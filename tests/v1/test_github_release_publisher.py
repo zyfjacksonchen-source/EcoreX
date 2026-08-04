@@ -40,8 +40,8 @@ def _release(*, draft: bool = True, upload_url: str | None = None) -> dict:
     return {
         "id": 77,
         "tag_name": "v1.0.0",
-        "name": "EcoreX 1.0.0",
-        "body": f"EcoreX signed release {RELEASE_ID}",
+        "name": "e-Mate 1.0.0",
+        "body": f"e-Mate signed release {RELEASE_ID}",
         "prerelease": False,
         "upload_url": upload_url
         or "https://uploads.github.com/repos/acme/ecorex/releases/77/assets{?name,label}",

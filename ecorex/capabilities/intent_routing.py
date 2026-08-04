@@ -32,6 +32,21 @@ MAX_ROUTING_INTENT_BYTES = 64 * 1024
 MAX_PHRASE_OCCURRENCES = 16
 MAX_ROUTING_CLAUSES = 32
 
+_IMAGE_CONTEXT_FOLLOWUPS = (
+    "再来一张",
+    "再生成一张",
+    "再做一张",
+    "再画一张",
+    "换一个版本",
+    "换个版本",
+    "再出一个版本",
+    "another one",
+    "one more",
+    "another version",
+    "make another",
+    "generate another",
+)
+
 _CLAUSE_BREAK_RE = re.compile(
     r"[\r\n,，。!！？?；;]+"
     r"|\.(?![A-Za-z0-9])"
@@ -90,6 +105,19 @@ def intent_is_routable(value: object) -> bool:
         return False
     size = _utf8_size(value)
     return size is not None and size <= MAX_ROUTING_INTENT_BYTES
+
+
+def intent_inherits_image_context(value: object) -> bool:
+    """Return whether short prose should inherit a verified image route.
+
+    These phrases never route on their own. Callers must also have an attached
+    image, a successful image tool call, or an earlier reviewed image intent.
+    """
+
+    if not intent_is_routable(value):
+        return False
+    normalized = normalize_intent_text(value)
+    return any(_contains_phrase(normalized, phrase) for phrase in _IMAGE_CONTEXT_FOLLOWUPS)
 
 
 def _contains_phrase(normalized_intent: str, phrase: str) -> bool:
@@ -680,11 +708,11 @@ def builtin_intent_routing_policy() -> IntentRoutingPolicy:
     )
     return IntentRoutingPolicy(
         policy_id="ecorex.intent-routing",
-        version="1.5.0",
+        version="1.6.0",
         rules=(
             IntentRoutingRule(
                 rule_id="media.image.create",
-                version="1.5.0",
+                version="1.6.0",
                 required_facets_any=frozenset({"media.image.create"}),
                 required_effects=frozenset({CapabilityEffect.GENERATE_MEDIA}),
                 positive_phrases=(
@@ -742,12 +770,12 @@ def builtin_intent_routing_policy() -> IntentRoutingPolicy:
                     *shared_suppressions,
                     *create_discussion_suppressions,
                 ),
-                score_boost=240,
-                promote_to=None,
+                score_boost=1_200,
+                promote_to=Exposure.DIRECT,
             ),
             IntentRoutingRule(
                 rule_id="media.image.deliverable",
-                version="1.5.0",
+                version="1.6.0",
                 required_facets_any=frozenset({"media.image.create"}),
                 required_effects=frozenset({CapabilityEffect.GENERATE_MEDIA}),
                 positive_phrases=(),
@@ -808,12 +836,12 @@ def builtin_intent_routing_policy() -> IntentRoutingPolicy:
                     "how do i draw a poster",
                     *shared_suppressions,
                 ),
-                score_boost=240,
-                promote_to=None,
+                score_boost=1_200,
+                promote_to=Exposure.DIRECT,
             ),
             IntentRoutingRule(
                 rule_id="media.image.edit",
-                version="1.5.0",
+                version="1.6.0",
                 required_facets_any=frozenset({"media.image.edit"}),
                 required_effects=frozenset({CapabilityEffect.GENERATE_MEDIA}),
                 positive_phrases=(
@@ -864,6 +892,13 @@ def builtin_intent_routing_policy() -> IntentRoutingPolicy:
                     "替換背景",
                     "去背",
                     "摳圖",
+                    "去掉路人",
+                    "路人去掉",
+                    "去除水印",
+                    "水印去除",
+                    "remove the person",
+                    "remove a person",
+                    "remove the watermark",
                 ),
                 blocked_prefixes=meta_prefixes,
                 blocked_suffixes=meta_suffixes,
@@ -897,8 +932,8 @@ def builtin_intent_routing_policy() -> IntentRoutingPolicy:
                     *shared_suppressions,
                     *edit_discussion_suppressions,
                 ),
-                score_boost=240,
-                promote_to=None,
+                score_boost=1_200,
+                promote_to=Exposure.DIRECT,
             ),
         ),
     )
@@ -915,6 +950,7 @@ __all__ = [
     "MAX_ROUTING_SCORE_BOOST",
     "builtin_intent_routing_policy",
     "intent_is_routable",
+    "intent_inherits_image_context",
     "normalize_intent_clauses",
     "normalize_intent_text",
 ]

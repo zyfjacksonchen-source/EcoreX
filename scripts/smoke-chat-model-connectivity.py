@@ -184,7 +184,7 @@ def _config_keys(config: Dict[str, Any], key_text: str) -> Dict[str, str]:
         openai_key = enterprise_openai_key
         openai_credential_source = "admin_policy_cache"
     else:
-        # gpt-5.5 is the canonical Admin-managed EcoreX chat model. Do not
+        # gpt-5.6-luna is the canonical Admin-managed EcoreX chat model. Do not
         # let the local multi-model note file mask a missing Admin policy.
         openai_key = ""
         openai_credential_source = "missing_admin_policy_or_runtime_config"
@@ -251,7 +251,7 @@ def run_smoke(config: Dict[str, Any], key_text: str, timeout: int, include_diagn
     openai_credential_source = keys.get("openai_credential_source", "")
     checks: List[Callable[[], Dict[str, Any]]] = [
         lambda: {
-            **_post_openai_compatible("openai", "gpt-5.5", keys["openai_key"], keys["openai_base"], timeout, max_tokens_field="max_completion_tokens"),
+            **_post_openai_compatible("openai", "gpt-5.6-luna", keys["openai_key"], keys["openai_base"], timeout, max_tokens_field="max_completion_tokens"),
             "credentialSource": openai_credential_source,
         },
         lambda: _post_openai_compatible("deepseek", "deepseek-v4-pro", keys["deepseek_key"], keys["deepseek_base"], timeout),
@@ -273,7 +273,7 @@ def run_smoke(config: Dict[str, Any], key_text: str, timeout: int, include_diagn
         "menuModelsFail": [f"{item['provider']}:{item['model']}:{item['status']}" for item in results if not item.get("ok")],
         "diagnosticOnly": diagnostic_results,
         "credentialSources": {
-            "openai:gpt-5.5": openai_credential_source,
+            "openai:gpt-5.6-luna": openai_credential_source,
         },
         "secretsRedacted": True,
     }

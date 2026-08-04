@@ -208,6 +208,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const [systemHealthLoadState, setSystemHealthLoadState] = useState<LoadState>("loading");
   const [systemHealthError, setSystemHealthError] = useState<string | null>(null);
   const [conversationUsage, setConversationUsage] = useState<ConversationUsageProjection | null>(null);
+  const [accountUsage, setAccountUsage] = useState<ConversationUsageProjection | null>(null);
   const [chatModel, setChatModel] = useState("");
   const [imageModel, setImageModel] = useState("");
   const [threads, setThreads] = useState<ThreadProjection[]>([]);
@@ -602,6 +603,25 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     }
   }, [client]);
 
+  const refreshAccountUsage = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const usage = await client.accountUsage(signal);
+      if (signal?.aborted) return false;
+      setAccountUsage(usage);
+      return true;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return false;
+      return false;
+    }
+  }, [client]);
+
+  useEffect(() => {
+    if (!bootstrapped) return;
+    const controller = new AbortController();
+    void refreshAccountUsage(controller.signal);
+    return () => controller.abort();
+  }, [bootstrapped, refreshAccountUsage]);
+
   useEffect(() => {
     watermarkRef.current = state.watermark;
   }, [state.watermark]);
@@ -693,6 +713,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
       applyEventBatch(events);
       if (events.some((event) => event.event_type === "model.response_completed")) {
         void refreshConversationUsage(threadId);
+        void refreshAccountUsage();
       }
       if (events.some((event) => event.event_type.startsWith("artifact."))) {
         void refreshArtifacts(threadId).catch((error) => {
@@ -778,6 +799,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   }, [
     applyEventBatch,
     client,
+    refreshAccountUsage,
     refreshArtifacts,
     refreshConversationUsage,
     refreshProjection,
@@ -1359,7 +1381,14 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
       applyUpdateSnapshot(response.update);
       pendingUpdateActivation.current = null;
       if (response.restart_scheduled) {
-        window.setTimeout(() => window.location.reload(), response.reload_after_ms);
+        const { handOffToUpdatedRuntime } = await import("./updateActivationHandoff.ts");
+        await handOffToUpdatedRuntime({
+          readBootstrap: () => client.bootstrap(),
+          targetVersion: update.target_version ?? "",
+          initialDelayMs: response.reload_after_ms,
+          currentUrl: window.location.href,
+          replace: (url) => window.location.replace(url),
+        });
       }
       return true;
     } catch (error) {
@@ -1757,6 +1786,8 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     clearSystemHealthError: () => setSystemHealthError(null),
     refreshSystemHealth: () => void refreshSystemHealth(),
     loadSystemTechnicalHealth,
+    accountUsage,
+    refreshAccountUsage: () => refreshAccountUsage(),
     conversationUsage,
     refreshConversationUsage: () => {
       const activeThreadId = stateRef.current.thread?.thread_id;

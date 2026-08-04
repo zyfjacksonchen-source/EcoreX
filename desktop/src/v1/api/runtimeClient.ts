@@ -23,6 +23,7 @@ import type {
   LiveReplayResponse,
   LoginSessionResponse,
   LogoutSessionResponse,
+  PasswordSessionChangeResponse,
   MemoryMutationResponse,
   MemorySnapshot,
   MigrationQuarantineProjection,
@@ -37,6 +38,9 @@ import type {
   ReplaceTurnResponse,
   ShareListResponse,
   ShareSnapshotProjection,
+  SkillHubCardProjection,
+  SkillHubDetailProjection,
+  SkillHubListResponse,
   SystemHealthSample,
   SystemMetricHistory,
   ThreadProjection,
@@ -49,9 +53,10 @@ import type {
   RetouchWorkspaceProjection,
   UpdateMutationResponse,
 } from "./contracts.ts";
+import { RuntimeApiError } from "./runtimeErrors.ts";
+export { RuntimeApiError } from "./runtimeErrors.ts";
 import {
   validateBootstrapResponse,
-  validateConversationUsageProjection,
   validateEventEnvelope,
   validateInputAttachmentProjection,
 } from "./runtimeContract.ts";
@@ -175,18 +180,6 @@ export function eventClientMessageIds(events: readonly EventEnvelope[]): string[
   return events.flatMap((event) => event.client_message_id ? [event.client_message_id] : []);
 }
 
-export class RuntimeApiError extends Error {
-  readonly status: number;
-  readonly code: string | null;
-
-  constructor(message: string, status: number, code: string | null = null) {
-    super(message);
-    this.name = "RuntimeApiError";
-    this.status = status;
-    this.code = code;
-  }
-}
-
 export class EventCursorResetRequired extends RuntimeApiError {
   constructor(message = "事件游标已失效，需要重新同步会话。") {
     super(message, 409, "event_cursor_reset_required");
@@ -246,6 +239,18 @@ function validateLogoutSessionResponse(value: unknown): LogoutSessionResponse {
   return value as unknown as LogoutSessionResponse;
 }
 
+function validatePasswordSessionChangeResponse(value: unknown): PasswordSessionChangeResponse {
+  if (
+    !isRecord(value)
+    || value.schema_version !== 1
+    || value.status !== "changed"
+    || value.reauthentication_required !== true
+  ) {
+    throw new RuntimeApiError("Runtime returned an invalid password change receipt.", 502, "password_change_receipt_invalid");
+  }
+  return value as unknown as PasswordSessionChangeResponse;
+}
+
 function validateLoginSessionResponse(value: unknown): LoginSessionResponse {
   if (
     !isRecord(value)
@@ -265,6 +270,27 @@ function validateLoginSessionResponse(value: unknown): LoginSessionResponse {
   }
   return value as unknown as LoginSessionResponse;
 }
+
+function rejectSkillHubProjection(message: string, code: string): never {
+  throw new RuntimeApiError(message, 502, code);
+}
+
+async function validateSkillHubListResponse(value: unknown): Promise<SkillHubListResponse> {
+  return (await import("./skillHubRuntimeContract.ts")).validateSkillHubListResponse(value, rejectSkillHubProjection);
+}
+
+async function validateSkillHubCardProjection(value: unknown): Promise<SkillHubCardProjection> {
+  return (await import("./skillHubRuntimeContract.ts")).validateSkillHubCardProjection(value, rejectSkillHubProjection);
+}
+
+async function validateSkillHubDetailProjection(value: unknown): Promise<SkillHubDetailProjection> {
+  return (await import("./skillHubRuntimeContract.ts")).validateSkillHubDetailProjection(value, rejectSkillHubProjection);
+}
+
+async function validateConversationUsageProjection(value: unknown): Promise<ConversationUsageProjection> {
+  return (await import("./usageRuntimeContract.ts")).validateConversationUsageProjection(value);
+}
+
 
 async function validateThreadProjectionBoundary(value: unknown): Promise<ThreadProjection> {
   const contract = await import("./runtimeProjectionContract.ts");
@@ -449,6 +475,15 @@ export class RuntimeClient {
   ): Promise<ConversationUsageProjection> {
     return this.json(
       `/api/v1/threads/${encodeURIComponent(threadId)}/usage`,
+      { signal },
+      false,
+      validateConversationUsageProjection,
+    );
+  }
+
+  accountUsage(signal?: AbortSignal): Promise<ConversationUsageProjection> {
+    return this.json(
+      "/api/v1/usage",
       { signal },
       false,
       validateConversationUsageProjection,
@@ -713,12 +748,130 @@ export class RuntimeClient {
     );
   }
 
+  changeSessionPassword(
+    currentPassword: string,
+    newPassword: string,
+    clientRequestId = createClientRequestId("session_password"),
+  ): Promise<PasswordSessionChangeResponse> {
+    return this.json(
+      "/api/v1/session/password",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          schema_version: 1,
+          current_password: currentPassword,
+          new_password: newPassword,
+          client_request_id: clientRequestId,
+        }),
+      },
+      true,
+      validatePasswordSessionChangeResponse,
+    );
+  }
+
   connectorCatalog(signal?: AbortSignal): Promise<ConnectorCatalogResponse> {
     return this.json("/api/v1/connectors", { signal });
   }
 
   extensionCatalog(signal?: AbortSignal): Promise<ExtensionCatalogSnapshot> {
     return this.json("/api/v1/extensions", { signal });
+  }
+
+  skillHubCatalog(
+    query = "",
+    category: SkillHubCardProjection["category"] | null = null,
+    tag: string | null = null,
+    source: string | null = null,
+    cursor: string | null = null,
+    signal?: AbortSignal,
+  ): Promise<SkillHubListResponse> {
+    const parameters = new URLSearchParams({ query, limit: "100" });
+    if (category) parameters.set("category", category);
+    if (tag) parameters.set("tag", tag);
+    if (source) parameters.set("source", source);
+    if (cursor) parameters.set("cursor", cursor);
+    return this.json(
+      `/api/v1/skill-hub/skills?${parameters}`,
+      { signal },
+      false,
+      validateSkillHubListResponse,
+    );
+  }
+
+  skillHubDetail(slug: string): Promise<SkillHubDetailProjection> {
+    return this.json(
+      `/api/v1/skill-hub/skills/${encodeURIComponent(slug)}`,
+      {},
+      false,
+      validateSkillHubDetailProjection,
+    );
+  }
+
+  installHubSkill(
+    card: SkillHubCardProjection,
+    clientRequestId = createClientRequestId("skill_hub_install"),
+  ): Promise<ExtensionMutationResponse> {
+    return this.json(
+      `/api/v1/skill-hub/skills/${encodeURIComponent(card.slug)}/install`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          version: card.version,
+          package_sha256: card.package_sha256,
+          client_request_id: clientRequestId,
+        }),
+      },
+      true,
+    );
+  }
+
+  async downloadHubSkillPackage(card: SkillHubCardProjection): Promise<Blob> {
+    const response = await fetch(
+      `${this.base}/api/v1/skill-hub/skills/${encodeURIComponent(card.slug)}`
+        + `/versions/${encodeURIComponent(card.version)}/package`,
+      {
+        headers: this.headers(false),
+        credentials: "same-origin",
+        cache: "no-store",
+      },
+    );
+    if (!response.ok) {
+      throw new RuntimeApiError(
+        `Skill package download failed (${response.status}).`,
+        response.status,
+        "skill_hub_package_download_failed",
+      );
+    }
+    if (response.headers.get("x-skill-content-sha256") !== card.package_sha256) {
+      throw new RuntimeApiError(
+        "Skill package identity changed.",
+        502,
+        "skill_hub_package_identity_changed",
+      );
+    }
+    return response.blob();
+  }
+
+  publishHubSkill(
+    slug: string,
+    category: SkillHubCardProjection["category"],
+    bundleBase64: string,
+    clientRequestId = createClientRequestId("skill_hub_upload"),
+  ): Promise<SkillHubCardProjection> {
+    return this.json(
+      "/api/v1/skill-hub/skills",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          slug,
+          category,
+          bundle_base64: bundleBase64,
+          client_request_id: clientRequestId,
+        }),
+      },
+      true,
+      validateSkillHubCardProjection,
+    );
   }
 
   installLocalSkill(
@@ -753,12 +906,34 @@ export class RuntimeClient {
       disable: "disable",
       health_check: "health",
       rollback: "rollback",
+      configure: "configure",
+      uninstall: "uninstall",
     };
     return this.json(
       `/api/v1/extensions/${encodeURIComponent(extensionId)}/${actionPath[actionId]}`,
       {
         method: "POST",
         body: JSON.stringify({
+          expected_revision: expectedRevision,
+          client_request_id: clientRequestId,
+        }),
+      },
+      true,
+    );
+  }
+
+  configureSkill(
+    extensionId: string,
+    values: Record<string, string>,
+    expectedRevision: number,
+    clientRequestId = createClientRequestId("extension_configure"),
+  ): Promise<ExtensionMutationResponse> {
+    return this.json(
+      `/api/v1/extensions/${encodeURIComponent(extensionId)}/configure`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          values,
           expected_revision: expectedRevision,
           client_request_id: clientRequestId,
         }),

@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Search,
   Settings2,
+  Sparkles,
   UserRound,
   X,
 } from "lucide-react";
@@ -44,11 +45,14 @@ interface SidebarProps {
   authenticated: boolean;
   accountDisplayName: string | null;
   skillsActive: boolean;
+  creativeActive: boolean;
+  homeActive: boolean;
   sessionBusy: boolean;
   sessionError: string | null;
   onClose: () => void;
   onNewTask: (project?: ProjectProjection | null) => void;
   onOpenSkills: () => void;
+  onOpenCreative: () => void;
   onPickProject: () => Promise<ProjectProjection | null>;
   onClearProjectError: () => void;
   onOpenThread: (threadId: string) => Promise<boolean>;
@@ -83,11 +87,14 @@ export function Sidebar({
   authenticated,
   accountDisplayName,
   skillsActive,
+  creativeActive,
+  homeActive,
   sessionBusy,
   sessionError,
   onClose,
   onNewTask,
   onOpenSkills,
+  onOpenCreative,
   onPickProject,
   onClearProjectError,
   onOpenThread,
@@ -347,19 +354,29 @@ export function Sidebar({
           </IconButton>
         </div>
 
-        <button className="ex-new-task" type="button" aria-label="新建任务" onClick={() => onNewTask(null)}>
+        <button className={`ex-new-task${homeActive ? " is-current" : ""}`} type="button" aria-label="新建任务" onClick={() => onNewTask(null)}>
           <Plus aria-hidden="true" />
-          <span>新对话</span>
+          <span>新任务</span>
+        </button>
+        <button
+          className={`ex-sidebar-action ex-sidebar-skill-link${creativeActive ? " is-current" : ""}`}
+          type="button"
+          aria-label="创意中心"
+          aria-current={creativeActive ? "page" : undefined}
+          onClick={onOpenCreative}
+        >
+          <Sparkles aria-hidden="true" />
+          <span>创意中心</span>
         </button>
         <button
           className={`ex-sidebar-action ex-sidebar-skill-link${skillsActive ? " is-current" : ""}`}
           type="button"
-          aria-label="技能"
+          aria-label="能力中心"
           aria-current={skillsActive ? "page" : undefined}
           onClick={onOpenSkills}
         >
           <Blocks aria-hidden="true" />
-          <span>技能</span>
+          <span>能力中心</span>
         </button>
         <nav className="ex-task-nav" aria-label="会话与项目">
           <section className="ex-sidebar-section" aria-label="项目">
@@ -555,15 +572,24 @@ export function Sidebar({
         </nav>
 
         <div className="ex-sidebar-footer">
+          <button
+            className="ex-sidebar-action"
+            type="button"
+            data-ecorex-feature-trigger="settings"
+            onClick={onOpenSettings}
+          >
+            <Settings2 aria-hidden="true" />
+            <span>设置</span>
+          </button>
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button
                 className="ex-sidebar-action ex-account-trigger"
                 type="button"
-                aria-label={`${authenticated ? accountDisplayName || "已登录账号" : "未登录"}，打开账号菜单`}
+                aria-label={`用户中心，${authenticated ? accountDisplayName || "已登录账号" : "未登录"}`}
               >
                 <UserRound aria-hidden="true" />
-                <span>{authenticated ? accountDisplayName || "已登录账号" : "未登录"}</span>
+                <span>用户中心</span>
                 <ChevronDown className="ex-account-chevron" aria-hidden="true" />
               </button>
             </DropdownMenu.Trigger>
@@ -575,13 +601,9 @@ export function Sidebar({
                 sideOffset={6}
                 collisionPadding={12}
               >
-                <DropdownMenu.Item
-                  className="ex-menu-item"
-                  data-ecorex-feature-trigger="settings"
-                  onSelect={onOpenSettings}
-                >
-                  <Settings2 aria-hidden="true" />设置
-                </DropdownMenu.Item>
+                <DropdownMenu.Label className="ex-menu-note">
+                  {authenticated ? accountDisplayName || "已登录账号" : "未登录"}
+                </DropdownMenu.Label>
                 {authenticated ? (
                   <DropdownMenu.Item
                     className="ex-menu-item is-danger"

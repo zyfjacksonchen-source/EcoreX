@@ -53,6 +53,7 @@ from .intent_routing import (
     IntentRoutingPolicy,
     IntentRoutingRule,
     builtin_intent_routing_policy,
+    intent_inherits_image_context,
     normalize_intent_clauses,
     normalize_intent_text,
 )
@@ -184,6 +185,7 @@ __all__ = [
     "builtin_pack_service_specs",
     "builtin_discovery_policy",
     "builtin_intent_routing_policy",
+    "intent_inherits_image_context",
     "builtin_model_catalog",
     "builtin_tool_specs",
     "build_capability_handler_set",

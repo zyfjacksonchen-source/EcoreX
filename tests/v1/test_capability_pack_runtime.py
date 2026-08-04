@@ -146,7 +146,9 @@ def _signed_service_pack(
     return registry, verified
 
 
-def test_signed_pack_is_verified_and_bound_to_exact_tool_contract(tmp_path: Path) -> None:
+def test_signed_pack_is_verified_and_bound_to_exact_tool_contract(
+    tmp_path: Path,
+) -> None:
     registry, artifact, manifest, verifier = _signed_image_pack(tmp_path)
     verified = verify_capability_pack(
         manifest,
@@ -248,9 +250,7 @@ def test_signed_ocr_service_pack_composes_real_product_adapter(tmp_path: Path) -
     image = small.resize((1020, 180))
     content = BytesIO()
     image.save(content, "PNG")
-    result = ocr_runtime.provider.extract(
-        content.getvalue(), timeout_seconds=8.0
-    )
+    result = ocr_runtime.provider.extract(content.getvalue(), timeout_seconds=8.0)
     assert result["provider"] == "rapidocr_onnxruntime"
     assert "4827" in result["text"].replace(" ", "")
 
@@ -284,9 +284,7 @@ def test_production_pack_resolver_binds_executable_image_handler_and_fails_truth
     )
     with pytest.raises(ImageToolUnavailable) as unavailable:
         asyncio.run(
-            runtime.handlers["imagegen"](
-                {"instruction": "create a dashboard"}, context
-            )
+            runtime.handlers["imagegen"]({"instruction": "create a dashboard"}, context)
         )
     assert unavailable.value.code == "managed_image_orchestration_not_configured"
 
@@ -381,6 +379,9 @@ def test_handler_set_reports_real_executability_not_declared_pack_flags(
             "shell",
             "skill_search",
             "skill_read",
+                "skill_run",
+                "task_list",
+                "feishu_cli",
             "tool_search",
             "tool_describe",
             "connector_search",
@@ -393,7 +394,9 @@ def test_handler_set_reports_real_executability_not_declared_pack_flags(
     }
 
 
-def test_tool_arguments_and_outputs_are_enforced_before_crossing_handler_boundary() -> None:
+def test_tool_arguments_and_outputs_are_enforced_before_crossing_handler_boundary() -> (
+    None
+):
     called = False
 
     def handler(arguments):
@@ -421,7 +424,9 @@ def test_tool_arguments_and_outputs_are_enforced_before_crossing_handler_boundar
     )
     from ecorex.capabilities import CapabilityRegistry
 
-    service = CapabilityService(CapabilityRegistry((spec,)), handlers={spec.tool_id: handler})
+    service = CapabilityService(
+        CapabilityRegistry((spec,)), handlers={spec.tool_id: handler}
+    )
     plan = service.create_plan(
         intent="strict",
         explicit_tools=(spec.tool_id,),

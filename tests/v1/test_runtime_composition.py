@@ -61,16 +61,14 @@ def test_bootstrap_and_turns_are_generated_from_backend_catalogs(tmp_path) -> No
 
     assert bootstrap["models"]["snapshot_id"].startswith("models_")
     assert bootstrap["models"]["chat"][0]["model_id"] == "ecorex-chat"
-    assert bootstrap["models"]["chat"][0]["display_name"] == (
-        "GPT-5.6 SOL · 中等推理"
-    )
+    assert bootstrap["models"]["chat"][0]["display_name"] == ("GPT-5.6 Luna · 高推理")
     assert bootstrap["models"]["chat"][0]["model_policy"] == {
         "schema_version": 1,
-        "policy_id": "ecorex-chat-gpt-5.6-sol",
-        "policy_version": "1.0.0",
+        "policy_id": "ecorex-chat-gpt-5.6-luna",
+        "policy_version": "1.1.0",
         "local_model_id": "ecorex-chat",
-        "upstream_model_id": "gpt-5.6-sol",
-        "reasoning_effort": "medium",
+        "upstream_model_id": "gpt-5.6-luna",
+        "reasoning_effort": "high",
         "context_management": {
             "type": "compaction",
             "compact_threshold_tokens": 272_000,
@@ -130,11 +128,27 @@ def test_bootstrap_and_turns_are_generated_from_backend_catalogs(tmp_path) -> No
     plan = CapabilitySnapshotRepository(tmp_path / "runtime.db").get(capability_id)
     decisions = {decision.tool_id: decision for decision in plan.decisions}
     assert set(decisions) == {
-        "read", "fetch", "vision", "ocr", "cdp", "shell", "imagegen",
-        "skill_search", "skill_read", "tool_search", "tool_describe",
-        "connector_search", "connector_describe", "connector_read",
-        "connector_write", "artifact_read", "input_attachment_read",
-    }
+        "read",
+        "fetch",
+        "vision",
+        "ocr",
+        "cdp",
+        "shell",
+        "imagegen",
+        "feishu_cli",
+        "skill_search",
+        "skill_read",
+        "skill_run",
+        "tool_search",
+        "tool_describe",
+        "connector_search",
+        "connector_describe",
+        "connector_read",
+        "connector_write",
+        "artifact_read",
+            "input_attachment_read",
+            "task_list",
+        }
     assert decisions["imagegen"].eligible is True
     assert not any(
         reason.startswith("missing_model_capabilities:")
@@ -149,16 +163,20 @@ def test_bootstrap_and_turns_are_generated_from_backend_catalogs(tmp_path) -> No
     # only a Turn with backend-bound uploads promotes it to direct exposure.
     assert decisions["input_attachment_read"].eligible is True
     assert decisions["input_attachment_read"].exposure is Exposure.DEFERRED
-    assert "runtime_context_required" not in decisions["input_attachment_read"].reason_codes
+    assert (
+        "runtime_context_required"
+        not in decisions["input_attachment_read"].reason_codes
+    )
     assert decisions["shell"].eligible is True
     assert {decision.tool_id for decision in plan.direct} >= {
         "read",
         "shell",
+        "imagegen",
         "tool_search",
         "tool_describe",
     }
     assert plan.direct[0].tool_id == "shell"
-    assert plan.deferred[0].tool_id == "imagegen"
+    assert decisions["imagegen"].exposure is Exposure.DIRECT
     snapshots = RuntimeSnapshotRepository(tmp_path / "runtime.db")
     config = snapshots.get(config_id)
     assert config.kind == "config"
@@ -171,13 +189,18 @@ def test_bootstrap_and_turns_are_generated_from_backend_catalogs(tmp_path) -> No
     assert snapshots.get(permission_id).kind == "permission"
     assert snapshots.get(bootstrap["models"]["snapshot_id"]).kind == "models"
     frozen_models = snapshots.get(bootstrap["models"]["snapshot_id"])
-    assert frozen_models.payload["modalities"]["chat"][0]["model_policy"] == (
-        bootstrap["models"]["chat"][0]["model_policy"]
+    assert (
+        frozen_models.payload["modalities"]["chat"][0]["model_policy"]
+        == (bootstrap["models"]["chat"][0]["model_policy"])
     )
-    assert frozen_models.payload["modalities"]["image"][0]["capabilities"] == (
-        bootstrap["models"]["image"][0]["capabilities"]
+    assert (
+        frozen_models.payload["modalities"]["image"][0]["capabilities"]
+        == (bootstrap["models"]["image"][0]["capabilities"])
     )
-    assert app.state.runtime_composition.model_catalog.snapshot_id == bootstrap["models"]["snapshot_id"]
+    assert (
+        app.state.runtime_composition.model_catalog.snapshot_id
+        == bootstrap["models"]["snapshot_id"]
+    )
 
 
 def test_bound_image_attachment_promotes_reader_vision_and_ocr(tmp_path) -> None:
@@ -217,6 +240,7 @@ def test_bound_image_attachment_promotes_reader_vision_and_ocr(tmp_path) -> None
         assert decision.exposure is Exposure.DIRECT
         assert "runtime_context_required" in decision.reason_codes
 
+
 def test_projection_only_composition_does_not_publish_execution_authority(
     tmp_path,
 ) -> None:
@@ -241,12 +265,16 @@ def test_projection_only_composition_does_not_publish_execution_authority(
     )
 
     with sqlite3.connect(database) as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM runtime_snapshots"
-        ).fetchone()[0] == 0
-        assert connection.execute(
-            "SELECT COUNT(*) FROM extension_catalog_snapshots"
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute("SELECT COUNT(*) FROM runtime_snapshots").fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM extension_catalog_snapshots"
+            ).fetchone()[0]
+            == 0
+        )
     assert composition.model_snapshot.snapshot_id == source.model_catalog.snapshot_id
     with pytest.raises(RuntimeError, match="projection-only"):
         composition.prepare_turn(

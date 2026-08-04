@@ -568,7 +568,7 @@ def _models(rows: list[sqlite3.Row]) -> tuple[tuple[_Model, ...], int]:
         if is_image:
             slots = (("gpt-image-2", "image_generation"), ("gpt-image-2-edit", "image_edit"))
         elif provider == "openai":
-            slots = (("ecorex-chat", "chat"),)
+            slots = (("ecorex-chat", "chat"), ("ecorex-gpt-5.6-sol", "chat"))
         elif provider == "deepseek":
             slots = (("ecorex-deepseek-v4-pro", "chat"),)
         elif provider == "gemini":
@@ -585,6 +585,8 @@ def _models(rows: list[sqlite3.Row]) -> tuple[tuple[_Model, ...], int]:
                     "legacy model slot is configured more than once"
                 )
             if local_model_id == "ecorex-chat":
+                model_id = "gpt-5.6-luna"
+            elif local_model_id == "ecorex-gpt-5.6-sol":
                 model_id = "gpt-5.6-sol"
             elif modality != "chat":
                 model_id = "gpt-image-2"

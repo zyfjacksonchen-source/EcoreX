@@ -1195,7 +1195,7 @@ def test_windows_sandbox_receipt_matches_invariant_unicode_path_identity(
     )
 
     assert receipt["permission_domain_sha256"] == expected_permission_domain
-    assert receipt["contract"] == "windows-appcontainer-stable-provision-v3"
+    assert receipt["contract"] == "windows-appcontainer-stable-provision-v4"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer ACL contract")

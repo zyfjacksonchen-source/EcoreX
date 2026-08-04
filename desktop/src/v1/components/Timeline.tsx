@@ -1,5 +1,5 @@
 import { Fragment, lazy, memo, Suspense, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, Check, CircleDashed, Copy, FolderOpen, Workflow, WandSparkles } from "lucide-react";
+import { ArrowDown, FolderOpen, Workflow, WandSparkles } from "lucide-react";
 
 import type {
   ArtifactProjection,
@@ -22,12 +22,15 @@ import {
   selectTimelineWindow,
   TIMELINE_WINDOW_SIZE,
 } from "../state/timelineWindow.ts";
-import { ArtifactShelf } from "./ArtifactShelf.tsx";
 import { InputAttachmentPreview, type InputAttachmentBlobLoader } from "./InputAttachmentPreview.tsx";
 
 const OfficeMarkdown = lazy(() => import("./OfficeMarkdown.tsx"));
 const TimelineActivity = lazy(() => import("./TimelineActivity.tsx"));
 const NewConversationProjectSelector = lazy(() => import("./NewConversationProjectSelector.tsx"));
+const ReasoningBlock = lazy(() => import("./ReasoningBlock.tsx"));
+const TaskListBlock = lazy(() => import("./TaskListBlock.tsx"));
+const TurnCompletionRow = lazy(() => import("./TurnCompletionRow.tsx"));
+const ArtifactShelf = lazy(async () => ({ default: (await import("./ArtifactShelf.tsx")).ArtifactShelf }));
 
 interface TimelineProps {
   items: ItemProjection[];
@@ -117,73 +120,6 @@ const TERMINAL_TURN_STATUSES = new Set<TurnProjection["status"]>([
   "superseded",
 ]);
 
-export function formatTurnDuration(turn: Pick<TurnProjection, "created_at" | "updated_at">): string {
-  const startedAt = Date.parse(turn.created_at);
-  const endedAt = Date.parse(turn.updated_at);
-  const elapsedSeconds = Math.max(0, Math.round((endedAt - startedAt) / 1_000));
-  if (!Number.isFinite(elapsedSeconds)) return "耗时未知";
-  if (elapsedSeconds < 60) return `耗时 ${elapsedSeconds} 秒`;
-  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
-  const remainingSeconds = elapsedSeconds % 60;
-  if (elapsedMinutes < 60) {
-    return remainingSeconds
-      ? `耗时 ${elapsedMinutes} 分 ${remainingSeconds} 秒`
-      : `耗时 ${elapsedMinutes} 分`;
-  }
-  const elapsedHours = Math.floor(elapsedMinutes / 60);
-  const remainingMinutes = elapsedMinutes % 60;
-  return remainingMinutes
-    ? `耗时 ${elapsedHours} 小时 ${remainingMinutes} 分`
-    : `耗时 ${elapsedHours} 小时`;
-}
-
-const TurnCompletionRow = memo(function TurnCompletionRow({
-  turn,
-  copyText,
-}: {
-  turn: TurnProjection;
-  copyText: string;
-}) {
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
-  const resetTimer = useRef<number | null>(null);
-  useEffect(() => () => {
-    if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
-  }, []);
-
-  const copyReply = async () => {
-    if (!copyText.trim() || copyState === "copied") return;
-    try {
-      if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
-      await navigator.clipboard.writeText(copyText);
-      setCopyState("copied");
-    } catch {
-      setCopyState("error");
-    }
-    if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
-    resetTimer.current = window.setTimeout(() => setCopyState("idle"), 2_000);
-  };
-
-  return (
-    <div className="ex-turn-completion" data-turn-status={turn.status}>
-      <span>{formatTurnDuration(turn)}</span>
-      {copyText.trim() ? (
-        <button
-          className="ex-icon-button ex-turn-copy"
-          type="button"
-          aria-label={copyState === "copied" ? "回复已复制" : "复制本次回复"}
-          title={copyState === "copied" ? "已复制" : "复制回复"}
-          onClick={() => void copyReply()}
-        >
-          {copyState === "copied" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-        </button>
-      ) : null}
-      <span className="ex-turn-copy-notice" aria-live="polite">
-        {copyState === "copied" ? "已复制" : copyState === "error" ? "复制失败" : ""}
-      </span>
-    </div>
-  );
-});
-
 const MessageRow = memo(function MessageRow({
   item,
   onLoadAttachment,
@@ -259,6 +195,7 @@ export function Timeline({
       || item.kind === "tool_call"
       || item.kind === "checkpoint"
       || item.kind === "artifact"
+      || item.kind === "task_list"
     )),
     [items],
   );
@@ -543,6 +480,13 @@ export function Timeline({
                   onLoadAttachment={onLoadAttachment}
                   onLoadAttachmentThumbnail={onLoadAttachmentThumbnail}
                 />
+              ) : item.kind === "task_list" ? (
+                <Suspense fallback={<div className="ex-activity-row" role="status">正在载入任务清单…</div>}>
+                  <TaskListBlock
+                    item={item}
+                    interrupted={Boolean(turns.find((turn) => turn.turn_id === item.turn_id)?.status.match(/failed|cancelled|interrupted|superseded/))}
+                  />
+                </Suspense>
               ) : item.kind === "artifact" ? (() => {
                 const projected = artifactFrom(item);
                 if (!projected) return null;
@@ -591,14 +535,16 @@ export function Timeline({
                     </div>
                   </section>
                 ) : (
-                  <ArtifactShelf
-                    artifacts={[artifact]}
-                    previewUrls={artifactPreviewUrls}
-                    onAction={onArtifactAction}
-                    onPreviewVisible={onArtifactPreviewVisible}
-                    retouchAvailable={retouchAvailable}
-                    retouchUnavailableReason={retouchUnavailableReason}
-                  />
+                  <Suspense fallback={<div className="ex-activity-row" role="status">正在载入产物…</div>}>
+                    <ArtifactShelf
+                      artifacts={[artifact]}
+                      previewUrls={artifactPreviewUrls}
+                      onAction={onArtifactAction}
+                      onPreviewVisible={onArtifactPreviewVisible}
+                      retouchAvailable={retouchAvailable}
+                      retouchUnavailableReason={retouchUnavailableReason}
+                    />
+                  </Suspense>
                 );
               })() : (
                 <Suspense fallback={<div className="ex-activity-row" role="status">正在更新工作步骤…</div>}>
@@ -606,7 +552,7 @@ export function Timeline({
                 </Suspense>
               )}
             {completion ? (
-              <TurnCompletionRow turn={completion.turn} copyText={completion.copyText} />
+              <Suspense fallback={null}><TurnCompletionRow turn={completion.turn} copyText={completion.copyText} /></Suspense>
             ) : null}
           </Fragment>
           );
@@ -636,27 +582,23 @@ export function Timeline({
           </div>
         ) : null}
         {messageWindow.atLatest && fallbackArtifacts.length ? (
-          <ArtifactShelf
-            artifacts={fallbackArtifacts}
-            previewUrls={artifactPreviewUrls}
-            onAction={onArtifactAction}
-            onPreviewVisible={onArtifactPreviewVisible}
-            retouchAvailable={retouchAvailable}
-            retouchUnavailableReason={retouchUnavailableReason}
-          />
+          <Suspense fallback={<div className="ex-activity-row" role="status">正在载入产物…</div>}>
+            <ArtifactShelf
+              artifacts={fallbackArtifacts}
+              previewUrls={artifactPreviewUrls}
+              onAction={onArtifactAction}
+              onPreviewVisible={onArtifactPreviewVisible}
+              retouchAvailable={retouchAvailable}
+              retouchUnavailableReason={retouchUnavailableReason}
+            />
+          </Suspense>
         ) : null}
         {messageWindow.atLatest && (isThinking || visibleReasoning) ? (
-          <div className={`ex-thinking${visibleReasoning ? " has-summary" : ""}`}>
-            <CircleDashed aria-hidden="true" />
-            <div>
-              <span role="status" aria-live="polite" aria-atomic="true">
-                {phaseLabel(activeTurn?.status)}
-              </span>
-              {visibleReasoning && typeof visibleReasoning.content.text === "string" ? (
-                <p aria-live="off">{visibleReasoning.content.text}</p>
-              ) : null}
-            </div>
-          </div>
+          visibleReasoning ? (
+            <Suspense fallback={<div className="ex-thinking-state" role="status">{phaseLabel(activeTurn?.status)}</div>}>
+              <ReasoningBlock item={visibleReasoning} label={phaseLabel(activeTurn?.status)} />
+            </Suspense>
+          ) : <div className="ex-thinking-state" role="status">{phaseLabel(activeTurn?.status)}</div>
         ) : null}
       </div>
       {showJumpToLatest ? (

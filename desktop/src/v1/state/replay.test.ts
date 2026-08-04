@@ -24,6 +24,7 @@ function projection(): ThreadProjectionResponse {
       title: "月度复盘",
       pinned: false,
       active_turn_status: null,
+      last_turn_status: null,
       metadata: {},
       forked_from_thread_id: null,
       forked_from_turn_id: null,

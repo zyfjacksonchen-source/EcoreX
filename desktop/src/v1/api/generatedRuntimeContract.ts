@@ -70,7 +70,9 @@ export const GENERATED_RUNTIME_CONTRACT = {
       "enable",
       "disable",
       "health_check",
-      "rollback"
+      "rollback",
+      "configure",
+      "uninstall"
     ],
     "extensionCategories": [
       "system",
@@ -120,7 +122,8 @@ export const GENERATED_RUNTIME_CONTRACT = {
       "staged",
       "enabled",
       "disabled",
-      "quarantined"
+      "quarantined",
+      "uninstalled"
     ],
     "extensionTrust": [
       "builtin",
@@ -153,7 +156,7 @@ export const GENERATED_RUNTIME_CONTRACT = {
       "failed"
     ]
   },
-  "schemaSha256": "ed81d9f65c424c47d3ec912b5143859d75d1ac0fd6c141b3b8ad36cf64c1fa1b",
+  "schemaSha256": "5fa103fc0e57972d6e12aaf0c917ccf1f9b552ff4cb7cc87f882a985dc5cb183",
   "schemaVersion": 1,
   "versions": {
     "api": "v1",
@@ -241,6 +244,7 @@ export const GENERATED_RUNTIME_CONTRACT = {
         "today",
         "week",
         "context",
+        "task_activity",
         "calculated_at"
       ]
     },

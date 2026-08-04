@@ -83,6 +83,55 @@ def test_kernel_turn_projection_state_constraints_and_idempotency(tmp_path):
     assert len(projection.items) == 2
 
 
+def test_task_list_is_durable_idempotent_and_cannot_fake_completion(tmp_path):
+    kernel = RuntimeKernel(tmp_path / "runtime.db")
+    thread = kernel.create_thread()
+    created = kernel.create_turn(
+        thread.thread_id,
+        CreateTurnRequest(input="完成多步任务", client_message_id="task-list-1"),
+    )
+    leased = kernel.jobs.lease_next("worker-1", lease_seconds=120)
+    assert leased is not None and leased.lease_token
+    kernel.jobs.start(leased.job_id, "worker-1", leased.lease_token)
+    kernel.transition_turn(created.turn.turn_id, TurnStatus.PREPARING)
+    pending = [
+        {"id": "collect", "title": "收集资料", "status": "completed"},
+        {"id": "deliver", "title": "交付结果", "status": "in_progress"},
+    ]
+    first = kernel.update_task_list(
+        turn_id=created.turn.turn_id,
+        items=pending,
+        idempotency_key="task-list-update-1",
+        job_id=leased.job_id,
+        lease_token=leased.lease_token,
+    )
+    repeated = kernel.update_task_list(
+        turn_id=created.turn.turn_id,
+        items=pending,
+        idempotency_key="task-list-update-1",
+        job_id=leased.job_id,
+        lease_token=leased.lease_token,
+    )
+    assert repeated.item_id == first.item_id
+    assert first.kind is ItemKind.TASK_LIST
+    assert first.status is ItemStatus.IN_PROGRESS
+    assert [event.event_type for event in kernel.events.page(thread.thread_id).events].count(
+        "task_list.updated"
+    ) == 1
+
+    with pytest.raises(ConflictError, match="invalid"):
+        kernel.update_task_list(
+            turn_id=created.turn.turn_id,
+            items=[
+                {"id": "one", "title": "第一项", "status": "in_progress"},
+                {"id": "two", "title": "第二项", "status": "in_progress"},
+            ],
+            idempotency_key="task-list-update-invalid",
+            job_id=leased.job_id,
+            lease_token=leased.lease_token,
+        )
+
+
 def test_projection_orders_opaque_items_by_durable_event_sequence(tmp_path):
     kernel = RuntimeKernel(tmp_path / "runtime.db")
     thread = kernel.create_thread(CreateThreadRequest(title="稳定顺序"))
@@ -242,6 +291,15 @@ def test_api_bootstrap_polling_sse_and_mutations(tmp_path):
     assert (expires - issued).total_seconds() == 72 * 3600
     assert body["models"]["chat"] and body["models"]["image"]
     assert "image2" in body["models"]["image"][0]["aliases"]
+
+    version = client.get("/api/version")
+    assert version.status_code == 200
+    assert version.json()["version"] == "0.3.0"
+    assert "core_version" not in version.json()
+    update = client.get("/api/update-check", params={"platform": "win32"})
+    assert update.status_code == 200
+    assert update.json()["artifact"]["id"] == "webui-windows-x64"
+    assert update.json()["update"]["webui"]["authority"] == "/api/v1/update"
 
     thread_response = client.post(
         "/api/v1/threads", json={"title": "Office"}, headers=mutation

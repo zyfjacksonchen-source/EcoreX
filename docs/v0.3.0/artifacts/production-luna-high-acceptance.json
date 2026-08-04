@@ -1,0 +1,20 @@
+{
+  "credential_source": "user-provided-local-file",
+  "environment": "production-provider-from-local-acceptance",
+  "generated_at": "2026-08-04T14:45:23.967935+00:00",
+  "http_status": 200,
+  "metered_request": true,
+  "provider_host_hash": "3136FA81C233E525",
+  "provider_transport_authorization": "explicit-http",
+  "reasoning_effort": "high",
+  "reported_model": "gpt-5.6-luna",
+  "requested_model": "gpt-5.6-luna",
+  "response_id_hash": "1febf88dd8612e5d",
+  "schema_version": 1,
+  "status": "passed",
+  "usage": {
+    "input_tokens": 4391,
+    "output_tokens": 5,
+    "total_tokens": 4396
+  }
+}

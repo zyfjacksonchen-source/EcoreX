@@ -5,6 +5,8 @@ import type {
   ExtensionActionId,
   ExtensionCatalogSnapshot,
   ExtensionProjection,
+  SkillHubCardProjection,
+  SkillHubDetailProjection,
 } from "../api/contracts.ts";
 import {
   createClientRequestId,
@@ -63,6 +65,14 @@ export function useExtensionSession({
   );
   const [extensionError, setExtensionError] = useState<string | null>(null);
   const [extensionInstallBusy, setExtensionInstallBusy] = useState(false);
+  const [skillHubItems, setSkillHubItems] = useState<SkillHubCardProjection[]>([]);
+  const [skillHubState, setSkillHubState] = useState<ExtensionLoadState>("idle");
+  const [skillHubError, setSkillHubError] = useState<string | null>(null);
+  const [skillHubInstallingSlug, setSkillHubInstallingSlug] = useState<string | null>(null);
+  const [skillHubDownloadingSlug, setSkillHubDownloadingSlug] = useState<string | null>(null);
+  const [skillHubDetail, setSkillHubDetail] = useState<SkillHubDetailProjection | null>(null);
+  const [skillHubDetailLoadingSlug, setSkillHubDetailLoadingSlug] = useState<string | null>(null);
+  const [skillHubUploadBusy, setSkillHubUploadBusy] = useState(false);
   const [extensionOperations, setExtensionOperations] = useState<
     Record<string, ExtensionOperationState>
   >({});
@@ -74,6 +84,8 @@ export function useExtensionSession({
   const lastBootstrapSnapshotId = useRef<string | null>(null);
   const lastSessionRevision = useRef<number | null>(bootstrap?.login.session_revision ?? null);
   const operationLocks = useRef(new Set<string>());
+  const hubInstallLock = useRef(false);
+  const hubUploadLock = useRef(false);
   const requestIds = useRef(new Map<string, string>());
 
   const transitionCatalogState = useCallback((state: ExtensionLoadState) => {
@@ -135,6 +147,7 @@ export function useExtensionSession({
   const mutateExtension = useCallback(async (
     extension: ExtensionProjection,
     actionId: ExtensionActionId,
+    configuration?: Record<string, string>,
   ): Promise<boolean> => {
     if (catalogStateRef.current !== "ready") {
       setExtensionError("扩展目录未验证，请刷新后再操作。");
@@ -172,12 +185,19 @@ export function useExtensionSession({
     setExtensionError(null);
 
     try {
-      const response = await client.mutateExtension(
-        extension.extension_id,
-        actionId,
-        extension.revision,
-        clientRequestId,
-      );
+      const response = actionId === "configure"
+        ? await client.configureSkill(
+            extension.extension_id,
+            configuration ?? {},
+            extension.revision,
+            clientRequestId,
+          )
+        : await client.mutateExtension(
+            extension.extension_id,
+            actionId,
+            extension.revision,
+            clientRequestId,
+          );
       if (response.extension.extension_id !== extension.extension_id) {
         throw new RuntimeApiError("扩展状态与当前操作不匹配。", 502, "extension_projection_mismatch");
       }
@@ -282,6 +302,114 @@ export function useExtensionSession({
     }
   }, [acceptCatalog, client, extensionSnapshot, formatError, refreshExtensions]);
 
+  const refreshSkillHub = useCallback(async (
+    query = "",
+    category: SkillHubCardProjection["category"] | null = null,
+    tag: string | null = null,
+    source: string | null = null,
+    signal?: AbortSignal,
+  ): Promise<boolean> => {
+    setSkillHubState("loading");
+    setSkillHubError(null);
+    try {
+      const response = await client.skillHubCatalog(query, category, tag, source, null, signal);
+      if (signal?.aborted) return false;
+      setSkillHubItems(response.items);
+      setSkillHubState("ready");
+      return true;
+    } catch (error) {
+      if (isAbortError(error)) return false;
+      setSkillHubState("error");
+      setSkillHubError(formatError(error));
+      return false;
+    }
+  }, [client, formatError]);
+
+  const installHubSkill = useCallback(async (card: SkillHubCardProjection): Promise<boolean> => {
+    if (hubInstallLock.current || operationLocks.current.size) return false;
+    hubInstallLock.current = true;
+    setSkillHubInstallingSlug(card.slug);
+    setSkillHubError(null);
+    try {
+      const response = await client.installHubSkill(card);
+      acceptCatalog(response.extensions);
+      await refreshSkillHub();
+      return true;
+    } catch (error) {
+      setSkillHubError(formatError(error));
+      return false;
+    } finally {
+      hubInstallLock.current = false;
+      setSkillHubInstallingSlug(null);
+    }
+  }, [acceptCatalog, client, formatError, refreshSkillHub]);
+
+  const downloadHubSkill = useCallback(async (card: SkillHubCardProjection): Promise<boolean> => {
+    if (skillHubDownloadingSlug) return false;
+    setSkillHubDownloadingSlug(card.slug);
+    setSkillHubError(null);
+    try {
+      const blob = await client.downloadHubSkillPackage(card);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${card.slug}-${card.version}.zip`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      return true;
+    } catch (error) {
+      setSkillHubError(formatError(error));
+      return false;
+    } finally {
+      setSkillHubDownloadingSlug(null);
+    }
+  }, [client, formatError, skillHubDownloadingSlug]);
+
+  const loadHubSkillDetail = useCallback(async (card: SkillHubCardProjection): Promise<boolean> => {
+    setSkillHubDetailLoadingSlug(card.slug);
+    setSkillHubError(null);
+    try {
+      setSkillHubDetail(await client.skillHubDetail(card.slug));
+      return true;
+    } catch (error) {
+      setSkillHubError(formatError(error));
+      return false;
+    } finally {
+      setSkillHubDetailLoadingSlug(null);
+    }
+  }, [client, formatError]);
+
+  const publishHubSkill = useCallback(async (
+    slug: string,
+    category: SkillHubCardProjection["category"],
+    file: File,
+  ): Promise<boolean> => {
+    const normalizedSlug = slug.trim();
+    if (!/^[a-z0-9][a-z0-9-]{1,95}$/.test(normalizedSlug)) {
+      setSkillHubError("Skill slug 需以小写字母或数字开头，只能包含小写字母、数字和连字符。");
+      return false;
+    }
+    if (!file.name.toLocaleLowerCase("en-US").endsWith(".zip") || file.size <= 0 || file.size > 10 * 1024 * 1024) {
+      setSkillHubError("发布包必须是不超过 10 MB 的 ZIP 文件。");
+      return false;
+    }
+    if (hubUploadLock.current || operationLocks.current.size) return false;
+    hubUploadLock.current = true;
+    setSkillHubUploadBusy(true);
+    setSkillHubError(null);
+    try {
+      await client.publishHubSkill(normalizedSlug, category, await readFileBase64(file));
+      await refreshSkillHub();
+      return true;
+    } catch (error) {
+      setSkillHubError(formatError(error));
+      return false;
+    } finally {
+      hubUploadLock.current = false;
+      setSkillHubUploadBusy(false);
+    }
+  }, [client, formatError, refreshSkillHub]);
+
   return {
     extensionSnapshot,
     extensionCatalogState,
@@ -291,6 +419,23 @@ export function useExtensionSession({
     clearExtensionError: () => setExtensionError(null),
     refreshExtensions,
     mutateExtension,
+    configureSkill: (extension: ExtensionProjection, values: Record<string, string>) => (
+      mutateExtension(extension, "configure", values)
+    ),
     installLocalSkill,
+    skillHubItems,
+    skillHubState,
+    skillHubError,
+    skillHubInstallingSlug,
+    skillHubDownloadingSlug,
+    skillHubDetail,
+    skillHubDetailLoadingSlug,
+    skillHubUploadBusy,
+    refreshSkillHub,
+    installHubSkill,
+    downloadHubSkill,
+    loadHubSkillDetail,
+    clearHubSkillDetail: () => setSkillHubDetail(null),
+    publishHubSkill,
   };
 }

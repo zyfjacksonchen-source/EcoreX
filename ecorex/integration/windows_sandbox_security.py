@@ -43,8 +43,9 @@ from .windows_path_identity import windows_invariant_path_key
 _MAX_CONFIG_BYTES = 256 * 1024
 _PREPARATION_FILE = ".sandbox-security-preparation.json"
 _HELPER_FILE_NAME = "ecorex-sandbox-host.exe"
-_STABLE_PROVISION_CONTRACT = "windows-appcontainer-stable-provision-v3"
-_STRICT_INHERITANCE_PROOF = "immutable-read-tree-mutable-workspace-acl-mic-v3"
+_STABLE_PROVISION_CONTRACT = "windows-appcontainer-stable-provision-v4"
+_STRICT_INHERITANCE_PROOF = "immutable-runtime-durable-cas-mutable-workspace-acl-mic-v4"
+_PROVISION_INHERITANCE_PROOF = "fresh-runtime-durable-cas-v1"
 _RECEIPT_KEYS = {
     "appcontainer_sid",
     "cpu_rate_hard_cap",
@@ -203,7 +204,7 @@ class WindowsSandboxSlotSecurity:
             raise WindowsSandboxSecurityError(
                 "Pre-extract Runtime payload root is not fresh and empty"
             )
-        read_roots = (payload,)
+        read_roots = self._security_read_roots(payload, create=True)
         durable = self._preparation_record(
             state="provisioning",
             slot_digest=manifest.build_digest,
@@ -227,7 +228,7 @@ class WindowsSandboxSlotSecurity:
             read_roots=read_roots,
             workspaces=workspaces,
             slot_digest=manifest.build_digest,
-            inheritance_proof="fresh-empty-roots-v1",
+            inheritance_proof=_PROVISION_INHERITANCE_PROOF,
             expected_helper_sha256=self.expected_helper_sha256,
         )
         durable = self._preparation_record(
@@ -260,7 +261,7 @@ class WindowsSandboxSlotSecurity:
         workspaces = self._workspace_roots_from_payload(
             payload, manifest=manifest, artifact=artifact
         )
-        read_roots = (payload,)
+        read_roots = self._security_read_roots(payload)
         runtime_helper = _trusted_regular_file(payload / "bin" / "ecorex-sandbox-host.exe")
         runtime_helper_sha256 = _sha256_file(runtime_helper)
         if runtime_helper_sha256 != self.expected_helper_sha256:
@@ -278,7 +279,7 @@ class WindowsSandboxSlotSecurity:
             read_roots=read_roots,
             workspaces=workspaces,
             slot_digest=manifest.build_digest,
-            inheritance_proof="fresh-empty-roots-v1",
+            inheritance_proof=_PROVISION_INHERITANCE_PROOF,
             expected_helper_sha256=self.expected_helper_sha256,
         )
         attestation = self._invoke(
@@ -349,7 +350,7 @@ class WindowsSandboxSlotSecurity:
             workspaces = self._workspace_roots_from_payload(
                 payload, manifest=manifest, artifact=artifact
             )
-            read_roots = (payload,)
+            read_roots = self._security_read_roots(payload)
             runtime_helper = _trusted_regular_file(
                 payload / "bin" / "ecorex-sandbox-host.exe"
             )
@@ -450,7 +451,7 @@ class WindowsSandboxSlotSecurity:
             raise WindowsSandboxSecurityError(
                 "Abandoned sandbox permission domain changed"
             )
-        read_roots = (payload,)
+        read_roots = self._security_read_roots(payload)
         receipt = value["receipt"]
         provision_helper_sha256 = str(value["provision_helper_sha256"])
         provision_helper = self._helper_for_digest(provision_helper_sha256)
@@ -466,7 +467,7 @@ class WindowsSandboxSlotSecurity:
                 read_roots=read_roots,
                 workspaces=workspaces,
                 slot_digest=value["slot_digest"],
-                inheritance_proof="fresh-empty-roots-v1",
+                inheritance_proof=_PROVISION_INHERITANCE_PROOF,
                 expected_helper_sha256=provision_helper_sha256,
             )
         self._invoke(
@@ -511,7 +512,7 @@ class WindowsSandboxSlotSecurity:
             manifest=manifest,
             artifact=artifact,
         )
-        read_roots = (payload,)
+        read_roots = self._security_read_roots(payload)
         if not self.validate(slot, manifest, artifact, marker):
             raise WindowsSandboxSecurityError(
                 "Retained slot sandbox receipt is not valid for cleanup"
@@ -612,6 +613,16 @@ class WindowsSandboxSlotSecurity:
         raise WindowsSandboxSecurityError(
             "Sandbox provision helper is no longer available"
         )
+
+    def _security_read_roots(
+        self, payload: Path, *, create: bool = False
+    ) -> tuple[Path, ...]:
+        """Return the only two read authorities admitted by receipt v4."""
+
+        cas_root = self.install_root / "state" / "extension-cas"
+        if create:
+            cas_root.mkdir(parents=True, exist_ok=True)
+        return (_real_directory(payload), _real_directory(cas_root))
 
     def _preparation_record(
         self,
@@ -823,7 +834,7 @@ class WindowsSandboxSlotSecurity:
             or receipt.get("permission_domain_sha256")
             != _permission_domain_digest(workspaces)
             or receipt.get("read_roots_sha256")
-            != _relative_roots_digest(read_roots, slot)
+            != _relative_roots_digest(read_roots, self.install_root, slot)
             or receipt.get("cpu_rate_hard_cap") != WINDOWS_CPU_RATE_HARD_CAP
             or receipt.get("process_memory_limit_bytes")
             != WINDOWS_PROCESS_MEMORY_LIMIT_BYTES
@@ -1064,7 +1075,7 @@ class WindowsSandboxSlotSecurity:
                 "Referenced slot sandbox marker is invalid"
             )
         payload = _real_directory(slot / "payload")
-        read_roots = (payload,)
+        read_roots = self._security_read_roots(payload)
         helper = _trusted_regular_file(payload / "bin" / "ecorex-sandbox-host.exe")
         helper_sha256 = _sha256_file(helper)
         receipt = self._invoke(
@@ -1340,10 +1351,16 @@ def _permission_domain_digest(roots: tuple[Path, ...]) -> str:
     return hashlib.sha256("\0".join(values).encode()).hexdigest()
 
 
-def _relative_roots_digest(roots: tuple[Path, ...], slot: Path) -> str:
-    values = sorted(
-        windows_invariant_path_key(root.relative_to(slot)) for root in roots
-    )
+def _relative_roots_digest(
+    roots: tuple[Path, ...], base: Path, slot: Path
+) -> str:
+    def stable_relative(root: Path) -> Path:
+        try:
+            return Path("slot") / root.relative_to(slot)
+        except ValueError:
+            return root.relative_to(base)
+
+    values = sorted(windows_invariant_path_key(stable_relative(root)) for root in roots)
     return hashlib.sha256("\0".join(values).encode()).hexdigest()
 
 

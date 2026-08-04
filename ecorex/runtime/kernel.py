@@ -33,6 +33,7 @@ from ecorex.protocol import (
     ReplaceTurnRequest,
     ReplaceTurnResponse,
     SteerTurnRequest,
+    TaskListProjection,
     ThreadProjection,
     ThreadProjectionResponse,
     ThreadStatus,
@@ -118,6 +119,11 @@ class RuntimeKernel:
             if "active_turn_status" in row.keys()
             else None
         )
+        last_turn_status = (
+            row["last_turn_status"]
+            if "last_turn_status" in row.keys()
+            else None
+        )
         return ThreadProjection(
             thread_id=row["thread_id"],
             status=ThreadStatus(row["status"]),
@@ -125,6 +131,9 @@ class RuntimeKernel:
             pinned=metadata.get("pinned") is True,
             active_turn_status=(
                 TurnStatus(active_turn_status) if active_turn_status else None
+            ),
+            last_turn_status=(
+                TurnStatus(last_turn_status) if last_turn_status else None
             ),
             metadata=metadata,
             forked_from_thread_id=row["forked_from_thread_id"],
@@ -307,6 +316,10 @@ class RuntimeKernel:
                        )
                      ORDER BY turns.created_at DESC, turns.turn_id DESC LIMIT 1
                     ) AS active_turn_status
+                    ,(SELECT turns.status FROM turns
+                      WHERE turns.thread_id = threads.thread_id
+                      ORDER BY turns.created_at DESC, turns.turn_id DESC LIMIT 1
+                    ) AS last_turn_status
                 FROM threads WHERE threads.thread_id = ?
                 """,
                 (thread_id,),
@@ -349,6 +362,10 @@ class RuntimeKernel:
                        )
                      ORDER BY turns.created_at DESC, turns.turn_id DESC LIMIT 1
                     ) AS active_turn_status
+                    ,(SELECT turns.status FROM turns
+                      WHERE turns.thread_id = threads.thread_id
+                      ORDER BY turns.created_at DESC, turns.turn_id DESC LIMIT 1
+                    ) AS last_turn_status
                 FROM threads
             """
             if conditions:
@@ -656,6 +673,81 @@ class RuntimeKernel:
             connection.execute(
                 "UPDATE items SET content_json = ?, updated_at = ? WHERE item_id = ?",
                 (json_dumps(content), _store_time(now), item_id),
+            )
+            return self._item_from_row(self._require_item(connection, item_id))
+
+    def update_task_list(
+        self,
+        *,
+        turn_id: str,
+        items: list[dict[str, Any]],
+        idempotency_key: str,
+        job_id: str,
+        lease_token: str,
+    ) -> ItemProjection:
+        if not idempotency_key:
+            raise ValueError("Task List idempotency key is required")
+        now = _utc_now()
+        try:
+            content = TaskListProjection(
+                turn_id=turn_id,
+                items=items,
+                updated_at=now,
+            ).model_dump(mode="json")
+        except ValueError as error:
+            raise ConflictError("Task List content is invalid") from error
+        complete = all(item["status"] == "completed" for item in content["items"])
+        target_status = ItemStatus.COMPLETED if complete else ItemStatus.IN_PROGRESS
+        with self._mutation_transaction(
+            scope="task_list_update",
+            subject=turn_id,
+            job_id=job_id,
+            lease_token=lease_token,
+        ) as connection:
+            turn = self._require_turn(connection, turn_id)
+            if TurnStatus(turn["status"]) in TERMINAL_TURN_STATUSES:
+                raise ConflictError("terminal Turns cannot update a Task List")
+            prior = connection.execute(
+                "SELECT item_id,payload_json FROM events WHERE thread_id=? AND idempotency_key=?",
+                (turn["thread_id"], idempotency_key),
+            ).fetchone()
+            if prior is not None:
+                if json_loads(prior["payload_json"], {}).get("items") != content["items"]:
+                    raise ConflictError("Task List idempotency key was reused with different content")
+                return self._item_from_row(self._require_item(connection, prior["item_id"]))
+            row = connection.execute(
+                "SELECT * FROM items WHERE turn_id=? AND kind=? ORDER BY created_at,item_id LIMIT 1",
+                (turn_id, ItemKind.TASK_LIST.value),
+            ).fetchone()
+            if row is None:
+                projected = self._create_item_in_transaction(
+                    connection,
+                    thread_id=turn["thread_id"],
+                    turn_id=turn_id,
+                    kind=ItemKind.TASK_LIST,
+                    content=content,
+                    status=target_status,
+                    idempotency_key=f"{idempotency_key}:item",
+                    now=now,
+                )
+                item_id = projected.item_id
+            else:
+                if ItemStatus(row["status"]) is ItemStatus.COMPLETED and not complete:
+                    raise ConflictError("a completed Task List cannot be reopened")
+                item_id = str(row["item_id"])
+            self.events.append_in_transaction(
+                connection,
+                thread_id=turn["thread_id"],
+                turn_id=turn_id,
+                item_id=item_id,
+                event_type="task_list.updated",
+                payload=content,
+                idempotency_key=idempotency_key,
+                created_at=now,
+            )
+            connection.execute(
+                "UPDATE items SET status=?,content_json=?,updated_at=? WHERE item_id=?",
+                (target_status.value, json_dumps(content), _store_time(now), item_id),
             )
             return self._item_from_row(self._require_item(connection, item_id))
 
@@ -1667,6 +1759,10 @@ class RuntimeKernel:
             "UPDATE turns SET status = ?, terminal_reason = ?, updated_at = ? "
             "WHERE turn_id = ?",
             (target.value, terminal_reason, _store_time(now), row["turn_id"]),
+        )
+        connection.execute(
+            "UPDATE threads SET updated_at = ? WHERE thread_id = ?",
+            (_store_time(now), row["thread_id"]),
         )
 
     def _settle_turn_dependents_in_transaction(
@@ -2760,6 +2856,18 @@ class RuntimeKernel:
                     }
                 )
                 items[event.item_id]["content"] = content
+                items[event.item_id]["updated_at"] = event.created_at
+            elif event.event_type == "task_list.updated" and event.item_id in items:
+                try:
+                    content = TaskListProjection.model_validate(payload).model_dump(mode="json")
+                except ValueError:
+                    raise ConflictError("Inherited Task List content is invalid") from None
+                items[event.item_id]["content"] = content
+                items[event.item_id]["status"] = (
+                    ItemStatus.COMPLETED
+                    if all(item["status"] == "completed" for item in content["items"])
+                    else ItemStatus.IN_PROGRESS
+                )
                 items[event.item_id]["updated_at"] = event.created_at
             elif event.event_type == "tool.result" and event.item_id in items:
                 if items[event.item_id]["kind"] is not ItemKind.TOOL_CALL:

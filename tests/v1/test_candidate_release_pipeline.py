@@ -1056,6 +1056,12 @@ def test_candidate_cli_writes_typed_failure_when_protected_signer_is_missing(
 
 
 def test_candidate_and_publication_workflows_are_split_and_default_safe() -> None:
+    platform_stage = (
+        Path(__file__).resolve().parents[2]
+        / ".github"
+        / "workflows"
+        / "ecorex-v1-platform-stage.yml"
+    ).read_text(encoding="utf-8")
     candidate = (
         Path(__file__).resolve().parents[2]
         / ".github"
@@ -1069,9 +1075,14 @@ def test_candidate_and_publication_workflows_are_split_and_default_safe() -> Non
         / "ecorex-v1-promote-candidate.yml"
     ).read_text(encoding="utf-8")
 
+    assert "github.sha != vars.ECOREX_V030_RELEASE_COMMIT_SHA" in platform_stage
+    assert "github.ref_protected" not in platform_stage
+
     assert "pull_request:" not in candidate
     assert "workflow_dispatch:" in candidate
-    assert "github.ref_protected" in candidate
+    assert "vars.ECOREX_V030_RELEASE_COMMIT_SHA" in candidate
+    assert "refs/heads/main" in candidate
+    assert "github.ref_protected" not in candidate
     assert "cancel-in-progress: false" in candidate
     assert "ecorex-release-signing-${{ inputs.channel }}" in candidate
     assert "ecorex-v1-accepted-${{ inputs.channel }}" in candidate
@@ -1089,7 +1100,9 @@ def test_candidate_and_publication_workflows_are_split_and_default_safe() -> Non
 
     assert "pull_request:" not in publication
     assert "workflow_dispatch:" in publication
-    assert "github.ref_protected" in publication
+    assert "vars.ECOREX_V030_RELEASE_COMMIT_SHA" in publication
+    assert "refs/heads/main" in publication
+    assert "github.ref_protected" not in publication
     assert "default: verify-only" in publication
     assert 'default: "1"' in publication
     assert "candidate_run_id:" in publication

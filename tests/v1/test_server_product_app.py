@@ -79,6 +79,15 @@ def _write_signed_bundle(tmp_path: Path):
         "</head><body></body></html>"
     ).encode("utf-8")
     (web_root / "index.html").write_bytes(index)
+    hub = (
+        "<!doctype html><html><head>"
+        "<!--__ECOREX_RUNTIME_CONFIG__-->"
+        "<title>e-Mate 能力中心</title>"
+        "</head><body>Skill Hub</body></html>"
+    ).encode("utf-8")
+    hub_sha = hashlib.sha256(hub).hexdigest()
+    hub_path = f"assets/skill-hub-page.{hub_sha[:12]}.json"
+    (web_root / hub_path).write_bytes(hub)
 
     files = (
         WebFileRecord(
@@ -91,6 +100,12 @@ def _write_signed_bundle(tmp_path: Path):
             path=javascript_path,
             size_bytes=len(javascript),
             sha256=javascript_sha,
+            immutable=True,
+        ),
+        WebFileRecord(
+            path=hub_path,
+            size_bytes=len(hub),
+            sha256=hub_sha,
             immutable=True,
         ),
     )
@@ -216,8 +231,11 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
     capability_service = app.state.runtime_composition.capability_service
     assert set(capability_service.handlers) == {
         "read",
+        "feishu_cli",
         "skill_search",
         "skill_read",
+        "skill_run",
+        "task_list",
         "tool_search",
         "tool_describe",
         "connector_search",
@@ -252,7 +270,9 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
         "cdp": "verified_handler_not_installed",
         "fetch": "verified_handler_not_installed",
         "imagegen": "verified_handler_not_installed",
+        "ocr": "input_attachment_ocr_runtime_not_bound",
         "shell": "verified_handler_not_installed",
+        "task_list": "verified_handler_not_installed",
         "vision": "verified_handler_not_installed",
     }
     client = TestClient(app, base_url=ORIGIN)
@@ -266,10 +286,18 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
     assert "\\u003c/script\\u003e" in index.text
     assert "csrf" not in index.text.casefold()
     second_index = client.get("/")
-    assert second_index.headers["content-security-policy"] != index.headers[
+    assert (
+        second_index.headers["content-security-policy"]
+        != index.headers["content-security-policy"]
+    )
+    assert client.head("/").content == b""
+    skill_hub = client.get("/ecorex-agent/skills/")
+    assert skill_hub.status_code == 200
+    assert "e-Mate 能力中心" in skill_hub.text
+    assert "__ECOREX_RUNTIME_CONFIG__" not in skill_hub.text
+    assert skill_hub.headers["content-security-policy"] != index.headers[
         "content-security-policy"
     ]
-    assert client.head("/").content == b""
 
     bearer = app.state.runtime_bearer_token
     bootstrap = client.get(
@@ -304,9 +332,7 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
 def test_runtime_owner_endpoint_requires_exact_process_nonce(tmp_path):
     signed = _write_signed_bundle(tmp_path)
     nonce = "A" * 43
-    app = create_product_app(
-        _settings(tmp_path, signed, runtime_owner_nonce=nonce)
-    )
+    app = create_product_app(_settings(tmp_path, signed, runtime_owner_nonce=nonce))
     client = TestClient(app, base_url=ORIGIN)
 
     missing = client.get("/api/v1/runtime-owner")
@@ -399,17 +425,15 @@ def test_product_settings_inject_cloud_authoritative_session(tmp_path):
         signature=SessionLeaseSignature(
             algorithm="ed25519",
             key_id="product-session-key",
-            value=base64.b64encode(
-                session_key.sign(claims.canonical_payload())
-            ).decode("ascii"),
+            value=base64.b64encode(session_key.sign(claims.canonical_payload())).decode(
+                "ascii"
+            ),
         ),
     )
     service = ManagedSessionService(
         tmp_path / "runtime.db",
         vault=InMemoryCredentialVault(),
-        verifier=Ed25519SessionLeaseVerifier(
-            {"product-session-key": session_public}
-        ),
+        verifier=Ed25519SessionLeaseVerifier({"product-session-key": session_public}),
     )
     service.install(
         lease,

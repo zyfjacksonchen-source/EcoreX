@@ -126,6 +126,8 @@ def _assistant_message_text(message: Dict[str, Any]) -> str:
 
 
 def _ensure_final_response_in_messages(agent: Agent, new_messages: List[Dict[str, Any]], response: str) -> List[Dict[str, Any]]:
+    if getattr(agent, "_last_run_final_response_persistable", True) is not True:
+        return new_messages
     text = sanitize_assistant_identity((response or "").strip())
     if not text:
         return new_messages
@@ -158,6 +160,28 @@ def _ensure_final_response_in_messages(agent: Agent, new_messages: List[Dict[str
         logger.warning(f"[AgentBridge] Failed to mirror synthetic final response into memory: {_exception_log_summary(exc)}")
 
     return new_messages
+
+
+def _failed_run_messages_for_persistence(
+    messages: List[Dict[str, Any]], *, user_pre_persisted: bool
+) -> List[Dict[str, Any]]:
+    preserved = list(messages)
+    if not user_pre_persisted or not preserved or preserved[0].get("role") != "user":
+        return preserved
+    content = preserved[0].get("content")
+    text = "\n".join(
+        str(block.get("text") or "")
+        for block in (content if isinstance(content, list) else [])
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+    marker = text.find("[e-Mate Runtime continuity note:")
+    if marker < 0:
+        return preserved[1:]
+    preserved[0] = {
+        "role": "assistant",
+        "content": [{"type": "text", "text": text[marker:]}],
+    }
+    return preserved
 
 
 def add_openai_compatible_support(bot_instance):
@@ -809,6 +833,8 @@ class AgentBridge:
         cancel_event = None
         token_key = None
         agentbridge_owns_cancel_token = False
+        pre_persisted = False
+        internal_action = False
         try:
             # Extract session_id from context for user isolation
             if context:
@@ -868,7 +894,7 @@ class AgentBridge:
                 agent.model.channel_type = context.get("channel_type", "")
                 agent.model.session_id = session_id or ""
 
-            # Store session_id on agent so executor can clear DB on fatal errors
+            # Store request identity for diagnostics and continuity.
             agent._current_session_id = session_id
             agent._current_request_id = request_id or ""
 
@@ -942,17 +968,6 @@ class AgentBridge:
                         channel_type,
                         context.get("project_context_meta") if context else None,
                     )
-                else:
-                    with agent.messages_lock:
-                        msg_count = len(agent.messages)
-                    if msg_count == 0:
-                        try:
-                            from agent.memory import get_conversation_store
-                            get_conversation_store().clear_session(session_id)
-                            _clear_responses_state_for_session(session_id)
-                            logger.info(f"[AgentBridge] Cleared DB for recovered session: {session_id}")
-                        except Exception as e:
-                            logger.warning(f"[AgentBridge] Failed to clear DB after recovery: {_exception_log_summary(e)}")
             
             # Record this user turn for the self-evolution idle trigger. Skip
             # scheduler-injected / scheduled-task sessions so internal runs do
@@ -1009,19 +1024,25 @@ class AgentBridge:
                     sort_keys=True,
                 )
             )
-            # If the agent cleared its messages due to format error / overflow,
-            # also purge the DB so the next request starts clean.
+            # Persist tool facts produced before a model-format failure. The
+            # leading user row may already have been eagerly persisted.
             if session_id and agent:
                 try:
-                    with agent.messages_lock:
-                        msg_count = len(agent.messages)
-                    if msg_count == 0:
-                        from agent.memory import get_conversation_store
-                        get_conversation_store().clear_session(session_id)
-                        _clear_responses_state_for_session(session_id)
-                        logger.info(f"[AgentBridge] Cleared DB for session after error: {session_id}")
+                    failed_messages = list(getattr(agent, "_last_run_new_messages", []))
+                    sanitize_messages_identity(failed_messages)
+                    failed_messages = _failed_run_messages_for_persistence(
+                        failed_messages,
+                        user_pre_persisted=bool(pre_persisted or internal_action),
+                    )
+                    if failed_messages:
+                        self._persist_messages(
+                            session_id,
+                            failed_messages,
+                            (context.get("channel_type") or "") if context else "",
+                            context.get("project_context_meta") if context else None,
+                        )
                 except Exception as db_err:
-                    logger.warning(f"[AgentBridge] Failed to clear DB after error: {_exception_log_summary(db_err)}")
+                    logger.warning(f"[AgentBridge] Failed to preserve recovery context: {_exception_log_summary(db_err)}")
             # Release cancel token on error path too (idempotent).
             if cancel_event is not None and (request_id or session_id) and agentbridge_owns_cancel_token:
                 try:
@@ -1171,7 +1192,7 @@ class AgentBridge:
                     for key, value in sorted(existing_env_vars.items()):
                         f.write(f'{key}={value}\n')
 
-                logger.info(f"[AgentBridge] Synced API keys from config.json to .env")
+                logger.info("[AgentBridge] Synced API keys from config.json to .env")
             except Exception as e:
                 logger.warning(f"[AgentBridge] Failed to sync API keys: {_exception_log_summary(e)}")
     

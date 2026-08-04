@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from common import const
 from ecorex.capabilities import (
     ManagedModelCatalog,
     ManagedModelSpec,
@@ -32,7 +33,7 @@ def _catalog() -> ManagedModelCatalog:
             ),
             ManagedModelSpec(
                 model_id="gpt-image-2",
-                display_name="EcoreX Image 2",
+                display_name="e-Mate Image 2",
                 modalities=frozenset({ModelModality.IMAGE}),
                 aliases=("image2", "image-2"),
                 capabilities=frozenset({"image_generation", "image_edit"}),
@@ -62,24 +63,24 @@ def test_builtin_catalog_publishes_one_canonical_image_2_alias() -> None:
     )
 
 
-def test_builtin_chat_catalog_publishes_versioned_gpt_56_sol_policy() -> None:
+def test_builtin_chat_catalog_publishes_versioned_gpt_56_luna_high_policy() -> None:
     catalog = builtin_model_catalog()
     model = catalog.for_modality(ModelModality.CHAT)[0]
 
     assert model.model_id == "ecorex-chat"
-    assert model.display_name == "GPT-5.6 SOL · 中等推理"
+    assert model.display_name == "GPT-5.6 Luna · 高推理"
     assert {"chat", "tools", "vision", "reasoning"} <= model.capabilities
     assert catalog.resolve(
-        "gpt-5.6-sol", modality=ModelModality.CHAT
+        "gpt-5.6-luna", modality=ModelModality.CHAT
     ).canonical_model_id == "ecorex-chat"
     assert model.model_policy is not None
     assert model.model_policy.to_dict() == {
         "schema_version": 1,
-        "policy_id": "ecorex-chat-gpt-5.6-sol",
-        "policy_version": "1.0.0",
+        "policy_id": "ecorex-chat-gpt-5.6-luna",
+        "policy_version": "1.1.0",
         "local_model_id": "ecorex-chat",
-        "upstream_model_id": "gpt-5.6-sol",
-        "reasoning_effort": "medium",
+        "upstream_model_id": "gpt-5.6-luna",
+        "reasoning_effort": "high",
         "context_management": {
             "type": "compaction",
             "compact_threshold_tokens": 272_000,
@@ -96,6 +97,7 @@ def test_builtin_chat_catalog_restores_all_managed_v03_provider_choices() -> Non
 
     assert set(models) == {
         "ecorex-chat",
+        "ecorex-gpt-5.6-sol",
         "ecorex-deepseek-v4-pro",
         "ecorex-gemini-3.1-pro",
         "ecorex-doubao-seed-2.0-pro",
@@ -103,6 +105,11 @@ def test_builtin_chat_catalog_restores_all_managed_v03_provider_choices() -> Non
     assert catalog.resolve("deepseek-v4-pro", modality=ModelModality.CHAT).canonical_model_id == (
         "ecorex-deepseek-v4-pro"
     )
+    assert catalog.resolve("gpt-5.6-sol", modality=ModelModality.CHAT).canonical_model_id == (
+        "ecorex-gpt-5.6-sol"
+    )
+    assert ModelModality.CHAT not in models["ecorex-gpt-5.6-sol"].default_for
+    assert models["ecorex-gpt-5.6-sol"].model_policy.reasoning_effort == "medium"
     assert catalog.resolve("gemini", modality=ModelModality.CHAT).canonical_model_id == (
         "ecorex-gemini-3.1-pro"
     )
@@ -119,11 +126,21 @@ def test_gateway_mapping_accepts_only_exact_managed_policy_subsets() -> None:
         for policy in ECOREX_CHAT_MODEL_POLICIES
     }
     require_managed_chat_mapping(full_mapping)
-    require_managed_chat_mapping({"ecorex-chat": "gpt-5.6-sol"})
+    require_managed_chat_mapping({"ecorex-chat": "gpt-5.6-luna"})
+    require_managed_chat_mapping({"ecorex-gpt-5.6-sol": "gpt-5.6-sol"})
     with pytest.raises(ValueError, match="violates managed policy"):
         require_managed_chat_mapping({"ecorex-deepseek-v4-pro": "deepseek-chat"})
     with pytest.raises(ValueError, match="violates managed policy"):
         require_managed_chat_mapping({"unknown-model": "unknown-model"})
+
+
+def test_gpt_55_is_legacy_compatible_but_not_exposed_in_the_active_catalog() -> None:
+    assert "gpt-5.5" not in const.MODEL_LIST
+    assert {const.GPT_56_LUNA, const.GPT_56_SOL} <= set(const.MODEL_LIST)
+    assert all(
+        policy.upstream_model_id != "gpt-5.5"
+        for policy in ECOREX_CHAT_MODEL_POLICIES
+    )
 
 
 def test_catalog_is_available_before_a_thread_exists_and_separates_modalities() -> None:

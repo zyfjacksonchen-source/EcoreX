@@ -23,6 +23,12 @@ from common.ecorex_public_payload import mask_sensitive_text, redact_public_tool
 from common.ecorex_identity import sanitize_assistant_identity, sanitize_message_identity
 from common.log import logger
 from common.i18n import t as _t
+from ecorex.capabilities import (
+    Exposure,
+    builtin_capability_registry,
+    builtin_intent_routing_policy,
+    intent_inherits_image_context,
+)
 
 # Optional: repair malformed JSON args from non-strict providers (e.g. unescaped quotes in long content).
 try:
@@ -296,6 +302,7 @@ TOOL_SCHEMA_CORE_NAMES = {
     "edit",
     "send",
     "host_diagnostics",
+    "browser",
     "optional_abilities",
     "agent_capability",
     "feishu_cli",
@@ -352,13 +359,6 @@ TOOL_SCHEMA_INTENT_KEYWORDS = {
     "vision": (
         "image", "vision", "screenshot", "图片", "图像", "截图", "识别",
     ),
-    "imagegen": (
-        "imagegen", "image gen", "image generation", "text to image", "image to image",
-        "generate image", "edit image", "生图", "图像生成", "图片生成", "文生图", "图生图",
-        "生成图片", "生成图像", "改图", "修图", "出图", "多图", "批量生图",
-        "批量生成图片", "一张张生成", "逐张生成", "轮播图",
-        "精准修图", "局部修图", "精修标注", "标注图", "箭头尖端", "语义图片编辑",
-    ),
     "ocr": (
         "ocr", "extract text", "extract url", "screenshot link", "image link",
         "图片链接", "截图链接", "识别链接", "读取链接", "读链接", "识别文字", "识别文本",
@@ -373,24 +373,6 @@ TOOL_SCHEMA_INTENT_KEYWORDS = {
     ),
 }
 
-IMAGEGEN_SEMANTIC_EDIT_REGEXES = (
-    re.compile(r"(?:图|图片|照片|图像|画面|海报|封面|素材).{0,32}(?:去掉|去除|删除|移除|抹掉|擦除|消除|去背景|换背景|去水印|去logo|去\s*logo|修掉|修复|补全|扩图|抠图|换成|替换|改成|改为|变成|调整|美化)"),
-    re.compile(r"(?:去掉|去除|删除|移除|抹掉|擦除|消除|去背景|换背景|去水印|去logo|去\s*logo|修掉|修复|补全|扩图|抠图|换成|替换|改成|改为|变成|调整|美化).{0,32}(?:图|图片|照片|图像|画面|海报|封面|素材|背景|路人|水印|logo|文字|人物|物体|瑕疵|污渍)"),
-    re.compile(r"(?:背景|路人|水印|logo|文字|错字|物体|人物|瑕疵|污渍).{0,20}(?:去掉|去除|删除|移除|抹掉|擦除|消除|换成|替换|改成|改为|修掉|修复)"),
-    re.compile(r"(?i)(?:remove|delete|erase|replace|change|fix|retouch|inpaint|clean up).{0,40}(?:image|photo|picture|background|person|people|watermark|logo|text|object)"),
-    re.compile(r"(?i)(?:image|photo|picture).{0,40}(?:remove|delete|erase|replace|change|fix|retouch|inpaint|clean up)"),
-)
-
-IMAGEGEN_INTENT_REGEXES = (
-    re.compile(r"(?:生成|画|绘制|出|做|设计|创作).{0,16}(?:[一二两三四五六七八九十\d]+\s*张).{0,18}(?:图|图片|图像|海报|插图|插画|封面|视觉|素材)?"),
-    re.compile(r"(?:生成|画|绘制|出|做|设计|创作).{0,10}(?:图|图片|图像|海报|插图|插画|封面|视觉|素材)"),
-    re.compile(r"[一二两三四五六七八九十\d]+\s*张.{0,12}(?:图|图片|图像|海报|插图|插画|封面|视觉|素材)"),
-    re.compile(r"(?:一张张|逐张|多图|批量).{0,12}(?:生成|生图|出图|画|做|设计|创作)"),
-    re.compile(r"(?:精准修图|局部修图|精修标注|语义图片编辑|标注图|箭头尖端)"),
-    re.compile(r"(?:单字|一个字|文字|错字).{0,20}(?:改图|修图|改成|改为|替换|换成)"),
-    re.compile(r"(?:海报|图片|图像|画面|封面|物料).{0,24}(?:改图|修图|重绘|生成|出图|改成|改为|替换|换成)"),
-    *IMAGEGEN_SEMANTIC_EDIT_REGEXES,
-)
 IMAGEGEN_PRIORITY_TOOL_NAMES = {
     "imagegen",
     "host_diagnostics",
@@ -408,8 +390,10 @@ IMAGEGEN_SHELL_SEMANTIC_SIGNAL_REGEXES = (
     re.compile(r"(?i)(?:^|[\s;,{(\[])(?:prompt|instruction|description)\s*[:=]"),
     re.compile(r"(?i)--prompt(?:=|\s+)"),
     re.compile(r"(?i)\"prompt\"\s*:"),
-    re.compile(r"(?:生成|生图)"),
-) + IMAGEGEN_SEMANTIC_EDIT_REGEXES
+)
+
+_IMAGEGEN_ROUTE_POLICY = builtin_intent_routing_policy()
+_IMAGEGEN_ROUTE_SPEC = builtin_capability_registry().get("imagegen")
 
 TOOL_SCHEMA_FOLLOWUP_CONFIRMATIONS = {
     "ok", "okay", "yes", "y", "go", "continue", "proceed", "do it", "run it", "execute",
@@ -648,6 +632,8 @@ class AgentStreamExecutor:
         self._last_model_retry_evidence: Dict[str, Any] = {}
         self._current_user_message_text = ""
         self._current_turn_imagegen_success = False
+        self.last_outcome = "completed"
+        self.final_response_persistable = True
         
         # Track files to send (populated by read tool)
         self.files_to_send = []  # List of file metadata dicts
@@ -800,6 +786,13 @@ class AgentStreamExecutor:
             raise
         except Exception as e:
             logger.warning(f"[Agent] desktop tool permission check skipped: {_public_agent_exception_message('Permission check failed.', e)}")
+            try:
+                from common.ecorex_tool_permissions import verified_runtime_full_access
+
+                if verified_runtime_full_access():
+                    return {"allowed": True, "reason": "verified-runtime-full-access"}
+            except Exception:
+                pass
             risky = (tool_name or "").strip().lower() in {
                 "bash", "shell", "terminal", "browser", "feishu_cli", "optional_abilities",
                 "tongxin_cli", "agent_capability", "mcp", "mcp_server", "write", "edit", "fs_write", "skill_write",
@@ -1088,18 +1081,17 @@ class AgentStreamExecutor:
             return f"{name}:read"
         return name or "unknown"
 
-    def _count_recent_chain(self, chain_key: str) -> int:
+    def _count_recent_unproductive_chain(self, chain_key: str) -> int:
         count = 0
-        for key, _name, _success in reversed(self.tool_chain_history):
-            if key == chain_key:
-                count += 1
-            else:
+        for key, _name, success in reversed(self.tool_chain_history):
+            if key != chain_key or success:
                 break
+            count += 1
         return count
 
     def _check_tool_chain_budget(self, tool_name: str, args: dict) -> Tuple[bool, str]:
         chain_key = self._tool_chain_key(tool_name, args)
-        recent_count = self._count_recent_chain(chain_key)
+        recent_count = self._count_recent_unproductive_chain(chain_key)
         if chain_key.startswith("feishu_cli") and recent_count >= 6:
             return True, (
                 "Feishu/Lark tool chain has been used repeatedly without converging. "
@@ -1131,7 +1123,7 @@ class AgentStreamExecutor:
         if not self.tool_chain_history:
             return ""
         chain_key = self.tool_chain_history[-1][0]
-        recent_count = self._count_recent_chain(chain_key)
+        recent_count = self._count_recent_unproductive_chain(chain_key)
         if recent_count < 4 or self._last_convergence_hint_key == f"{chain_key}:{recent_count}":
             return ""
         if not (
@@ -1320,7 +1312,9 @@ class AgentStreamExecutor:
         for group, keywords in TOOL_SCHEMA_INTENT_KEYWORDS.items():
             if any(self._intent_keyword_matches(lowered, keyword) for keyword in keywords):
                 groups.add(group)
-        if self._looks_like_imagegen_user_intent(user_text):
+        if self._looks_like_imagegen_user_intent(user_text) or re.search(
+            r"(?<![\w-])@imagegen(?![\w-])", user_text or "", flags=re.IGNORECASE
+        ):
             groups.add("imagegen")
         if "mcp" in lowered:
             groups.add("mcp")
@@ -1329,17 +1323,33 @@ class AgentStreamExecutor:
 
     @staticmethod
     def _looks_like_imagegen_user_intent(user_text: str) -> bool:
-        text = str(user_text or "").strip().lower()
-        if not text:
-            return False
-        return any(pattern.search(text) for pattern in IMAGEGEN_INTENT_REGEXES)
+        return any(
+            evidence.matched and evidence.promote_to is Exposure.DIRECT
+            for evidence in _IMAGEGEN_ROUTE_POLICY.evaluate(str(user_text or ""), _IMAGEGEN_ROUTE_SPEC)
+        )
 
     @staticmethod
     def _looks_like_semantic_image_edit_user_intent(user_text: str) -> bool:
-        text = str(user_text or "").strip().lower()
-        if not text:
-            return False
-        return any(pattern.search(text) for pattern in IMAGEGEN_SEMANTIC_EDIT_REGEXES)
+        return any(
+            evidence.matched and evidence.rule_id == "media.image.edit"
+            for evidence in _IMAGEGEN_ROUTE_POLICY.evaluate(str(user_text or ""), _IMAGEGEN_ROUTE_SPEC)
+        )
+
+    def _latest_user_has_image_attachment(self) -> bool:
+        for message in reversed(self.messages or []):
+            if not isinstance(message, dict) or message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                return False
+            if any(isinstance(block, dict) and block.get("type") == "tool_result" for block in content):
+                continue
+            return any(
+                isinstance(block, dict)
+                and block.get("type") in {"image", "input_image", "image_url"}
+                for block in content
+            )
+        return False
 
     @staticmethod
     def _intent_keyword_matches(lowered_text: str, keyword: str) -> bool:
@@ -1703,7 +1713,12 @@ class AgentStreamExecutor:
         tool_router = ToolRouterPolicy()
         imagegen_companion_groups = set()
         inherited_followup_intent = False
-        if self._is_tool_schema_followup_confirmation(user_text):
+        image_context_followup = intent_inherits_image_context(user_text)
+        recent_imagegen_success = any(
+            str(name or "").strip().lower() == "imagegen" and success
+            for _chain, name, success in self.tool_chain_history[-8:]
+        )
+        if self._is_tool_schema_followup_confirmation(user_text) or image_context_followup:
             for historical_text in self._recent_real_user_texts(limit=4)[1:]:
                 historical_groups = self._tool_schema_intent_groups(historical_text)
                 if historical_groups:
@@ -1711,6 +1726,14 @@ class AgentStreamExecutor:
                     imagegen_intent = imagegen_intent or "imagegen" in historical_groups
                     inherited_followup_intent = True
                     break
+        if (
+            not imagegen_intent
+            and image_context_followup
+            and (self._latest_user_has_image_attachment() or recent_imagegen_success)
+        ):
+            intent_groups.add("imagegen")
+            imagegen_intent = True
+            inherited_followup_intent = True
         if imagegen_intent:
             imagegen_companion_groups = tool_router.companion_groups_for_imagegen(intent_groups)
         selected: Dict[str, Any] = {}
@@ -1900,7 +1923,10 @@ class AgentStreamExecutor:
         except Exception:
             basename = ""
         if basename in {"python", "python.exe", "python3", "py", "py.exe", "node", "node.exe"}:
-            semantic_generation_signal = any(pattern.search(text) for pattern in IMAGEGEN_SHELL_SEMANTIC_SIGNAL_REGEXES)
+            semantic_generation_signal = (
+                AgentStreamExecutor._looks_like_imagegen_user_intent(text)
+                or any(pattern.search(text) for pattern in IMAGEGEN_SHELL_SEMANTIC_SIGNAL_REGEXES)
+            )
             if (
                 ("from pil import" in text or "imagedraw" in text or "image.new(" in text)
                 and semantic_generation_signal
@@ -1947,12 +1973,7 @@ class AgentStreamExecutor:
             return True
         if self._looks_like_semantic_image_edit_user_intent(text):
             return True
-        retouch_patterns = (
-            r"(?:把|将).{0,16}(?:改成|改为|替换成|替换|换成).{0,16}(?:图|图片|图像|海报|画面|文字|错字|单字|一个字)",
-            r"(?:图|图片|图像|海报|画面).{0,24}(?:字|文字|错字|单字|一个字).{0,24}(?:改成|改为|替换成|替换|换成)",
-            r"(?:把|将).{0,8}(?:图|图片|图像|海报|画面).{0,24}(?:字|文字|错字|单字|一个字).{0,24}(?:改成|改为|替换成|替换|换成)",
-        )
-        return any(re.search(pattern, text) for pattern in retouch_patterns)
+        return False
 
     def _retouch_shell_postprocess_allowed(self, command: str) -> bool:
         text = str(command or "").strip().lower()
@@ -2336,6 +2357,7 @@ class AgentStreamExecutor:
         )
         logger.info(f"🤖 {self.model.model}{thinking_label} | 👤 {_log_msg}")        
         self._current_user_message_text = str(user_message or "")
+        resume_from_tool_history = self._continues_previous_tool_work(user_message)
         
         # Add user message (Claude format - use content blocks for consistency)
         self.messages.append({
@@ -2362,6 +2384,10 @@ class AgentStreamExecutor:
 
         final_response = ""
         turn = 0
+        exhausted = True
+        outcome = "completed"
+        self.last_outcome = outcome
+        self.final_response_persistable = True
 
         cancelled = False
         try:
@@ -2383,12 +2409,12 @@ class AgentStreamExecutor:
                 if not tool_calls:
                     # 检查是否返回了空响应
                     if not assistant_msg:
-                        logger.warning(f"[Agent] LLM returned empty response after retry (no content and no tool calls)")
-                        logger.info(f"[Agent] This usually happens when LLM thinks the task is complete after tool execution")
+                        logger.warning("[Agent] LLM returned empty response after retry (no content and no tool calls)")
+                        logger.info("[Agent] This usually happens when LLM thinks the task is complete after tool execution")
                         
                         # 如果之前有工具调用，强制要求 LLM 生成文本回复
-                        if turn > 1:
-                            logger.info(f"[Agent] Requesting explicit response from LLM...")
+                        if turn > 1 or resume_from_tool_history:
+                            logger.info("[Agent] Requesting explicit response from LLM...")
                             
                             # Remember position so we can remove the injected prompt later
                             prompt_insert_idx = len(self.messages)
@@ -2403,6 +2429,7 @@ class AgentStreamExecutor:
                             })
                             
                             # 再调用一次 LLM
+                            self._force_text_response_once("empty-after-tools")
                             assistant_msg, tool_calls = self._call_llm_stream(retry_on_empty=False)
                             self._remove_internal_hints()
                             final_response = assistant_msg
@@ -2420,31 +2447,36 @@ class AgentStreamExecutor:
                             # to the tool execution path below (don't break the loop).
                             if tool_calls:
                                 logger.info(
-                                    f"[Agent] LLM returned tool_calls in explicit-response retry, "
-                                    f"continuing to execute tools instead of breaking"
+                                    "[Agent] LLM returned tool_calls in explicit-response retry, "
+                                    "continuing to execute tools instead of breaking"
                                 )
                             elif not assistant_msg:
-                                # Still empty (no text and no tool_calls): use fallback
-                                logger.warning(f"[Agent] Still empty after explicit request")
+                                # Preserve completed tool facts without claiming the task succeeded.
+                                logger.warning("[Agent] Still empty after explicit request")
                                 final_response = _t(
-                                    "抱歉，我暂时无法生成回复。请尝试换一种方式描述你的需求，或稍后再试。",
-                                    "Sorry, I can't generate a reply right now. Please try rephrasing your request, or try again later.",
+                                    "工具步骤已经执行，现有产物也已保留，但模型没有返回最终说明；本轮未标记为完成。你可以直接回复“继续”，我会基于现有结果收口。",
+                                    "The tool steps ran and existing artifacts were preserved, but the model returned no final explanation, so this run was not marked complete. Reply “continue” to finish from the existing results.",
                                 )
-                                logger.info(f"Generated fallback response for empty LLM output")
+                                outcome = "partial"
+                                self.final_response_persistable = False
+                                logger.info("Generated fallback response for empty LLM output")
                         else:
                             # First-turn empty reply, fall back directly
                             final_response = _t(
                                 "抱歉，我暂时无法生成回复。请尝试换一种方式描述你的需求，或稍后再试。",
                                 "Sorry, I can't generate a reply right now. Please try rephrasing your request, or try again later.",
                             )
-                            logger.info(f"Generated fallback response for empty LLM output")
+                            outcome = "failed"
+                            self.final_response_persistable = False
+                            logger.info("Generated fallback response for empty LLM output")
                     else:
                         logger.info(f"💭 {assistant_msg[:150]}{'...' if len(assistant_msg) > 150 else ''}")
                     
                     # If the explicit-response retry produced tool_calls, skip the break
                     # and continue down to the tool execution branch in this same iteration.
                     if not tool_calls:
-                        logger.debug(f"✅ Done (no tool calls)")
+                        exhausted = False
+                        logger.debug("✅ Done (no tool calls)")
                         self._emit_event("turn_end", {
                             "turn": turn,
                             "has_tool_calls": False
@@ -2502,7 +2534,7 @@ class AgentStreamExecutor:
                         
                         # Check for critical error - abort entire conversation
                         if result.get("status") == "critical_error":
-                            logger.error(f"💥 Fatal error detected, aborting conversation")
+                            logger.error("💥 Fatal error detected, aborting conversation")
                             final_response = result.get('result') or _t("任务执行失败", "Task execution failed")
                             return final_response
                         
@@ -2609,11 +2641,12 @@ class AgentStreamExecutor:
                     "tool_count": len(tool_calls)
                 })
 
-            if turn >= self.max_turns:
+            if exhausted:
+                outcome = "partial"
                 logger.warning(f"⚠️  Reached max decision step limit: {self.max_turns}")
                 
                 # Force model to summarize without tool calls
-                logger.info(f"[Agent] Requesting summary from LLM after reaching max steps...")
+                logger.info("[Agent] Requesting summary from LLM after reaching max steps...")
                 
                 # Remember position before injecting the prompt so we can remove it later
                 prompt_insert_idx = len(self.messages)
@@ -2679,7 +2712,8 @@ class AgentStreamExecutor:
         finally:
             final_response = final_response.strip() if final_response else final_response
             final_response = sanitize_assistant_identity(final_response)
-            if final_response and not cancelled:
+            self.last_outcome = "cancelled" if cancelled else outcome
+            if final_response and not cancelled and self.final_response_persistable:
                 self._ensure_final_response_message(final_response)
             if cancelled:
                 # Emit before agent_end so channels can mark UI as cancelled
@@ -2688,10 +2722,29 @@ class AgentStreamExecutor:
             self._emit_event("agent_end", {
                 "final_response": final_response,
                 "cancelled": cancelled,
+                "outcome": "cancelled" if cancelled else outcome,
                 "usage": self.agent.last_usage,
             })
 
         return final_response
+
+    def _continues_previous_tool_work(self, user_message: str) -> bool:
+        """Recognize a continuation only when the preceding turn has tool facts."""
+        text = re.sub(r"\s+", " ", str(user_message or "").strip().lower())
+        if not (
+            text.startswith(("继续", "接着", "往下", "完成剩余", "请继续"))
+            or re.match(r"^(continue|proceed|resume|finish)\b", text)
+        ):
+            return False
+        turns = self._identify_complete_turns()
+        if not turns:
+            return False
+        return any(
+            isinstance(block, dict) and block.get("type") == "tool_result"
+            for message in turns[-1]["messages"]
+            for block in (message.get("content") or [])
+            if isinstance(message.get("content"), list)
+        )
 
     def _call_llm_stream(self, retry_on_empty=True, retry_count=0, max_retries=3,
                          _overflow_retry: bool = False,
@@ -2924,7 +2977,7 @@ class AgentStreamExecutor:
                     }
 
                     # Log error with all available information
-                    logger.error(f"🔴 Stream API Error:")
+                    logger.error("🔴 Stream API Error:")
                     logger.error(f"   Message: {_public_agent_exception_message('Stream API message redacted.', error_msg)}")
                     logger.error(f"   Status Code: {status_code}")
                     logger.error(f"   Error Code: {error_code}")
@@ -3205,20 +3258,40 @@ class AgentStreamExecutor:
                         "before_effective_context_limit_tokens": context_budget.get("effective_context_limit_tokens"),
                     })
 
-                # Aggressive trim didn't help or this is a message format error
-                # -> clear everything and also purge DB to prevent reload of dirty data
-                logger.warning("🔄 Clearing conversation history to recover")
-                self.messages.clear()
-                self._clear_session_db()
+                if is_message_format_error and not _overflow_retry:
+                    recovery = self._compress_history_for_format_recovery()
+                    if recovery["applied"]:
+                        self._emit_event("message_format_recovery", {
+                            **recovery,
+                            "retry": True,
+                            "force_text_response": True,
+                        })
+                        self._emit_event("message_end", {
+                            "content": "",
+                            "tool_calls": [],
+                            "message_format_retry": True,
+                            "retrying": True,
+                            "usage": self.agent.last_usage,
+                        })
+                        return self._call_llm_stream(
+                            retry_on_empty=retry_on_empty,
+                            retry_count=retry_count,
+                            max_retries=max_retries,
+                            _overflow_retry=True,
+                            _force_text_turn=True,
+                            _force_text_reason="message_format_recovery",
+                        )
+
+                # Recovery failed closed without deleting the user's durable history.
                 if is_context_overflow:
                     raise Exception(_t(
-                        "抱歉，对话历史过长导致上下文溢出。我已清空历史记录，请重新描述你的需求。",
-                        "Sorry, the conversation history got too long and overflowed the context. I've cleared the history — please describe your request again.",
+                        "对话上下文仍然过长，本轮已停止，但历史记录和已有产物均已保留。请继续时缩小任务范围。",
+                        "The conversation context is still too long. This run stopped, but the history and existing artifacts were preserved. Continue with a narrower scope.",
                     ))
                 else:
                     raise Exception(_t(
-                        "抱歉，之前的对话出现了问题。我已清空历史记录，请重新发送你的消息。",
-                        "Sorry, something went wrong with the earlier conversation. I've cleared the history — please send your message again.",
+                        "模型仍未接受修复后的消息链，本轮已停止，但历史记录和工具结果均已保留。请直接回复“继续”重试。",
+                        "The model still rejected the repaired message chain. This run stopped, but the history and tool results were preserved. Reply “continue” to retry.",
                     ))
             
             # Check if error is rate limit (429)
@@ -3718,47 +3791,9 @@ class AgentStreamExecutor:
             stop_tool_heartbeat()
 
     def _build_tool_not_found_message(self, tool_name: str) -> str:
-        """Build a helpful error message when a tool is not found.
-
-        If a skill with the same name exists in skill_manager, read its
-        SKILL.md and include the content so the LLM knows how to use it.
-        """
+        """Report the authoritative callable tool set without Skill bypasses."""
         available_tools = list(self.tools.keys())
-        base_msg = f"Tool '{tool_name}' not found. Available tools: {available_tools}"
-
-        skill_manager = getattr(self.agent, 'skill_manager', None)
-        if not skill_manager:
-            return base_msg
-
-        skill_entry = skill_manager.get_skill(tool_name)
-        if not skill_entry:
-            return base_msg
-
-        skill = skill_entry.skill
-        skill_md_path = skill.file_path
-        skill_content = ""
-        try:
-            with open(skill_md_path, 'r', encoding='utf-8') as f:
-                skill_content = f.read()
-        except Exception:
-            skill_content = skill.description
-
-        logger.info(
-            f"[Agent] Tool '{tool_name}' not found, but matched skill '{skill.name}'. "
-            f"Guiding LLM to use the skill instead."
-        )
-
-        return (
-            f"Tool '{tool_name}' is not a built-in tool, but a matching skill "
-            f"'{skill.name}' is available. Read and follow the skill instructions below, "
-            f"then choose the most specific available tool for each step. Do not fall back "
-            f"to raw shell probing when a dedicated host tool such as `feishu_cli`, "
-            f"`host_diagnostics`, or the configured browser/CDP path applies:\n\n"
-            f"--- SKILL: {skill.name} (path: {skill_md_path}) ---\n"
-            f"{skill_content}\n"
-            f"--- END SKILL ---\n\n"
-            f"Available tools: {available_tools}"
-        )
+        return f"Tool '{tool_name}' not found. Available tools: {available_tools}"
 
     def _validate_and_fix_messages(self):
         """Delegate to the shared sanitizer (see message_sanitizer.py)."""
@@ -4080,6 +4115,19 @@ class AgentStreamExecutor:
             current_user_marker=current_user_marker,
         )
 
+    def _compress_history_for_format_recovery(self) -> Dict[str, Any]:
+        """Strip provider-sensitive tool protocol while retaining its facts."""
+        before = len(self.messages)
+        repaired: List[Dict[str, Any]] = []
+        for turn in self._identify_complete_turns():
+            repaired.extend(
+                compress_turn_to_text_only(turn, preserve_tool_facts=True)["messages"]
+            )
+        if not repaired or repaired == self.messages:
+            return {"applied": False, "messages_before": before, "messages_after": before}
+        self.messages[:] = repaired
+        return {"applied": True, "messages_before": before, "messages_after": len(repaired)}
+
     def _build_context_summary_callback(self, discarded_turns: list, kept_turns: list):
         """
         Build a callback that injects an LLM summary into the first user
@@ -4280,32 +4328,6 @@ class AgentStreamExecutor:
             f"({old_count} -> {len(self.messages)} messages, "
             f"~{current_tokens + system_tokens} -> ~{kept_tokens + system_tokens} tokens)"
         )
-
-    def _clear_session_db(self):
-        """
-        Clear the current session's persisted messages from SQLite DB.
-
-        This prevents dirty data (broken tool_use/tool_result pairs) from being
-        reloaded on the next request or after a restart.
-        """
-        try:
-            session_id = getattr(self.agent, '_current_session_id', None)
-            if not session_id:
-                return
-            from agent.memory import get_conversation_store
-            store = get_conversation_store()
-            store.clear_session(session_id)
-            try:
-                from models.openai.responses_state_store import clear_responses_state_for_session
-
-                removed = clear_responses_state_for_session(session_id)
-                if removed:
-                    logger.info(f"Cleared Responses state for dirty session: {session_id}, removed={removed}")
-            except Exception as e:
-                logger.warning(f"Failed to clear Responses state for dirty session {session_id}: {_public_agent_exception_message('Responses state cleanup failed.', e)}")
-            logger.info(f"🗑️ Cleared dirty session data from DB: {session_id}")
-        except Exception as e:
-            logger.warning(f"Failed to clear session DB: {_public_agent_exception_message('Session DB cleanup failed.', e)}")
 
     def _prepare_messages(self) -> List[Dict[str, Any]]:
         """

@@ -49,3 +49,11 @@ class ExtensionIntegrityError(ExtensionError):
 
 class ExtensionProviderRevoked(ExtensionError):
     code = "extension_provider_revoked"
+
+
+class SkillStateChanged(ExtensionProviderRevoked):
+    code = "skill_state_changed"
+
+
+class SkillNotExecutable(ExtensionError):
+    code = "skill_not_executable"

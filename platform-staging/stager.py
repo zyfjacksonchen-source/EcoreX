@@ -3645,7 +3645,8 @@ def _browser_gates(
             {
                 "parent_environment_allowlisted": True,
                 "fixed_playwright_lifecycle": True,
-                "arbitrary_evaluate_disabled": True,
+                "evaluate_requires_full_access": True,
+                "same_page_batch_supported": True,
             },
         )
         _gate(

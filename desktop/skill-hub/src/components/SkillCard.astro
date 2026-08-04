@@ -1,0 +1,23 @@
+---
+// Adapted from Cow Skill Hub SkillCard.astro at the commit pinned in
+// docs/v0.3.0/skill-hub/cow-skill-hub.lock.json (MIT; see NOTICE.md).
+---
+
+<article class="skill-card" data-skill-card hidden>
+  <header>
+    <div>
+      <h2 data-title></h2>
+      <button class="slug" type="button" data-copy-slug aria-label="复制 Skill slug"></button>
+    </div>
+    <span class="state" data-state></span>
+  </header>
+  <p data-summary></p>
+  <div class="tags" data-tags></div>
+  <footer>
+    <span data-meta></span>
+    <div class="actions">
+      <button type="button" data-detail>查看详情</button>
+      <button class="primary" type="button" data-install>安装并启用</button>
+    </div>
+  </footer>
+</article>

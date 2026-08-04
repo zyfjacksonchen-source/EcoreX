@@ -48,6 +48,7 @@ _CORE_POLICIES: dict[str, _CorePublicPolicy] = {
     "tool_describe": _CorePublicPolicy("正在查看能力说明", "已确认能力说明"),
     "skill_search": _CorePublicPolicy("正在查找办公技能", "已完成技能查找"),
     "skill_read": _CorePublicPolicy("正在读取技能说明", "已读取技能说明"),
+    "skill_run": _CorePublicPolicy("正在运行技能", "已完成技能运行"),
     "connector_search": _CorePublicPolicy(
         "正在查找可用连接器操作", "已完成连接器操作查找"
     ),

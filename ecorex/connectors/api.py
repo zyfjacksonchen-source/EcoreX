@@ -352,7 +352,7 @@ def _oauth_callback_html(
         result = "completed"
         result_code = "ok"
         title = "连接已完成"
-        message = "EcoreX 已安全接收授权结果，正在关闭此窗口。"
+        message = "e-Mate 已安全接收授权结果，正在关闭此窗口。"
         http_status = status.HTTP_200_OK
     else:
         assert error is not None

@@ -21,7 +21,7 @@ def configuration(
     modality: str = "chat",
     preset: str = "responses",
     local_model_id: str = "ecorex-chat",
-    upstream_model_id: str = "gpt-5.6-sol",
+    upstream_model_id: str = "gpt-5.6-luna",
 ) -> ActiveModelConfiguration:
     return ActiveModelConfiguration(
         config_id="config-activation",
@@ -68,11 +68,11 @@ def test_catalog_visibility_is_not_enough_to_activate() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request.url.path)
         if request.url.path == "/v1/models":
-            return catalog("gpt-5.6-sol")
+            return catalog("gpt-5.6-luna")
         return httpx.Response(
             200,
             headers={"Content-Type": "application/json"},
-            json={"model": "gpt-5.6-sol", "output": []},
+            json={"model": "gpt-5.6-luna", "output": []},
         )
 
     result = run_test(handler, configuration())
@@ -86,11 +86,11 @@ def test_responses_probe_freezes_endpoint_model_and_no_storage() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/models":
-            return catalog("gpt-5.6-sol")
+            return catalog("gpt-5.6-luna")
         submitted.append(request)
         body = json.loads(request.content)
         assert body == {
-            "model": "gpt-5.6-sol",
+            "model": "gpt-5.6-luna",
             "instructions": "Return exactly ECOREX_ACTIVATION_OK and no other text.",
             "input": [
                 {
@@ -99,14 +99,14 @@ def test_responses_probe_freezes_endpoint_model_and_no_storage() -> None:
                     "content": [
                         {
                             "type": "input_text",
-                            "text": "EcoreX administrator activation probe.",
+                            "text": "e-Mate administrator activation probe.",
                         }
                     ],
                 }
             ],
             "max_output_tokens": 512,
             "store": False,
-            "reasoning": {"effort": "medium"},
+            "reasoning": {"effort": "high"},
             "context_management": [
                 {"type": "compaction", "compact_threshold": 272_000}
             ],
@@ -115,7 +115,7 @@ def test_responses_probe_freezes_endpoint_model_and_no_storage() -> None:
             200,
             headers={"Content-Type": "application/json"},
             json={
-                "model": "gpt-5.6-sol-2026-07-01",
+                "model": "gpt-5.6-luna-2026-07-01",
                 "output": [
                     {
                         "type": "message",
@@ -136,7 +136,7 @@ def test_responses_probe_freezes_endpoint_model_and_no_storage() -> None:
     assert submitted[0].url.path == "/v1/responses"
     assert submitted[0].headers["accept-encoding"] == "identity"
     assert submitted[0].headers["idempotency-key"] == (
-        "ecorex-model-activation-9b57f3a792eb8b129e6d652e320aadc4"
+        "ecorex-model-activation-c5240da1035c4bda7783d3d15c741357"
     )
 
 
@@ -254,7 +254,7 @@ def test_uncertain_submission_is_never_retried() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal submissions
         if request.url.path == "/v1/models":
-            return catalog("gpt-5.6-sol")
+            return catalog("gpt-5.6-luna")
         submissions += 1
         raise httpx.ReadTimeout("result unknown", request=request)
 
@@ -270,7 +270,7 @@ def test_server_error_after_submission_is_uncertain_and_never_retried() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal submissions
         if request.url.path == "/v1/models":
-            return catalog("gpt-5.6-sol")
+            return catalog("gpt-5.6-luna")
         submissions += 1
         return httpx.Response(
             503,

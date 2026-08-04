@@ -27,6 +27,7 @@ from .management_models import (
     ModelConfigurationProjection,
     ModelRevisionProjection,
     ModelTestProjection,
+    PasswordChangeProjection,
     StageModelConfigurationRequest,
     UpdateAdminUserRequest,
     UsageSummaryProjection,
@@ -597,6 +598,129 @@ class AdminManagementRepository:
         if retry_after is not None:
             raise AdminPasswordLocked(retry_after)
         raise AdminPasswordAuthenticationError("password login failed")
+
+    def change_password(
+        self,
+        *,
+        current_password: str,
+        new_password: str,
+        client_request_id: str,
+        actor: ControlPrincipal,
+    ) -> PasswordChangeProjection:
+        """Change only the authenticated account credential, idempotently."""
+
+        operation = "account.password.change"
+        request_sha = _sha(
+            {
+                "account_id": actor.account_id,
+                "current_password": self._secrets.password_request_fingerprint(
+                    current_password
+                ),
+                "new_password": self._secrets.password_request_fingerprint(new_password),
+            }
+        )
+
+        connection = self._connect()
+        try:
+            replay = connection.execute(
+                "SELECT operation,request_sha256,response_json "
+                "FROM admin_ops_idempotency WHERE actor_subject=? AND client_request_id=?",
+                (actor.subject, client_request_id),
+            ).fetchone()
+            if replay is not None:
+                if replay["operation"] != operation or replay["request_sha256"] != request_sha:
+                    raise AdminManagementConflict("idempotency key was reused")
+                return PasswordChangeProjection.model_validate_json(replay["response_json"])
+            row = connection.execute(
+                "SELECT users.status,credentials.encoded_hash "
+                "FROM admin_ops_users users LEFT JOIN admin_ops_password_credentials "
+                "credentials USING(account_id) WHERE users.account_id=?",
+                (actor.account_id,),
+            ).fetchone()
+        finally:
+            connection.close()
+
+        encoded = (
+            str(row["encoded_hash"])
+            if row is not None and row["encoded_hash"] is not None
+            else dummy_password_hash()
+        )
+        verified, _replacement = verify_password_and_upgrade(current_password, encoded)
+        if not verified or row is None or row["status"] != "active":
+            raise AdminPasswordAuthenticationError("password change failed")
+        replacement_hash = encode_password(new_password)
+        result = PasswordChangeProjection()
+        now = _now()
+
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            replay = connection.execute(
+                "SELECT operation,request_sha256,response_json "
+                "FROM admin_ops_idempotency WHERE actor_subject=? AND client_request_id=?",
+                (actor.subject, client_request_id),
+            ).fetchone()
+            if replay is not None:
+                if replay["operation"] != operation or replay["request_sha256"] != request_sha:
+                    raise AdminManagementConflict("idempotency key was reused")
+                connection.commit()
+                return PasswordChangeProjection.model_validate_json(replay["response_json"])
+            current = connection.execute(
+                "SELECT users.status,credentials.encoded_hash "
+                "FROM admin_ops_users users LEFT JOIN admin_ops_password_credentials "
+                "credentials USING(account_id) WHERE users.account_id=?",
+                (actor.account_id,),
+            ).fetchone()
+            if (
+                current is None
+                or current["status"] != "active"
+                or current["encoded_hash"] is None
+                or not hmac.compare_digest(str(current["encoded_hash"]), encoded)
+            ):
+                raise AdminManagementConflict("account credential changed concurrently")
+            self._write_password(
+                connection,
+                account_id=actor.account_id,
+                encoded_hash=replacement_hash,
+                source_version="admin",
+                source_record_sha256=None,
+                now=now,
+            )
+            credential_version = int(
+                connection.execute(
+                    "SELECT credential_version FROM admin_ops_password_credentials "
+                    "WHERE account_id=?",
+                    (actor.account_id,),
+                ).fetchone()[0]
+            )
+            self._audit(
+                connection,
+                actor=actor,
+                action="account.password.changed",
+                target_id=actor.account_id,
+                payload={"credential_version": credential_version},
+            )
+            connection.execute(
+                "INSERT INTO admin_ops_idempotency("
+                "actor_subject,client_request_id,operation,request_sha256,response_json,created_at"
+                ") VALUES(?,?,?,?,?,?)",
+                (
+                    actor.subject,
+                    client_request_id,
+                    operation,
+                    request_sha,
+                    result.model_dump_json(),
+                    now,
+                ),
+            )
+            connection.commit()
+            return result
+        except BaseException:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     @staticmethod
     def _password_source_key(source_ip: str | None) -> str:

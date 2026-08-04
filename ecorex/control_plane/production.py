@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import ipaddress
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -51,6 +52,7 @@ from ecorex.release import (
 )
 from ecorex.release.direct_admission import DirectReleaseAdmissionPolicy
 from ecorex.update import Ed25519SignatureVerifier, MAX_ARTIFACT_BYTES
+from ecorex.extensions import LocalSkillBundleStore
 
 from .app import ControlPlaneServiceLifecycle, create_control_plane_app
 from .audit import CloudAuditRepository
@@ -89,6 +91,7 @@ from .management_schema import (
     CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION,
     AdminManagementSchemaManager,
 )
+from .skill_hub import SkillHubRegistry
 from .device_identity import ManagedDeviceIdentityBroker
 from .device_identity_production import (
     DeviceIdentityProductionConfig,
@@ -1487,6 +1490,8 @@ class ControlPlaneProductionBundle:
     model_connection_tester: HTTPSModelConnectionTester | None
     device_identity_broker: ManagedDeviceIdentityBroker | None
     release_replica_service: CDNReleaseReplicaService | None
+    skill_hub_registry: SkillHubRegistry
+    skill_hub_bundle_store: LocalSkillBundleStore
     lifecycle: "SingleNodeControlPlaneLifecycle"
     config: ControlPlaneProductionConfig
 
@@ -1508,6 +1513,8 @@ class ControlPlaneProductionBundle:
             model_connection_tester=self.model_connection_tester,
             device_identity_broker=self.device_identity_broker,
             release_replica_service=self.release_replica_service,
+            skill_hub_registry=self.skill_hub_registry,
+            skill_hub_bundle_store=self.skill_hub_bundle_store,
         )
 
 
@@ -1853,6 +1860,11 @@ class SingleNodeSQLiteS3Provider:
                 ).migrate()
                 if config.device_identity_enabled:
                     DeviceIdentitySchemaManager(config.database_path).migrate()
+                SkillHubRegistry(
+                    config.database_path,
+                    author_key=_skill_hub_author_key(secrets),
+                )
+                LocalSkillBundleStore(_skill_hub_cas_root(config))
                 volume.install_or_validate()
                 volume.validate_wal()
                 post_backup = backup.create(reason="post-migration")
@@ -1894,6 +1906,15 @@ class SingleNodeSQLiteS3Provider:
         management = AdminManagementSchemaManager(config.database_path).validate()
         if config.device_identity_enabled:
             DeviceIdentitySchemaManager(config.database_path).validate()
+        SkillHubRegistry(
+            config.database_path,
+            author_key=_skill_hub_author_key(secrets),
+            initialize=False,
+        )
+        skill_hub_root = _skill_hub_cas_root(config)
+        if not skill_hub_root.is_dir():
+            raise ProductionConfigurationError("Skill Hub CAS is unavailable")
+        LocalSkillBundleStore(skill_hub_root, create=False)
         receipt = backup.latest(full_digest=True)
         _require_recent_backup(receipt, config.maximum_backup_age_seconds)
         audit_encryption = _secret_bytes(
@@ -2023,6 +2044,17 @@ class SingleNodeSQLiteS3Provider:
             AdminManagementSchemaManager(config.database_path).validate()
             if config.device_identity_enabled:
                 DeviceIdentitySchemaManager(config.database_path).validate()
+            skill_hub_registry = SkillHubRegistry(
+                config.database_path,
+                author_key=_skill_hub_author_key(secrets),
+                initialize=False,
+            )
+            skill_hub_root = _skill_hub_cas_root(config)
+            if not skill_hub_root.is_dir():
+                raise ProductionConfigurationError("Skill Hub CAS is unavailable")
+            skill_hub_bundle_store = LocalSkillBundleStore(
+                skill_hub_root, create=False
+            )
             backup.latest(full_digest=True)
             storage, object_store = self._share_storage(config)
             verifier = Ed25519SignatureVerifier(release_keys)
@@ -2160,6 +2192,8 @@ class SingleNodeSQLiteS3Provider:
                 model_connection_tester=model_connection_tester,
                 device_identity_broker=device_identity_broker,
                 release_replica_service=release_replica_service,
+                skill_hub_registry=skill_hub_registry,
+                skill_hub_bundle_store=skill_hub_bundle_store,
                 lifecycle=lifecycle,
                 config=config,
             )
@@ -2368,6 +2402,19 @@ def _validate_runtime_schema_receipts(database_path: Path) -> None:
         ) from error
     finally:
         connection.close()
+
+
+def _skill_hub_cas_root(config: ControlPlaneProductionConfig) -> Path:
+    return config.database_path.parent / "skill-hub-cas"
+
+
+def _skill_hub_author_key(secrets: SecretProvider) -> bytes:
+    integrity_key = _secret_bytes(
+        secrets.read("audit-integrity-key"), minimum_length=32, maximum_length=64
+    )
+    return hmac.new(
+        integrity_key, b"e-mate-skill-hub-author-v1", hashlib.sha256
+    ).digest()
 
 
 def _share_keyring(secrets: SecretProvider) -> CloudShareKeyRing:

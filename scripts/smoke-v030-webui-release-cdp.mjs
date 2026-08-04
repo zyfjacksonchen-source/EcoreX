@@ -117,7 +117,7 @@ const bridgeSource = `
     if (p === "/api/skills") return ok({ skills: [] });
     if (p === "/api/extensions") return ok({ extensions: [], count: 0, summary: {} });
     if (p === "/api/channels") return ok({ channels: [] });
-    if (p === "/api/models") return ok({ providers: [], capabilities: {}, currentProvider: "openai", currentModel: "gpt-5.5" });
+    if (p === "/api/models") return ok({ providers: [], capabilities: {}, currentProvider: "openai", currentModel: "gpt-5.6-luna" });
     if (p === "/api/scheduler") return ok({ enabled: false, initialized: false, running: false, serviceStatus: "unavailable", tasks: [], taskCount: 0, counts: { total: 0, enabled: 0, disabled: 0, error: 0 } });
     if (p === "/api/external-connections") return ok({ schema: "ecorex.external-connectors.implemented.v1", connections: [] });
     if (p === "/api/tool-permissions") return ok({ mode: "smart-ask", grantsCount: 0, auditPath: "mock-permissions.json" });

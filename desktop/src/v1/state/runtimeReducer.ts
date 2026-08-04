@@ -169,6 +169,7 @@ function reduceKnownEvent(state: RuntimeViewState, event: EventEnvelope): Runtim
           title: stringValue(event.payload.title),
           pinned: objectValue(event.payload.metadata).pinned === true,
           active_turn_status: null,
+          last_turn_status: null,
           metadata: objectValue(event.payload.metadata),
           forked_from_thread_id: null,
           forked_from_turn_id: null,
@@ -257,6 +258,26 @@ function reduceKnownEvent(state: RuntimeViewState, event: EventEnvelope): Runtim
         updated_at: event.created_at,
       };
       return { ...state, items: { ...state.items, [item.item_id]: item } };
+    }
+    case "task_list.updated": {
+      if (!event.item_id || state.items[event.item_id]?.kind !== "task_list") return state;
+      const item = state.items[event.item_id];
+      const content = objectValue(event.payload);
+      const entries = Array.isArray(content.items) ? content.items : [];
+      return {
+        ...state,
+        items: {
+          ...state.items,
+          [event.item_id]: {
+            ...item,
+            status: entries.length > 0 && entries.every((entry) => objectValue(entry).status === "completed")
+              ? "completed"
+              : "in_progress",
+            content,
+            updated_at: event.created_at,
+          },
+        },
+      };
     }
     case "turn.steered": {
       if (!event.item_id || !event.turn_id) return state;
@@ -582,7 +603,8 @@ export function selectIsThinking(state: RuntimeViewState): boolean {
 
 export function selectVisibleReasoning(state: RuntimeViewState): ItemProjection | null {
   const candidates = selectItems(state).filter(
-    (item) => item.kind === "reasoning" && item.content.presentation === "visible",
+    (item) => item.kind === "reasoning"
+      && (item.content.presentation === "visible" || item.content.presentation === "collapsed"),
   );
   return candidates.at(-1) ?? null;
 }

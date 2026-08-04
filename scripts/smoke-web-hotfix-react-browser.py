@@ -277,7 +277,7 @@ def _bridge_stub_script() -> str:
       }};
       if (path.startsWith('/api/tools')) return {{ status: 'success', tools: [] }};
       if (path.startsWith('/api/skills')) return {{ status: 'success', skills: [] }};
-      if (path.startsWith('/api/models')) return {{ status: 'success', providers: [{{ id: 'gpt-5.5' }}], capabilities: {{}} }};
+      if (path.startsWith('/api/models')) return {{ status: 'success', providers: [{{ id: 'gpt-5.6-luna' }}], capabilities: {{}} }};
       if (path.startsWith('/api/extensions')) return {{ status: 'success', extensions: [], count: 0, summary: {{}} }};
       if (path.startsWith('/api/channels')) return {{ status: 'success', channels: [] }};
       if (path.startsWith('/api/ui-state')) return request.method === 'GET' ? {{ status: 'success', state: null }} : {{ status: 'success' }};

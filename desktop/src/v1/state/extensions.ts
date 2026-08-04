@@ -74,6 +74,8 @@ export function extensionActionDisabledReason(action: ExtensionActionProjection)
     extension_circuit_open: "该技能当前处于熔断状态。",
     extension_not_enabled: "只有已启用技能可以执行此操作。",
     health_probe_unavailable: "当前技能没有提供健康检查。",
+    configuration_not_required: "当前技能不需要额外配置。",
+    extension_already_uninstalled: "当前技能已经卸载。",
   } satisfies Record<string, string>)[reason] ?? reason;
 }
 
@@ -93,6 +95,7 @@ export function extensionStatusLabel(status: ExtensionStatus): string {
     enabled: "已启用",
     disabled: "已停用",
     quarantined: "已隔离",
+    uninstalled: "已卸载",
   } satisfies Record<ExtensionStatus, string>)[status];
 }
 
@@ -132,6 +135,8 @@ export function extensionActionLabel(actionId: ExtensionActionId): string {
     disable: "停用",
     health_check: "检查健康",
     rollback: "回滚版本",
+    configure: "配置",
+    uninstall: "卸载",
   } satisfies Record<ExtensionActionId, string>)[actionId];
 }
 

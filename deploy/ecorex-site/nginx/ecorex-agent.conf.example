@@ -84,6 +84,15 @@ location = /ecorex-agent/public-bootstrap-index.json {
     add_header X-Content-Type-Options "nosniff" always;
 }
 
+# v0.2.9.2 WebUI clients discover v0.3.0 through this separately staged,
+# atomically replaced compatibility pointer.
+location = /ecorex-agent/manifest.json {
+    alias /srv/ecorex-agent-download/legacy-pointer/manifest.json;
+    default_type application/json;
+    add_header Cache-Control "no-store" always;
+    add_header X-Content-Type-Options "nosniff" always;
+}
+
 location ~ ^/ecorex-agent/(?<ecorex_public_asset>(?:site|styles)\.[0-9a-f]{12}\.(?:js|css)|assets/[A-Za-z0-9._-]+\.[0-9a-f]{12}\.(?:png|svg|webp|woff2))$ {
     alias /srv/ecorex-agent-download/current/$ecorex_public_asset;
     autoindex off;

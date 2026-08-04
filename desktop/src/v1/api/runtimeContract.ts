@@ -2,7 +2,6 @@ import type {
   ArtifactListResponse,
   ArtifactProjection,
   BootstrapResponse,
-  ConversationUsageProjection,
   EventEnvelope,
   InputAttachmentProjection,
 } from "./contracts.ts";
@@ -10,7 +9,6 @@ import { GENERATED_RUNTIME_CONTRACT } from "./generatedRuntimeContract.ts";
 
 const ARTIFACT_FIELDS = GENERATED_RUNTIME_CONTRACT.wireFields.ArtifactProjection;
 const BOOTSTRAP_FIELDS = GENERATED_RUNTIME_CONTRACT.wireFields.BootstrapResponse;
-const CONVERSATION_USAGE_FIELDS = GENERATED_RUNTIME_CONTRACT.wireFields.ConversationUsageProjection;
 const EVENT_FIELDS = GENERATED_RUNTIME_CONTRACT.wireFields.EventEnvelope;
 const INPUT_ATTACHMENT_FIELDS = GENERATED_RUNTIME_CONTRACT.wireFields.InputAttachmentProjection;
 const BOOTSTRAP_VALUES = GENERATED_RUNTIME_CONTRACT.bootstrap;
@@ -188,8 +186,8 @@ function assertModelDescriptor(
     if (value.model_policy.local_model_id !== value.model_id) {
       reject(contract, policyPath, "a policy matching model_id");
     }
-    if (value.model_policy.reasoning_effort !== "medium") {
-      reject(contract, `${policyPath}.reasoning_effort`, 'literal "medium"');
+    if (!["medium", "high"].includes(value.model_policy.reasoning_effort as string)) {
+      reject(contract, `${policyPath}.reasoning_effort`, 'literal "medium" or "high"');
     }
     assertRecord(
       value.model_policy.context_management,
@@ -649,91 +647,6 @@ export function validateInputAttachmentProjection(value: unknown): InputAttachme
     reject(contract, "created_at", "an ISO timestamp");
   }
   return value as unknown as InputAttachmentProjection;
-}
-
-function assertUsageWindow(value: unknown, path: string): void {
-  const contract = "ConversationUsageProjection";
-  assertRecord(value, contract, path);
-  assertWireFields(
-    value,
-    ["input_tokens", "output_tokens", "total_tokens"],
-    contract,
-    path,
-  );
-  assertInteger(value.input_tokens, contract, `${path}.input_tokens`);
-  assertInteger(value.output_tokens, contract, `${path}.output_tokens`);
-  assertInteger(value.total_tokens, contract, `${path}.total_tokens`);
-  if (value.total_tokens < value.input_tokens + value.output_tokens) {
-    reject(contract, `${path}.total_tokens`, "at least input plus output tokens");
-  }
-}
-
-export function validateConversationUsageProjection(value: unknown): ConversationUsageProjection {
-  const contract = "ConversationUsageProjection";
-  assertRecord(value, contract, "root");
-  assertWireFields(
-    value,
-    CONVERSATION_USAGE_FIELDS.ConversationUsageProjection,
-    contract,
-    "root",
-  );
-  assertString(value.thread_id, contract, "thread_id");
-  assertString(value.timezone, contract, "timezone");
-  if (value.scope !== "account" && value.scope !== "local_device") {
-    reject(contract, "scope", "account or local_device");
-  }
-  if (value.source !== "managed_gateway" && value.source !== "local_event_store") {
-    reject(contract, "source", "managed_gateway or local_event_store");
-  }
-  assertBoolean(
-    value.complete_across_devices,
-    contract,
-    "complete_across_devices",
-  );
-  assertUsageWindow(value.today, "today");
-  assertUsageWindow(value.week, "week");
-  assertRecord(value.context, contract, "context");
-  assertWireFields(
-    value.context,
-    [
-      "used_tokens",
-      "window_tokens",
-      "model_id",
-      "model_display_name",
-      "model_catalog_snapshot_id",
-      "measured_at",
-    ],
-    contract,
-    "context",
-  );
-  if (value.context.used_tokens !== null) {
-    assertInteger(value.context.used_tokens, contract, "context.used_tokens");
-  }
-  if (value.context.window_tokens !== null) {
-    assertInteger(value.context.window_tokens, contract, "context.window_tokens", 1_000);
-  }
-  if (
-    value.context.used_tokens !== null
-    && value.context.window_tokens !== null
-    && value.context.used_tokens > value.context.window_tokens
-  ) {
-    // This is not malformed: compaction may happen after the final provider
-    // usage fact. Keep it renderable instead of making the UI invent a cap.
-  }
-  assertNullableString(value.context.model_id, contract, "context.model_id");
-  assertNullableString(
-    value.context.model_display_name,
-    contract,
-    "context.model_display_name",
-  );
-  assertNullableString(
-    value.context.model_catalog_snapshot_id,
-    contract,
-    "context.model_catalog_snapshot_id",
-  );
-  assertNullableString(value.context.measured_at, contract, "context.measured_at");
-  assertString(value.calculated_at, contract, "calculated_at");
-  return value as unknown as ConversationUsageProjection;
 }
 
 /**

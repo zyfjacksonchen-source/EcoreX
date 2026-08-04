@@ -28,8 +28,11 @@ from .errors import (
     ExtensionIntegrityError,
     ExtensionNotFound,
     ExtensionProviderRevoked,
+    SkillNotExecutable,
+    SkillStateChanged,
 )
 from .local_bundle import LocalBundleFile, LocalSkillBundle, LocalSkillBundleStore
+from .local_bundle import SKILL_RUNTIME_FILE, parse_skill_runtime_manifest
 from .models import (
     EXTENSION_CONTRACT_VERSION,
     ExtensionExportKind,
@@ -41,6 +44,7 @@ from .models import (
     canonical_digest,
 )
 from .service import ExtensionCatalogSnapshot, ExtensionService
+from .skill_runner import ControlledSkillRunRequest, ControlledSkillRunResult
 
 
 CONTRIBUTION_CONTRACT_VERSION = "1.0"
@@ -74,6 +78,7 @@ class SkillReferenceContribution:
 class SkillContribution:
     extension_id: str
     revision_id: str
+    state_revision: int
     export_id: str
     export_digest: str
     artifact_sha256: str
@@ -88,6 +93,7 @@ class SkillContribution:
             "kind": "skill",
             "extension_id": self.extension_id,
             "revision_id": self.revision_id,
+            "state_revision": self.state_revision,
             "export_id": self.export_id,
             "export_digest": self.export_digest,
             "artifact_sha256": self.artifact_sha256,
@@ -174,6 +180,16 @@ class SkillSearchFact:
     result_sha256: str
 
 
+@dataclass(frozen=True, slots=True)
+class SkillReadFact:
+    """Durable proof that one exact searched Skill revision was read."""
+
+    tool_call_id: str
+    arguments: Mapping[str, Any]
+    result: Any
+    result_sha256: str
+
+
 class SkillRuntime:
     """Progressive Skill discovery over immutable Extension snapshots."""
 
@@ -187,6 +203,11 @@ class SkillRuntime:
             [ToolInvocationContext, str, str, str], SkillSearchFact | None
         ]
         | None = None,
+        read_fact_resolver: Callable[
+            [ToolInvocationContext, str, str, str], SkillReadFact | None
+        ]
+        | None = None,
+        controlled_runner: Any | None = None,
     ) -> None:
         if service.local_bundle_store is None:
             raise ValueError("Skill Runtime requires the product local Skill CAS")
@@ -195,6 +216,12 @@ class SkillRuntime:
         self.snapshot_resolver = snapshot_resolver
         self.turn_intent_resolver = turn_intent_resolver
         self.search_fact_resolver = search_fact_resolver
+        self.read_fact_resolver = read_fact_resolver
+        self.controlled_runner = (
+            controlled_runner
+            if controlled_runner is not None
+            else service.skill_runner
+        )
         self._snapshots: dict[str, ExtensionContributionSnapshot] = {}
 
     def contribution_snapshot(
@@ -244,8 +271,13 @@ class SkillRuntime:
                 # Builtin/pack Skills need their own verified static CAS adapter;
                 # they are not silently interpreted as local files.
                 continue
-            skills.append(self._skill_contribution(manifest))
-        skills.sort(key=lambda value: (normalize_reference(value.name), value.extension_id))
+            state_revision = item.get("revision")
+            if isinstance(state_revision, bool) or not isinstance(state_revision, int):
+                raise ExtensionIntegrityError("active Skill state revision is invalid")
+            skills.append(self._skill_contribution(manifest, state_revision=state_revision))
+        skills.sort(
+            key=lambda value: (normalize_reference(value.name), value.extension_id)
+        )
         mcp = tuple(
             sorted(
                 mcp_contributions,
@@ -310,18 +342,28 @@ class SkillRuntime:
             raise ValueError("Skill search limit must be between 1 and 50")
         snapshot = self._snapshot(extension_snapshot_id)
         query_tokens = _tokens(query)
-        explicit = tuple(normalize_reference(value) for value in explicit_names if str(value).strip())
+        explicit = tuple(
+            normalize_reference(value) for value in explicit_names if str(value).strip()
+        )
         ranked: list[tuple[int, str, SkillContribution]] = []
         for skill in snapshot.skills:
+            self._assert_skill_current(extension_snapshot_id, skill)
             identity = normalize_reference(skill.name)
             extension_identity = normalize_reference(skill.extension_id)
             haystack = " ".join(
                 normalize_reference(value)
-                for value in (skill.name, skill.description, skill.extension_id, *skill.tags)
+                for value in (
+                    skill.name,
+                    skill.description,
+                    skill.extension_id,
+                    *skill.tags,
+                )
             )
             if query_tokens and not all(token in haystack for token in query_tokens):
                 continue
-            explicit_rank = 0 if identity in explicit or extension_identity in explicit else 1
+            explicit_rank = (
+                0 if identity in explicit or extension_identity in explicit else 1
+            )
             ranked.append((explicit_rank, identity, skill))
         ranked.sort(key=lambda item: (item[0], item[1], item[2].extension_id))
         return tuple(
@@ -366,25 +408,30 @@ class SkillRuntime:
     ) -> dict[str, Any]:
         snapshot = self._snapshot(extension_snapshot_id)
         skill = self._resolve_skill(snapshot, discovery_id)
-        self.service.assert_export_invocable(
-            extension_snapshot_id,
-            export_kind=ExtensionExportKind.SKILL,
-            export_id=skill.export_id,
-            expected_revision_id=skill.revision_id,
-        )
+        self._assert_skill_current(extension_snapshot_id, skill)
         bundle = self.store.verify(skill.artifact_sha256)
         instructions = _instruction_body(
             self.store.read_verified_file(skill.artifact_sha256, "SKILL.md")
         )
-        if hashlib.sha256(instructions.encode("utf-8")).hexdigest() != skill.instruction_sha256:
-            raise ExtensionIntegrityError("Skill instructions changed after snapshot capture")
+        if (
+            hashlib.sha256(instructions.encode("utf-8")).hexdigest()
+            != skill.instruction_sha256
+        ):
+            raise ExtensionIntegrityError(
+                "Skill instructions changed after snapshot capture"
+            )
         by_id = {item.reference_id: item for item in skill.references}
         requested = tuple(reference_ids)
-        if len(requested) != len(set(requested)) or len(requested) > MAX_SKILL_REFERENCES:
+        if (
+            len(requested) != len(set(requested))
+            or len(requested) > MAX_SKILL_REFERENCES
+        ):
             raise ValueError("Skill reference selection is invalid")
         unknown = set(requested) - set(by_id)
         if unknown:
-            raise ExtensionNotFound("Skill reference is absent from the frozen revision")
+            raise ExtensionNotFound(
+                "Skill reference is absent from the frozen revision"
+            )
         resources = _reference_paths(bundle, skill.revision_id)
         selected = requested or ()
         references: list[dict[str, Any]] = []
@@ -392,21 +439,35 @@ class SkillRuntime:
         for reference_id in selected:
             resource = resources.get(reference_id)
             if resource is None:
-                raise ExtensionIntegrityError("Skill reference inventory no longer matches")
-            content = self.store.read_verified_file(skill.artifact_sha256, resource.path)
+                raise ExtensionIntegrityError(
+                    "Skill reference inventory no longer matches"
+                )
+            content = self.store.read_verified_file(
+                skill.artifact_sha256, resource.path
+            )
             if len(content) > MAX_SKILL_REFERENCE_BYTES:
-                raise ExtensionIntegrityError("Skill reference exceeds the read boundary")
+                raise ExtensionIntegrityError(
+                    "Skill reference exceeds the read boundary"
+                )
             try:
                 text = content.decode("utf-8")
             except UnicodeDecodeError as error:
-                raise ExtensionIntegrityError("Skill reference is not strict UTF-8") from error
-            _validate_text(text, label="Skill reference", maximum=MAX_SKILL_REFERENCE_BYTES)
+                raise ExtensionIntegrityError(
+                    "Skill reference is not strict UTF-8"
+                ) from error
+            _validate_text(
+                text, label="Skill reference", maximum=MAX_SKILL_REFERENCE_BYTES
+            )
             expected = by_id[reference_id]
             if hashlib.sha256(content).hexdigest() != expected.sha256:
-                raise ExtensionIntegrityError("Skill reference changed after snapshot capture")
+                raise ExtensionIntegrityError(
+                    "Skill reference changed after snapshot capture"
+                )
             response_bytes += len(content)
             if response_bytes > MAX_SKILL_RESPONSE_BYTES:
-                raise ExtensionIntegrityError("Skill read response exceeds the product boundary")
+                raise ExtensionIntegrityError(
+                    "Skill read response exceeds the product boundary"
+                )
             references.append({"reference_id": reference_id, "content": text})
         _validate_token_budget(instructions, *(item["content"] for item in references))
         return {
@@ -446,7 +507,26 @@ class SkillRuntime:
         return {
             "skill_search": _SkillSearchHandler(self),
             "skill_read": _SkillReadHandler(self),
+            "skill_run": _SkillRunHandler(self),
         }
+
+    def _assert_skill_current(
+        self,
+        extension_snapshot_id: str,
+        skill: SkillContribution,
+    ) -> None:
+        try:
+            self.service.assert_export_invocable(
+                extension_snapshot_id,
+                export_kind=ExtensionExportKind.SKILL,
+                export_id=skill.export_id,
+                expected_revision_id=skill.revision_id,
+                expected_state_revision=skill.state_revision,
+            )
+        except ExtensionProviderRevoked as error:
+            raise SkillStateChanged(
+                "Skill was disabled, uninstalled, or changed after discovery"
+            ) from error
 
     def _snapshot(self, extension_snapshot_id: str) -> ExtensionContributionSnapshot:
         snapshot = self._snapshots.get(extension_snapshot_id)
@@ -454,7 +534,9 @@ class SkillRuntime:
             snapshot = self.contribution_snapshot(extension_snapshot_id)
         return snapshot
 
-    def _skill_contribution(self, manifest: ExtensionManifest) -> SkillContribution:
+    def _skill_contribution(
+        self, manifest: ExtensionManifest, *, state_revision: int
+    ) -> SkillContribution:
         bundle = self.store.verify(manifest.artifact_sha256)
         instructions = _instruction_body(
             self.store.read_verified_file(manifest.artifact_sha256, "SKILL.md")
@@ -486,6 +568,7 @@ class SkillRuntime:
         return SkillContribution(
             extension_id=manifest.extension_id,
             revision_id=manifest.revision_id,
+            state_revision=state_revision,
             export_id=export.export_id,
             export_digest=export_digest,
             artifact_sha256=manifest.artifact_sha256,
@@ -511,7 +594,9 @@ class SkillRuntime:
             if skill.extension_id == extension_id and skill.revision_id == revision_id
         )
         if not matches:
-            raise ExtensionNotFound("Skill is absent from the frozen Extension snapshot")
+            raise ExtensionNotFound(
+                "Skill is absent from the frozen Extension snapshot"
+            )
         if len(matches) != 1:
             raise ExtensionIntegrityError("Skill discovery identity is ambiguous")
         return matches[0]
@@ -519,9 +604,16 @@ class SkillRuntime:
     def _snapshot_for_context(self, context: ToolInvocationContext) -> str:
         scope = context.execution_scope
         if scope is None or self.snapshot_resolver is None:
-            raise ExtensionIntegrityError("Skill tools require a durable Turn execution scope")
-        if not isinstance(scope.execution_batch_id, str) or not scope.execution_batch_id:
-            raise ExtensionIntegrityError("Skill tools require a durable execution batch")
+            raise ExtensionIntegrityError(
+                "Skill tools require a durable Turn execution scope"
+            )
+        if (
+            not isinstance(scope.execution_batch_id, str)
+            or not scope.execution_batch_id
+        ):
+            raise ExtensionIntegrityError(
+                "Skill tools require a durable execution batch"
+            )
         snapshot_id = self.snapshot_resolver(scope)
         if not isinstance(snapshot_id, str) or not snapshot_id.startswith("ext_"):
             raise ExtensionIntegrityError("Turn has no valid frozen Extension snapshot")
@@ -594,6 +686,15 @@ class _SkillReadHandler:
             raise ExtensionNotFound(
                 "Skill was not returned by a completed search in this execution batch"
             )
+        if (
+            not isinstance(search_fact.result, Mapping)
+            or search_fact.result.get("extension_snapshot_id") != snapshot_id
+            or search_fact.result.get("extension_contribution_snapshot_id")
+            != snapshot.snapshot_id
+        ):
+            raise SkillStateChanged(
+                "Extension generation changed after Skill discovery; search again"
+            )
         search_arguments = dict(search_fact.arguments)
         if set(search_arguments) not in ({"query"}, {"query", "limit"}):
             raise ExtensionIntegrityError("Skill search fact has invalid arguments")
@@ -610,7 +711,9 @@ class _SkillReadHandler:
             limit=int(search_arguments.get("limit", 10)),
         )
         if search_fact.result != expected_search:
-            raise ExtensionIntegrityError("Skill search result failed Runtime recomputation")
+            raise ExtensionIntegrityError(
+                "Skill search result failed Runtime recomputation"
+            )
         try:
             canonical_result = json.dumps(
                 search_fact.result,
@@ -645,20 +748,174 @@ class _SkillReadHandler:
         }
 
 
+class _SkillRunHandler:
+    def __init__(self, runtime: SkillRuntime) -> None:
+        self.runtime = runtime
+
+    async def __call__(
+        self,
+        arguments: Mapping[str, Any],
+        context: ToolInvocationContext,
+    ) -> dict[str, Any]:
+        snapshot_id = await asyncio.to_thread(
+            self.runtime._snapshot_for_context,
+            context,
+        )
+        snapshot = await asyncio.to_thread(self.runtime._snapshot, snapshot_id)
+        discovery_id = str(arguments["discovery_id"])
+        try:
+            skill = self.runtime._resolve_skill(snapshot, discovery_id)
+        except ExtensionNotFound as error:
+            # A discovery identity can legitimately disappear between tool
+            # rounds when its Extension is disabled, uninstalled, or upgraded.
+            # Expose the generation fence instead of misreporting corruption.
+            if _parse_skill_discovery_id(discovery_id) is not None:
+                raise SkillStateChanged(
+                    "Skill state changed after read; search and read again"
+                ) from error
+            raise
+        await asyncio.to_thread(
+            self.runtime._assert_skill_current,
+            snapshot_id,
+            skill,
+        )
+        if self.runtime.read_fact_resolver is None:
+            raise ExtensionIntegrityError("Skill read authority is unavailable")
+        read_fact = await asyncio.to_thread(
+            self.runtime.read_fact_resolver,
+            context,
+            snapshot_id,
+            snapshot.snapshot_id,
+            discovery_id,
+        )
+        if read_fact is None:
+            raise ExtensionNotFound(
+                "Skill was not read after search in this execution batch"
+            )
+        if (
+            not isinstance(read_fact.result, Mapping)
+            or read_fact.result.get("extension_snapshot_id") != snapshot_id
+            or read_fact.result.get("extension_contribution_snapshot_id")
+            != snapshot.snapshot_id
+        ):
+            raise SkillStateChanged(
+                "Extension generation changed after Skill read; search and read again"
+            )
+        # Recompute the exact read before any executable boundary is considered.
+        recomputed = await asyncio.to_thread(
+            self.runtime.read,
+            snapshot_id,
+            discovery_id,
+            reference_ids=tuple(read_fact.arguments.get("reference_ids") or ()),
+        )
+        if not isinstance(read_fact.result, Mapping) or any(
+            read_fact.result.get(key) != value for key, value in recomputed.items()
+        ):
+            raise ExtensionIntegrityError(
+                "Skill read result failed Runtime recomputation"
+            )
+        try:
+            canonical_result = json.dumps(
+                read_fact.result,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as error:
+            raise ExtensionIntegrityError(
+                "Skill read result is not canonical JSON"
+            ) from error
+        if not isinstance(read_fact.result_sha256, str) or not hmac.compare_digest(
+            read_fact.result_sha256,
+            hashlib.sha256(canonical_result).hexdigest(),
+        ):
+            raise ExtensionIntegrityError("Skill read result digest is invalid")
+        runner = self.runtime.controlled_runner
+        if runner is None:
+            raise SkillNotExecutable("Skill has no available controlled executable runner")
+        bundle = await asyncio.to_thread(
+            self.runtime.store.verify, skill.artifact_sha256
+        )
+        files = {record.path: b"" for record in bundle.files}
+        if SKILL_RUNTIME_FILE not in files:
+            raise SkillNotExecutable("Skill has no declared controlled executable entry")
+        files[SKILL_RUNTIME_FILE] = await asyncio.to_thread(
+            self.runtime.store.read_verified_file,
+            skill.artifact_sha256,
+            SKILL_RUNTIME_FILE,
+        )
+        runtime_manifest = parse_skill_runtime_manifest(files)
+        if (
+            runtime_manifest is None
+            or runtime_manifest.external_commands
+            or runtime_manifest.network_domains
+            or not runner.supports(runtime_manifest.runtime)
+        ):
+            raise SkillNotExecutable("Skill has no available controlled executable entry")
+        environment: Mapping[str, str] = {}
+        if runtime_manifest.environment:
+            vault = self.runtime.service.credential_vault
+            if vault is None:
+                raise SkillNotExecutable("Skill configuration is unavailable")
+            try:
+                environment = vault.get(
+                    self.runtime.service._skill_credential_reference(
+                        skill.extension_id, skill.revision_id
+                    )
+                )
+            except (KeyError, RuntimeError) as error:
+                raise SkillNotExecutable("Skill configuration is unavailable") from error
+            if set(environment) != set(runtime_manifest.environment):
+                raise SkillNotExecutable("Skill configuration is incomplete")
+
+        def state_fence() -> None:
+            self.runtime._assert_skill_current(snapshot_id, skill)
+
+        request = ControlledSkillRunRequest(
+            extension_id=skill.extension_id,
+            revision_id=skill.revision_id,
+            artifact_sha256=skill.artifact_sha256,
+            extension_generation=self.runtime.service.repository.generation(),
+            runtime=runtime_manifest.runtime,
+            entrypoint=runtime_manifest.entrypoint,
+            parameters=dict(arguments.get("parameters") or {}),
+            environment=dict(environment),
+            network_domains=runtime_manifest.network_domains,
+            effects=runtime_manifest.effects,
+        )
+        state_fence()
+        result = await runner.run(request, state_fence=state_fence)
+        state_fence()
+        if not isinstance(result, ControlledSkillRunResult):
+            raise ExtensionIntegrityError("controlled Skill runner result is invalid")
+        return {
+            "schema_version": 1,
+            "discovery_id": discovery_id,
+            "result": dict(result.result),
+        }
+
+
 def _instruction_body(payload: bytes) -> str:
     if not 1 <= len(payload) <= MAX_SKILL_INSTRUCTION_BYTES:
-        raise ExtensionIntegrityError("Skill instructions exceed the execution boundary")
+        raise ExtensionIntegrityError(
+            "Skill instructions exceed the execution boundary"
+        )
     try:
         text = payload.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise ExtensionIntegrityError("Skill instructions are not strict UTF-8") from error
+        raise ExtensionIntegrityError(
+            "Skill instructions are not strict UTF-8"
+        ) from error
     if text.startswith("\ufeff"):
         raise ExtensionIntegrityError("Skill instructions contain a BOM")
     match = _FRONTMATTER.match(text)
     if match is None:
         raise ExtensionIntegrityError("Skill instructions lack canonical frontmatter")
-    body = text[match.end():]
-    _validate_text(body, label="Skill instructions", maximum=MAX_SKILL_INSTRUCTION_BYTES)
+    body = text[match.end() :]
+    _validate_text(
+        body, label="Skill instructions", maximum=MAX_SKILL_INSTRUCTION_BYTES
+    )
     _validate_token_budget(body)
     return body
 
@@ -673,7 +930,9 @@ def _validate_token_budget(*values: str) -> None:
     lexical = len(re.findall(r"[\w\u3400-\u9fff]+|[^\s]", payload, re.UNICODE))
     byte_bound = (len(payload.encode("utf-8")) + 2) // 3
     if max(lexical, byte_bound) > MAX_SKILL_ESTIMATED_TOKENS:
-        raise ExtensionIntegrityError("Skill read exceeds the model context token boundary")
+        raise ExtensionIntegrityError(
+            "Skill read exceeds the model context token boundary"
+        )
 
 
 def _reference_paths(
@@ -684,11 +943,17 @@ def _reference_paths(
     for record in bundle.files:
         folded = record.path.casefold()
         suffix = "." + folded.rsplit(".", 1)[-1] if "." in folded else ""
-        if not folded.startswith("references/") or suffix not in _TEXT_REFERENCE_SUFFIXES:
+        if (
+            not folded.startswith("references/")
+            or suffix not in _TEXT_REFERENCE_SUFFIXES
+        ):
             continue
-        reference_id = "skillref_" + hashlib.sha256(
-            f"{revision_id}\0{record.path}\0{record.sha256}".encode("utf-8")
-        ).hexdigest()
+        reference_id = (
+            "skillref_"
+            + hashlib.sha256(
+                f"{revision_id}\0{record.path}\0{record.sha256}".encode("utf-8")
+            ).hexdigest()
+        )
         result[reference_id] = record
     if len(result) > MAX_SKILL_REFERENCES:
         raise ExtensionIntegrityError("Skill contains too many readable references")
@@ -697,7 +962,9 @@ def _reference_paths(
 
 def _tokens(value: str) -> tuple[str, ...]:
     return tuple(
-        token for token in re.split(r"[^\w\u3400-\u9fff]+", normalize_reference(value)) if token
+        token
+        for token in re.split(r"[^\w\u3400-\u9fff]+", normalize_reference(value))
+        if token
     )
 
 
@@ -727,6 +994,7 @@ __all__ = [
     "SkillContribution",
     "SkillReferenceContribution",
     "SkillRuntime",
+    "SkillReadFact",
     "SkillSearchFact",
     "SkillSearchResult",
 ]

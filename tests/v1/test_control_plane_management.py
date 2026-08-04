@@ -66,8 +66,8 @@ def _model_request(request_id: str = "request-model-create") -> CreateModelConfi
     return CreateModelConfigurationRequest(
         local_model_id="ecorex-chat",
         modality="chat",
-        display_name="GPT-5.6 SOL · 中等推理",
-        upstream_model_id="gpt-5.6-sol",
+        display_name="GPT-5.6 Luna · 高推理",
+        upstream_model_id="gpt-5.6-luna",
         provider_preset="responses",
         is_default=True,
         enabled=True,
@@ -288,8 +288,8 @@ def test_model_key_is_encrypted_and_only_tested_revision_activates(tmp_path: Pat
     staged = repository.stage_model_configuration(
         created.config_id,
         StageModelConfigurationRequest(
-            display_name="GPT-5.6 SOL 新名称",
-            upstream_model_id="gpt-5.6-sol-new",
+            display_name="GPT-5.6 Luna 新名称",
+            upstream_model_id="gpt-5.6-luna-new",
             provider_preset="responses",
             is_default=True,
             enabled=True,
@@ -328,7 +328,7 @@ def test_edit_during_model_probe_supersedes_old_result(tmp_path: Path) -> None:
         created.config_id,
         StageModelConfigurationRequest(
             display_name="替代草稿",
-            upstream_model_id="gpt-5.6-sol-next",
+            upstream_model_id="gpt-5.6-luna-next",
             provider_preset="responses",
             is_default=True,
             enabled=True,
@@ -355,7 +355,7 @@ def test_connection_test_uses_server_origin_and_checks_exact_model() -> None:
                 200,
                 headers={"Content-Type": "application/json"},
                 json={
-                    "model": "gpt-5.6-sol",
+                    "model": "gpt-5.6-luna",
                     "output": [
                         {
                             "type": "message",
@@ -372,7 +372,7 @@ def test_connection_test_uses_server_origin_and_checks_exact_model() -> None:
         return httpx.Response(
             200,
             headers={"Content-Type": "application/json"},
-            json={"data": [{"id": "gpt-5.6-sol"}]},
+            json={"data": [{"id": "gpt-5.6-luna"}]},
         )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -391,7 +391,7 @@ def test_connection_test_uses_server_origin_and_checks_exact_model() -> None:
     assert requests[1].headers["idempotency-key"].startswith(
         "ecorex-model-activation-"
     )
-    assert json.loads(requests[1].content)["model"] == "gpt-5.6-sol"
+    assert json.loads(requests[1].content)["model"] == "gpt-5.6-luna"
 
 
 def _repository_for_active_configuration():
@@ -403,7 +403,7 @@ def _repository_for_active_configuration():
         local_model_id="ecorex-chat",
         modality="chat",
         display_name="GPT",
-        upstream_model_id="gpt-5.6-sol",
+        upstream_model_id="gpt-5.6-luna",
         provider_preset="responses",
         is_default=True,
         api_key="sk-test-value",

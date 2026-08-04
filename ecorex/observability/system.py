@@ -400,7 +400,7 @@ class SystemObservabilityService:
             if invariant_status == "critical":
                 integrity_status = "critical"
                 integrity_message = (
-                    "检测到本地运行状态不一致，EcoreX 已切换为只读保护；"
+                    "检测到本地运行状态不一致，e-Mate 已切换为只读保护；"
                     "历史记录和诊断信息仍可查看。"
                 )
             elif invariant_status == "healthy":
@@ -421,10 +421,10 @@ class SystemObservabilityService:
         order = {"healthy": 0, "degraded": 1, "attention": 2, "critical": 3}
         overall = max((item["status"] for item in components), key=order.__getitem__)
         summary = {
-            "healthy": "EcoreX 运行正常",
-            "degraded": "EcoreX 可以继续工作，但有部分项目需要留意",
-            "attention": "EcoreX 已保护当前数据，有项目需要处理",
-            "critical": "EcoreX 已进入只读保护，历史和诊断仍可查看",
+            "healthy": "e-Mate 运行正常",
+            "degraded": "e-Mate 可以继续工作，但有部分项目需要留意",
+            "attention": "e-Mate 已保护当前数据，有项目需要处理",
+            "critical": "e-Mate 已进入只读保护，历史和诊断仍可查看",
         }[overall]
         sample = SystemHealthSample(
             sample_id=new_id("syssample"),

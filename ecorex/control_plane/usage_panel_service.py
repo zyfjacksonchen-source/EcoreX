@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 VERSION = "1.0.5"
+USAGE_PROJECTION_VERSION = "v0.3.0-usage-1"
 DB_PATH = "/srv/ecorex-agent-admin/data/ecorex-admin.sqlite3"
 CONTROL_PLANE_DB_PATH = os.environ.get(
     "ECOREX_CONTROL_PLANE_DATABASE_PATH",
@@ -27,7 +28,10 @@ HOST = "127.0.0.1"
 PORT = 18105
 TZ = timezone(timedelta(hours=8))
 MAX_DATA_RANGE_DAYS = 90
-MAX_DATA_RESPONSE_ROWS = 8_000
+# A normal seven-day operator view can exceed 8,000 projected rows once the
+# immutable event ledger grows. Keep the response bounded while leaving enough
+# headroom for the current production week.
+MAX_DATA_RESPONSE_ROWS = 12_000
 ADMIN_API_DIRS = [
     os.environ.get("ECOREX_ADMIN_API_DIR", ""),
     "/srv/ecorex-agent-admin/app",
@@ -237,6 +241,28 @@ def build_runtime_audit(query: dict) -> dict:
     }
     if "limit" not in filters and "auditLimit" not in filters:
         filters["limit"] = "80"
+    default_start = datetime(2026, 6, 22, tzinfo=TZ)
+    default_end = datetime(2026, 6, 29, tzinfo=TZ)
+    start_value = next(
+        (
+            str(filters[key])[:10]
+            for key in ("start", "from", "createdFrom", "created_from")
+            if filters.get(key)
+        ),
+        "",
+    )
+    end_value = next(
+        (
+            str(filters[key])[:10]
+            for key in ("end", "to", "createdTo", "created_to")
+            if filters.get(key)
+        ),
+        "",
+    )
+    start = parse_date(start_value, default_start)
+    end = parse_date(end_value, default_end)
+    validate_data_request(start, end)
+    usage_projection = build_payload(start, end)
     store = load_admin_store()
     with store.connect() as conn:
         audit = store.runtime_audit(conn, filters)
@@ -245,7 +271,14 @@ def build_runtime_audit(query: dict) -> dict:
         for key in ("userEmail", "user_email", "userKey", "user_key", "start", "end", "from", "to", "createdFrom", "createdTo")
         if filters.get(key)
     }
+    audit["projection_version"] = usage_projection["projection_version"]
+    audit["usageKpis"] = usage_projection["kpis"]
+    audit["reconciliation"] = usage_projection["reconciliation"]
+    audit["timezone"] = "Asia/Shanghai"
     payload = {"ok": True, "version": VERSION, "runtimeAudit": audit}
+    payload["projection_version"] = usage_projection["projection_version"]
+    payload["kpis"] = usage_projection["kpis"]
+    payload["reconciliation"] = usage_projection["reconciliation"]
     payload["filters"] = audit["filters"]
     for key in ("summary", "actionTypeCounts", "actionTypeLabels", "userActions", "effectiveArtifacts", "feedbackTraces"):
         payload[key] = audit.get(key)
@@ -895,6 +928,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
     }
     gateway_request_ids = set(gateway_requests_by_id)
     merged_usage: dict[tuple[str, str], dict] = {}
+    legacy_request_ids: set[str] = set()
     anonymous_usage_sequence = 0
     for row in legacy_usage_rows:
         identity = canonical_email(row.get("user_email"))
@@ -911,6 +945,8 @@ def build_payload(start: datetime, end: datetime) -> dict:
         normalized["_identity"] = identity
         normalized["_request_id"] = request_id
         merged_usage[key] = normalized
+        if request_id:
+            legacy_request_ids.add(request_id)
 
     # A Gateway request id is the cross-ledger idempotency identity. When a
     # legacy usage row and a v1 completion describe the same request, the
@@ -970,6 +1006,27 @@ def build_payload(start: datetime, end: datetime) -> dict:
             str(row.get("id") or ""),
         ),
     )
+    reconciliation = {
+        "canonical_record_count": len(usage_rows),
+        "replaced_duplicate_count": len(
+            legacy_request_ids.intersection(gateway_completion_by_request)
+        ),
+        "unassociated_record_count": sum(
+            1 for row in usage_rows if not str(row.get("_request_id") or "").strip()
+        ),
+        "missing_provider_usage_count": sum(
+            1
+            for request in gateway_request_rows
+            if str(request.get("status") or "") == "completed"
+            and str(request.get("request_id") or "").strip()
+            not in gateway_completion_by_request
+        )
+        + sum(
+            1
+            for row in usage_rows
+            if usage_row_projection(row)["usageSource"] == "unreported"
+        ),
+    }
 
     raw_events = []
     for index, event in enumerate(rows, 1):
@@ -1353,6 +1410,8 @@ def build_payload(start: datetime, end: datetime) -> dict:
         "人工干预次数为根据失败、取消、受限事件推算的需复查任务数，RAW 中没有单独的人工点击字段。",
     ]
     return {
+        "projection_version": USAGE_PROJECTION_VERSION,
+        "reconciliation": reconciliation,
         "meta": {
             "title": "e-Mate 上周使用情况分析面板",
             "range": f"{start.strftime('%Y-%m-%d')} 至 {(end - timedelta(days=1)).strftime('%Y-%m-%d')}",
@@ -1497,6 +1556,8 @@ def build_account_usage_projection(
 
     return {
         "schema_version": 1,
+        "projection_version": payload["projection_version"],
+        "reconciliation": payload["reconciliation"],
         "scope": "account",
         "timezone": timezone_name,
         "today": totals([row for row in rows if row.get("date") == today_label]),

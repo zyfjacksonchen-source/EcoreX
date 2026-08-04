@@ -23,6 +23,7 @@ import uuid
 
 import httpx
 
+from ecorex import __version__
 from ecorex.capabilities import (
     ApprovalRequirement,
     CapabilityEffect,
@@ -711,7 +712,7 @@ class MCPClientSupervisor:
                 {
                     "protocolVersion": MCP_PROTOCOL_VERSION,
                     "capabilities": {},
-                    "clientInfo": {"name": "EcoreX", "version": "1.0.0"},
+                    "clientInfo": {"name": "e-Mate", "version": __version__},
                 },
             )
             result = initialize.get("result")
@@ -790,7 +791,7 @@ class MCPClientSupervisor:
                 "method": "notifications/cancelled",
                 "params": {
                     "requestId": request_id,
-                    "reason": "EcoreX Turn was cancelled",
+                    "reason": "e-Mate Turn was cancelled",
                 },
             }
             try:

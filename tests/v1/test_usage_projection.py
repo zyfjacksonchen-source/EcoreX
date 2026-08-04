@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from ecorex.gateway import GatewayAccountUsageProjection, GatewayTokenUsageWindow
 from ecorex.capabilities import ManagedModelCatalog, builtin_model_catalog
-from ecorex.protocol import CreateThreadRequest, CreateTurnRequest
+from ecorex.protocol import CreateThreadRequest, CreateTurnRequest, TurnStatus
 from ecorex.runtime import RuntimeSettings, create_app
 from ecorex.runtime.usage import UsageProjectionService
 
@@ -146,6 +146,52 @@ def test_usage_projection_uses_provider_facts_for_calendar_and_context(tmp_path)
     assert projection.context.window_tokens == 272_000
 
 
+def test_usage_projection_derives_home_activity_from_turn_states_in_shanghai(tmp_path) -> None:
+    app = create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "runtime-task-activity.db",
+            runtime_bearer_token=TOKEN,
+            csrf_token=CSRF,
+            webui_origins=(ORIGIN,),
+        )
+    )
+    turns = [
+        _turn(app, title=f"任务 {index}", message_id=f"task-activity-{index}")[1].turn
+        for index in range(5)
+    ]
+    states = [
+        (TurnStatus.COMPLETED, "2026-08-04T16:00:00.000000+00:00"),
+        (TurnStatus.FAILED, "2026-08-05T03:00:00.000000+00:00"),
+        (TurnStatus.CANCELLED, "2026-08-03T15:59:59.000000+00:00"),
+        (TurnStatus.QUEUED, "2026-08-05T03:30:00.000000+00:00"),
+        (TurnStatus.WAITING_HUMAN, "2026-08-05T03:45:00.000000+00:00"),
+    ]
+    with app.state.runtime.database.transaction() as connection:
+        for turn, (status, updated_at) in zip(turns, states, strict=True):
+            connection.execute(
+                "UPDATE turns SET status = ?, updated_at = ? WHERE turn_id = ?",
+                (status.value, updated_at, turn.turn_id),
+            )
+
+    projection = UsageProjectionService(
+        app.state.runtime.database,
+        model_catalog=app.state.runtime_composition.model_catalog,
+        timezone_name="Asia/Shanghai",
+        clock=lambda: datetime(2026, 8, 5, 4, 0, tzinfo=UTC),
+    ).project(turns[0].thread_id)
+
+    assert projection.task_activity.completed_today == 1
+    assert projection.task_activity.terminal_today == 2
+    assert projection.task_activity.waiting == 2
+    assert len(projection.task_activity.days) == 7
+    assert projection.task_activity.days[-1].model_dump(mode="json") == {
+        "date": "2026-08-05",
+        "completed": 1,
+        "terminal": 2,
+    }
+    assert projection.task_activity.days[-3].terminal == 1
+
+
 def test_usage_endpoint_returns_a_strict_read_only_projection(tmp_path) -> None:
     app = create_app(
         settings=RuntimeSettings(
@@ -175,7 +221,27 @@ def test_usage_endpoint_returns_a_strict_read_only_projection(tmp_path) -> None:
     }
     assert response.json()["context"]["used_tokens"] == 2
     assert response.json()["context"]["window_tokens"] == 272_000
+    account = client.get("/api/v1/usage", headers=_headers())
+    assert account.status_code == 200
+    assert account.json()["today"] == response.json()["today"]
     assert client.get("/api/v1/threads/thread_missing/usage", headers=_headers()).status_code == 404
+
+
+def test_account_usage_without_threads_still_has_seven_activity_days(tmp_path) -> None:
+    app = create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "runtime-empty-account-usage.db",
+            runtime_bearer_token=TOKEN,
+            csrf_token=CSRF,
+            webui_origins=(ORIGIN,),
+        )
+    )
+
+    response = TestClient(app).get("/api/v1/usage", headers=_headers())
+
+    assert response.status_code == 200
+    assert response.json()["thread_id"] == "account"
+    assert len(response.json()["task_activity"]["days"]) == 7
 
 
 def test_usage_context_keeps_the_completed_turns_frozen_catalog_revision(

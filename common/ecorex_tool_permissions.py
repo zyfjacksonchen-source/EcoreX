@@ -57,6 +57,21 @@ _DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
 _TENCENT_DOCS_MCP_ENDPOINT = "https://docs.qq.com/openapi/mcp"
 _ACCESS_RANK = {"deny": 0, "read": 1, "write": 2}
 _ACCESS_TIEBREAK = {"deny": 3, "write": 2, "read": 1}
+_VERIFIED_RUNTIME_FULL_ACCESS: bool | None = None
+_VERIFIED_RUNTIME_PERMISSION_LOCK = threading.Lock()
+
+
+def sync_verified_runtime_permission(*, full_access: bool) -> None:
+    """Project the verified Runtime authority into legacy tool entry points."""
+
+    global _VERIFIED_RUNTIME_FULL_ACCESS
+    with _VERIFIED_RUNTIME_PERMISSION_LOCK:
+        _VERIFIED_RUNTIME_FULL_ACCESS = bool(full_access)
+
+
+def verified_runtime_full_access() -> bool:
+    with _VERIFIED_RUNTIME_PERMISSION_LOCK:
+        return _VERIFIED_RUNTIME_FULL_ACCESS is True
 
 
 def _now() -> str:
@@ -1487,6 +1502,10 @@ class ToolPermissionBroker:
     def _load_settings(self) -> Dict[str, Any]:
         data = _read_json(self._settings_path(), {})
         data["mode"] = self._normalize_mode(data.get("mode"))
+        with _VERIFIED_RUNTIME_PERMISSION_LOCK:
+            runtime_full_access = _VERIFIED_RUNTIME_FULL_ACCESS
+        if runtime_full_access is not None:
+            data["mode"] = "full-access" if runtime_full_access else "smart-ask"
         always_allow = data.get("alwaysAllow")
         data["alwaysAllow"] = always_allow if isinstance(always_allow, dict) else {}
         return data
@@ -1559,40 +1578,40 @@ class ToolPermissionBroker:
     @staticmethod
     def _message_for_tool(tool_name: str, summary: str) -> str:
         if tool_name == "browser":
-            return f"EcoreX wants to control the browser: {summary}"
+            return f"e-Mate wants to control the browser: {summary}"
         if tool_name == "feishu_cli":
-            return f"EcoreX wants to access Feishu through lark-cli: {summary}"
+            return f"e-Mate wants to access Feishu through lark-cli: {summary}"
         if tool_name == "tongxin_cli":
-            return f"EcoreX wants to query Tongxin Assistant read-only account data: {summary}"
+            return f"e-Mate wants to query Tongxin Assistant read-only account data: {summary}"
         if tool_name == "optional_abilities":
-            return f"EcoreX wants to enable or install an optional ability: {summary}"
+            return f"e-Mate wants to enable or install an optional ability: {summary}"
         if tool_name == "agent_capability":
-            return f"EcoreX wants the agent to install or configure a capability: {summary}"
+            return f"e-Mate wants the agent to install or configure a capability: {summary}"
         if tool_name in {"mcp", "mcp_server"}:
-            return f"EcoreX wants to start or call an MCP external capability: {summary}"
+            return f"e-Mate wants to start or call an MCP external capability: {summary}"
         if tool_name in {"write", "edit", "fs_write"}:
-            return f"EcoreX wants to write a local file: {summary}"
+            return f"e-Mate wants to write a local file: {summary}"
         if tool_name == "skill_write":
-            return f"EcoreX wants to modify installed skills: {summary}"
+            return f"e-Mate wants to modify installed skills: {summary}"
         if tool_name == "env_config":
-            return f"EcoreX wants to modify or read environment configuration: {summary}"
+            return f"e-Mate wants to modify or read environment configuration: {summary}"
         if tool_name == "send":
-            return f"EcoreX wants to send a local file: {summary}"
+            return f"e-Mate wants to send a local file: {summary}"
         if tool_name == "scheduler":
-            return f"EcoreX wants to create or modify a scheduled background task: {summary}"
+            return f"e-Mate wants to create or modify a scheduled background task: {summary}"
         if tool_name == "evolution_undo":
-            return f"EcoreX wants to restore memory or skill files from an evolution backup: {summary}"
+            return f"e-Mate wants to restore memory or skill files from an evolution backup: {summary}"
         if tool_name == "web_fetch":
-            return f"EcoreX wants to fetch content from the internet: {summary}"
+            return f"e-Mate wants to fetch content from the internet: {summary}"
         if tool_name == "web_search":
-            return f"EcoreX wants to search the internet: {summary}"
+            return f"e-Mate wants to search the internet: {summary}"
         if tool_name == "vision":
-            return f"EcoreX wants to analyze an image using a model API: {summary}"
+            return f"e-Mate wants to analyze an image using a model API: {summary}"
         if tool_name == "imagegen":
-            return f"EcoreX wants to generate or edit images and write local image files: {summary}"
+            return f"e-Mate wants to generate or edit images and write local image files: {summary}"
         if tool_name == "image_jobs":
-            return f"EcoreX wants to start or control an image job: {summary}"
-        return f"EcoreX wants to run a local shell command: {summary}"
+            return f"e-Mate wants to start or control an image job: {summary}"
+        return f"e-Mate wants to run a local shell command: {summary}"
 
 
 _BROKER = ToolPermissionBroker()

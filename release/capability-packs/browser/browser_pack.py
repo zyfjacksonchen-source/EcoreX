@@ -36,7 +36,9 @@ _MAX_RUNTIME_BYTES = 512 * 1024 * 1024
 _MAX_SCREENSHOT_BYTES = 3 * 1024 * 1024
 _MAX_LOCAL_DOCUMENT_URL_BYTES = 64 * 1024
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_CDP_OPERATIONS = frozenset({"navigate", "snapshot", "click", "type", "wait", "screenshot"})
+_CDP_OPERATIONS = frozenset(
+    {"navigate", "snapshot", "click", "type", "wait", "screenshot", "evaluate", "batch"}
+)
 _PROXY_FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
 
 
@@ -44,7 +46,10 @@ def handle(request: Request) -> Mapping[str, Any]:
     if request.tool_id == "fetch":
         return _fetch(request.arguments)
     if request.tool_id == "cdp":
-        return _cdp(request.arguments)
+        return _cdp(
+            request.arguments,
+            full_access=request.context.get("effective_sandbox") == "danger-full-access",
+        )
     raise ContractError("browser_tool_unsupported")
 
 
@@ -145,7 +150,7 @@ def _validate_public_url(value: str) -> None:
         raise ContractError("browser_url_not_allowed")
 
 
-def _cdp(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+def _cdp(arguments: Mapping[str, Any], *, full_access: bool) -> Mapping[str, Any]:
     require_exact_arguments(
         arguments,
         required=frozenset({"operation"}),
@@ -158,6 +163,29 @@ def _cdp(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
     parameters = arguments.get("parameters", {})
     if not isinstance(parameters, Mapping) or len(parameters) > 32:
         raise ContractError("browser_parameters_invalid")
+    if operation == "evaluate" and not full_access:
+        raise ContractError("browser_evaluate_requires_full_access")
+    if operation == "batch":
+        steps = parameters.get("steps")
+        if not isinstance(steps, list) or not 1 <= len(steps) <= 16:
+            raise ContractError("browser_batch_invalid")
+        screenshot_count = 0
+        for step in steps:
+            if not isinstance(step, Mapping) or set(step) - {"operation", "parameters"}:
+                raise ContractError("browser_batch_invalid")
+            step_operation = step.get("operation")
+            step_parameters = step.get("parameters", {})
+            if (
+                step_operation not in _CDP_OPERATIONS - {"batch", "navigate"}
+                or not isinstance(step_parameters, Mapping)
+                or len(step_parameters) > 32
+            ):
+                raise ContractError("browser_batch_invalid")
+            if step_operation == "evaluate" and not full_access:
+                raise ContractError("browser_evaluate_requires_full_access")
+            screenshot_count += int(step_operation == "screenshot")
+        if screenshot_count > 1:
+            raise ContractError("browser_batch_invalid")
     if not target.startswith("data:text/html,"):
         _validate_public_url(target)
     timeout_ms = bounded_int(parameters.get("timeout_ms", 20_000), 100, 60_000)
@@ -235,7 +263,7 @@ def _cdp(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
                             result = _browser_phase(
                                 "browser_page_operation_failed",
                                 lambda: _perform_page_operation(
-                                    page, operation, parameters
+                                    page, operation, parameters, full_access=full_access
                                 ),
                                 retryable=True,
                             )
@@ -331,10 +359,45 @@ def _validate_browser_request_url(value: str) -> None:
     _validate_public_url(value)
 
 
-def _perform_page_operation(page: Any, operation: str, parameters: Mapping[str, Any]) -> Mapping[str, Any]:
+def _perform_page_operation(
+    page: Any,
+    operation: str,
+    parameters: Mapping[str, Any],
+    *,
+    full_access: bool,
+) -> Mapping[str, Any]:
+    if operation == "batch":
+        return {
+            "url": page.url,
+            "results": [
+                _perform_page_operation(
+                    page,
+                    str(step["operation"]),
+                    step.get("parameters", {}),
+                    full_access=full_access,
+                )
+                for step in parameters["steps"]
+            ],
+        }
     if operation in {"navigate", "snapshot"}:
         text = page.locator("body").inner_text(timeout=10_000)[:200_000]
         return {"url": page.url, "title": page.title()[:4096], "text": text}
+    if operation == "evaluate":
+        if not full_access:
+            raise ContractError("browser_evaluate_requires_full_access")
+        expression = bounded_text(
+            parameters.get("expression"),
+            20_000,
+            code="browser_evaluate_invalid",
+        )
+        value = page.evaluate(expression)
+        try:
+            encoded = json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError, RecursionError):
+            raise ContractError("browser_evaluate_result_invalid") from None
+        if len(encoded) > 200_000:
+            raise ContractError("browser_evaluate_result_too_large")
+        return {"url": page.url, "value": value}
     selector = bounded_text(parameters.get("selector"), 2048, code="browser_selector_invalid")
     locator = page.locator(selector).first
     if operation == "click":

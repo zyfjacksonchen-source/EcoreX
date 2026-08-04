@@ -37,6 +37,7 @@ from ecorex.update.rollback import (
     RollbackAuthorizationError,
     issue_rollback_authorization,
 )
+from ecorex.extensions import LocalSkillBundleStore
 
 from .bootstrap_index_service import (
     BootstrapIndexPublicationError,
@@ -95,6 +96,7 @@ from .repository import (
     ControlPlaneRepository,
     UpdateHintClient,
 )
+from .skill_hub import SkillHubRegistry, create_skill_hub_router
 from .release_replica import (
     CDNReleaseReplicaService,
     create_cdn_release_replica_router,
@@ -709,6 +711,8 @@ def create_control_plane_app(
     model_connection_tester: ModelConnectionTester | None = None,
     device_identity_broker: ManagedDeviceIdentityBroker | None = None,
     release_replica_service: CDNReleaseReplicaService | None = None,
+    skill_hub_registry: SkillHubRegistry | None = None,
+    skill_hub_bundle_store: LocalSkillBundleStore | None = None,
 ) -> FastAPI:
     hub = UpdateSignalHub()
     resolved_model_tester = (
@@ -757,7 +761,7 @@ def create_control_plane_app(
                 await closer()
 
     app = FastAPI(
-        title="EcoreX Control Plane",
+        title="e-Mate Control Plane",
         version="1.0.0",
         docs_url=None,
         redoc_url=None,
@@ -785,12 +789,24 @@ def create_control_plane_app(
     app.state.management_repository = management_repository
     app.state.device_identity_broker = device_identity_broker
     app.state.release_replica_service = release_replica_service
+    app.state.skill_hub_registry = skill_hub_registry
 
     def principal(request: Request) -> ControlPrincipal:
         try:
-            return _authenticate_control_principal(
+            current = _authenticate_control_principal(
                 authenticator, request.scope.get("headers", [])
             )
+            if (
+                device_identity_broker is not None
+                and current.token_id is not None
+                and device_identity_broker.access_token_is_current(
+                    account_id=current.account_id,
+                    token_id=current.token_id,
+                )
+                is False
+            ):
+                raise PermissionError("managed access token is no longer current")
+            return current
         except PermissionError as error:
             raise HTTPException(
                 status_code=401, detail="Control Plane authentication failed"
@@ -853,6 +869,7 @@ def create_control_plane_app(
             create_device_identity_router(
                 device_identity_broker,
                 admin_dependency=user_admin,
+                account_dependency=principal,
                 password_repository=management_repository,
             )
         )
@@ -867,6 +884,25 @@ def create_control_plane_app(
         )
     if release_replica_service is not None:
         app.include_router(create_cdn_release_replica_router(release_replica_service))
+    if (skill_hub_registry is None) != (skill_hub_bundle_store is None):
+        raise ValueError("Skill Hub registry and CAS must be configured together")
+    if skill_hub_registry is not None and skill_hub_bundle_store is not None:
+        def skill_hub_nickname(account_id: str) -> str:
+            if management_repository is None:
+                return "e-Mate 用户"
+            try:
+                return management_repository.get_user(account_id).display_name
+            except AdminManagementError:
+                return "e-Mate 用户"
+
+        app.include_router(
+            create_skill_hub_router(
+                skill_hub_registry,
+                skill_hub_bundle_store,
+                principal_dependency=principal,
+                nickname_resolver=skill_hub_nickname,
+            )
+        )
 
     @app.get(
         "/api/v1/internal/release-admin-auth",

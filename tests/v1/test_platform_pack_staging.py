@@ -465,23 +465,76 @@ def test_image_pack_is_only_a_managed_core_handshake(tmp_path: Path) -> None:
     assert denied["error_code"] == "managed_image_core_required"
 
 
-def test_browser_pack_has_no_arbitrary_evaluate_operation(tmp_path: Path) -> None:
+def test_browser_pack_evaluate_requires_full_access(tmp_path: Path) -> None:
     artifact = _zipapp(tmp_path, "browser")
+    request = _request(
+        "browser",
+        "cdp",
+        {
+            "operation": "evaluate",
+            "target": "data:text/html,<body>blocked</body>",
+            "parameters": {"expression": "document.body.textContent"},
+        },
+        tmp_path,
+    )
+    request["context"]["effective_sandbox"] = "workspace-write"
     response = _invoke(
         artifact,
-        _request(
-            "browser",
-            "cdp",
-            {
-                "operation": "evaluate",
-                "target": "data:text/html,<body>blocked</body>",
-                "parameters": {"expression": "process.exit()"},
-            },
-            tmp_path,
-        ),
+        request,
     )
     assert response["status"] == "failed"
-    assert response["error_code"] == "browser_operation_not_supported"
+    assert response["error_code"] == "browser_evaluate_requires_full_access"
+
+
+def test_browser_batch_keeps_one_page_for_evaluate_and_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(PACKS / "common"))
+    browser = runpy.run_path(str(PACKS / "browser" / "browser_pack.py"))
+
+    class Locator:
+        first = None
+
+        def __init__(self, page):
+            self.page = page
+            self.first = self
+
+        def inner_text(self, timeout):
+            del timeout
+            return self.page.text
+
+    class Page:
+        url = "https://example.com/"
+        text = "before"
+
+        def evaluate(self, expression):
+            assert expression == "document.body.textContent = 'after'"
+            self.text = "after"
+            return self.text
+
+        def locator(self, selector):
+            assert selector == "body"
+            return Locator(self)
+
+        def title(self):
+            return "Example"
+
+    result = browser["_perform_page_operation"](
+        Page(),
+        "batch",
+        {
+            "steps": [
+                {
+                    "operation": "evaluate",
+                    "parameters": {"expression": "document.body.textContent = 'after'"},
+                },
+                {"operation": "snapshot", "parameters": {}},
+            ]
+        },
+        full_access=True,
+    )
+    assert result["results"][0]["value"] == "after"
+    assert result["results"][1]["text"] == "after"
 
 
 def test_browser_stage_selects_revision_matched_relocatable_headless_shell(

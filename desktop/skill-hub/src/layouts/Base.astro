@@ -1,0 +1,30 @@
+---
+interface Props { title: string; }
+const { title } = Astro.props;
+---
+
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="发现、安装和发布 e-Mate Skills" />
+    <title>{title} · e-Mate</title>
+    <!--__ECOREX_RUNTIME_CONFIG__-->
+    <link rel="stylesheet" href="/assets/skill-hub.unhashed-upstream0c214c3.css" />
+    <script src="/assets/skill-hub-client.unhashed-upstream0c214c3.js" defer></script>
+  </head>
+  <body>
+    <nav>
+      <a class="brand" href="/">e-Mate</a>
+      <div>
+        <a href="#discover">发现</a>
+        <a href="#published">自建</a>
+        <button type="button" data-open-upload>上传 Skill</button>
+        <button type="button" data-theme aria-label="切换明暗主题">◐</button>
+      </div>
+    </nav>
+    <main><slot /></main>
+    <footer>e-Mate Skill Hub · 发现、安装和管理办公能力</footer>
+  </body>
+</html>

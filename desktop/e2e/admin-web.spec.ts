@@ -316,17 +316,17 @@ test("administrator manages users, hot-tests a model, and creates an explicit fu
   const modelSecret = "sk-e2e-model-secret-123456";
   await page.getByRole("button", { name: "添加模型" }).click();
   await page.locator("#model-local-id").selectOption("ecorex-chat");
-  await page.locator("#model-display-name").fill("GPT-5.6 SOL · 中等推理");
-  await page.locator("#model-upstream-id").fill("gpt-5.6-sol");
+  await page.locator("#model-display-name").fill("GPT-5.6 Luna · 高推理");
+  await page.locator("#model-upstream-id").fill("gpt-5.6-luna");
   await page.locator("#model-api-key").fill(modelSecret);
   await page.getByRole("button", { name: "保存草稿" }).click();
-  await expect(page.locator("#model-table-body")).toContainText("GPT-5.6 SOL");
+  await expect(page.locator("#model-table-body")).toContainText("GPT-5.6 Luna");
   await expect(page.locator("#model-api-key")).toHaveValue("");
   await expect(page.locator("body")).not.toContainText(modelSecret);
   expect(guard.modelCreateBody).toMatchObject({
     local_model_id: "ecorex-chat",
     modality: "chat",
-    upstream_model_id: "gpt-5.6-sol",
+    upstream_model_id: "gpt-5.6-luna",
     api_key: modelSecret,
   });
 

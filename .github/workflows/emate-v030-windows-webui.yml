@@ -1,0 +1,85 @@
+name: e-Mate v0.3.0 Windows x64 WebUI package
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Stable Candidate run containing the signed Windows artifacts
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: emate-v030-windows-webui-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'zhangyifanjackson-dotcom/EcoreX' && github.ref == 'refs/heads/main' && github.sha == vars.ECOREX_V030_RELEASE_COMMIT_SHA }}
+    runs-on: windows-2025
+    timeout-minutes: 30
+    environment:
+      name: ecorex-release-signing-stable
+    steps:
+      - name: Checkout the exact pinned source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Install exact package verification dependencies
+        run: python scripts/install-v1-python-profile.py --profile runtime
+
+      - name: Download exact signed stable Candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          name: ecorex-v1-candidate-stable
+          path: .producer/candidate
+
+      - name: Bind Candidate and production key to this source
+        shell: pwsh
+        env:
+          RELEASE_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          RELEASE_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not $env:RELEASE_KEY_ID -or -not $env:RELEASE_PUBLIC_KEY) { throw "release_key_missing" }
+          $receipt = Get-Content -Raw -LiteralPath ".producer/candidate/output/candidate-build-receipt.json" | ConvertFrom-Json
+          if ($receipt.commit_sha -ne $env:GITHUB_SHA) { throw "candidate_commit_mismatch" }
+          $key = [Convert]::FromBase64String($env:RELEASE_PUBLIC_KEY)
+          if ($key.Length -ne 32) { throw "release_key_invalid" }
+          [IO.File]::WriteAllBytes((Join-Path $env:RUNNER_TEMP "release-public-key.bin"), $key)
+
+      - name: Build and reopen the Candidate-bound WebUI package
+        shell: pwsh
+        env:
+          RELEASE_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+        run: >-
+          python scripts/build-v030-windows-webui.py
+          --release-dir .producer/candidate/output/release
+          --candidate-receipt .producer/candidate/output/candidate-build-receipt.json
+          --output .producer/output
+          --trusted-public-key "$env:RELEASE_KEY_ID=$env:RUNNER_TEMP/release-public-key.bin"
+          --production-key-id "$env:RELEASE_KEY_ID"
+
+      - name: Upload verified Windows WebUI handoff
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: emate-v030-windows-webui
+          path: |
+            .producer/output/EcoreX_0.3.0-webui-windows-x64.zip
+            .producer/output/emate-webui-build-receipt.json
+          if-no-files-found: error
+          retention-days: 7

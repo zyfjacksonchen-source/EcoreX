@@ -459,7 +459,9 @@ def test_builder_derives_and_signs_beneficial_base_bound_core_delta(
     base_manifest = replace(
         base_release.manifest,
         release_id="release-stable-previous",
-        version="0.9.0",
+        # The legacy WebUI used a four-part product version. The signed v1
+        # manifest is SemVer, so preserve that baseline as build metadata.
+        version="0.2.9+legacy.2",
         build_digest=hashlib.sha256(b"previous-build").hexdigest(),
     )
     base_artifact = base_manifest.artifact("core-windows-x64")

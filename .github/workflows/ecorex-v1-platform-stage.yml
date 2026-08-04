@@ -41,8 +41,8 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Refuse unprotected or non-dispatch execution
-        if: ${{ github.event_name != 'workflow_dispatch' || github.ref_protected != true }}
+      - name: Refuse non-dispatch or unpinned release source
+        if: ${{ github.event_name != 'workflow_dispatch' || github.repository != 'zhangyifanjackson-dotcom/EcoreX' || github.ref != 'refs/heads/main' || github.sha != vars.ECOREX_V030_RELEASE_COMMIT_SHA }}
         shell: bash
         run: exit 1
 

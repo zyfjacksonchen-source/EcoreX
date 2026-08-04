@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 import pytest
 
 from ecorex.control_plane.device_identity import (
@@ -30,7 +30,9 @@ from ecorex.control_plane.management import (
     AdminPasswordAuthenticationError,
     AdminPasswordLocked,
 )
+from ecorex.control_plane.management_models import CreateAdminUserRequest
 from ecorex.control_plane.management_schema import AdminManagementSchemaManager
+from ecorex.control_plane.models import ControlPrincipal
 from ecorex.release.signing import Ed25519MemorySigner
 from ecorex.security import Ed25519AccessTokenVerifier
 from ecorex.session import Ed25519SessionLeaseVerifier, HTTPSDeviceAuthorizationBroker
@@ -40,6 +42,9 @@ NOW = datetime(2026, 7, 16, 12, 0, tzinfo=UTC)
 
 
 class Directory:
+    def __init__(self) -> None:
+        self.auth_epoch = 0
+
     def resolve(self, account_id: str) -> DeviceAccountIdentity:
         if account_id != "acct-1":
             raise RuntimeError("unknown account")
@@ -50,6 +55,7 @@ class Directory:
             roles=("user",),
             model_allowlist=("gpt-5.6-sol", "gpt-image-2"),
             quota={"managed_requests": 100, "concurrent_requests": 4},
+            auth_epoch=self.auth_epoch,
         )
 
 
@@ -241,6 +247,51 @@ def test_cloud_revoke_is_idempotent_and_blocks_refresh(identity) -> None:
         )
 
 
+def test_password_epoch_invalidates_access_and_revokes_every_lease(identity) -> None:
+    broker, access_private, _lease, _database = identity
+    first = broker.grant_account(
+        client_id="ecorex-webui",
+        account_id="acct-1",
+        idempotency_key="password-grant-all-revoke-0001",
+    )
+    second = broker.grant_account(
+        client_id="ecorex-webui",
+        account_id="acct-1",
+        idempotency_key="password-grant-all-revoke-0002",
+    )
+    verifier = Ed25519AccessTokenVerifier(
+        {"access-key": public(access_private)},
+        issuer="https://identity.ecorex.test",
+        audience="ecorex-managed-runtime",
+        clock=lambda: NOW,
+    )
+    first_claims = verifier.verify(str(first.access_token))
+    assert first_claims.token_id is not None
+    assert broker.access_token_is_current(
+        account_id="acct-1", token_id=first_claims.token_id
+    ) is True
+    broker.account_directory.auth_epoch = 1
+    assert broker.access_token_is_current(
+        account_id="acct-1", token_id=first_claims.token_id
+    ) is False
+    assert broker.revoke_account_sessions(
+        account_id="acct-1",
+        idempotency_key="password-change-revoke-all-0001",
+    ) == 2
+    assert broker.revoke_account_sessions(
+        account_id="acct-1",
+        idempotency_key="password-change-revoke-all-0001",
+    ) == 0
+    for grant, suffix in ((first, "first"), (second, "second")):
+        with pytest.raises(DeviceRefreshRequired):
+            broker.refresh(
+                client_id="ecorex-webui",
+                lease_id=grant.lease.claims.lease_id,
+                refresh_token=str(grant.refresh_token),
+                idempotency_key=f"refresh-after-password-{suffix}",
+            )
+
+
 def test_https_runtime_client_matches_exact_authorize_and_token_contract(
     identity,
 ) -> None:
@@ -249,6 +300,95 @@ def test_https_runtime_client_matches_exact_authorize_and_token_contract(
 
 def test_password_login_uses_transport_source_and_maps_lockout(identity, monkeypatch) -> None:
     asyncio.run(_exercise_password_login_boundary(identity, monkeypatch))
+
+
+def test_self_service_password_route_changes_login_and_revokes_access(identity) -> None:
+    asyncio.run(_exercise_self_service_password_route(identity))
+
+
+async def _exercise_self_service_password_route(identity) -> None:
+    broker, access_private, _lease, database = identity
+    AdminManagementSchemaManager(database).migrate()
+    repository = AdminManagementRepository(database, encryption_key=b"p" * 32)
+    admin = ControlPrincipal(
+        subject="admin", client_id="tests", account_id="admin",
+        roles=frozenset({"platform_admin"}),
+    )
+    repository.create_user(
+        CreateAdminUserRequest(
+            account_id="acct-1",
+            display_name="e-Mate User",
+            email="user@example.com",
+            organization_id="org-1",
+            token_limit=100,
+            image_limit=10,
+            password="original-password",
+            client_request_id="create-password-route-user",
+        ),
+        actor=admin,
+    )
+    broker.account_directory.auth_epoch = 1
+    verifier = Ed25519AccessTokenVerifier(
+        {"access-key": public(access_private)},
+        issuer="https://identity.ecorex.test",
+        audience="ecorex-managed-runtime",
+        clock=lambda: NOW,
+    )
+
+    def account(request: Request) -> ControlPrincipal:
+        token = request.headers["authorization"].removeprefix("Bearer ")
+        claims = verifier.verify(token)
+        return ControlPrincipal(
+            subject=claims.subject,
+            client_id=claims.client_id,
+            account_id=claims.account_id,
+            organization_id=claims.organization_id,
+            roles=claims.roles,
+            token_id=claims.token_id,
+        )
+
+    app = FastAPI()
+    app.include_router(
+        create_device_identity_router(
+            broker,
+            account_dependency=account,
+            password_repository=repository,
+        )
+    )
+    client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://identity.ecorex.test",
+    )
+    runtime = HTTPSDeviceAuthorizationBroker(
+        "https://identity.ecorex.test",
+        client_id="ecorex-webui",
+        allowed_hosts=frozenset({"identity.ecorex.test"}),
+        client=client,
+    )
+    grant = await runtime.login(
+        identifier="user@example.com",
+        password="original-password",
+        idempotency_key="password-route-login-0001",
+    )
+    claims = verifier.verify(grant.access_token)
+    changed = await runtime.change_password(
+        current_password="original-password",
+        new_password="replacement-password",
+        access_token=grant.access_token,
+        client_request_id="password-route-change-0001",
+        idempotency_key="password-route-change-0001",
+    )
+    assert changed.reauthentication_required is True
+    assert claims.token_id is not None
+    assert broker.access_token_is_current(
+        account_id="acct-1", token_id=claims.token_id
+    ) is False
+    with pytest.raises(AdminPasswordAuthenticationError):
+        repository.authenticate_password("acct-1", "original-password")
+    assert repository.authenticate_password(
+        "USER@EXAMPLE.COM", "replacement-password"
+    ).account_id == "acct-1"
+    await client.aclose()
 
 
 async def _exercise_password_login_boundary(identity, monkeypatch) -> None:

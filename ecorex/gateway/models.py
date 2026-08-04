@@ -337,7 +337,7 @@ class GatewayModelPolicy(GatewayModel):
     )
     local_model_id: str = Field(min_length=1, max_length=128)
     upstream_model_id: str = Field(min_length=1, max_length=128)
-    reasoning_effort: Literal["medium"] = "medium"
+    reasoning_effort: Literal["medium", "high"] = "medium"
     context_management: GatewayContextManagementPolicy
 
     @model_validator(mode="after")

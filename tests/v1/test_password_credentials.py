@@ -275,6 +275,56 @@ def test_password_idempotency_fingerprint_replays_same_and_conflicts_different(
     assert b"different-password" not in database_bytes
 
 
+def test_self_service_password_change_reauthenticates_and_never_persists_secrets(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "target.db"
+    repository = _repository(path)
+    repository.create_user(
+        _request(
+            "account-1",
+            "user@example.com",
+            request_id="create-password-user",
+            password="original-password",
+        ),
+        actor=ACTOR,
+    )
+    user = ControlPrincipal(
+        subject="account-1",
+        client_id="ecorex-webui",
+        account_id="account-1",
+        roles=frozenset({"user"}),
+    )
+    changed = repository.change_password(
+        current_password="original-password",
+        new_password="replacement-password",
+        client_request_id="self-password-change-0001",
+        actor=user,
+    )
+    assert changed.status == "changed"
+    assert changed.reauthentication_required is True
+    assert (
+        repository.change_password(
+            current_password="original-password",
+            new_password="replacement-password",
+            client_request_id="self-password-change-0001",
+            actor=user,
+        )
+        == changed
+    )
+    with pytest.raises(AdminPasswordAuthenticationError):
+        repository.authenticate_password("account-1", "original-password")
+    assert repository.authenticate_password(
+        "account-1", "replacement-password"
+    ).account_id == "account-1"
+    assert repository.authenticate_password(
+        "USER@EXAMPLE.COM", "replacement-password"
+    ).account_id == "account-1"
+    raw = path.read_bytes()
+    assert b"original-password" not in raw
+    assert b"replacement-password" not in raw
+
+
 def test_account_and_ip_rate_limits_are_reserved_before_pbkdf2(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from dataclasses import replace
 import io
 import json
 from pathlib import Path
@@ -18,7 +19,7 @@ from ecorex.capabilities import (
     RuntimeAvailability,
     builtin_capability_registry,
 )
-from ecorex.connectors import builtin_connector_registry
+from ecorex.connectors import InMemoryCredentialVault, builtin_connector_registry
 from ecorex.extensions import (
     EXTENSION_CONTRACT_VERSION,
     ExtensionActionUnavailable,
@@ -153,6 +154,83 @@ def test_zip_and_directory_normalize_to_one_cas_revision(tmp_path: Path) -> None
     assert all(len(item["sha256"]) == 64 for item in manifest["files"])
 
 
+def test_script_skill_requires_a_normalized_runtime_manifest_and_reports_configuration(tmp_path: Path) -> None:
+    runtime_manifest = json.dumps({
+        "schema_version": 1,
+        "runtime": "python",
+        "entrypoint": "scripts/main.py",
+        "environment": ["OFFICE_API_KEY"],
+        "network_domains": [],
+        "external_commands": [],
+        "effects": ["read"],
+    }, sort_keys=True, separators=(",", ":"))
+    payload = _zip({
+        "SKILL.md": _skill(),
+        "skill-runtime.json": runtime_manifest,
+        "scripts/main.py": "import json\nprint(json.dumps({'ok': True}))\n",
+    })
+    service = _service(tmp_path, credential_vault=InMemoryCredentialVault())
+    staged = service.install_local_skill_zip(
+        payload,
+        extension_id="local.script-helper",
+        expected_revision=0,
+        client_request_id="install:script-helper:1",
+    )
+    assert staged.readiness == "needs_configuration"
+    assert staged.requirements == ("environment:OFFICE_API_KEY",)
+    configure = next(action for action in staged.actions if action.action_id == "configure")
+    assert configure.enabled is True
+    app = FastAPI()
+    register_extension_routes(app, service)
+    response = TestClient(app).post(
+        f"/api/v1/extensions/{staged.extension_id}/configure",
+        json={
+            "values": {"OFFICE_API_KEY": "secret-value"},
+            "expected_revision": staged.revision,
+            "client_request_id": "configure:script-helper:1",
+        },
+    )
+    assert response.status_code == 200
+    assert "secret-value" not in response.text
+    configured = service.projection(staged.extension_id)
+    assert configured.readiness == "unsupported"
+    assert configured.requirements == ("controlled_runner_unavailable",)
+    serialized = json.dumps(
+        [event.payload for event in service.repository.events()],
+        ensure_ascii=False,
+    )
+    assert "secret-value" not in serialized
+
+    with pytest.raises(ExtensionManifestError, match="skill-runtime.json"):
+        LocalSkillBundleStore(tmp_path / "other-cas").ingest_zip(_zip({
+            "SKILL.md": _skill(),
+            "scripts/main.py": "print('undeclared')\n",
+        }))
+
+    node_manifest = json.dumps(
+        {
+            "schema_version": 1,
+            "runtime": "node",
+            "entrypoint": "scripts/main.mjs",
+            "environment": [],
+            "network_domains": [],
+            "external_commands": [],
+            "effects": ["read"],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    LocalSkillBundleStore(tmp_path / "node-cas").ingest_zip(
+        _zip(
+            {
+                "SKILL.md": _skill(),
+                "skill-runtime.json": node_manifest,
+                "scripts/main.mjs": "console.log(JSON.stringify({ok:true}))\n",
+            }
+        )
+    )
+
+
 @pytest.mark.parametrize(
     "files",
     [
@@ -234,6 +312,48 @@ def test_local_skill_lifecycle_is_restart_safe_and_cas_fenced(tmp_path: Path) ->
     assert availability.installed_packs == frozenset()
     with pytest.raises(ExtensionVerificationError):
         restarted._reverify_revision(manifest)
+
+
+def test_extension_generation_and_uninstall_tombstone_are_durable(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    staged = service.install_local_skill_zip(
+        _zip({"SKILL.md": _skill()}),
+        extension_id="local.uninstallable",
+        expected_revision=0,
+        client_request_id="install:uninstallable:1",
+    )
+    enabled = asyncio.run(
+        service.enable(
+            staged.extension_id,
+            expected_revision=staged.revision,
+            client_request_id="enable:uninstallable:1",
+        )
+    )
+    before = service.snapshot()
+    assert before.extension_generation == 2
+
+    removed = service.uninstall(
+        enabled.extension_id,
+        expected_revision=enabled.revision,
+        client_request_id="uninstall:uninstallable:1",
+    )
+    assert removed.status == "uninstalled"
+    assert removed.active_revision_id is None
+    assert service.project_snapshot().extension_generation == 3
+    assert service.enabled_export_ids(ExtensionExportKind.SKILL) == set()
+    assert service.repository.events(after_seq=2)[0].event_type == "extension.uninstalled"
+
+    restarted = _service(tmp_path)
+    assert restarted.projection(enabled.extension_id).status == "uninstalled"
+    assert restarted.repository.generation() == 3
+    assert restarted.import_legacy_skill_states() == 0
+    with pytest.raises(ExtensionProviderRevoked):
+        restarted.assert_export_invocable(
+            before.snapshot_id,
+            export_kind=ExtensionExportKind.SKILL,
+            export_id=enabled.extension_id,
+            expected_revision_id=enabled.active_revision_id,
+        )
 
 
 def test_extension_preflight_and_sync_probe_never_stall_event_loop(
@@ -484,6 +604,21 @@ def test_builtin_catalog_availability_and_provider_revocation(tmp_path: Path) ->
         installed_pack_ids=frozenset({"image"}),
     )
     register_builtin_extensions(service, declarations)
+    core_skill = replace(
+        declarations[0].manifest,
+        extension_id="ecorex.core.skill",
+        kind=ExtensionKind.SKILL,
+        runtime_boundary=RuntimeBoundary.DECLARATIVE,
+        exports=(
+            ExtensionExport(
+                export_id="core.skill",
+                kind=ExtensionExportKind.SKILL,
+                exposure=ExtensionExposure.DEFERRED,
+                permission_effects=(),
+            ),
+        ),
+    )
+    assert service._user_disable_disabled_reason(core_skill) is None
     snapshot = service.snapshot()
     availability = service.apply_availability(
         RuntimeAvailability(

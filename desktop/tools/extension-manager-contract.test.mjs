@@ -45,13 +45,11 @@ test("skill workspace renders only backend-projected actions and reasons", () =>
   assert.match(settings, /管理扩展/);
 });
 
-test("skill workspace does not expose execution internals", () => {
+test("skill workspace exposes configuration keys without execution internals or stored secrets", () => {
   for (const forbidden of [
     "active_digest",
     "active_revision_id",
     "command",
-    "environment",
-    "env",
     "secret",
     "path",
     "canonical_manifest_base64",
@@ -63,6 +61,10 @@ test("skill workspace does not expose execution internals", () => {
       `component must not render or submit ${forbidden}`,
     );
   }
+  assert.match(component, /type="password"/);
+  assert.match(component, /autoComplete="off"/);
+  assert.match(component, /if \(saved\) setConfiguration\(\{\}\)/);
+  assert.doesNotMatch(component, /localStorage|sessionStorage/);
 });
 
 test("extension session fences stale catalogs and refreshes conflicts without replaying them", () => {
@@ -73,6 +75,21 @@ test("extension session fences stale catalogs and refreshes conflicts without re
   assert.match(session, /await client\.extensionCatalog\(\)/);
   assert.equal((session.match(/await client\.mutateExtension\(/g) ?? []).length, 1);
   assert.doesNotMatch(session, /setExtensionSnapshot\([^\n]*(?:enabled|disabled|quarantined)/);
+});
+
+test("WebUI Skill Hub exposes real detail, download, upload, and Runtime install paths", () => {
+  assert.match(component, /查看详情/);
+  assert.match(component, /版本历史/);
+  assert.match(component, /下载 ZIP/);
+  assert.match(component, /单次安装意图/);
+  assert.match(component, /onPublishHub/);
+  assert.match(component, /按标签筛选/);
+  assert.match(component, /按原始来源筛选/);
+  assert.match(component, /requestAction\(selected, "uninstall"\)/);
+  assert.match(session, /client\.skillHubDetail/);
+  assert.match(session, /client\.downloadHubSkillPackage/);
+  assert.match(session, /client\.skillHubCatalog\(query, category, tag, source/);
+  assert.doesNotMatch(component, /emate:\/\//);
 });
 
 test("extension feature CSS stays inside the locked EcoreX token system", () => {

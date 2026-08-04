@@ -53,6 +53,7 @@ class Ed25519JWTAuthenticator(ControlPlaneAuthenticator):
             account_id=claims.account_id,
             organization_id=claims.organization_id,
             roles=claims.roles,
+            token_id=claims.token_id,
         )
 
 

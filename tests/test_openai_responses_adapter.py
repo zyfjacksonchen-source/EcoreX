@@ -32,7 +32,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
             loaded = load_responses_state(
                 session_id=session_id,
                 provider="openai",
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 workspace=workspace,
             )
             self.assertTrue(loaded.prompt_cache_key.startswith("ecorex:"))
@@ -41,7 +41,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
             saved = save_responses_state(
                 session_id=session_id,
                 provider="openai",
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 workspace=workspace,
                 state=ResponsesState(
                     previous_response_id="resp_saved",
@@ -61,7 +61,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
             reloaded = load_responses_state(
                 session_id=session_id,
                 provider="openai",
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 workspace=workspace,
             )
             self.assertEqual(reloaded.previous_response_id, "resp_saved")
@@ -70,13 +70,13 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
             self.assertTrue(clear_responses_state(
                 session_id=session_id,
                 provider="openai",
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 workspace=workspace,
             ))
             cleared = load_responses_state(
                 session_id=session_id,
                 provider="openai",
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 workspace=workspace,
             )
             self.assertIsNone(cleared.previous_response_id)
@@ -101,7 +101,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
             saved = save_responses_state(
                 session_id="session-malformed",
                 provider="openai",
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 workspace=workspace,
                 state=ResponsesState(previous_response_id="resp_recovered"),
             )
@@ -109,14 +109,14 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
             reloaded = load_responses_state(
                 session_id="session-malformed",
                 provider="openai",
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 workspace=workspace,
             )
             self.assertEqual(reloaded.previous_response_id, "resp_recovered")
             self.assertTrue(clear_responses_state(
                 session_id="session-malformed",
                 provider="openai",
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 workspace=workspace,
             ))
 
@@ -131,7 +131,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
             truncation="auto",
         )
         plan = build_responses_plan(
-            model="gpt-5.5",
+            model="gpt-5.6-luna",
             messages=[
                 {"role": "system", "content": "Stay concise."},
                 {"role": "user", "content": "Check order ORDER-1"},
@@ -154,7 +154,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
         self.assertEqual(plan.create_path, "/responses")
         self.assertEqual(plan.compact_path, "/responses/compact")
         self.assertEqual(plan.input_tokens_path, "/responses/input_tokens")
-        self.assertEqual(payload["model"], "gpt-5.5")
+        self.assertEqual(payload["model"], "gpt-5.6-luna")
         self.assertTrue(payload["stream"])
         self.assertEqual(payload["instructions"], "Stay concise.")
         self.assertEqual(payload["previous_response_id"], "resp_previous")
@@ -181,7 +181,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
         from models.openai.responses_adapter import build_responses_plan
 
         plan = build_responses_plan(
-            model="gpt-5.5",
+            model="gpt-5.6-luna",
             messages=[
                 {"role": "developer", "content": "Use policy v3."},
                 {"role": "user", "content": [{"type": "text", "text": "Summarize the case."}]},
@@ -193,7 +193,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
             "content": [{"type": "input_text", "text": "Summarize the case."}],
         }]
         self.assertEqual(plan.compact_payload, {
-            "model": "gpt-5.5",
+            "model": "gpt-5.6-luna",
             "input": expected_input,
             "instructions": "Use policy v3.",
         })
@@ -243,7 +243,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                     "type": "response.created",
                     "response": {
                         "id": "resp_stream",
-                        "model": "gpt-5.5",
+                        "model": "gpt-5.6-luna",
                         "created_at": 123,
                     },
                 },
@@ -275,7 +275,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                     "type": "response.completed",
                     "response": {
                         "id": "resp_stream",
-                        "model": "gpt-5.5",
+                        "model": "gpt-5.6-luna",
                         "status": "completed",
                         "service_tier": "priority",
                         "usage": {
@@ -344,7 +344,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                     "type": "response.completed",
                     "response": {
                         "id": "resp_done",
-                        "model": "gpt-5.5",
+                        "model": "gpt-5.6-luna",
                         "status": "completed",
                     },
                 },
@@ -419,7 +419,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                     "provider": "openai",
                     "api_key": "test-key",
                     "api_base": "https://api.openai.com/v1",
-                    "model": "gpt-5.5",
+                    "model": "gpt-5.6-luna",
                     "responses_service_tier": "flex",
                     "responses_prompt_cache_retention": "24h",
                 }
@@ -442,7 +442,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
             save_responses_state(
                 session_id="session-planned",
                 provider="openai",
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 workspace=workspace,
                 state=ResponsesState(
                     previous_response_id="resp_persisted",
@@ -509,7 +509,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                 save_responses_state(
                     session_id=session_id,
                     provider="openai",
-                    model="gpt-5.5",
+                    model="gpt-5.6-luna",
                     workspace=workspace,
                     state=ResponsesState(previous_response_id="resp_lifecycle"),
                 )
@@ -518,7 +518,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                 cleared = load_responses_state(
                     session_id=session_id,
                     provider="openai",
-                    model="gpt-5.5",
+                    model="gpt-5.6-luna",
                     workspace=workspace,
                 )
             finally:
@@ -579,7 +579,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                 save_responses_state(
                     session_id="session_web_clear",
                     provider="openai",
-                    model="gpt-5.5",
+                    model="gpt-5.6-luna",
                     workspace=workspace,
                     state=ResponsesState(previous_response_id="resp_web_clear"),
                 )
@@ -591,7 +591,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                 cleared = load_responses_state(
                     session_id="session_web_clear",
                     provider="openai",
-                    model="gpt-5.5",
+                    model="gpt-5.6-luna",
                     workspace=workspace,
                 )
             finally:
@@ -619,7 +619,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                 save_responses_state(
                     session_id="session_clear_history",
                     provider="openai",
-                    model="gpt-5.5",
+                    model="gpt-5.6-luna",
                     workspace=workspace,
                     state=ResponsesState(previous_response_id="resp_clear_history"),
                 )
@@ -632,7 +632,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                 cleared = load_responses_state(
                     session_id="session_clear_history",
                     provider="openai",
-                    model="gpt-5.5",
+                    model="gpt-5.6-luna",
                     workspace=workspace,
                 )
             finally:
@@ -655,7 +655,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                 self.calls.append(kwargs)
                 return {
                     "id": "resp_runtime_next",
-                    "model": "gpt-5.5",
+                    "model": "gpt-5.6-luna",
                     "status": "completed",
                     "service_tier": "priority",
                     "output": [{
@@ -683,7 +683,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                     "provider": "openai",
                     "api_key": "test-key",
                     "api_base": "https://api.openai.com/v1",
-                    "model": "gpt-5.5",
+                    "model": "gpt-5.6-luna",
                     "use_responses_api": True,
                     "responses_service_tier": "flex",
                     "responses_prompt_cache_retention": "24h",
@@ -702,7 +702,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
             save_responses_state(
                 session_id="session-runtime",
                 provider="openai",
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 workspace=workspace,
                 state=ResponsesState(previous_response_id="resp_should_not_auto_load"),
             )
@@ -711,19 +711,19 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                 stream=False,
                 session_id="session-runtime",
                 workspace=workspace,
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
             )
             state = load_responses_state(
                 session_id="session-runtime",
                 provider="openai",
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 workspace=workspace,
             )
 
         self.assertEqual(result["choices"][0]["message"]["content"], "Runtime OK")
         self.assertEqual(client.calls[0]["api_key"], "test-key")
         self.assertEqual(client.calls[0]["api_base"], "https://api.openai.com/v1")
-        self.assertEqual(client.calls[0]["model"], "gpt-5.5")
+        self.assertEqual(client.calls[0]["model"], "gpt-5.6-luna")
         self.assertEqual(client.calls[0]["service_tier"], "flex")
         self.assertEqual(client.calls[0]["prompt_cache_retention"], "24h")
         self.assertTrue(client.calls[0]["prompt_cache_key"].startswith("ecorex:"))
@@ -747,7 +747,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
             def responses_create(self, **_kwargs):
                 return {
                     "id": "resp_failed",
-                    "model": "gpt-5.5",
+                    "model": "gpt-5.6-luna",
                     "status": "failed",
                     "error": {
                         "message": "tool limit exceeded",
@@ -762,7 +762,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                     "provider": "openai",
                     "api_key": "test-key",
                     "api_base": "https://api.openai.com/v1",
-                    "model": "gpt-5.5",
+                    "model": "gpt-5.6-luna",
                     "use_responses_api": True,
                 }
 
@@ -776,13 +776,13 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                 stream=False,
                 session_id="session-failed-status",
                 workspace=workspace,
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 model_max_retries=0,
             )
             state = load_responses_state(
                 session_id="session-failed-status",
                 provider="openai",
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 workspace=workspace,
             )
 
@@ -807,7 +807,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                 self.calls.append(kwargs)
                 return {
                     "id": "resp_incomplete_sync",
-                    "model": "gpt-5.5",
+                    "model": "gpt-5.6-luna",
                     "status": "incomplete",
                     "incomplete_details": {"reason": "max_tokens"},
                 }
@@ -821,7 +821,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                     "provider": "openai",
                     "api_key": "test-key",
                     "api_base": "https://api.openai.com/v1",
-                    "model": "gpt-5.5",
+                    "model": "gpt-5.6-luna",
                     "use_responses_api": True,
                 }
 
@@ -836,13 +836,13 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                 stream=False,
                 session_id="session-incomplete-sync",
                 workspace=workspace,
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 model_max_retries=1,
             )
             state = load_responses_state(
                 session_id="session-incomplete-sync",
                 provider="openai",
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 workspace=workspace,
             )
 
@@ -872,7 +872,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                         "type": "response.created",
                         "response": {
                             "id": "resp_stream_runtime",
-                            "model": "gpt-5.5",
+                            "model": "gpt-5.6-luna",
                         },
                     },
                     {"type": "response.output_text.delta", "delta": "stream"},
@@ -880,7 +880,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                         "type": "response.completed",
                         "response": {
                             "id": "resp_stream_next",
-                            "model": "gpt-5.5",
+                            "model": "gpt-5.6-luna",
                             "status": "completed",
                             "service_tier": "priority",
                             "usage": {
@@ -906,7 +906,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                     "provider": "openai",
                     "api_key": "test-key",
                     "api_base": "https://api.openai.com/v1",
-                    "model": "gpt-5.5",
+                    "model": "gpt-5.6-luna",
                     "use_responses_api": True,
                 }
 
@@ -921,12 +921,12 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                 stream=True,
                 session_id="session-stream-runtime",
                 workspace=workspace,
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
             ))
             state = load_responses_state(
                 session_id="session-stream-runtime",
                 provider="openai",
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 workspace=workspace,
             )
 
@@ -935,7 +935,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
         self.assertEqual(len(client.responses_calls), 1)
         self.assertEqual(len(client.chat_calls), 0)
         self.assertTrue(client.responses_calls[0]["stream"])
-        self.assertEqual(client.responses_calls[0]["model"], "gpt-5.5")
+        self.assertEqual(client.responses_calls[0]["model"], "gpt-5.6-luna")
         self.assertNotIn("messages", client.responses_calls[0])
         self.assertEqual(state.previous_response_id, "resp_stream_next")
         self.assertEqual(state.service_tier, "priority")
@@ -969,7 +969,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                         "type": "response.completed",
                         "response": {
                             "id": "resp_retry_next",
-                            "model": "gpt-5.5",
+                            "model": "gpt-5.6-luna",
                             "status": "completed",
                             "usage": {
                                 "input_tokens": 2,
@@ -989,7 +989,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                     "provider": "openai",
                     "api_key": "test-key",
                     "api_base": "https://api.openai.com/v1",
-                    "model": "gpt-5.5",
+                    "model": "gpt-5.6-luna",
                     "use_responses_api": True,
                 }
 
@@ -1002,7 +1002,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
         chunks = list(RuntimeBot(client).call_with_tools(
             [{"role": "user", "content": "hello"}],
             stream=True,
-            model="gpt-5.5",
+            model="gpt-5.6-luna",
             model_max_retries=1,
             model_retry_sleep=sleeps.append,
         ))
@@ -1045,7 +1045,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                     "provider": "openai",
                     "api_key": "test-key",
                     "api_base": "https://api.openai.com/v1",
-                    "model": "gpt-5.5",
+                    "model": "gpt-5.6-luna",
                     "use_responses_api": True,
                 }
 
@@ -1060,14 +1060,14 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                 stream=True,
                 session_id="session-stream-error-after-output",
                 workspace=workspace,
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 model_max_retries=1,
                 model_retry_sleep=lambda _delay: None,
             ))
             state = load_responses_state(
                 session_id="session-stream-error-after-output",
                 provider="openai",
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 workspace=workspace,
             )
 
@@ -1097,7 +1097,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                     "type": "response.incomplete",
                     "response": {
                         "id": "resp_incomplete",
-                        "model": "gpt-5.5",
+                        "model": "gpt-5.6-luna",
                         "status": "incomplete",
                         "incomplete_details": {"reason": "max_tokens"},
                     },
@@ -1112,7 +1112,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                     "provider": "openai",
                     "api_key": "test-key",
                     "api_base": "https://api.openai.com/v1",
-                    "model": "gpt-5.5",
+                    "model": "gpt-5.6-luna",
                     "use_responses_api": True,
                 }
 
@@ -1127,14 +1127,14 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
                 stream=True,
                 session_id="session-stream-incomplete",
                 workspace=workspace,
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 model_max_retries=1,
                 model_retry_sleep=lambda _delay: None,
             ))
             state = load_responses_state(
                 session_id="session-stream-incomplete",
                 provider="openai",
-                model="gpt-5.5",
+                model="gpt-5.6-luna",
                 workspace=workspace,
             )
 
@@ -1159,7 +1159,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
         previous = ResponsesState(prompt_cache_key="tenant:stable-prefix", service_tier="flex")
         response = {
             "id": "resp_new",
-            "model": "gpt-5.5",
+            "model": "gpt-5.6-luna",
             "status": "completed",
             "service_tier": "priority",
             "output": [{
@@ -1188,7 +1188,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
 
         refusal = normalize_responses_output_to_chat({
             "id": "resp_refusal",
-            "model": "gpt-5.5",
+            "model": "gpt-5.6-luna",
             "status": "completed",
             "output": [{
                 "type": "message",
@@ -1232,7 +1232,7 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
         self.assertEqual(state.service_tier, "flex")
 
         plan = build_responses_plan(
-            model="gpt-5.5",
+            model="gpt-5.6-luna",
             messages=[{"role": "user", "content": "fresh turn"}],
             state=state,
         )
@@ -1260,9 +1260,9 @@ class TestOpenAIHTTPClientResponsesMethods(unittest.TestCase):
                 return {"ok": True, "path": kwargs["path"], "stream": kwargs["stream"]}
 
         client = CaptureClient()
-        create = client.responses_create(model="gpt-5.5", input="hi", stream=True)
-        compact = client.responses_compact(model="gpt-5.5", input=[])
-        tokens = client.responses_input_tokens(model="gpt-5.5", input="hi")
+        create = client.responses_create(model="gpt-5.6-luna", input="hi", stream=True)
+        compact = client.responses_compact(model="gpt-5.6-luna", input=[])
+        tokens = client.responses_input_tokens(model="gpt-5.6-luna", input="hi")
 
         self.assertEqual(create, {"ok": True, "path": "/responses", "stream": True})
         self.assertEqual(compact, {"ok": True, "path": "/responses/compact", "stream": False})

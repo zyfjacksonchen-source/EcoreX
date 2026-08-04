@@ -19,17 +19,17 @@ class TestModelCapabilities(unittest.TestCase):
         self.assertEqual(infer_provider_id("meituan-longcat/LongCat-Flash-Lite"), const.MODELSCOPE)
         self.assertEqual(infer_provider_id("kimi-k2.6"), const.MOONSHOT)
         self.assertEqual(infer_provider_id("linkai-gpt-4o-mini"), const.LINKAI)
-        self.assertEqual(infer_provider_id("gpt-5.5"), const.OPENAI)
+        self.assertEqual(infer_provider_id("gpt-5.6-luna"), const.OPENAI)
         self.assertEqual(infer_provider_id("doubao-seed-2.1-pro"), const.DOUBAO)
 
     def test_model_context_policy_tracks_top_tier_windows(self):
         from common import const
         from models.model_capabilities import context_policy_for_model, get_model_capabilities
 
-        openai_policy = context_policy_for_model(const.GPT_55, const.OPENAI)
-        self.assertEqual(openai_policy.context_window_tokens, 1000000)
+        openai_policy = context_policy_for_model(const.GPT_56_LUNA, const.OPENAI)
+        self.assertEqual(openai_policy.context_window_tokens, 400000)
         self.assertEqual(openai_policy.max_output_tokens, 128000)
-        self.assertEqual(openai_policy.auto_compact_token_limit, 800000)
+        self.assertEqual(openai_policy.auto_compact_token_limit, 300000)
         self.assertEqual(openai_policy.tokenizer_status, "local_tokenizer")
 
         gemini_policy = context_policy_for_model(const.GEMINI_31_PRO_PRE, const.GEMINI)
@@ -190,7 +190,7 @@ class TestModelCapabilities(unittest.TestCase):
         from common import const
         from models.token_estimator import estimate_text_tokens
 
-        self.assertGreater(estimate_text_tokens("hello world", const.GPT_55, const.OPENAI), 0)
+        self.assertGreater(estimate_text_tokens("hello world", const.GPT_56_LUNA, const.OPENAI), 0)
         self.assertGreater(estimate_text_tokens("中文 token 估算", const.DEEPSEEK_V4_PRO, const.DEEPSEEK), 0)
 
     def test_openai_fixed_sampling_models_strip_unsupported_params(self):
@@ -201,7 +201,7 @@ class TestModelCapabilities(unittest.TestCase):
         )
 
         payload = {
-            "model": "gpt-5.5",
+            "model": "gpt-5.6-luna",
             "messages": [{"role": "user", "content": "hello"}],
             "max_tokens": 4096,
             "temperature": 0.7,
@@ -212,7 +212,7 @@ class TestModelCapabilities(unittest.TestCase):
             "verbosity": "low",
             "stream": True,
         }
-        capabilities = get_model_capabilities("gpt-5.5", "openai")
+        capabilities = get_model_capabilities("gpt-5.6-luna", "openai")
         clean, removed = sanitize_chat_payload(payload, capabilities)
 
         self.assertTrue(capabilities.supports_reasoning_effort)
@@ -237,8 +237,8 @@ class TestModelCapabilities(unittest.TestCase):
         from models.model_capabilities import get_model_capabilities, sanitize_chat_payload
 
         clean, removed = sanitize_chat_payload(
-            {"model": "gpt-5.5", "stream": True, "temperature": 0.7},
-            get_model_capabilities("gpt-5.5", "custom"),
+            {"model": "gpt-5.6-luna", "stream": True, "temperature": 0.7},
+            get_model_capabilities("gpt-5.6-luna", "custom"),
         )
 
         self.assertEqual(clean["temperature"], 0.7)
@@ -250,7 +250,7 @@ class TestModelCapabilities(unittest.TestCase):
         from models.model_capabilities import capabilities_for_config
 
         capabilities = capabilities_for_config({
-            "model": "gpt-5.5",
+            "model": "gpt-5.6-luna",
             "bot_type": const.CHATGPT,
             "open_ai_api_base": "https://coding-plan.test/v1",
             "use_linkai": False,
@@ -282,7 +282,7 @@ class TestModelCapabilities(unittest.TestCase):
                     "provider": "openai",
                     "api_key": "test-key",
                     "api_base": "https://api.openai.com/v1",
-                    "model": "gpt-5.5",
+                    "model": "gpt-5.6-luna",
                     "default_temperature": 0.7,
                     "default_top_p": 0.9,
                     "default_frequency_penalty": 0.2,
@@ -300,7 +300,7 @@ class TestModelCapabilities(unittest.TestCase):
             verbosity="high",
         )
 
-        self.assertEqual(payload["model"], "gpt-5.5")
+        self.assertEqual(payload["model"], "gpt-5.6-luna")
         self.assertNotIn("temperature", payload)
         self.assertNotIn("top_p", payload)
         self.assertNotIn("frequency_penalty", payload)
@@ -319,7 +319,7 @@ class TestModelCapabilities(unittest.TestCase):
                 return {
                     "api_key": "test-key",
                     "api_base": "https://api.openai.com/v1",
-                    "model": "gpt-5.5",
+                    "model": "gpt-5.6-luna",
                     "default_temperature": 0.7,
                     "default_top_p": 0.9,
                     "default_frequency_penalty": 0.2,
@@ -351,7 +351,7 @@ class TestModelCapabilities(unittest.TestCase):
                     "provider": "openai",
                     "api_key": "test-key",
                     "api_base": "https://coding-plan.test/v1",
-                    "model": "gpt-5.5",
+                    "model": "gpt-5.6-luna",
                     "default_temperature": 0.7,
                     "default_top_p": 0.9,
                     "default_frequency_penalty": 0.2,
@@ -445,12 +445,12 @@ class TestModelCapabilities(unittest.TestCase):
             ),
             const.CHATGPTONAZURE,
         )
-        capabilities = get_model_capabilities("gpt-5.5", const.CHATGPTONAZURE)
+        capabilities = get_model_capabilities("gpt-5.6-luna", const.CHATGPTONAZURE)
         self.assertFalse(capabilities.supports_temperature)
         self.assertTrue(capabilities.supports_reasoning_effort)
         self.assertEqual(capabilities.max_tokens_param, "max_completion_tokens")
 
-        matrix = build_provider_capability_matrix({const.CHATGPTONAZURE: ["gpt-5.5", "o1-mini"]})
+        matrix = build_provider_capability_matrix({const.CHATGPTONAZURE: ["gpt-5.6-luna", "o1-mini"]})
         azure_gpt = matrix["providers"][const.CHATGPTONAZURE]["models"][0]
         self.assertEqual(azure_gpt["api_family"], "azure_openai")
         self.assertEqual(azure_gpt["host_policy"], "azure_deployment")
@@ -459,7 +459,7 @@ class TestModelCapabilities(unittest.TestCase):
 
         with patch("models.chatgpt.chat_gpt_bot.conf", return_value={
             "bot_type": const.OPENAI,
-            "model": "gpt-5.5",
+            "model": "gpt-5.6-luna",
             "open_ai_api_key": "test-key",
             "open_ai_api_base": "https://example.openai.azure.com/",
             "temperature": 0.7,
@@ -472,7 +472,7 @@ class TestModelCapabilities(unittest.TestCase):
         legacy_azure_config = {
             "bot_type": "",
             "use_azure_chatgpt": True,
-            "model": "gpt-5.5",
+            "model": "gpt-5.6-luna",
             "open_ai_api_base": "https://example.openai.azure.com/",
             "use_linkai": False,
         }
@@ -483,7 +483,7 @@ class TestModelCapabilities(unittest.TestCase):
 
         with patch("bridge.agent_bridge.conf", return_value=legacy_azure_config):
             bridge_model = AgentLLMModel(None)
-            self.assertEqual(bridge_model._resolve_bot_type("gpt-5.5"), const.CHATGPTONAZURE)
+            self.assertEqual(bridge_model._resolve_bot_type("gpt-5.6-luna"), const.CHATGPTONAZURE)
 
         with patch("models.chatgpt.chat_gpt_bot.conf", return_value={
             **legacy_azure_config,
@@ -494,7 +494,7 @@ class TestModelCapabilities(unittest.TestCase):
             legacy_flag_bot = ChatGPTBot()
             self.assertEqual(legacy_flag_bot.get_api_config()["provider"], const.CHATGPTONAZURE)
             self.assertNotIn("temperature", legacy_flag_bot.args)
-            self.assertEqual(legacy_flag_bot.args["model"], "gpt-5.5")
+            self.assertEqual(legacy_flag_bot.args["model"], "gpt-5.6-luna")
 
         with patch("models.chatgpt.chat_gpt_bot.conf", return_value={
             **legacy_azure_config,
@@ -516,7 +516,7 @@ class TestModelCapabilities(unittest.TestCase):
                     "provider": "openai",
                     "api_key": "test-key",
                     "api_base": "https://api.openai.com/v1",
-                    "model": "gpt-5.5",
+                    "model": "gpt-5.6-luna",
                 }
 
             def _responses_sync_response_with_retry(self, plan, *args, **kwargs):
@@ -542,7 +542,7 @@ class TestModelCapabilities(unittest.TestCase):
         from common import const
 
         local_config = {
-            "model": "gpt-5.5",
+            "model": "gpt-5.6-luna",
             "bot_type": const.OPENAI,
             "use_linkai": False,
             "enable_thinking": True,
@@ -571,7 +571,7 @@ class TestModelCapabilities(unittest.TestCase):
             openai_kwargs = bridge_model._build_call_kwargs(
                 request,
                 stream=False,
-                model_name="gpt-5.5",
+                model_name="gpt-5.6-luna",
                 provider=const.OPENAI,
             )
 
@@ -685,7 +685,7 @@ class TestModelCapabilities(unittest.TestCase):
         from models.model_capabilities import build_provider_capability_matrix
 
         matrix = build_provider_capability_matrix({
-            "openai": [const.GPT_55, "o1-mini", const.GPT_4o],
+            "openai": [const.GPT_56_LUNA, "o1-mini", const.GPT_4o],
             "deepseek": [const.DEEPSEEK_V4_FLASH],
             "custom": [],
         })
@@ -695,7 +695,7 @@ class TestModelCapabilities(unittest.TestCase):
         json.dumps(matrix, sort_keys=True)
         self.assertEqual(
             [row["model"] for row in matrix["providers"]["openai"]["models"]],
-            [const.GPT_55, "o1-mini", const.GPT_4o],
+            [const.GPT_56_LUNA, "o1-mini", const.GPT_4o],
         )
 
         gpt55_row = matrix["providers"]["openai"]["models"][0]

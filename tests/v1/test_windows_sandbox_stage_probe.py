@@ -57,7 +57,7 @@ def test_suspended_child_identity_is_verified_before_job_and_resume() -> None:
     assert "CREATE_SUSPENDED" in process
 
 
-def test_windows_security_receipt_contract_is_v3_and_fail_closed() -> None:
+def test_windows_security_receipt_contract_is_v4_and_fail_closed() -> None:
     security = (ROOT / "ecorex" / "integration" / "windows_sandbox_security.py").read_text(
         encoding="utf-8"
     )
@@ -65,10 +65,13 @@ def test_windows_security_receipt_contract_is_v3_and_fail_closed() -> None:
         encoding="utf-8"
     )
 
-    contract = "windows-appcontainer-stable-provision-v3"
-    proof = "immutable-read-tree-mutable-workspace-acl-mic-v3"
+    contract = "windows-appcontainer-stable-provision-v4"
+    proof = "immutable-runtime-durable-cas-mutable-workspace-acl-mic-v4"
     assert f'_STABLE_PROVISION_CONTRACT = "{contract}"' in security
     assert f'_STRICT_INHERITANCE_PROOF = "{proof}"' in security
     assert contract in runtime
+    assert 'request.install_root / L"state" / L"extension-cas"' in _source(
+        "ecorex_sandbox_security.cpp"
+    )
     assert "windows-appcontainer-stable-provision-v2" not in security
     assert "windows-appcontainer-stable-provision-v2" not in runtime

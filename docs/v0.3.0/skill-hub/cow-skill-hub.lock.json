@@ -1,0 +1,1042 @@
+{
+  "schema_version": 2,
+  "captured_at": "2026-08-04T14:12:48+08:00",
+  "upstream": {
+    "repository": "https://github.com/zhayujie/cow-skill-hub",
+    "commit": "0c214c3a61f66f8c122111c23270bd146241001b",
+    "archive_url": "https://codeload.github.com/zhayujie/cow-skill-hub/zip/0c214c3a61f66f8c122111c23270bd146241001b",
+    "archive_size": 836019,
+    "archive_sha256": "2926c9b72da1269b1a5676802932a2551f53bcf3162be8e0acef2a823c1a5b18",
+    "license": "MIT",
+    "copyright": "Copyright (c) 2026 zhayujie"
+  },
+  "catalog_snapshot": {
+    "source": "https://skills.cowagent.ai/",
+    "html_size": 144584,
+    "html_sha256": "f3abdca3312437108e389a6bad5a3d9649b3941fada411827f032a6f9169c3d2",
+    "reported_skill_count": 67,
+    "selection": "category=external OR tags contains office OR tags contains content",
+    "seed_resolution_locked": true,
+    "network_dependency": false,
+    "native_alias_count": 5,
+    "mirrored_package_count": 28,
+    "unsupported_count": 20,
+    "resolution_note": "Every selected item is fixed to an observed source digest. Native aliases bind existing e-Mate abilities; digest-locked source mirrors are transformed offline into declarative canonical packages; packages requiring guessed execution contracts remain unsupported. No Cow service is consulted after this snapshot."
+  },
+  "excluded_slugs": [
+    "academic-thesis-review",
+    "akshare-analysis",
+    "architecture",
+    "gold",
+    "legal",
+    "linkai-cli",
+    "plugin-gpt-image",
+    "post-job",
+    "resume-assistant",
+    "stock-analysis",
+    "travel-manager"
+  ],
+  "seed_candidates": [
+    {
+      "slug": "baidu-search",
+      "version": "1.1.3",
+      "category": "external",
+      "tags": [
+        "search"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 3504,
+      "source_package_sha256": "c16c7a23d5bd24ce9211cce55ecc8cecbdc22b4f41bc07f905e4a8261d2a1fbc",
+      "source_package_file": "baidu-search-1.1.3.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "execution_contract_unattested",
+        "detail": "source contains executable scripts but no audited e-Mate runtime/effect contract"
+      }
+    },
+    {
+      "slug": "plugin-video-gen",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "content"
+      ],
+      "provider": "linkai",
+      "source_package_size_bytes": 1384,
+      "source_package_sha256": "558d6cd5d18f26b833faf6a5b3fa4c0f5d82f8d871ac06cd0430861b2654f22f",
+      "source_package_file": "plugin-video-gen-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "plugin-video-gen-1.0.0.zip",
+        "package_size_bytes": 1945,
+        "package_sha256": "577898957abe94d53945017e5df9770ed8397c70e40b4bae8edcac1c2ce17894",
+        "cas_sha256": "15928c562e3fa4defceff05021c9fd2c4be742105a178a874faf598cef437ee8",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "tencent-docs",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "office"
+      ],
+      "provider": "community",
+      "source_package_size_bytes": 267475,
+      "source_package_sha256": "4c696c61c43a9e4236ef8bbd2bb95acf3aa8d7e6d6928d37ba086e45e16d88ca",
+      "source_package_file": "tencent-docs-1.0.0.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "execution_contract_unattested",
+        "detail": "source contains executable scripts but no audited e-Mate runtime/effect contract"
+      }
+    },
+    {
+      "slug": "lark-cli",
+      "version": "1.0.65",
+      "category": "external",
+      "tags": [
+        "office"
+      ],
+      "provider": "github",
+      "source_package_size_bytes": 3956665,
+      "source_package_sha256": "dd86afe3e1b1f19acb2ff2aa0a5c0596420f9a0b3c56b611fd1e958924fe9f82",
+      "source_package_file": "lark-cli-1.0.65.zip",
+      "resolution": {
+        "kind": "native_alias",
+        "native_extension_id": "skill.feishu-lark",
+        "reason_code": "native_capability_alias"
+      }
+    },
+    {
+      "slug": "wecom-cli",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "office"
+      ],
+      "provider": "github",
+      "source_package_size_bytes": 169509,
+      "source_package_sha256": "ab705ed17c001f08db14652108dc07fffd5dd3c691cb11aa092c52df5555b8dc",
+      "source_package_file": "wecom-cli-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "wecom-cli-1.0.0.zip",
+        "package_size_bytes": 68410,
+        "package_sha256": "678f62f4e915aeaeb4cf35206659f7da70cf7a6a19bc20dafdeaacd13128c808",
+        "cas_sha256": "849f92c2887bd33e4d7034dade5b7a4b2ad5aa495ecb5a15e8af723421c48d56",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "plugin-gemini-image",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [],
+      "provider": "linkai",
+      "source_package_size_bytes": 1390,
+      "source_package_sha256": "fba1c7c6162ef83d1bec98a1a78ef4ba5c4f82c771a29fc9cdb387e3e38c4ade",
+      "source_package_file": "plugin-gemini-image-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "plugin-gemini-image-1.0.0.zip",
+        "package_size_bytes": 1944,
+        "package_sha256": "955fc94f883d1c53f459809594803d2791b7aa7578fe483914eacd17676d843d",
+        "cas_sha256": "2683d8cb2bfafbda3a361f48095c94409dfb1f5b42a364017cad309b563007f0",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "baidu-baike-data",
+      "version": "1.1.0",
+      "category": "external",
+      "tags": [
+        "search"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 3436,
+      "source_package_sha256": "e5ec618cf4451b419588db64ebab2c4ca70ef7670255b8bd8f46c4ca93bd06bb",
+      "source_package_file": "baidu-baike-data-1.1.0.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "execution_contract_unattested",
+        "detail": "source contains executable scripts but no audited e-Mate runtime/effect contract"
+      }
+    },
+    {
+      "slug": "dws",
+      "version": "1.0.47",
+      "category": "external",
+      "tags": [
+        "office"
+      ],
+      "provider": "github",
+      "source_package_size_bytes": 1588404,
+      "source_package_sha256": "feb304df0a2b4f8451e3f375a3b584560b3c30d2ce5630f6ab08f178e4ce1ca8",
+      "source_package_file": "dws-1.0.47.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "execution_contract_unattested",
+        "detail": "source contains executable scripts but no audited e-Mate runtime/effect contract"
+      }
+    },
+    {
+      "slug": "style-collection",
+      "version": "1.0.0",
+      "category": "community",
+      "tags": [
+        "content"
+      ],
+      "provider": "community",
+      "source_package_size_bytes": 43474,
+      "source_package_sha256": "c6cefaf554b5f38f9846bcbc0da58a45c2eacec69d183a73053e99ec2b12dfa0",
+      "source_package_file": "style-collection-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "style-collection-1.0.0.zip",
+        "package_size_bytes": 23302,
+        "package_sha256": "4afae60faa20213a10a353809c6e26cbdf41eaf62acf67fd50fa7021f5f85366",
+        "cas_sha256": "dcd9ad3769708bbb78a3b401ee18375bd65e01007dc245d341fab306243690f8",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "tencent-meeting",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "office"
+      ],
+      "provider": "community",
+      "source_package_size_bytes": 17546,
+      "source_package_sha256": "d814cdd9bff0f7944d38f81856b970e3ded044785f54ce27dd0a5c396a83ac56",
+      "source_package_file": "tencent-meeting-1.0.0.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "execution_contract_unattested",
+        "detail": "source contains executable scripts but no audited e-Mate runtime/effect contract"
+      }
+    },
+    {
+      "slug": "baidu-scholar-search",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "search",
+        "office"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 1780,
+      "source_package_sha256": "efe65c7a2da2fbffa1749632c87ce638e7c0acc4fcfabb30132c726c3dbb2534",
+      "source_package_file": "baidu-scholar-search-1.0.0.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "execution_contract_unattested",
+        "detail": "source contains executable scripts but no audited e-Mate runtime/effect contract"
+      }
+    },
+    {
+      "slug": "script-adaptation-collection",
+      "version": "1.0.0",
+      "category": "community",
+      "tags": [
+        "content"
+      ],
+      "provider": "community",
+      "source_package_size_bytes": 15506,
+      "source_package_sha256": "fe119e0cb01024adee1a8ff9a10bf7faccfdbbf7a564eaf331a3a69c8c053562",
+      "source_package_file": "script-adaptation-collection-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "script-adaptation-collection-1.0.0.zip",
+        "package_size_bytes": 9263,
+        "package_sha256": "82524fa57756d7ad6471eb03346c2539dde95e3e9d54f3107a04ab7267186493",
+        "cas_sha256": "b48ae8f5e6121aa161659c7489b9a00bca5717f3d0711d574301e0d86363d989",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "female-evaluator-collection",
+      "version": "1.0.0",
+      "category": "community",
+      "tags": [
+        "content"
+      ],
+      "provider": "community",
+      "source_package_size_bytes": 40852,
+      "source_package_sha256": "48a53b8d13009f29c4eff54588377eb6ea0ffa9b85c67b1ce697c4ec9bac4bcf",
+      "source_package_file": "female-evaluator-collection-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "female-evaluator-collection-1.0.0.zip",
+        "package_size_bytes": 20382,
+        "package_sha256": "dcdd6530c8c0570466d1cf00292e653fc4084ba22f6561c69006014112a9ebab",
+        "cas_sha256": "ee8855463d11fa28b0e103984647b79d4dd2b5e03eaef87f949bc74d9980fdfa",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "male-evaluator-collection",
+      "version": "1.0.0",
+      "category": "community",
+      "tags": [
+        "content"
+      ],
+      "provider": "community",
+      "source_package_size_bytes": 18649,
+      "source_package_sha256": "ff3838eeba2ef141d7c6ffa9d6d6c2fee62dbb44994957226d85914640ee9749",
+      "source_package_file": "male-evaluator-collection-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "male-evaluator-collection-1.0.0.zip",
+        "package_size_bytes": 9154,
+        "package_sha256": "ef2be78fd52dad5bfe5bf8543452903313f69ec28f601285018a428ad45cbd09",
+        "cas_sha256": "a0a156ee4a0ab8ac26f52ccb98752d9ed672eec8af01b962cd7923e54c601865",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "plugin-enterprise-search",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "office",
+        "search"
+      ],
+      "provider": "linkai",
+      "source_package_size_bytes": 1798,
+      "source_package_sha256": "93f01e76900bb9a9b8241c8aef4a610f2ca5b1534ee2f6c78a02ff081ce311c2",
+      "source_package_file": "plugin-enterprise-search-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "plugin-enterprise-search-1.0.0.zip",
+        "package_size_bytes": 1512,
+        "package_sha256": "dfcc7a51b23533affe258be7a41d216906ebb16d51c1f164a5878688e764eacc",
+        "cas_sha256": "552147c57d14faedb3bc19c66be1e71ac6066e0556b080d4f532073cdc818134",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "xlsx",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "office",
+        "content"
+      ],
+      "provider": "github",
+      "source_package_size_bytes": 154361,
+      "source_package_sha256": "2e15169a9377f9af4d15f4286e8bcd60a43663bef0ed64c1aca059e1dea363a4",
+      "source_package_file": "xlsx-1.0.0.zip",
+      "resolution": {
+        "kind": "native_alias",
+        "native_extension_id": "skill.office-spreadsheets",
+        "reason_code": "native_capability_alias"
+      }
+    },
+    {
+      "slug": "docx",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "office",
+        "content"
+      ],
+      "provider": "github",
+      "source_package_size_bytes": 162488,
+      "source_package_sha256": "4f8f602a5b179ca01edbd5335b3b7b8d9e7ae089270ea66d64965496e49ae6ef",
+      "source_package_file": "docx-1.0.0.zip",
+      "resolution": {
+        "kind": "native_alias",
+        "native_extension_id": "skill.office-documents",
+        "reason_code": "native_capability_alias"
+      }
+    },
+    {
+      "slug": "eda-reporter",
+      "version": "1.0.0",
+      "category": "community",
+      "tags": [
+        "office",
+        "data"
+      ],
+      "provider": "community",
+      "source_package_size_bytes": 70475,
+      "source_package_sha256": "6fbe52b6c026ab3d9509892870fc331cb1baef78214052c6b40de70e9c80358d",
+      "source_package_file": "eda-reporter-1.0.0.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "execution_contract_unattested",
+        "detail": "source contains executable scripts but no audited e-Mate runtime/effect contract"
+      }
+    },
+    {
+      "slug": "plugin-seedream-image",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "content"
+      ],
+      "provider": "linkai",
+      "source_package_size_bytes": 2989,
+      "source_package_sha256": "fe3c0c187e5c975127b826fc8ba7cb642a193efbf6e72009db52dd5493bed24e",
+      "source_package_file": "plugin-seedream-image-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "plugin-seedream-image-1.0.0.zip",
+        "package_size_bytes": 1800,
+        "package_sha256": "036de99757f263ca58098ee6396e45a88277963e5805c6a9f71fe8aa255caf41",
+        "cas_sha256": "111328565009c72943ea803132f733ee7acd7cb56685b04486f0ba3d87af5495",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "youtube-upload",
+      "version": "1.0.0",
+      "category": "community",
+      "tags": [
+        "content"
+      ],
+      "provider": "community",
+      "source_package_size_bytes": 10213,
+      "source_package_sha256": "7b82277664ced72d9e43a09df2f24d90e53fc9f58fd95292c10f0172640c6e74",
+      "source_package_file": "youtube-upload-1.0.0.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "execution_contract_unattested",
+        "detail": "source contains executable scripts but no audited e-Mate runtime/effect contract"
+      }
+    },
+    {
+      "slug": "wechat-article-search",
+      "version": "0.1.0",
+      "category": "external",
+      "tags": [
+        "data",
+        "content",
+        "search"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 8996,
+      "source_package_sha256": "9e7aeadffa91ddfd9fcfd974c0a63eee932a13659b0ad20004d52fcd9872aac4",
+      "source_package_file": "wechat-article-search-0.1.0.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "execution_contract_unattested",
+        "detail": "source contains executable scripts but no audited e-Mate runtime/effect contract"
+      }
+    },
+    {
+      "slug": "plugin-12306-ticket",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "search",
+        "office"
+      ],
+      "provider": "linkai",
+      "source_package_size_bytes": 1726,
+      "source_package_sha256": "706b4ec53a87fcee9c17b2511bafb63028beef7641beb5eed2cfd1fc9757aec9",
+      "source_package_file": "plugin-12306-ticket-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "plugin-12306-ticket-1.0.0.zip",
+        "package_size_bytes": 1504,
+        "package_sha256": "50cf44d339a3938cebc7edd73a9d334a22a340bf3a6454e491c903ae795dd493",
+        "cas_sha256": "b82aed6af91ad56148547f47bdc2bfe4711cc4faf81946190de25c3ad7d2c059",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "latex-to-word",
+      "version": "1.0.0",
+      "category": "community",
+      "tags": [
+        "office"
+      ],
+      "provider": "community",
+      "source_package_size_bytes": 25957,
+      "source_package_sha256": "db9e71224672a3965465e9f5c214947c6bd08602d77f034e72363c24041674b3",
+      "source_package_file": "latex-to-word-1.0.0.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "execution_contract_unattested",
+        "detail": "source contains executable scripts but no audited e-Mate runtime/effect contract"
+      }
+    },
+    {
+      "slug": "plugin-amap",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [],
+      "provider": "linkai",
+      "source_package_size_bytes": 1761,
+      "source_package_sha256": "08c346999f4a7aa3a911d6c1117adfa4d6af6a2754e11704e6333bf371b928d5",
+      "source_package_file": "plugin-amap-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "plugin-amap-1.0.0.zip",
+        "package_size_bytes": 1510,
+        "package_sha256": "31c5586dbc1a097cb16f1acceb2e6e236ff6d677e146db26935dfa759c9034f6",
+        "cas_sha256": "3244f5f593b35eeb3c0ce3c7577ca65790cfbf8443ba29d289c8a7b00e4da881",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "plugin-antv",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "data"
+      ],
+      "provider": "linkai",
+      "source_package_size_bytes": 1824,
+      "source_package_sha256": "d1cc12f89f222a660d687c59e4478274fe8f2392457c74c885639c8c8b733289",
+      "source_package_file": "plugin-antv-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "plugin-antv-1.0.0.zip",
+        "package_size_bytes": 1536,
+        "package_sha256": "b4ac2187c67b55350ab89e2ac2f6ec0d6595cc32182bddc46238972ffad0280e",
+        "cas_sha256": "eb2258346da1b80812e8c54312800e316119785e689072ed64a79d2c65aaa50c",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "plugin-baidu-map",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "search"
+      ],
+      "provider": "linkai",
+      "source_package_size_bytes": 1728,
+      "source_package_sha256": "5429b258c47e959dd9f92af656f0e55c69babcdae5c88bfff23c5579973ff03e",
+      "source_package_file": "plugin-baidu-map-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "plugin-baidu-map-1.0.0.zip",
+        "package_size_bytes": 1512,
+        "package_sha256": "2c45c64137e0b891b503f1205144f324a264db16b47fc1c40229e6a3df76e232",
+        "cas_sha256": "5ff266c1e0c89ab6bc7c80c6e76aa66400c6a4b42af46198f5810b02fd76f7ba",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "web-summarizer",
+      "version": "1.0.0",
+      "category": "community",
+      "tags": [
+        "office",
+        "data",
+        "search"
+      ],
+      "provider": "community",
+      "source_package_size_bytes": 3709,
+      "source_package_sha256": "32750705743506372a44b68c8d5c0d7d1121af18368089a9315aef84cae0c1b0",
+      "source_package_file": "web-summarizer-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "web-summarizer-1.0.0.zip",
+        "package_size_bytes": 2515,
+        "package_sha256": "10f97cca39c0305a6233be071de0c37b6d932a86292084f06781b718b7aacf0f",
+        "cas_sha256": "b6192c1a6ef77e2834e2c141e8745fc310d20d416f9a1d8b6869f6c6e7ccbf86",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "plugin-bilibili-search",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "search",
+        "content"
+      ],
+      "provider": "linkai",
+      "source_package_size_bytes": 1672,
+      "source_package_sha256": "6be3ca22a0a2ca41145da786c273c51a7d87259fef02529345a76559d8f45949",
+      "source_package_file": "plugin-bilibili-search-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "plugin-bilibili-search-1.0.0.zip",
+        "package_size_bytes": 1477,
+        "package_sha256": "29749391d043d841f1a42dffca57a217d9042a5837ef298d42c84f187c626c41",
+        "cas_sha256": "66b44c5ef2e41851d7a700dec752136139f7885884db2eb7fac78a0bef211524",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "plugin-chart",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "data"
+      ],
+      "provider": "linkai",
+      "source_package_size_bytes": 1652,
+      "source_package_sha256": "11ebee8b99b5fcb43abf99041af8b992955052b1a645e4e948da26eb24c73ea1",
+      "source_package_file": "plugin-chart-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "plugin-chart-1.0.0.zip",
+        "package_size_bytes": 1474,
+        "package_sha256": "b9719307a15347faffe273575ca44d0321390103732885ba7479736958dcd719",
+        "cas_sha256": "4d213bcfb98da437e668991c3d48fbc7c17a61cb526ebec7b37cbb0841526f1d",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "01-textbook-analysis",
+      "version": "1.0.0",
+      "category": "community",
+      "tags": [
+        "office",
+        "search"
+      ],
+      "provider": "community",
+      "source_package_size_bytes": 234767,
+      "source_package_sha256": "8dcee4a31e3333b89dd40ed1781a0f52fdbf2c9169647b6d5f4cc17fea170713",
+      "source_package_file": "01-textbook-analysis-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "01-textbook-analysis-1.0.0.zip",
+        "package_size_bytes": 87848,
+        "package_sha256": "756734522496751fbe0f593b33093584c3c2ae79f67f8093e8b66f58275cb089",
+        "cas_sha256": "5342b13e1d3bdd563ad4dafff631eb39349e92182817300e26f5cd8f44d252fd",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "web-access",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "search"
+      ],
+      "provider": "github",
+      "source_package_size_bytes": 53637,
+      "source_package_sha256": "3e36fb053246108151f63d49faa0609c7dedb5d8942c47b7bb68957b36e46290",
+      "source_package_file": "web-access-1.0.0.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "execution_contract_unattested",
+        "detail": "source contains executable scripts but no audited e-Mate runtime/effect contract"
+      }
+    },
+    {
+      "slug": "pptx",
+      "version": "1.0.0",
+      "category": "community",
+      "tags": [
+        "office"
+      ],
+      "provider": "cowagent",
+      "source_package_size_bytes": 162815,
+      "source_package_sha256": "0fb85c38a28ed7d405a7e767e1877c396c9283af58ddb42465f9167c0768a883",
+      "source_package_file": "pptx-1.0.0.zip",
+      "resolution": {
+        "kind": "native_alias",
+        "native_extension_id": "skill.office-presentations",
+        "reason_code": "native_capability_alias"
+      }
+    },
+    {
+      "slug": "pdf",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "office",
+        "content"
+      ],
+      "provider": "github",
+      "source_package_size_bytes": 21960,
+      "source_package_sha256": "7da83df4b84ead1b7db839877f72721c2f693bf32fd000b8a7d7f32675a5b966",
+      "source_package_file": "pdf-1.0.0.zip",
+      "resolution": {
+        "kind": "native_alias",
+        "native_extension_id": "skill.office-pdf",
+        "reason_code": "native_capability_alias"
+      }
+    },
+    {
+      "slug": "60s-skills",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "search"
+      ],
+      "provider": "github",
+      "source_package_size_bytes": 56011,
+      "source_package_sha256": "9f9167cb5dc7583e20809156285ee4c6c1a55c1ce0ac93d07647ffe22d26c389",
+      "source_package_file": "60s-skills-1.0.0.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "ambiguous_skill_root",
+        "detail": "source does not identify exactly one root Skill document"
+      }
+    },
+    {
+      "slug": "markdown-converter",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "office"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 1249,
+      "source_package_sha256": "9caa8c989b8fff4ce32ef8c8f8f45ec42224744a4f1766bfc35f0b2dd296508b",
+      "source_package_file": "markdown-converter-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "markdown-converter-1.0.0.zip",
+        "package_size_bytes": 1882,
+        "package_sha256": "e768f39b06e6bc9d764554464e205eff10bb97c52ecaf57b707332ee656df633",
+        "cas_sha256": "968278c2f070b2cf0ddaa5ba70d147cd126ef11d8c7f8f7e76c1815b0916192b",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "word-docx",
+      "version": "1.0.2",
+      "category": "external",
+      "tags": [
+        "content",
+        "office"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 3676,
+      "source_package_sha256": "6b8cba2aeee42805c17da788b1a23662a33518ffed10c4b96c9bebc48be9f77f",
+      "source_package_file": "word-docx-1.0.2.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "word-docx-1.0.2.zip",
+        "package_size_bytes": 4059,
+        "package_sha256": "1704973dea3a737d2ad4ca3f2833b279a857d10a1b952b61d8d413a759cabfc3",
+        "cas_sha256": "f5c87c0a0c92abe5c88fc0a73ba3e35d3e6111894f1c2f6e2bb171babe180d62",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "bilibili-all-in-one",
+      "version": "1.0.12",
+      "category": "external",
+      "tags": [
+        "content",
+        "search"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 50886,
+      "source_package_sha256": "0c453f34819b2b127a3df870554b5f24685c4cde519ca6c0e208b085f83ea1c5",
+      "source_package_file": "bilibili-all-in-one-1.0.12.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "execution_contract_unattested",
+        "detail": "source contains executable scripts but no audited e-Mate runtime/effect contract"
+      }
+    },
+    {
+      "slug": "official-writing",
+      "version": "1.0.2",
+      "category": "external",
+      "tags": [
+        "content",
+        "office"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 1554,
+      "source_package_sha256": "21a644098e054940c97b0e17c6cdde295c872adae2aef28a8f93a500a7b1106e",
+      "source_package_file": "official-writing-1.0.2.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "official-writing-1.0.2.zip",
+        "package_size_bytes": 2055,
+        "package_sha256": "d5fdbf835a6551e9e20fcd7086cea800e7f1045914857285846ec95c62f71706",
+        "cas_sha256": "89b08d94e2e20bab634bace5e7619835c9a965acfa813d0761cb5370795356bf",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "bdpan-storage",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "content"
+      ],
+      "provider": "github",
+      "source_package_size_bytes": 72884,
+      "source_package_sha256": "e8dc9b9e7d3f30fc08a427b8f3b282e658a644f7fd458460684de908051223ae",
+      "source_package_file": "bdpan-storage-1.0.0.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "execution_contract_unattested",
+        "detail": "source contains executable scripts but no audited e-Mate runtime/effect contract"
+      }
+    },
+    {
+      "slug": "thesis-helper",
+      "version": "2.0.0",
+      "category": "external",
+      "tags": [
+        "content"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 10354,
+      "source_package_sha256": "4172861cf2ddb54f79c868e782b6014f9704984590a1c271f1f92e2cdb707256",
+      "source_package_file": "thesis-helper-2.0.0.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "execution_contract_unattested",
+        "detail": "source contains executable scripts but no audited e-Mate runtime/effect contract"
+      }
+    },
+    {
+      "slug": "api",
+      "version": "1.3.4",
+      "category": "external",
+      "tags": [
+        "coding"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 98554,
+      "source_package_sha256": "6541a48bb5a8c0a7f6e8e129b7e6490c845489b0f62625d12677d3a4ed8da790",
+      "source_package_file": "api-1.3.4.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "api-1.3.4.zip",
+        "package_size_bytes": 97044,
+        "package_sha256": "c8ea3dad6c24f11ef6d91e3922e8b292789b8b35aeb063090d507c640baf15a4",
+        "cas_sha256": "d07262f85e9c0fbf31dabc66500c8e2be5e273038047ace8d580af54a6fd726f",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "mckinsey-research",
+      "version": "2.1.0",
+      "category": "external",
+      "tags": [
+        "data",
+        "search"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 27216,
+      "source_package_sha256": "15dc407883fde58078f56df850db2605f01880ed1ebc714880da54ee36e859d2",
+      "source_package_file": "mckinsey-research-2.1.0.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "unsupported_resource_type",
+        "detail": "source contains resources outside the declarative canonical allowlist"
+      }
+    },
+    {
+      "slug": "youtube-watcher",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "content",
+        "search"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 2138,
+      "source_package_sha256": "250ca692c96bc5d02bed1e1b4b34b2441b3cf8d31357aa280f0a47d7e11fde47",
+      "source_package_file": "youtube-watcher-1.0.0.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "execution_contract_unattested",
+        "detail": "source contains executable scripts but no audited e-Mate runtime/effect contract"
+      }
+    },
+    {
+      "slug": "competitor-analysis",
+      "version": "5.1.0",
+      "category": "external",
+      "tags": [
+        "search"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 19460,
+      "source_package_sha256": "6a6f5fd4791845661bd5f758337b42c419d6dfb22e8bcdfdcd021f0994874868",
+      "source_package_file": "competitor-analysis-5.1.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "competitor-analysis-5.1.0.zip",
+        "package_size_bytes": 19082,
+        "package_sha256": "1e99d263dcb228c2139b121e8c6d18435e7afc4d4af7540e7c4a66e2e0fb2818",
+        "cas_sha256": "519eaff4fc148b141beae19d7aa29fe7dfa179e6e9b7995c4ba2aa1a70dec52e",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "seo",
+      "version": "1.0.3",
+      "category": "external",
+      "tags": [
+        "data"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 13050,
+      "source_package_sha256": "bbb1e0428fa30ec486d7286c01d4732a20a26fa56b9a694c5459f53eeb882613",
+      "source_package_file": "seo-1.0.3.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "seo-1.0.3.zip",
+        "package_size_bytes": 13396,
+        "package_sha256": "d8b785edf370e8491a35a940b9b59fd287397470aed5bb321be8dab2862ef42e",
+        "cas_sha256": "9988b11978c1d2749056c5701a5c2af4d7a5869dcd6d65272c0eb0fe222fa60e",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "ecomseer",
+      "version": "1.0.1",
+      "category": "external",
+      "tags": [
+        "search",
+        "data"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 21692,
+      "source_package_sha256": "030a9c4caddad8973ebeb16e6e45a9eaf66f506ad98f29dfa639edb98ead795f",
+      "source_package_file": "ecomseer-1.0.1.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "ecomseer-1.0.1.zip",
+        "package_size_bytes": 22050,
+        "package_sha256": "2722434dd569cac1795c50149a55fd7ded1507cbb0f6b3f74358d91d35e41512",
+        "cas_sha256": "dc84512ce85bd9ca22516408962b82302d465128a0610a745bfb6a1b4c4ea448",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "feishu-tools",
+      "version": "1.0.0",
+      "category": "community",
+      "tags": [
+        "office"
+      ],
+      "provider": "cowagent",
+      "source_package_size_bytes": 17403,
+      "source_package_sha256": "39ac67675841cfe5e18370702466cf2d4186e1603b509c5b7bed233787227c2f",
+      "source_package_file": "feishu-tools-1.0.0.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "ambiguous_skill_root",
+        "detail": "source does not identify exactly one root Skill document"
+      }
+    },
+    {
+      "slug": "email-daily-summary",
+      "version": "0.1.0",
+      "category": "external",
+      "tags": [
+        "data"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 3885,
+      "source_package_sha256": "2d699a9eb4608712c643fab76316bbe64efea2ea17c156046b4f4366f616c9ce",
+      "source_package_file": "email-daily-summary-0.1.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "email-daily-summary-0.1.0.zip",
+        "package_size_bytes": 4454,
+        "package_sha256": "65625f4996fda30bbdf7e9fc35e2847c4ea69a7736c058a523761e516e059c2a",
+        "cas_sha256": "464aaaa78abc37df64a6c5860056bfb8044549deb3b05dfd9197b7de9ddb9d38",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "notion-skill",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "content"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 1920,
+      "source_package_sha256": "8e3361a8e19528ed45d852a98220906050bbda344555e932157232725494809d",
+      "source_package_file": "notion-skill-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "notion-skill-1.0.0.zip",
+        "package_size_bytes": 2396,
+        "package_sha256": "ebb36d9be70e4c2a0aed77b34277c0a81a3c15149abaa8d75c5b4fd028060298",
+        "cas_sha256": "b094e669421ca55025e2084955ccb34ea26b22869f6dd2d25fbe607b9bdef597",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "reddit-insights",
+      "version": "2.2.0",
+      "category": "external",
+      "tags": [
+        "content",
+        "search"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 4599,
+      "source_package_sha256": "0ab7c4add85c6aea18454d22cecb528e37915148ecca876b6c9b04e99834a657",
+      "source_package_file": "reddit-insights-2.2.0.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "unbounded_description",
+        "detail": "source description is not an unambiguous bounded scalar"
+      }
+    },
+    {
+      "slug": "apple-reminders",
+      "version": "1.0.0",
+      "category": "external",
+      "tags": [
+        "office"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 1391,
+      "source_package_sha256": "d77e75c919d892fd58f7b18bfee7751a2a2a1729393d24343de9e6b88453a49d",
+      "source_package_file": "apple-reminders-1.0.0.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "apple-reminders-1.0.0.zip",
+        "package_size_bytes": 1875,
+        "package_sha256": "68c3b31c2cf8628eb52b9c89d563fccbf0c1cd62c4ef7e4a86df730c9d3a0651",
+        "cas_sha256": "3d07409cadd22c6caad0f370800f64b44384e34def061b3ce47f0fab2da12a09",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "discord",
+      "version": "1.0.1",
+      "category": "external",
+      "tags": [
+        "office"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 3077,
+      "source_package_sha256": "376c646a0bc8874539592c28dbaa8f8f9cbcc5842adeb175ae4a539dfd5bb84b",
+      "source_package_file": "discord-1.0.1.zip",
+      "resolution": {
+        "kind": "mirrored",
+        "package_file": "discord-1.0.1.zip",
+        "package_size_bytes": 3672,
+        "package_sha256": "a4e00d0c03762c2f44ce4d5927fa35bf0c48f9a8d54568860351c30bebe56bbc",
+        "cas_sha256": "91962940d09e902a1719d72b12115bd848eedaef46baf0f1b95addc9b4501a33",
+        "transformation_id": "emate-declarative-canonical-v1"
+      }
+    },
+    {
+      "slug": "whatsapp-business",
+      "version": "1.0.3",
+      "category": "external",
+      "tags": [
+        "office"
+      ],
+      "provider": "clawhub",
+      "source_package_size_bytes": 5432,
+      "source_package_sha256": "dc4adedd2d3ce68c6238761b46eaef810220ecaf59f37d532c7e8d903fcfdeb0",
+      "source_package_file": "whatsapp-business-1.0.3.zip",
+      "resolution": {
+        "kind": "unsupported",
+        "reason_code": "unbounded_description",
+        "detail": "source description is not an unambiguous bounded scalar"
+      }
+    }
+  ]
+}

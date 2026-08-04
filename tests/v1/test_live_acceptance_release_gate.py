@@ -151,7 +151,7 @@ def test_valid_live_acceptance_proves_model_image_retouch_and_cdp() -> None:
     evidence = _evidence()
     executions = _validate(evidence)
     assert set(executions) == LIVE_ACCEPTANCE_GATES
-    assert executions["live-model"]["upstream_model_id"] == "gpt-5.6-sol"
+    assert executions["live-model"]["upstream_model_id"] == "gpt-5.6-luna"
     assert executions["live-image"]["canonical_model_id"] == "gpt-image-2"
     assert executions["live-image"]["completed_requests"] == 4
     assert executions["cdp-acceptance"]["protocol"] == "cdp"
@@ -174,7 +174,7 @@ def test_valid_live_acceptance_proves_model_image_retouch_and_cdp() -> None:
     [
         (
             lambda value: value["executions"]["live-model"].__setitem__(
-                "upstream_model_id", "gpt-5.5"
+                "upstream_model_id", "unsupported-upstream-model"
             ),
             "live_model_execution_invalid",
         ),

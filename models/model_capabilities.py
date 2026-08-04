@@ -128,7 +128,6 @@ _FIXED_SAMPLING_EXACT = {
     const.GPT_54,
     const.GPT_54_MINI,
     const.GPT_54_NANO,
-    const.GPT_55,
     const.O1,
     const.O1_MINI,
     "o1",
@@ -219,8 +218,8 @@ _OPENAI_RULE_PROVIDERS = tuple(dict.fromkeys((
 _AZURE_OPENAI_RULE_PROVIDERS = (const.CHATGPTONAZURE,)
 
 _DEFAULT_PROVIDER_CAPABILITY_MODELS: Dict[str, Tuple[str, ...]] = {
-    const.OPENAI: (const.GPT_55, const.GPT_54_MINI, const.GPT_5, "o1-mini"),
-    const.CHATGPTONAZURE: (const.GPT_55, "o1-mini"),
+    const.OPENAI: (const.GPT_56_LUNA, const.GPT_56_SOL, const.GPT_54_MINI, const.GPT_5, "o1-mini"),
+    const.CHATGPTONAZURE: (const.GPT_56_LUNA, const.GPT_56_SOL, "o1-mini"),
     const.DEEPSEEK: (const.DEEPSEEK_V4_PRO, const.DEEPSEEK_V4_FLASH, const.DEEPSEEK_CHAT, const.DEEPSEEK_REASONER),
     const.QWEN_DASHSCOPE: (const.QWEN37_PLUS, const.QWEN37_MAX, const.QWEN36_PLUS),
     const.ZHIPU_AI: (const.GLM_5_1, const.GLM_5, const.GLM_4_7),
@@ -237,8 +236,6 @@ _CONTEXT_POLICY_SOFT_RATIO = 0.80
 _CONTEXT_POLICY_HARD_RATIO = 0.92
 
 _CONTEXT_EXACT: Dict[str, Tuple[int, int, str, str]] = {
-    const.GPT_55: (1000000, 128000, "openai:gpt-5.5", "OpenAI model page lists a 1M context window and 128K max output."),
-    "gpt-5.5-pro": (1050000, 128000, "openai:gpt-5.5-pro", "OpenAI model page lists 1.05M context and 128K max output."),
     const.GPT_54: (1050000, 128000, "openai:gpt-5.4", "OpenAI model page lists 1.05M context and 128K max output."),
     const.GPT_54_MINI: (1050000, 128000, "openai:gpt-5.4-mini", "OpenAI model page lists 1.05M context and 128K max output."),
     const.GPT_54_NANO: (1050000, 128000, "openai:gpt-5.4-nano", "OpenAI model page lists 1.05M context and 128K max output."),
@@ -261,8 +258,6 @@ _CONTEXT_EXACT: Dict[str, Tuple[int, int, str, str]] = {
 }
 
 _CONTEXT_PREFIXES: Tuple[Tuple[str, int, int, str, str], ...] = (
-    ("gpt-5.5-pro", 1050000, 128000, "openai:gpt-5.5-pro", "OpenAI GPT-5.5 Pro long-context policy."),
-    ("gpt-5.5", 1000000, 128000, "openai:gpt-5.5", "OpenAI GPT-5.5 long-context policy."),
     ("gpt-5.4", 1050000, 128000, "openai:gpt-5.4", "OpenAI GPT-5.4 long-context policy."),
     ("gpt-5", 400000, 128000, "openai:gpt-5", "OpenAI GPT-5 family policy."),
     ("gpt-4.1", 1000000, 32768, "openai:gpt-4.1", "OpenAI GPT-4.1 family policy."),

@@ -13,13 +13,19 @@ function block(start, end) {
 }
 
 function token(source, name) {
-  const match = source.match(new RegExp(`--${name}:\\s*oklch\\(([^)]+)\\)`));
-  assert.ok(match, `missing OKLCH token --${name}`);
-  const [lightness, chroma, hue] = match[1].trim().split(/\s+/).slice(0, 3).map(Number);
-  return [lightness, chroma, hue];
+  const oklch = source.match(new RegExp(`--${name}:\\s*oklch\\(([^)]+)\\)`));
+  if (oklch) return oklch[1].trim().split(/\s+/).slice(0, 3).map(Number);
+  const hex = source.match(new RegExp(`--${name}:\\s*#([0-9a-f]{6})`, "i"));
+  assert.ok(hex, `missing color token --${name}`);
+  return { rgb: [0, 2, 4].map((offset) => Number.parseInt(hex[1].slice(offset, offset + 2), 16) / 255) };
 }
 
-function luminance([lightness, chroma, hue]) {
+function luminance(color) {
+  if (!Array.isArray(color)) {
+    const [red, green, blue] = color.rgb.map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+  }
+  const [lightness, chroma, hue] = color;
   const radians = hue * Math.PI / 180;
   const a = chroma * Math.cos(radians);
   const b = chroma * Math.sin(radians);
@@ -45,7 +51,7 @@ const modes = {
   dark: block(':root,\n:root[data-theme="dark"] {', '@media (forced-colors: active)'),
 };
 
-test("the first paint defaults to the dark EcoreX token set", () => {
+test("the first paint defaults to the dark e-Mate token set", () => {
   assert.match(css, /:root,\n:root\[data-theme="dark"\]\s*\{/);
   assert.doesNotMatch(css, /:root,\n:root\[data-theme="light"\]\s*\{/);
 });

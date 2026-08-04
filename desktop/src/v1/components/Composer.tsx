@@ -1,7 +1,7 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { ChevronDown, FileText, LoaderCircle, Plus, Send, ShieldCheck, Square } from "lucide-react";
-import { lazy, Suspense, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import type { SendDisposition } from "../state/useRuntimeSession.ts";
 import type {
@@ -26,6 +26,9 @@ const ConnectorPopover = lazy(async () => ({
 const ComposerModelSelector = lazy(loadComposerModelSelector);
 
 interface ComposerProps {
+  prefillRequest?: { key: string; text: string } | null;
+  draft: string;
+  onDraftChange: (draft: string) => void;
   connectors: ConnectorCatalogItem[];
   connectorLoadState: ConnectorCatalogLoadState;
   connectorError: string | null;
@@ -85,6 +88,9 @@ const dispositionLabel: Record<SendDisposition, string> = {
 };
 
 export function Composer({
+  prefillRequest = null,
+  draft,
+  onDraftChange,
   connectors,
   connectorLoadState,
   connectorError,
@@ -118,7 +124,6 @@ export function Composer({
   onLoadAttachmentThumbnail,
   onInterrupt,
 }: ComposerProps) {
-  const [draft, setDraft] = useState("");
   const [disposition, setDisposition] = useState<SendDisposition>("steer");
   const [sendFailed, setSendFailed] = useState(false);
   const [attachments, setAttachments] = useState<InputAttachmentProjection[]>([]);
@@ -130,6 +135,8 @@ export function Composer({
   }>>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const consumedPrefillRef = useRef<string | null>(null);
   const remaining = quota?.remaining;
   const remainingLabel = typeof remaining === "number" ? remaining.toLocaleString("zh-CN") : "—";
   const formatTokens = (value: number | null | undefined) => {
@@ -153,12 +160,19 @@ export function Composer({
   const sendLabel = submitting ? "发送中" : sendFailed ? "重试发送" : "发送";
   const selectedChatModel = chatModels.find((model) => model.model_id === chatModel);
 
+  useEffect(() => {
+    if (!prefillRequest || consumedPrefillRef.current === prefillRequest.key) return;
+    consumedPrefillRef.current = prefillRequest.key;
+    if (!draft.trim()) onDraftChange(prefillRequest.text);
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [draft, onDraftChange, prefillRequest]);
+
   const submit = async () => {
     if ((!draft.trim() && attachments.length === 0) || !modelAvailable) return;
     const sent = await onSend(draft, active ? disposition : "steer", attachments);
     setSendFailed(!sent);
     if (sent) {
-      setDraft("");
+      onDraftChange("");
       setAttachments([]);
       setAttachmentError(null);
     }
@@ -261,13 +275,14 @@ export function Composer({
           </div>
         ) : null}
         <textarea
+          ref={textareaRef}
           id="ecorex-composer"
           value={draft}
           rows={1}
           placeholder="给小芯发送消息，支持粘贴图片或文件"
           aria-describedby={!modelAvailable ? "ecorex-composer-note" : undefined}
           onChange={(event) => {
-            setDraft(event.target.value);
+            onDraftChange(event.target.value);
             setSendFailed(false);
           }}
           onKeyDown={(event) => {

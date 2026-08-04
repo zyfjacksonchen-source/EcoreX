@@ -8,7 +8,7 @@ import binascii
 from typing import Literal
 
 from fastapi import APIRouter, FastAPI, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ecorex.protocol import (
     ExtensionCatalogSnapshot,
@@ -54,6 +54,20 @@ class LocalSkillInstallRequest(BaseModel):
         max_length=192,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$",
     )
+
+
+class SkillConfigurationRequest(ExtensionMutationRequest):
+    values: dict[str, str]
+
+    @field_validator("values")
+    @classmethod
+    def validate_values(cls, value: dict[str, str]) -> dict[str, str]:
+        if not 1 <= len(value) <= 32 or any(
+            not key or len(key) > 128 or not item or len(item) > 16_384
+            for key, item in value.items()
+        ):
+            raise ValueError("Skill configuration is invalid")
+        return value
 
 
 def register_extension_routes(app: FastAPI, service: ExtensionService) -> None:
@@ -103,6 +117,35 @@ def register_extension_routes(app: FastAPI, service: ExtensionService) -> None:
         try:
             extension = service.disable(
                 extension_id,
+                expected_revision=request.expected_revision,
+                client_request_id=request.client_request_id,
+            )
+        except ExtensionError as error:
+            raise _http_error(error) from error
+        return _mutation(service, extension)
+
+    @router.post("/{extension_id}/uninstall", response_model=ExtensionMutationResponse)
+    def uninstall(
+        extension_id: str, request: ExtensionMutationRequest
+    ) -> ExtensionMutationResponse:
+        try:
+            extension = service.uninstall(
+                extension_id,
+                expected_revision=request.expected_revision,
+                client_request_id=request.client_request_id,
+            )
+        except ExtensionError as error:
+            raise _http_error(error) from error
+        return _mutation(service, extension)
+
+    @router.post("/{extension_id}/configure", response_model=ExtensionMutationResponse)
+    def configure(
+        extension_id: str, request: SkillConfigurationRequest
+    ) -> ExtensionMutationResponse:
+        try:
+            extension = service.configure_skill(
+                extension_id,
+                values=request.values,
                 expected_revision=request.expected_revision,
                 client_request_id=request.client_request_id,
             )
@@ -180,5 +223,6 @@ def _http_error(error: ExtensionError) -> HTTPException:
 __all__ = [
     "ExtensionMutationRequest",
     "LocalSkillInstallRequest",
+    "SkillConfigurationRequest",
     "register_extension_routes",
 ]

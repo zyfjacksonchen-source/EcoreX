@@ -1,0 +1,44 @@
+---
+import Base from "../layouts/Base.astro";
+import SkillCard from "../components/SkillCard.astro";
+---
+
+<Base title="能力中心">
+  <section class="hero">
+    <span>e-Mate 能力中心</span>
+    <h1>发现和安装 Skill</h1>
+    <p>搜索办公、内容创作和第三方能力，安装后下一次推理即可使用。</p>
+    <label class="search"><span aria-hidden="true">⌕</span><input type="search" data-search placeholder="搜索名称、说明或标签…" /></label>
+  </section>
+  <section class="filters" aria-label="市场筛选">
+    <button class="active" type="button" data-category="">全部</button>
+    <button type="button" data-category="office_productivity">办公效率</button>
+    <button type="button" data-category="content_creation">内容创作</button>
+    <button type="button" data-category="third_party">第三方</button>
+  </section>
+  <p class="status" data-status role="status">正在读取 e-Mate Skill Hub…</p>
+  <section class="grid" data-grid aria-live="polite"><SkillCard /></section>
+
+  <dialog data-detail-dialog aria-labelledby="detail-title">
+    <button class="close" type="button" data-close-detail aria-label="关闭">×</button>
+    <h2 id="detail-title" data-detail-title></h2>
+    <p data-detail-summary></p>
+    <dl data-detail-list></dl>
+    <div class="dialog-actions">
+      <button type="button" data-detail-download>下载 ZIP</button>
+      <button class="primary" type="button" data-detail-install>安装并启用</button>
+    </div>
+  </dialog>
+
+  <dialog data-upload-dialog aria-labelledby="upload-title">
+    <button class="close" type="button" data-close-upload aria-label="关闭">×</button>
+    <h2 id="upload-title">上传 Skill</h2>
+    <p>ZIP 通过 Runtime 校验后自动发布；同一 slug 与版本不可覆盖。</p>
+    <form data-upload-form>
+      <label>Skill slug<input name="slug" required pattern="[a-z0-9][a-z0-9._-]{0,95}" /></label>
+      <label>市场分类<select name="category"><option value="office_productivity">办公效率</option><option value="content_creation">内容创作</option><option value="third_party">第三方</option></select></label>
+      <label>ZIP 文件<input name="bundle" type="file" accept=".zip,application/zip" required /></label>
+      <button class="primary" type="submit">验证并发布</button>
+    </form>
+  </dialog>
+</Base>

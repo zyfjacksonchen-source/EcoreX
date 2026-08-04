@@ -59,6 +59,7 @@ class SandboxProbe:
         if self.filesystem_read_scope in {
             "host-unrestricted",
             "workspace-and-runtime",
+            "runtime-cas-workspace",
         }:
             return self.filesystem_read_scope
         return "unverified"
@@ -81,7 +82,8 @@ class SandboxProbe:
             "ready": self.complete,
             "reason": self.reason,
             "filesystem_read_scoped": (
-                self.effective_filesystem_read_scope == "workspace-and-runtime"
+                self.effective_filesystem_read_scope
+                in {"workspace-and-runtime", "runtime-cas-workspace"}
             ),
             "filesystem_read_scope": self.effective_filesystem_read_scope,
             "filesystem_write_scoped": self.filesystem_write_scoped,
@@ -109,6 +111,7 @@ class SandboxBackend(Protocol):
         self,
         *,
         workspace_roots: tuple[Path, ...],
+        read_roots: tuple[Path, ...] = (),
         python_executable: Path,
         artifact_path: Path,
     ) -> SandboxProbe: ...
@@ -117,6 +120,7 @@ class SandboxBackend(Protocol):
         self,
         *,
         workspace_roots: tuple[Path, ...],
+        read_roots: tuple[Path, ...] = (),
         python_executable: Path,
         artifact_path: Path,
         timeout_seconds: float,
@@ -238,9 +242,15 @@ class WindowsAppContainerSandboxBackend:
         self.payload_root = self.helper_path.parent.parent
         self.slot_root = self.payload_root.parent
         self.install_root = self.slot_root.parent.parent
-        self.read_roots = (self.payload_root,)
         receipt = dict(security_receipt or {})
         self.security_receipt = receipt
+        contract = receipt.get("contract")
+        durable_cas = self.install_root / "state" / "extension-cas"
+        self.read_roots = (
+            (self.payload_root, durable_cas)
+            if contract == "windows-appcontainer-stable-provision-v4"
+            else (self.payload_root,)
+        )
         self._security_identity_ready = bool(
             self.helper_path.name == "ecorex-sandbox-host.exe"
             and self.helper_path.parent == self.payload_root / "bin"
@@ -249,13 +259,23 @@ class WindowsAppContainerSandboxBackend:
             and self.install_root.is_dir()
             and all(root.is_dir() for root in self.read_roots)
             and receipt.get("schema_version") == 1
-            and receipt.get("contract")
-            == "windows-appcontainer-stable-provision-v3"
+            and contract
+            in {
+                "windows-appcontainer-stable-provision-v3",
+                "windows-appcontainer-stable-provision-v4",
+            }
             and receipt.get("helper_sha256") == digest
             and isinstance(receipt.get("slot_digest"), str)
             and _SHA256.fullmatch(str(receipt.get("slot_digest"))) is not None
             and isinstance(receipt.get("root_security_sha256"), str)
             and _SHA256.fullmatch(str(receipt.get("root_security_sha256"))) is not None
+            and (
+                contract != "windows-appcontainer-stable-provision-v4"
+                or receipt.get("read_roots_sha256")
+                == _install_relative_roots_digest(
+                    self.read_roots, self.install_root, self.slot_root
+                )
+            )
         )
         self._last_probe: SandboxProbe | None = None
 
@@ -263,10 +283,21 @@ class WindowsAppContainerSandboxBackend:
         self,
         *,
         workspace_roots: tuple[Path, ...],
+        read_roots: tuple[Path, ...] = (),
         python_executable: Path,
         artifact_path: Path,
     ) -> SandboxProbe:
         del python_executable, artifact_path
+        if any(
+            not any(root == allowed or root.is_relative_to(allowed) for allowed in self.read_roots)
+            for root in read_roots
+        ):
+            return SandboxProbe(
+                backend_id="windows-appcontainer",
+                platform="windows",
+                ready=False,
+                reason="windows_appcontainer_read_root_unattested",
+            )
         if (
             not self._security_identity_ready
             or self.security_receipt.get("workspace_roots_sha256")
@@ -292,6 +323,7 @@ class WindowsAppContainerSandboxBackend:
         self,
         *,
         workspace_roots: tuple[Path, ...],
+        read_roots: tuple[Path, ...] = (),
         python_executable: Path,
         artifact_path: Path,
         timeout_seconds: float,
@@ -300,6 +332,11 @@ class WindowsAppContainerSandboxBackend:
     ) -> SandboxLaunchPlan:
         if self._last_probe is None or not self._last_probe.complete:
             raise RuntimeError("windows_appcontainer_not_probed")
+        if any(
+            not any(root == allowed or root.is_relative_to(allowed) for allowed in self.read_roots)
+            for root in read_roots
+        ):
+            raise RuntimeError("windows_appcontainer_read_root_unattested")
         current_helper = _trusted_regular_file(self.helper_path)
         if (
             current_helper != self.helper_path
@@ -359,6 +396,7 @@ class MacOSSandboxExecBackend:
         self,
         *,
         workspace_roots: tuple[Path, ...],
+        read_roots: tuple[Path, ...] = (),
         python_executable: Path,
         artifact_path: Path,
     ) -> SandboxProbe:
@@ -529,6 +567,7 @@ class MacOSSandboxExecBackend:
                 ).lstrip()
                 policy = self._policy(
                     workspace_roots=workspace_roots,
+                    read_roots=read_roots,
                     python_executable=python_executable,
                     artifact_path=artifact_path,
                 )
@@ -589,6 +628,7 @@ class MacOSSandboxExecBackend:
             outside_unchanged=outside_unchanged,
             child_marker_valid=child_marker_valid,
             script_started=script_started,
+            read_scoped=bool(read_roots),
         )
         ready = reason == "ready"
         self._last_probe = SandboxProbe(
@@ -596,7 +636,11 @@ class MacOSSandboxExecBackend:
             platform="macos",
             ready=ready,
             reason=reason,
-            filesystem_read_scope=("host-unrestricted" if ready else "unverified"),
+            filesystem_read_scope=(
+                "runtime-cas-workspace" if ready and read_roots
+                else "host-unrestricted" if ready
+                else "unverified"
+            ),
             filesystem_write_scoped=ready,
             network_denied=ready,
             process_tree_contained=ready,
@@ -606,6 +650,7 @@ class MacOSSandboxExecBackend:
         self,
         *,
         workspace_roots: tuple[Path, ...],
+        read_roots: tuple[Path, ...] = (),
         python_executable: Path,
         artifact_path: Path,
         timeout_seconds: float,
@@ -619,6 +664,7 @@ class MacOSSandboxExecBackend:
             raise RuntimeError("macos_seatbelt_not_probed")
         policy = self._policy(
             workspace_roots=workspace_roots,
+            read_roots=read_roots,
             python_executable=python_executable,
             artifact_path=artifact_path,
         )
@@ -638,17 +684,23 @@ class MacOSSandboxExecBackend:
     def _policy(
         *,
         workspace_roots: tuple[Path, ...],
+        read_roots: tuple[Path, ...] = (),
         python_executable: Path,
         artifact_path: Path,
     ) -> str:
-        # workspace-write deliberately permits reads while restricting writes
-        # to the selected workspaces and denying network.  This matches the
-        # user-facing profile and avoids a brittle, interpreter-specific read
-        # allowlist that can prevent signed Python builds from starting.
-        del python_executable, artifact_path
         workspace_rules = [
             f'(subpath "{_seatbelt_escape(str(root))}")' for root in workspace_roots
         ]
+        if read_roots:
+            runtime_root = _runtime_read_root(python_executable)
+            allowed_reads = tuple(dict.fromkeys((runtime_root, *read_roots, *workspace_roots)))
+            read_rule = "(allow file-read* " + " ".join(
+                f'(subpath "{_seatbelt_escape(str(root))}")' for root in allowed_reads
+            ) + ' (subpath "/System/Library") (subpath "/usr/lib"))'
+        else:
+            # The general workspace shell retains its existing product policy;
+            # controlled Skills always supply an exact CAS read root above.
+            read_rule = "(allow file-read*)"
         return " ".join(
             (
                 "(version 1)",
@@ -656,7 +708,7 @@ class MacOSSandboxExecBackend:
                 "(allow process*)",
                 "(allow sysctl-read)",
                 "(allow mach-lookup)",
-                "(allow file-read*)",
+                read_rule,
                 "(allow file-write* " + " ".join(workspace_rules) + ")",
                 "(deny network*)",
             )
@@ -709,6 +761,7 @@ def _macos_probe_failure_reason(
     outside_unchanged: bool,
     child_marker_valid: bool,
     script_started: bool = True,
+    read_scoped: bool = False,
 ) -> str:
     expected_keys = {
         "child_launch_errno",
@@ -765,7 +818,7 @@ def _macos_probe_failure_reason(
         return "macos_seatbelt_probe_network_denial_unproven"
     if value["network_close_ok"] is not True:
         return "macos_seatbelt_probe_network_cleanup_failed"
-    if value["outside_read_match"] is not True:
+    if value["outside_read_match"] is not (not read_scoped):
         return "macos_seatbelt_probe_read_policy_unproven"
     if not _is_denial_errno(value["outside_write_errno"]):
         return "macos_seatbelt_probe_write_denial_unproven"
@@ -907,6 +960,29 @@ def _terminate_probe_process(process: subprocess.Popen[bytes]) -> None:
 def _roots_digest(roots: tuple[Path, ...]) -> str:
     value = "\0".join(str(root) for root in roots).encode("utf-8")
     return hashlib.sha256(value).hexdigest()
+
+
+def _install_relative_roots_digest(
+    roots: tuple[Path, ...], install_root: Path, slot_root: Path
+) -> str:
+    def stable_relative(root: Path) -> Path:
+        try:
+            return Path("slot") / root.relative_to(slot_root)
+        except ValueError:
+            return root.relative_to(install_root)
+
+    values = sorted(windows_invariant_path_key(stable_relative(root)) for root in roots)
+    return hashlib.sha256("\0".join(values).encode()).hexdigest()
+
+
+def _runtime_read_root(executable: Path) -> Path:
+    """Return the smallest signed Runtime tree containing its interpreter."""
+
+    resolved = executable.resolve(strict=True)
+    for parent in resolved.parents:
+        if parent.name == "payload":
+            return parent
+    return resolved.parent
 
 
 def _permission_domain_digest(roots: tuple[Path, ...]) -> str:

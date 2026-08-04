@@ -93,7 +93,7 @@ def _provider() -> ManagedHTTPSResponsesProvider:
     return ManagedHTTPSResponsesProvider(
         origin="https://provider.ecorex.invalid",
         allowed_origins=frozenset({"https://provider.ecorex.invalid"}),
-        model_mapping={"ecorex-chat": "gpt-5.6-sol"},
+        model_mapping={"ecorex-chat": "gpt-5.6-luna"},
         bearer_token=lambda: _TOKEN,
     )
 

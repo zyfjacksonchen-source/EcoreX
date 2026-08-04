@@ -86,7 +86,7 @@ const bridgeSource = String.raw`
     if (p === "/api/skills") return ok({ skills: [] });
     if (p === "/api/extensions") return ok({ extensions: [], count: 0, summary: {} });
     if (p === "/api/channels") return ok({ channels: [] });
-    if (p === "/api/models") return ok({ providers: [], capabilities: {}, currentProvider: "openai", currentModel: "gpt-5.5" });
+    if (p === "/api/models") return ok({ providers: [], capabilities: {}, currentProvider: "openai", currentModel: "gpt-5.6-luna" });
     if (p === "/api/scheduler") return ok({ enabled: false, initialized: false, running: false, serviceStatus: "unavailable", tasks: [], taskCount: 0, counts: { total: 0, enabled: 0, disabled: 0, error: 0 } });
     if (p === "/api/external-connections") return ok({ connections: [] });
     if (p === "/api/tencent-docs/status") return ok({ message: "手测桥接：腾讯文档 mock 已配置", capability: { configured: true, connected: true, toolCount: 2, contentToolCount: 1, endpoint: "https://docs.qq.com/openapi/mcp", redacted: true } });

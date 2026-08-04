@@ -516,6 +516,45 @@ def test_same_request_is_deduplicated_across_legacy_and_gateway_ledgers(
     assert rows["one@example.test"]["tokenUsageTasks"] == 2
 
 
+def test_usage_and_audit_share_one_projection_and_reconciliation(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "usage-audit.sqlite3"
+    _database(str(database))
+    _add_v1_facts(str(database))
+    _use_database(monkeypatch, str(database))
+    panel = usage_panel_service.build_payload(
+        datetime(2026, 7, 18, tzinfo=TZ),
+        datetime(2026, 7, 19, tzinfo=TZ),
+    )
+
+    class Store:
+        def connect(self):
+            connection = sqlite3.connect(database)
+            connection.row_factory = sqlite3.Row
+            return connection
+
+        @staticmethod
+        def runtime_audit(_connection, _filters):
+            return {"summary": {"userActions": 2}}
+
+    monkeypatch.setattr(usage_panel_service, "load_admin_store", Store)
+    audit = usage_panel_service.build_runtime_audit(
+        {"start": ["2026-07-18"], "end": ["2026-07-19"]}
+    )
+
+    assert audit["projection_version"] == usage_panel_service.USAGE_PROJECTION_VERSION
+    assert audit["kpis"] == panel["kpis"]
+    assert audit["runtimeAudit"]["usageKpis"] == panel["kpis"]
+    assert audit["reconciliation"] == {
+        "canonical_record_count": 2,
+        "replaced_duplicate_count": 1,
+        "unassociated_record_count": 1,
+        "missing_provider_usage_count": 0,
+    }
+
+
 def test_composer_account_projection_uses_the_exact_panel_ledger(
     tmp_path,
     monkeypatch,

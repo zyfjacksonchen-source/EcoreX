@@ -194,7 +194,7 @@ class SkillLoader:
         config_path = os.path.join(skill_dir, "config.json")
         
         if not os.path.exists(config_path):
-            logger.debug(f"[SkillLoader] linkai-agent skipped: no config.json found")
+            logger.debug("[SkillLoader] linkai-agent skipped: no config.json found")
             return ""
         
         try:

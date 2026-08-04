@@ -305,7 +305,7 @@ async function runPreflight() {
         await trigger.click();
         const menu = page.locator(".ex-model-menu");
         await checkedVisible(menu, "initial_model_menu_missing");
-        check((await menu.textContent())?.includes("GPT-5.6 SOL") === true, "gpt_56_missing");
+        check((await menu.textContent())?.includes("GPT-5.6 Luna") === true, "gpt_56_missing");
       },
       "model-switch-chat-image": async () => {
         await openThread("artifact");

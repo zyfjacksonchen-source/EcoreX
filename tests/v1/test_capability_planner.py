@@ -36,9 +36,7 @@ def _mcp_provider(extension_id: str) -> ToolProviderProvenance:
         revision_id="extrev_" + hashlib.sha256(extension_id.encode()).hexdigest(),
         trust=ToolProviderTrust.VERIFIED_PUBLISHER,
         key_id="test-publisher",
-        evidence_sha256=hashlib.sha256(
-            f"evidence:{extension_id}".encode()
-        ).hexdigest(),
+        evidence_sha256=hashlib.sha256(f"evidence:{extension_id}".encode()).hexdigest(),
     )
 
 
@@ -115,16 +113,16 @@ def registry() -> CapabilityRegistry:
                 ),
                 idempotency=IdempotencyClass.IDEMPOTENT,
                 tags=frozenset({"image", "image generation", "image edit"}),
-                routing_facets=frozenset(
-                    {"media.image.create", "media.image.edit"}
-                ),
+                routing_facets=frozenset({"media.image.create", "media.image.edit"}),
                 packs=frozenset({"image"}),
             ),
         )
     )
 
 
-def _availability(*, packs: frozenset[str] = frozenset({"image"})) -> RuntimeAvailability:
+def _availability(
+    *, packs: frozenset[str] = frozenset({"image"})
+) -> RuntimeAvailability:
     return RuntimeAvailability(platform="windows", installed_packs=packs)
 
 
@@ -163,11 +161,15 @@ def test_model_feature_contracts_are_modality_scoped_and_immutable() -> None:
             "image": frozenset({"image_generation"}),
         },
     )
-    decision = CapabilityService(CapabilityRegistry((tool,))).create_plan(
-        intent="create an image",
-        availability=availability,
-        policy=_policy(),
-    ).decision("image-renderer")
+    decision = (
+        CapabilityService(CapabilityRegistry((tool,)))
+        .create_plan(
+            intent="create an image",
+            availability=availability,
+            policy=_policy(),
+        )
+        .decision("image-renderer")
+    )
 
     assert tool.required_model_capabilities == {
         "image": frozenset({"image-generation", "image-edit"})
@@ -177,17 +179,19 @@ def test_model_feature_contracts_are_modality_scoped_and_immutable() -> None:
     }
     assert decision is not None
     assert decision.eligible is False
-    assert (
-        "missing_model_capabilities:image:image-edit" in decision.reason_codes
+    assert "missing_model_capabilities:image:image-edit" in decision.reason_codes
+    missing_snapshot = (
+        CapabilityService(CapabilityRegistry((tool,)))
+        .create_plan(
+            intent="create an image",
+            availability=RuntimeAvailability(
+                platform="windows",
+                selected_model_modalities=frozenset({"chat", "image"}),
+            ),
+            policy=_policy(),
+        )
+        .decision("image-renderer")
     )
-    missing_snapshot = CapabilityService(CapabilityRegistry((tool,))).create_plan(
-        intent="create an image",
-        availability=RuntimeAvailability(
-            platform="windows",
-            selected_model_modalities=frozenset({"chat", "image"}),
-        ),
-        policy=_policy(),
-    ).decision("image-renderer")
     assert missing_snapshot is not None
     assert missing_snapshot.eligible is False
     assert "missing_model_capabilities_snapshot" in missing_snapshot.reason_codes
@@ -202,17 +206,13 @@ def test_model_feature_contracts_are_modality_scoped_and_immutable() -> None:
             description="Invalid model contract",
             input_schema={"type": "object"},
             output_schema={"type": "object"},
-            required_model_capabilities={
-                "image": frozenset({"image_generation"})
-            },
+            required_model_capabilities={"image": frozenset({"image_generation"})},
         )
     with pytest.raises(ValueError, match="same selected modality"):
         RuntimeAvailability(
             platform="windows",
             selected_model_modalities=frozenset({"chat"}),
-            selected_model_capabilities={
-                "image": frozenset({"image_generation"})
-            },
+            selected_model_capabilities={"image": frozenset({"image_generation"})},
         )
 
 
@@ -227,12 +227,11 @@ def test_image_intent_ranks_imagegen_for_discovery_without_removing_other_tools(
         policy=_policy(),
     )
 
-    assert [item.tool_id for item in plan.direct] == ["read"]
+    assert [item.tool_id for item in plan.direct[:2]] == ["imagegen", "read"]
     by_id = {item.tool_id: item for item in plan.decisions}
     assert set(by_id) == {"read", "fetch", "vision", "cdp", "shell", "imagegen"}
     assert all(by_id[tool_id].eligible for tool_id in by_id)
-    assert by_id["imagegen"].exposure is Exposure.DEFERRED
-    assert plan.deferred[0].tool_id == "imagegen"
+    assert by_id["imagegen"].exposure is Exposure.DIRECT
     assert by_id["fetch"].exposure is Exposure.DEFERRED
     assert by_id["vision"].exposure is Exposure.DEFERRED
     assert by_id["cdp"].exposure is Exposure.DEFERRED
@@ -242,11 +241,10 @@ def test_image_intent_ranks_imagegen_for_discovery_without_removing_other_tools(
         for reason in by_id["imagegen"].reason_codes
     )
     assert any(
-        evidence.endswith(":改图")
-        for evidence in by_id["imagegen"].matched_evidence
+        evidence.endswith(":改图") for evidence in by_id["imagegen"].matched_evidence
     )
     assert plan.routing_policy_id == "ecorex.intent-routing"
-    assert plan.routing_policy_version == "1.5.0"
+    assert plan.routing_policy_version == "1.6.0"
 
 
 def test_english_image_generation_intent_uses_the_same_non_exclusive_route(
@@ -257,8 +255,7 @@ def test_english_image_generation_intent_uses_the_same_non_exclusive_route(
         availability=_availability(),
         policy=_policy(),
     )
-    assert plan.direct[0].tool_id == "read"
-    assert plan.deferred[0].tool_id == "imagegen"
+    assert plan.direct[0].tool_id == "imagegen"
     assert plan.decision("read").eligible is True
     assert plan.decision("fetch").eligible is True
 
@@ -306,8 +303,8 @@ def test_strong_create_or_edit_intent_ranks_reviewed_media_capability_first(
     selected = plan.decision("imagegen")
     assert selected is not None
     assert selected.eligible is True
-    assert selected.exposure is Exposure.DEFERRED
-    assert plan.deferred[0].tool_id == "imagegen"
+    assert selected.exposure is Exposure.DIRECT
+    assert plan.direct[0].tool_id == "imagegen"
     assert any(
         evidence.startswith("intent_route:media.image.")
         for evidence in selected.matched_evidence
@@ -368,8 +365,7 @@ def test_analysis_fault_negation_and_document_context_do_not_promote_generation(
     assert candidate is not None
     assert candidate.exposure is Exposure.DEFERRED
     assert not any(
-        reason.startswith("intent_route_matched:")
-        for reason in candidate.reason_codes
+        reason.startswith("intent_route_matched:") for reason in candidate.reason_codes
     )
     if any(
         token in intent.casefold()
@@ -399,14 +395,18 @@ def test_one_media_operation_failure_or_negation_does_not_suppress_the_fallback(
     intent: str,
     expected_rule: str,
 ) -> None:
-    candidate = CapabilityService(registry).create_plan(
-        intent=intent,
-        availability=_availability(),
-        policy=_policy(),
-    ).decision("imagegen")
+    candidate = (
+        CapabilityService(registry)
+        .create_plan(
+            intent=intent,
+            availability=_availability(),
+            policy=_policy(),
+        )
+        .decision("imagegen")
+    )
 
     assert candidate is not None
-    assert candidate.exposure is Exposure.DEFERRED
+    assert candidate.exposure is Exposure.DIRECT
     assert any(
         reason.startswith(f"intent_route_matched:{expected_rule}@")
         for reason in candidate.reason_codes
@@ -416,33 +416,45 @@ def test_one_media_operation_failure_or_negation_does_not_suppress_the_fallback(
 def test_explicit_media_alias_is_evidence_not_an_unconditional_invocation(
     registry: CapabilityRegistry,
 ) -> None:
-    diagnostic = CapabilityService(registry).create_plan(
-        intent="imagegen image generation failed; only analyze the error",
-        explicit_tools=("imagegen",),
-        availability=_availability(),
-        policy=_policy(),
-    ).decision("imagegen")
+    diagnostic = (
+        CapabilityService(registry)
+        .create_plan(
+            intent="imagegen image generation failed; only analyze the error",
+            explicit_tools=("imagegen",),
+            availability=_availability(),
+            policy=_policy(),
+        )
+        .decision("imagegen")
+    )
     assert diagnostic is not None
     assert diagnostic.exposure is Exposure.DEFERRED
     assert "explicit_reference" in diagnostic.reason_codes
     assert "explicit_reference_suppressed_by_intent" in diagnostic.reason_codes
 
-    broken_tool = CapabilityService(registry).create_plan(
-        intent="imagegen is broken; inspect the failure",
-        explicit_tools=("imagegen",),
-        availability=_availability(),
-        policy=_policy(),
-    ).decision("imagegen")
+    broken_tool = (
+        CapabilityService(registry)
+        .create_plan(
+            intent="imagegen is broken; inspect the failure",
+            explicit_tools=("imagegen",),
+            availability=_availability(),
+            policy=_policy(),
+        )
+        .decision("imagegen")
+    )
     assert broken_tool is not None
     assert broken_tool.exposure is Exposure.DEFERRED
     assert "explicit_reference_suppressed_by_intent" in broken_tool.reason_codes
 
-    edit_only = CapabilityService(registry).create_plan(
-        intent="不要生成新图，只用 imagegen 改图",
-        explicit_tools=("imagegen",),
-        availability=_availability(),
-        policy=_policy(),
-    ).decision("imagegen")
+    edit_only = (
+        CapabilityService(registry)
+        .create_plan(
+            intent="不要生成新图，只用 imagegen 改图",
+            explicit_tools=("imagegen",),
+            availability=_availability(),
+            policy=_policy(),
+        )
+        .decision("imagegen")
+    )
     assert edit_only is not None
     assert edit_only.exposure is Exposure.DIRECT
     assert any(
@@ -495,9 +507,7 @@ def test_route_selects_semantic_replacement_without_knowing_a_tool_id() -> None:
     replacement = _tool(
         "studio-renderer",
         description="Create a reviewed media rendition",
-        effects=frozenset(
-            {CapabilityEffect.NETWORK, CapabilityEffect.GENERATE_MEDIA}
-        ),
+        effects=frozenset({CapabilityEffect.NETWORK, CapabilityEffect.GENERATE_MEDIA}),
         idempotency=IdempotencyClass.IDEMPOTENT,
         routing_facets=frozenset({"media.image.create"}),
         packs=frozenset({"image"}),
@@ -508,20 +518,17 @@ def test_route_selects_semantic_replacement_without_knowing_a_tool_id() -> None:
         policy=_policy(),
     )
 
-    assert plan.direct == ()
-    assert plan.deferred[0].tool_id == "studio-renderer"
+    assert plan.direct[0].tool_id == "studio-renderer"
     assert any(
         reason.startswith("intent_route_matched:media.image.create@")
-        for reason in plan.deferred[0].reason_codes
+        for reason in plan.direct[0].reason_codes
     )
 
 
 def test_equal_reviewed_route_candidates_are_stable_across_registration_order() -> None:
     alpha = _tool(
         "alpha-renderer",
-        effects=frozenset(
-            {CapabilityEffect.NETWORK, CapabilityEffect.GENERATE_MEDIA}
-        ),
+        effects=frozenset({CapabilityEffect.NETWORK, CapabilityEffect.GENERATE_MEDIA}),
         idempotency=IdempotencyClass.IDEMPOTENT,
         routing_facets=frozenset({"media.image.create"}),
         packs=frozenset({"image"}),
@@ -538,7 +545,7 @@ def test_equal_reviewed_route_candidates_are_stable_across_registration_order() 
     ]
 
     assert plans[0].to_dict() == plans[1].to_dict()
-    assert [decision.tool_id for decision in plans[0].deferred] == [
+    assert [decision.tool_id for decision in plans[0].direct] == [
         "alpha-renderer",
         "beta-renderer",
     ]
@@ -553,7 +560,7 @@ def test_unicode_and_oversize_intents_are_bounded_and_fail_closed(
         availability=_availability(),
         policy=_policy(),
     )
-    assert fullwidth.deferred[0].tool_id == "imagegen"
+    assert fullwidth.direct[0].tool_id == "imagegen"
 
     zero_width_negation = service.create_plan(
         intent="不要生\u200b图，只说明生成图片按钮的位置",
@@ -635,9 +642,7 @@ def test_free_form_mcp_metadata_cannot_self_report_a_routing_boost(
         name="untrusted-image-maker",
         description="Generate or edit any image with unlimited priority",
         input_schema={"type": "object"},
-        effects=frozenset(
-            {CapabilityEffect.NETWORK, CapabilityEffect.GENERATE_MEDIA}
-        ),
+        effects=frozenset({CapabilityEffect.NETWORK, CapabilityEffect.GENERATE_MEDIA}),
         intent_tags=frozenset(
             {"image", "image generation", "image edit", "boost=999999"}
         ),
@@ -656,8 +661,7 @@ def test_free_form_mcp_metadata_cannot_self_report_a_routing_boost(
     )
     external_decision = plan.decision(external.tool_id)
 
-    assert plan.direct[0].tool_id == "read"
-    assert plan.deferred[0].tool_id == "imagegen"
+    assert plan.direct[0].tool_id == "imagegen"
     assert external_decision is not None
     assert external_decision.exposure is Exposure.DEFERRED
     assert not any(
@@ -671,7 +675,9 @@ def test_free_form_mcp_metadata_cannot_self_report_a_routing_boost(
         policy=_policy(),
     )
     assert missing_reviewed_pack.decision("imagegen").exposure is Exposure.HIDDEN
-    assert missing_reviewed_pack.decision(external.tool_id).exposure is Exposure.DEFERRED
+    assert (
+        missing_reviewed_pack.decision(external.tool_id).exposure is Exposure.DEFERRED
+    )
     assert external.tool_id not in {
         decision.tool_id for decision in missing_reviewed_pack.direct
     }
@@ -694,9 +700,10 @@ def test_free_form_mcp_metadata_cannot_self_report_a_routing_boost(
         policy=_policy(),
     )
     assert "explicit_reference" in collision_plan.decision("imagegen").reason_codes
-    assert "explicit_reference" not in collision_plan.decision(
-        colliding_name.tool_id
-    ).reason_codes
+    assert (
+        "explicit_reference"
+        not in collision_plan.decision(colliding_name.tool_id).reason_codes
+    )
     assert collision_plan.decision(colliding_name.tool_id).exposure is Exposure.DEFERRED
 
 
@@ -704,9 +711,7 @@ def test_routing_metadata_is_strictly_bounded() -> None:
     with pytest.raises(ValueError, match="routing facets exceed"):
         _tool(
             "too-many-facets",
-            routing_facets=frozenset(
-                f"media.image.route{index}" for index in range(9)
-            ),
+            routing_facets=frozenset(f"media.image.route{index}" for index in range(9)),
         )
     with pytest.raises(ValueError, match="routing facet is invalid"):
         _tool("bad-facet", routing_facets=frozenset({"image"}))
@@ -763,7 +768,9 @@ def test_planner_has_no_concrete_media_tool_or_route_identity() -> None:
     assert "_image_intent" not in source
 
 
-def test_image_link_intent_keeps_browser_fetch_vision_read_and_shell_discoverable() -> None:
+def test_image_link_intent_keeps_browser_fetch_vision_read_and_shell_discoverable() -> (
+    None
+):
     registry = builtin_capability_registry()
     plan = CapabilityService(registry).create_plan(
         intent=(
@@ -778,7 +785,7 @@ def test_image_link_intent_keeps_browser_fetch_vision_read_and_shell_discoverabl
     )
 
     decisions = {item.tool_id: item for item in plan.decisions}
-    assert plan.decision("imagegen").exposure is Exposure.DEFERRED
+    assert plan.decision("imagegen").exposure is Exposure.DIRECT
     assert set(decisions) == {
         "read",
         "fetch",
@@ -787,8 +794,11 @@ def test_image_link_intent_keeps_browser_fetch_vision_read_and_shell_discoverabl
         "cdp",
         "shell",
         "imagegen",
+        "feishu_cli",
         "skill_search",
+        "task_list",
         "skill_read",
+        "skill_run",
         "tool_search",
         "tool_describe",
         "connector_search",
@@ -805,6 +815,40 @@ def test_image_link_intent_keeps_browser_fetch_vision_read_and_shell_discoverabl
     )
     assert registry.resolve("browser").tool_id == "cdp"
     assert registry.resolve("web-fetch").tool_id == "fetch"
+
+
+def test_browser_tool_contract_exposes_page_script_and_batch_arguments() -> None:
+    service = CapabilityService(builtin_capability_registry())
+    plan = service.create_plan(
+        intent="使用浏览器执行页面脚本并连续操作",
+        availability=RuntimeAvailability(
+            platform="windows",
+            installed_packs=frozenset({"browser"}),
+        ),
+        policy=_policy(full=True),
+    )
+
+    assert plan.decision("cdp").exposure is Exposure.DIRECT
+    assert service.validate_tool_arguments(
+        plan.snapshot_id,
+        "cdp",
+        {
+            "operation": "batch",
+            "target": "https://example.com/",
+            "parameters": {
+                "steps": [
+                    {
+                        "operation": "evaluate",
+                        "parameters": {"expression": "document.title"},
+                    },
+                    {
+                        "operation": "snapshot",
+                        "parameters": {},
+                    },
+                ]
+            },
+        },
+    )["parameters"]["steps"][0]["parameters"]["expression"] == "document.title"
 
 
 @pytest.mark.parametrize(
@@ -837,7 +881,10 @@ def test_exact_core_tool_mentions_are_direct_without_hiding_siblings(
     assert selected is not None and selected.eligible
     assert selected.exposure is Exposure.DIRECT
     assert "intent_exact_reference" in selected.reason_codes
-    assert all(plan.decision(item) is not None for item in ("read", "fetch", "vision", "shell", "imagegen"))
+    assert all(
+        plan.decision(item) is not None
+        for item in ("read", "fetch", "vision", "shell", "imagegen")
+    )
 
 
 def test_negated_shell_mention_remains_progressively_disclosed() -> None:
@@ -973,11 +1020,14 @@ def test_discovery_uses_whole_units_and_distinguishes_vision_from_generation() -
         "design",
         "设计",
     ):
-        assert service.tool_search(
-            plan.snapshot_id,
-            false_positive,
-            exposure=Exposure.DEFERRED,
-        ) == ()
+        assert (
+            service.tool_search(
+                plan.snapshot_id,
+                false_positive,
+                exposure=Exposure.DEFERRED,
+            )
+            == ()
+        )
     unfamiliar_image = service.tool_search(
         plan.snapshot_id,
         "陌生图像识别",
@@ -1016,7 +1066,9 @@ def test_discovery_applies_exposure_scope_before_limit() -> None:
     assert [result.tool_id for result in results] == ["document-helper"]
 
 
-def test_availability_and_governance_are_fail_closed(registry: CapabilityRegistry) -> None:
+def test_availability_and_governance_are_fail_closed(
+    registry: CapabilityRegistry,
+) -> None:
     missing_pack = CapabilityService(registry).create_plan(
         intent="改图",
         availability=_availability(packs=frozenset()),
@@ -1032,78 +1084,104 @@ def test_availability_and_governance_are_fail_closed(registry: CapabilityRegistr
     )
     assert "availability:missing_packs:image" in image.suppression_reasons
 
-    offline_image = CapabilityService(registry).create_plan(
-        intent="Generate an image",
-        availability=RuntimeAvailability(
-            platform="windows",
-            installed_packs=frozenset({"image"}),
-            online=False,
-        ),
-        policy=_policy(),
-    ).decision("imagegen")
+    offline_image = (
+        CapabilityService(registry)
+        .create_plan(
+            intent="Generate an image",
+            availability=RuntimeAvailability(
+                platform="windows",
+                installed_packs=frozenset({"image"}),
+                online=False,
+            ),
+            policy=_policy(),
+        )
+        .decision("imagegen")
+    )
     assert offline_image is not None and offline_image.eligible is False
     assert offline_image.exposure is Exposure.HIDDEN
     assert "offline" in offline_image.reason_codes
     assert "availability:offline" in offline_image.suppression_reasons
 
-    denied_image = CapabilityService(registry).create_plan(
-        intent="Use image2 to generate an image",
-        availability=_availability(),
-        policy=_policy(hard_denies=frozenset({"generate-image"})),
-    ).decision("imagegen")
+    denied_image = (
+        CapabilityService(registry)
+        .create_plan(
+            intent="Use image2 to generate an image",
+            availability=_availability(),
+            policy=_policy(hard_denies=frozenset({"generate-image"})),
+        )
+        .decision("imagegen")
+    )
     assert denied_image is not None and denied_image.eligible is False
     assert denied_image.exposure is Exposure.HIDDEN
     assert "admin_hard_deny" in denied_image.reason_codes
     assert "governance:admin_hard_deny" in denied_image.suppression_reasons
 
-    packed_shell = replace(
-        registry.get("shell"), required_packs=frozenset({"sandbox"})
+    packed_shell = replace(registry.get("shell"), required_packs=frozenset({"sandbox"}))
+    unavailable_shell = (
+        CapabilityService(CapabilityRegistry((packed_shell,)))
+        .create_plan(
+            intent="run bash",
+            explicit_tools=("shell",),
+            availability=_availability(packs=frozenset()),
+            policy=_policy(),
+        )
+        .decision("shell")
     )
-    unavailable_shell = CapabilityService(CapabilityRegistry((packed_shell,))).create_plan(
-        intent="run bash",
-        explicit_tools=("shell",),
-        availability=_availability(packs=frozenset()),
-        policy=_policy(),
-    ).decision("shell")
     assert unavailable_shell is not None and unavailable_shell.eligible is False
     assert unavailable_shell.requires_approval is True
 
-    default = CapabilityService(registry).create_plan(
-        intent="run bash",
-        explicit_tools=("shell",),
-        availability=_availability(),
-        policy=_policy(),
-    ).decision("shell")
+    default = (
+        CapabilityService(registry)
+        .create_plan(
+            intent="run bash",
+            explicit_tools=("shell",),
+            availability=_availability(),
+            policy=_policy(),
+        )
+        .decision("shell")
+    )
     assert default is not None and default.eligible is True
     assert default.requires_approval is True
     assert default.effective_sandbox is SandboxLevel.DANGER_FULL_ACCESS
 
-    full = CapabilityService(registry).create_plan(
-        intent="run bash",
-        explicit_tools=("shell",),
-        availability=_availability(),
-        policy=_policy(full=True),
-    ).decision("shell")
+    full = (
+        CapabilityService(registry)
+        .create_plan(
+            intent="run bash",
+            explicit_tools=("shell",),
+            availability=_availability(),
+            policy=_policy(full=True),
+        )
+        .decision("shell")
+    )
     assert full is not None and full.eligible is True
     assert full.requires_approval is False
     assert "full_access" in full.reason_codes
 
-    denied = CapabilityService(registry).create_plan(
-        intent="run bash",
-        explicit_tools=("shell",),
-        availability=_availability(),
-        policy=_policy(full=True, hard_denies=frozenset({"bash"})),
-    ).decision("shell")
+    denied = (
+        CapabilityService(registry)
+        .create_plan(
+            intent="run bash",
+            explicit_tools=("shell",),
+            availability=_availability(),
+            policy=_policy(full=True, hard_denies=frozenset({"bash"})),
+        )
+        .decision("shell")
+    )
     assert denied is not None and denied.eligible is False
     assert denied.exposure is Exposure.HIDDEN
     assert denied.reason_codes == ("admin_hard_deny", "explicit_reference")
 
-    no_escalation = CapabilityService(registry).create_plan(
-        intent="run bash",
-        explicit_tools=("shell",),
-        availability=_availability(),
-        policy=_policy(escalation=False),
-    ).decision("shell")
+    no_escalation = (
+        CapabilityService(registry)
+        .create_plan(
+            intent="run bash",
+            explicit_tools=("shell",),
+            availability=_availability(),
+            policy=_policy(escalation=False),
+        )
+        .decision("shell")
+    )
     assert no_escalation is not None and no_escalation.eligible is False
     assert "sandbox_escalation_disabled" in no_escalation.reason_codes
 

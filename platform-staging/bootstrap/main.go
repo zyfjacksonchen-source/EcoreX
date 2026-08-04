@@ -45,7 +45,7 @@ var (
 	safeID              = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 	releaseIDPattern    = regexp.MustCompile(`^release-stable-[0-9a-f]{24}$`)
 	sha256Pattern       = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	stableSemverPattern = regexp.MustCompile(`^1\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$`)
+	stableSemverPattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})$`)
 	semverPattern       = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
 	errProductLocked    = errors.New("another EcoreX install or Runtime is active")
 )
@@ -275,6 +275,7 @@ func (buffer *boundedBuffer) Bytes() []byte {
 func main() {
 	selfTest := flag.Bool("self-test", false, "verify the packaged bootstrap entrypoint")
 	indexURL := flag.String("index", "", "override the public discovery URL")
+	localRelease := flag.String("local-release", "", "install an authenticated local release directory")
 	installRootFlag := flag.String("install-root", "", "override the EcoreX data root")
 	launchInstalled := flag.Bool(
 		"launch-installed",
@@ -291,7 +292,7 @@ func main() {
 		return
 	}
 	if *launchInstalled {
-		if *indexURL != "" {
+		if *indexURL != "" || *localRelease != "" {
 			fail(fmt.Errorf("installed Runtime launch does not accept release discovery overrides"))
 		}
 		if err := runInstalled(*installRootFlag); err != nil {
@@ -299,9 +300,255 @@ func main() {
 		}
 		return
 	}
+	if *localRelease != "" {
+		if *indexURL != "" {
+			fail(fmt.Errorf("local release install does not accept public discovery overrides"))
+		}
+		if err := runLocalRelease(*localRelease, *installRootFlag); err != nil {
+			fail(err)
+		}
+		return
+	}
 	if err := run(*indexURL, *installRootFlag); err != nil {
 		fail(err)
 	}
+}
+
+func runLocalRelease(localRelease, rootOverride string) error {
+	progress := newBootstrapProgress(os.Stderr)
+	progress.Stage("准备", "正在验证本地 e-Mate WebUI 发布包")
+	configuration, _, keys, _, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	releaseDir, _, manifestBytes, release, selected, err := loadLocalRelease(localRelease, keys, *configuration.MinimumStable)
+	if err != nil {
+		return err
+	}
+	root, err := installRoot(rootOverride)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return fmt.Errorf("install root is unavailable")
+	}
+	lock, err := acquireProductLock(filepath.Join(root, "bootstrap-launch.lock"))
+	if err != nil {
+		if !errors.Is(err, errProductLocked) {
+			return err
+		}
+		progress.Stage("等待", "正在等待旧版 e-Mate 安全退出")
+		lock, err = acquireLocalInstallLock(
+			filepath.Join(root, "bootstrap-launch.lock"),
+			5*time.Minute,
+			250*time.Millisecond,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	defer lock.close()
+	if err := ensureBootstrapStateDirectory(root); err != nil {
+		return err
+	}
+	if err := ensureRuntimeDataDirectories(root); err != nil {
+		return err
+	}
+	bootstrapHelper, err := stageSandboxHelper(root, configuration.SandboxHelperSHA256)
+	if err != nil {
+		return err
+	}
+	legacy, err := selectLegacyMigration(root)
+	if err != nil {
+		return err
+	}
+	work := filepath.Join(root, "bootstrap-work", release.ReleaseID)
+	if err := os.MkdirAll(work, 0o700); err != nil {
+		return fmt.Errorf("bootstrap workspace is unavailable")
+	}
+	artifactsDir := filepath.Join(work, "artifacts")
+	_ = os.RemoveAll(artifactsDir)
+	if err := os.MkdirAll(artifactsDir, 0o700); err != nil {
+		return fmt.Errorf("bootstrap artifact directory is unavailable")
+	}
+	for _, item := range selected {
+		if err := copyLocalArtifact(filepath.Join(releaseDir, item.FileName), filepath.Join(artifactsDir, item.FileName), item); err != nil {
+			return err
+		}
+	}
+	stagedManifest := filepath.Join(artifactsDir, "release-manifest.json")
+	if err := atomicWrite(stagedManifest, manifestBytes, 0o600); err != nil {
+		return fmt.Errorf("release manifest could not be staged")
+	}
+	core := selected[0]
+	coreRoot := filepath.Join(work, "core")
+	_ = os.RemoveAll(coreRoot)
+	if err := extractCore(filepath.Join(artifactsDir, core.FileName), coreRoot); err != nil {
+		return err
+	}
+	trustedDefinitions, err := persistTrust(root, configuration.ReleasePublicKeys, keys)
+	if err != nil {
+		return err
+	}
+	result, err := installLocal(coreRoot, root, stagedManifest, artifactsDir, trustedDefinitions, bootstrapHelper, configuration.SandboxHelperSHA256)
+	if err != nil {
+		return err
+	}
+	installedPayload := filepath.Join(root, "slots", result.SlotID, "payload")
+	python := filepath.Join(installedPayload, "bin", "pack-python", "bin", "python3")
+	if runtime.GOOS == "windows" {
+		python = filepath.Join(installedPayload, "bin", "pack-python", "python.exe")
+	}
+	if err := os.RemoveAll(work); err != nil {
+		return fmt.Errorf("bootstrap workspace cleanup failed")
+	}
+	ownerNonce, err := issueRuntimeOwnerReceipt(root)
+	if err != nil {
+		return err
+	}
+	go func() {
+		_ = waitForRuntimeAndOpen(root, 5*time.Minute)
+	}()
+	return supervise(python, root, trustedDefinitions, legacy, ownerNonce)
+}
+
+func acquireLocalInstallLock(path string, timeout, poll time.Duration) (*productLock, error) {
+	if timeout <= 0 || timeout > 15*time.Minute || poll <= 0 || poll > timeout {
+		return nil, fmt.Errorf("local install lock wait is invalid")
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		lock, err := acquireProductLock(path)
+		if err == nil {
+			return lock, nil
+		}
+		if !errors.Is(err, errProductLocked) {
+			return nil, err
+		}
+		if !time.Now().Before(deadline) {
+			return nil, fmt.Errorf("old Runtime did not exit for local install")
+		}
+		time.Sleep(min(poll, time.Until(deadline)))
+	}
+}
+
+func loadLocalRelease(localRelease string, keys map[string]ed25519.PublicKey, floor minimumStable) (string, string, []byte, manifest, []artifact, error) {
+	if !filepath.IsAbs(localRelease) || strings.ContainsAny(localRelease, "\x00\r\n") {
+		return "", "", nil, manifest{}, nil, fmt.Errorf("local release directory must be absolute")
+	}
+	releaseDir := filepath.Clean(localRelease)
+	metadata, statErr := os.Lstat(releaseDir)
+	resolved, resolveErr := filepath.EvalSymlinks(releaseDir)
+	if statErr != nil || !metadata.IsDir() || metadata.Mode()&os.ModeSymlink != 0 || resolveErr != nil || !samePath(releaseDir, resolved) {
+		return "", "", nil, manifest{}, nil, fmt.Errorf("local release directory is unsafe")
+	}
+	manifestPath := filepath.Join(releaseDir, "release-manifest.json")
+	manifestBytes, err := readStableRegularFile(manifestPath, maxManifestBytes)
+	if err != nil {
+		return "", "", nil, manifest{}, nil, fmt.Errorf("local release manifest is unavailable")
+	}
+	var release manifest
+	if err := decodeExact(manifestBytes, &release); err != nil {
+		return "", "", nil, manifest{}, nil, fmt.Errorf("local release manifest is invalid")
+	}
+	discovery := localManifestDiscovery(&release)
+	if err := validateManifest(&release, &discovery, keys); err != nil {
+		return "", "", nil, manifest{}, nil, err
+	}
+	sequence, err := stableReleaseSequence(release.Version)
+	if err != nil || validateMinimumStable(floor, keys) != nil || sequence < floor.Sequence {
+		return "", "", nil, manifest{}, nil, fmt.Errorf("local release is below the Bootstrap minimum stable target")
+	}
+	platform, architecture, err := productTarget()
+	if err != nil {
+		return "", "", nil, manifest{}, nil, err
+	}
+	selected, err := requiredArtifacts(&release, platform, architecture)
+	if err != nil {
+		return "", "", nil, manifest{}, nil, err
+	}
+	byID := make(map[string]artifact, len(release.Artifacts))
+	for _, item := range release.Artifacts {
+		byID[item.ArtifactID] = item
+	}
+	for _, artifactID := range []string{"bootstrap-" + platform + "-" + architecture, "web-manifest"} {
+		item, ok := byID[artifactID]
+		if !ok || artifactID == "web-manifest" && (item.Platform != "all" || item.Architecture != "all") || artifactID != "web-manifest" && (item.Platform != platform || item.Architecture != architecture || item.SizeBytes > maxBootstrapBytes) {
+			return "", "", nil, manifest{}, nil, fmt.Errorf("local release is missing a required signed artifact")
+		}
+		selected = append(selected, item)
+	}
+	required := map[string]bool{}
+	for _, item := range selected {
+		required[item.FileName] = true
+		path := filepath.Join(releaseDir, item.FileName)
+		if !fileMatches(path, item.SizeBytes, item.SHA256) || verifyArtifactSignature(&release, item, keys) != nil {
+			return "", "", nil, manifest{}, nil, fmt.Errorf("local release artifact verification failed")
+		}
+	}
+	byFileName := make(map[string]artifact, len(release.Artifacts))
+	for _, item := range release.Artifacts {
+		if _, duplicate := byFileName[item.FileName]; duplicate {
+			return "", "", nil, manifest{}, nil, fmt.Errorf("local release manifest repeats an artifact file name")
+		}
+		byFileName[item.FileName] = item
+	}
+	entries, err := os.ReadDir(releaseDir)
+	if err != nil {
+		return "", "", nil, manifest{}, nil, fmt.Errorf("local release directory inventory is invalid")
+	}
+	observed := map[string]bool{}
+	for _, entry := range entries {
+		if entry.Name() == "release-manifest.json" && !entry.IsDir() {
+			continue
+		}
+		item, signed := byFileName[entry.Name()]
+		path := filepath.Join(releaseDir, entry.Name())
+		if entry.IsDir() || !signed || observed[entry.Name()] || !fileMatches(path, item.SizeBytes, item.SHA256) || verifyArtifactSignature(&release, item, keys) != nil {
+			return "", "", nil, manifest{}, nil, fmt.Errorf("local release directory inventory is invalid")
+		}
+		observed[entry.Name()] = true
+	}
+	for fileName := range required {
+		if !observed[fileName] {
+			return "", "", nil, manifest{}, nil, fmt.Errorf("local release is missing a required signed artifact")
+		}
+	}
+	return releaseDir, manifestPath, manifestBytes, release, selected, nil
+}
+
+func localManifestDiscovery(value *manifest) indexRelease {
+	sources := make([]indexSource, len(value.Sources))
+	for position, item := range value.Sources {
+		sources[position] = indexSource{SourceID: item.SourceID, Kind: item.Kind, Priority: item.Priority, URL: strings.TrimRight(item.BaseURL, "/") + "/release-manifest.json"}
+	}
+	return indexRelease{
+		ReleaseID: value.ReleaseID,
+		Version: value.Version,
+		Channel: value.Channel,
+		BuildDigest: value.BuildDigest,
+		Manifest: indexManifest{Signature: value.Signature, Sources: sources},
+	}
+}
+
+func copyLocalArtifact(source, destination string, item artifact) error {
+	input, err := os.Open(source)
+	if err != nil {
+		return fmt.Errorf("local release artifact is unavailable")
+	}
+	defer input.Close()
+	output, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("local release artifact could not be staged")
+	}
+	written, copyErr := io.Copy(output, input)
+	syncErr := output.Sync()
+	closeErr := output.Close()
+	if copyErr != nil || syncErr != nil || closeErr != nil || written != item.SizeBytes || !fileMatches(destination, item.SizeBytes, item.SHA256) {
+		_ = os.Remove(destination)
+		return fmt.Errorf("local release artifact changed while staging")
+	}
+	return nil
 }
 
 func runInstalled(rootOverride string) error {
@@ -1660,15 +1907,16 @@ func validatePointerFreshness(
 
 func stableReleaseSequence(version string) (int64, error) {
 	match := stableSemverPattern.FindStringSubmatch(version)
-	if len(match) != 3 {
-		return 0, fmt.Errorf("Bootstrap accepts stable v1 releases only")
+	if len(match) != 4 {
+		return 0, fmt.Errorf("stable release version must be a final product SemVer")
 	}
-	minor, minorErr := strconv.ParseInt(match[1], 10, 64)
-	patch, patchErr := strconv.ParseInt(match[2], 10, 64)
-	if minorErr != nil || patchErr != nil {
+	major, majorErr := strconv.ParseInt(match[1], 10, 64)
+	minor, minorErr := strconv.ParseInt(match[2], 10, 64)
+	patch, patchErr := strconv.ParseInt(match[3], 10, 64)
+	if majorErr != nil || minorErr != nil || patchErr != nil {
 		return 0, fmt.Errorf("stable release version is invalid")
 	}
-	sequence := minor*1_000_000 + patch + 1
+	sequence := major*100_000_000 + minor*10_000 + patch + 1
 	if sequence < 1 || sequence > 999999999999 {
 		return 0, fmt.Errorf("stable release sequence is outside its product bound")
 	}

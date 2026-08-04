@@ -150,6 +150,14 @@ from .direct_admission import (
     sign_direct_admission,
     validate_signed_direct_admission,
 )
+from .windows_webui import (
+    WINDOWS_ARTIFACT_ID,
+    WINDOWS_FILE_NAME,
+    WINDOWS_RECEIPT_SCHEMA,
+    WindowsWebUIBuildError,
+    build_windows_webui_package,
+    verify_windows_webui_package,
+)
 
 __all__ = [
     "ArtifactBuildInput",
@@ -276,4 +284,10 @@ __all__ = [
     "write_failure_receipt",
     "write_stage_receipt",
     "write_public_bootstrap_index",
+    "WINDOWS_ARTIFACT_ID",
+    "WINDOWS_FILE_NAME",
+    "WINDOWS_RECEIPT_SCHEMA",
+    "WindowsWebUIBuildError",
+    "build_windows_webui_package",
+    "verify_windows_webui_package",
 ]

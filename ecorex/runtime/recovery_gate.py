@@ -18,9 +18,9 @@ import threading
 from typing import Literal
 
 
-RecoveryExecutionScope = Literal["session_logout", "update_activate"]
+RecoveryExecutionScope = Literal["session_logout", "session_password", "update_activate"]
 RECOVERY_EXECUTION_SCOPES: frozenset[str] = frozenset(
-    {"session_logout", "update_activate"}
+    {"session_logout", "session_password", "update_activate"}
 )
 _SAFE_ERROR_CODE = re.compile(r"^[a-z0-9_:-]{1,160}$")
 

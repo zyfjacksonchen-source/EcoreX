@@ -394,6 +394,7 @@ function thread(threadId = "thread-ga", title = "季度资料整理") {
     title,
     pinned: false,
     active_turn_status: null,
+    last_turn_status: null,
     metadata: {},
     forked_from_thread_id: null,
     forked_from_turn_id: null,
@@ -648,7 +649,7 @@ function mockExtensions() {
       category: "office",
       icon_key: "document",
       active_revision_id: "extrev-office-tools-1",
-      active_version: "1.0.0",
+      active_version: "0.3.0",
       active_digest: "1".repeat(64),
       source: "core_bundle",
       trust: "builtin",
@@ -708,6 +709,53 @@ function mockExtensions() {
       revision: 1,
       updated_at: NOW,
       rollback_version: null,
+    },
+  ];
+}
+
+function mockSkillHubCards(state) {
+  return [
+    {
+      slug: "office-documents",
+      title: "文档助手",
+      summary: "起草、整理和校对常用办公文档。",
+      version: "0.3.0",
+      package_sha256: "4".repeat(64),
+      package_size_bytes: 48_128,
+      tags: ["文档", "办公效率"],
+      category: "office_productivity",
+      uploader: { nickname: "e-Mate", author_ref: "author_6d617465" },
+      provenance: { brand: "e-Mate", original_platform: null, original_url: null },
+      installation_status: "installed_enabled",
+      readiness: "ready",
+    },
+    {
+      slug: "content-planner",
+      title: "内容策划",
+      summary: "把主题整理为可执行的内容大纲、日历和交付清单。",
+      version: "1.2.0",
+      package_sha256: "5".repeat(64),
+      package_size_bytes: 63_744,
+      tags: ["内容创作", "任务规划"],
+      category: "content_creation",
+      uploader: { nickname: "创作团队", author_ref: "author_63726561" },
+      provenance: { brand: "e-Mate", original_platform: "GitHub", original_url: "https://github.com/example/content-planner" },
+      installation_status: state.hubInstalledSlugs.has("content-planner") ? "installed_enabled" : "not_installed",
+      readiness: "ready",
+    },
+    {
+      slug: "meeting-followup",
+      title: "会议跟进",
+      summary: "从会议材料中提取决定、负责人和后续动作。",
+      version: "1.0.1",
+      package_sha256: "6".repeat(64),
+      package_size_bytes: 35_328,
+      tags: ["会议", "待办"],
+      category: "third_party",
+      uploader: { nickname: "办公实验室", author_ref: "author_6f666669" },
+      provenance: { brand: "e-Mate", original_platform: "CowAgent", original_url: "https://skills.cowagent.ai/meeting-followup" },
+      installation_status: state.hubInstalledSlugs.has("meeting-followup") ? "installed_enabled" : "not_installed",
+      readiness: "needs_configuration",
     },
   ];
 }
@@ -780,7 +828,7 @@ function scenarioState(name) {
   const base = {
     scenario: name,
     authenticated: name !== "unauthenticated",
-    permissionProfile: "default",
+    permissionProfile: "full_access",
     permissionRevision: 1,
     projects: [{
       project_id: "project-ga-office",
@@ -812,6 +860,7 @@ function scenarioState(name) {
     deviceFlow: null,
     deviceBeginRequestId: null,
     extensions: mockExtensions(),
+    hubInstalledSlugs: new Set(["office-documents"]),
     extensionRequests: new Map(),
     memoryRevision: 1,
     memoryResettableCount: 2,
@@ -994,15 +1043,33 @@ function bootstrap(state) {
       snapshot_id: authenticated ? "models-ga" : null,
       chat: authenticated ? [{
         model_id: "ecorex-chat",
-        display_name: "GPT-5.6 SOL · 中等推理",
+        display_name: "GPT-5.6 Luna · 高推理",
         capabilities: ["chat", "tools", "reasoning"],
-        aliases: ["chat", "default", "gpt-5.6-sol", "gpt5.6-sol"],
+        aliases: ["chat", "default", "gpt-5.6-luna", "gpt5.6-luna"],
         is_default: true,
         model_policy: {
           schema_version: 1,
-          policy_id: "ecorex-chat-gpt-5.6-sol",
-          policy_version: "1.0.0",
+          policy_id: "ecorex-chat-gpt-5.6-luna",
+          policy_version: "1.1.0",
           local_model_id: "ecorex-chat",
+          upstream_model_id: "gpt-5.6-luna",
+          reasoning_effort: "high",
+          context_management: {
+            type: "compaction",
+            compact_threshold_tokens: 272_000,
+          },
+        },
+      }, {
+        model_id: "ecorex-gpt-5.6-sol",
+        display_name: "GPT-5.6 Sol · 中推理",
+        capabilities: ["chat", "tools", "reasoning"],
+        aliases: ["sol", "gpt-5.6-sol", "gpt5.6-sol"],
+        is_default: false,
+        model_policy: {
+          schema_version: 1,
+          policy_id: "ecorex-gpt-5.6-sol",
+          policy_version: "1.0.0",
+          local_model_id: "ecorex-gpt-5.6-sol",
           upstream_model_id: "gpt-5.6-sol",
           reasoning_effort: "medium",
           context_management: {
@@ -1099,7 +1166,7 @@ function bootstrap(state) {
     connectors: [],
     extensions: extensionCatalog(state),
     update: {
-      current_version: "1.0.0",
+      current_version: "0.3.0",
       state: "idle",
       target_version: null,
       release_id: null,
@@ -1475,10 +1542,12 @@ function threadCatalogItem(state, source) {
   const active = projection?.turns
     .filter((candidate) => !TERMINAL_TURN_STATUSES.has(candidate.status))
     .at(-1);
+  const last = projection?.turns.at(-1);
   return {
     ...source,
     pinned: source.pinned === true || source.metadata?.pinned === true,
     active_turn_status: active?.status ?? null,
+    last_turn_status: last?.status ?? null,
   };
 }
 
@@ -1748,6 +1817,64 @@ async function handleApi(holder, req, res, url) {
     return json(res, 200, deviceFlowProjection(state, { restartScheduled: true }));
   }
   if (path === "/api/v1/connectors" && req.method === "GET") return json(res, 200, connectorCatalog());
+  if (path === "/api/v1/skill-hub/skills" && req.method === "GET") {
+    const query = (url.searchParams.get("query") || "").trim().toLocaleLowerCase("zh-CN");
+    const category = url.searchParams.get("category");
+    const items = mockSkillHubCards(state).filter((item) => (
+      (!category || item.category === category)
+      && (!query || [item.slug, item.title, item.summary, ...item.tags].join(" ").toLocaleLowerCase("zh-CN").includes(query))
+    ));
+    return json(res, 200, { schema_version: 1, items, next_cursor: null });
+  }
+  const skillHubMatch = path.match(/^\/api\/v1\/skill-hub\/skills\/([^/]+)(?:\/install)?$/);
+  if (skillHubMatch) {
+    const slug = decodeURIComponent(skillHubMatch[1]);
+    const card = mockSkillHubCards(state).find((candidate) => candidate.slug === slug);
+    if (!card) return apiError(res, 404, "skill_not_found", "Skill was not found");
+    if (req.method === "GET" && !path.endsWith("/install")) {
+      return json(res, 200, { schema_version: 1, skill: card, versions: [card] });
+    }
+    if (req.method === "POST" && path.endsWith("/install")) {
+      const request = await body(req);
+      if (
+        request.version !== card.version
+        || request.package_sha256 !== card.package_sha256
+        || typeof request.client_request_id !== "string"
+      ) {
+        return apiError(res, 422, "invalid_skill_install", "Skill install identity is invalid");
+      }
+      state.hubInstalledSlugs.add(slug);
+      const extensionId = `hub.${slug}`;
+      if (!state.extensions.some((candidate) => candidate.extension_id === extensionId)) {
+        state.extensions.push({
+          extension_id: extensionId,
+          display_name: card.title,
+          description: card.summary,
+          kind: "skill",
+          category: "office",
+          icon_key: "sparkles",
+          active_revision_id: `extrev-${slug}-1`,
+          active_version: card.version,
+          active_digest: card.package_sha256,
+          source: "signed_release",
+          trust: "verified_publisher",
+          status: "enabled",
+          health: "healthy",
+          dependencies: [],
+          exports: [],
+          last_error_code: null,
+          revision: 1,
+          updated_at: new Date().toISOString(),
+          rollback_version: null,
+        });
+      }
+      const extensions = extensionCatalog(state);
+      return json(res, 200, {
+        extension: extensions.items.find((candidate) => candidate.extension_id === extensionId),
+        extensions,
+      });
+    }
+  }
   if (path === "/api/v1/extensions" && req.method === "GET") {
     return json(res, 200, extensionCatalog(state));
   }

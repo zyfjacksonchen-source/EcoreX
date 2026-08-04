@@ -1,0 +1,230 @@
+name: e-Mate v0.3.0 notarized macOS universal WebUI
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Protected stable Candidate run containing signed macOS artifacts
+        required: true
+        type: string
+      windows_package_run_id:
+        description: Run containing the verified Windows WebUI package
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: emate-v030-macos-universal-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  notarized-universal:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'zhangyifanjackson-dotcom/EcoreX' && github.ref == 'refs/heads/main' && github.sha == vars.ECOREX_V030_RELEASE_COMMIT_SHA }}
+    runs-on: macos-15
+    timeout-minutes: 90
+    environment:
+      name: ecorex-release-signing-stable
+    outputs:
+      verified_artifact_id: ${{ steps.verified_handoff.outputs.artifact-id }}
+      verified_artifact_sha256: ${{ steps.verified_handoff.outputs.artifact-digest }}
+    steps:
+      - name: Checkout the exact pinned source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+
+      - name: Set up Node for the exact React WebUI
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.23.1"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Build the source-bound React WebUI
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run build
+
+      - name: Download exact signed stable Candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          name: ecorex-v1-candidate-stable
+          path: .producer/candidate
+
+      - name: Download verified Windows WebUI package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          run-id: ${{ inputs.windows_package_run_id }}
+          github-token: ${{ github.token }}
+          name: emate-v030-windows-webui
+          path: .producer/windows
+
+      - name: Require Apple distribution authorities
+        env:
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          ECOREX_APPLE_DEVELOPER_ID: ${{ vars.ECOREX_APPLE_DEVELOPER_ID }}
+        run: |
+          set -euo pipefail
+          for name in APPLE_NOTARY_KEY_BASE64 APPLE_NOTARY_KEY_ID APPLE_NOTARY_ISSUER_ID ECOREX_APPLE_DEVELOPER_ID; do
+            test -n "${!name:-}" || { echo "missing distribution authority: $name" >&2; exit 1; }
+          done
+
+      - name: Install ephemeral notarization credentials
+        env:
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/emate-signing.keychain-db"
+          password="$(openssl rand -hex 24)"
+          printf '%s' "$APPLE_NOTARY_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          xcrun notarytool store-credentials emate-v030-ci --key "$RUNNER_TEMP/notary.p8" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER_ID" --keychain "$keychain"
+          echo "ECOREX_APPLE_NOTARY_PROFILE=emate-v030-ci" >> "$GITHUB_ENV"
+          echo "ECOREX_APPLE_NOTARY_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+      - name: Build and notarize the Candidate-bound universal WebUI package
+        env:
+          ECOREX_APPLE_DEVELOPER_ID: ${{ vars.ECOREX_APPLE_DEVELOPER_ID }}
+          ECOREX_RELEASE_SIGNER_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
+          ECOREX_RELEASE_SIGNER_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
+        run: >-
+          python scripts/build-v030-macos-universal-webui.py
+          --candidate-root .producer/candidate
+          --web-dist desktop/dist
+          --windows-package .producer/windows/EcoreX_0.3.0-webui-windows-x64.zip
+          --windows-receipt .producer/windows/emate-webui-build-receipt.json
+          --output .producer/output
+          --version 0.3.0
+          --commit-sha ${{ github.sha }}
+
+      - name: Prove the legacy pointer can only consume the verified receipt
+        run: >-
+          python -m ecorex.release.legacy_webui_manifest
+          .producer/output/webui-build-receipt.json
+          .producer/legacy-pointer/manifest.json
+
+      - name: Upload notarized bytes and receipt for publication admission
+        id: verified_handoff
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: emate-v030-verified-webui-packages
+          path: |
+            .producer/output/EcoreX_0.3.0-webui-windows-x64.zip
+            .producer/output/EcoreX_0.3.0-webui-macos-universal.zip
+            .producer/output/webui-build-receipt.json
+            .producer/output/macos-distribution-receipt.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove ephemeral Apple credentials
+        if: ${{ always() }}
+        run: |
+          rm -f "$RUNNER_TEMP/notary.p8"
+          security delete-keychain "$RUNNER_TEMP/emate-signing.keychain-db" || true
+
+  publish-legacy-webui:
+    name: Publish verified packages, then atomically switch the legacy manifest
+    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'zhangyifanjackson-dotcom/EcoreX' && github.ref == 'refs/heads/main' && github.sha == vars.ECOREX_V030_RELEASE_COMMIT_SHA }}
+    needs: notarized-universal
+    environment:
+      name: ecorex-production-deployment-stable
+    runs-on: [self-hosted, linux, arm64, ecorex-production-deploy]
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout immutable production executor
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Download only the verified cross-platform handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.notarized-universal.outputs.verified_artifact_id }}
+          ARTIFACT_SHA256: ${{ needs.notarized-universal.outputs.verified_artifact_sha256 }}
+        run: |
+          curl --fail --location --silent --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            --output .verified-webui.zip \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip"
+          python scripts/extract-v1-workflow-artifact.py \
+            --archive .verified-webui.zip \
+            --expected-sha256 "$ARTIFACT_SHA256" \
+            --output .publication \
+            --required-root EcoreX_0.3.0-webui-windows-x64.zip \
+            --required-root EcoreX_0.3.0-webui-macos-universal.zip \
+            --required-root webui-build-receipt.json \
+            --required-root macos-distribution-receipt.json \
+            --receipt .publication/workflow-artifact-extraction.json
+
+      - name: Reopen both packages before external publication
+        run: >-
+          python -m ecorex.release.legacy_webui_manifest
+          .publication/webui-build-receipt.json
+          .publication/preflight/manifest.json
+
+      - name: Publish or verify immutable GitHub installer assets
+        env:
+          GH_TOKEN: ${{ secrets.ECOREX_GITHUB_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          repository="zhangyifanjackson-dotcom/EcoreX-installers"
+          tag="v0.3.0"
+          if ! gh release view "$tag" --repo "$repository" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$repository" --draft --title "e-Mate v0.3.0" --notes "e-Mate v0.3.0 WebUI update from v0.2.9.2."
+          fi
+          for name in EcoreX_0.3.0-webui-windows-x64.zip EcoreX_0.3.0-webui-macos-universal.zip; do
+            readback="$RUNNER_TEMP/github-readback-$name"
+            install -d -m 0700 "$readback"
+            if gh release download "$tag" --repo "$repository" --pattern "$name" --dir "$readback" 2>/dev/null; then
+              cmp --silent ".publication/$name" "$readback/$name" || { echo "immutable GitHub asset conflict: $name" >&2; exit 1; }
+            else
+              gh release upload "$tag" ".publication/$name" --repo "$repository"
+            fi
+          done
+          gh release edit "$tag" --repo "$repository" --draft=false
+
+      - name: Publish immutable bytes, read back both origins, and switch manifest last
+        run: >-
+          python -m ecorex.release.legacy_webui_publication
+          .publication/webui-build-receipt.json
+          --receipt-output .publication/production-publication-receipt.json
+
+      - name: Retain production publication receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: emate-v030-production-publication-${{ github.run_id }}
+          path: |
+            .publication/workflow-artifact-extraction.json
+            .publication/production-publication-receipt.json
+          if-no-files-found: warn
+          retention-days: 90

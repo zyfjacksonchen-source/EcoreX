@@ -44,6 +44,7 @@ from ecorex.release.macos_native_contract import (  # noqa: E402
     PYTHON_MACOS_LICENSE,
 )
 from ecorex.release.secret_scan import detect_secret  # noqa: E402
+from ecorex.product_version import stable_release_sequence  # noqa: E402
 from ecorex.update import ReleaseManifest  # noqa: E402
 
 
@@ -58,13 +59,18 @@ _INACTIVE_MARKER_LICENSES = {
     # entry without treating arbitrary missing Runtime packages as licensed.
     "colorama": ("0.4.6", "BSD-3-Clause"),
 }
+_NODE_LICENSE_OVERRIDES = {
+    # zod-to-ts 1.2.0 ships an MIT LICENSE file but omits the package.json
+    # license field copied into package-lock.json. Keep the review exact.
+    ("node_modules/zod-to-ts", "1.2.0"): "MIT",
+}
 
 
 def _stable_release_sequence(version: str) -> int:
-    match = re.fullmatch(r"1\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})", version)
-    if match is None:
+    try:
+        return stable_release_sequence(version)
+    except ValueError:
         raise ValueError("candidate_bootstrap_minimum_stable_invalid")
-    return int(match.group(1)) * 1_000_000 + int(match.group(2)) + 1
 
 
 def _verify_bootstrap_minimum_stable(archive_path: Path, version: str) -> None:
@@ -175,7 +181,10 @@ def _license_inventory(
     for package_path, value in sorted(packages.items()):
         if not package_path or not isinstance(value, dict) or value.get("link") is True:
             continue
-        license_value = value.get("license")
+        version = str(value.get("version") or "")
+        license_value = value.get("license") or _NODE_LICENSE_OVERRIDES.get(
+            (package_path, version)
+        )
         if not isinstance(license_value, str) or not license_value.strip():
             raise ValueError(f"web_license_unclassified:{package_path}")
         if _FORBIDDEN_LICENSE.search(license_value):
@@ -183,7 +192,7 @@ def _license_inventory(
         node.append(
             {
                 "name": package_path.removeprefix("node_modules/"),
-                "version": str(value.get("version") or ""),
+                "version": version,
                 "license": license_value.strip(),
             }
         )

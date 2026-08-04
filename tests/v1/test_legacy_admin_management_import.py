@@ -154,7 +154,7 @@ def test_copy_on_write_import_preserves_users_usage_and_model_secrets(tmp_path: 
     assert report.eligible_sessions == 1
     assert report.excluded_revoked_sessions == 1
     assert report.excluded_expired_sessions == 1
-    assert report.model_slots_imported == 6
+    assert report.model_slots_imported == 7
     serialized = json.dumps(report.to_dict(), sort_keys=True)
     assert "DO NOT IMPORT" not in serialized
     assert all(secret not in serialized for secret in SECRETS.values())
@@ -168,11 +168,13 @@ def test_copy_on_write_import_preserves_users_usage_and_model_secrets(tmp_path: 
     models = repository.list_model_configurations()
     by_slot = {(item.draft or item.active).local_model_id: item for item in models}
     main = by_slot["ecorex-chat"].draft
-    assert main is not None and main.upstream_model_id == "gpt-5.6-sol"
+    assert main is not None and main.upstream_model_id == "gpt-5.6-luna"
+    sol = by_slot["ecorex-gpt-5.6-sol"].draft
+    assert sol is not None and sol.upstream_model_id == "gpt-5.6-sol"
     assert main.enabled is False
     assert main.test_status == "failed"
     assert main.test_error_code == "rotation_required"
-    for slot in ("ecorex-chat", "ecorex-gemini-3.1-pro", "gpt-image-2", "gpt-image-2-edit"):
+    for slot in ("ecorex-chat", "ecorex-gpt-5.6-sol", "ecorex-gemini-3.1-pro", "gpt-image-2", "gpt-image-2-edit"):
         draft = by_slot[slot].draft
         assert draft is not None and draft.enabled is False
         assert draft.test_error_code == "rotation_required"
@@ -233,7 +235,7 @@ def test_four_chat_rows_reuse_openai_key_for_missing_image_slots(tmp_path: Path)
     report = import_v0292_admin_management(
         source, target, encryption_key=KEY, as_of=NOW
     )
-    assert report.model_slots_imported == 6
+    assert report.model_slots_imported == 7
     repository = AdminManagementRepository(target, encryption_key=KEY)
     models = repository.list_model_configurations()
     by_slot = {(item.draft or item.active).local_model_id: item for item in models}

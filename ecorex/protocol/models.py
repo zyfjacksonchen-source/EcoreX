@@ -7,7 +7,7 @@ state.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 import hashlib
 import json
@@ -199,6 +199,7 @@ class ItemKind(str, Enum):
     ARTIFACT = "artifact"
     INTERACTION = "interaction"
     CHECKPOINT = "checkpoint"
+    TASK_LIST = "task_list"
 
 
 class ReasoningPresentation(str, Enum):
@@ -222,6 +223,28 @@ class ReasoningItemContent(FrozenProtocolModel):
     revision: int = Field(ge=1)
     presentation: ReasoningPresentation
     archived_reason: str | None = Field(default=None, max_length=256)
+
+
+class TaskListEntry(FrozenProtocolModel):
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    title: str = Field(min_length=1, max_length=240)
+    status: Literal["pending", "in_progress", "completed"]
+
+
+class TaskListProjection(FrozenProtocolModel):
+    schema_version: Literal[1] = 1
+    turn_id: str = Field(min_length=1, max_length=256)
+    items: tuple[TaskListEntry, ...] = Field(min_length=2, max_length=8)
+    updated_at: datetime
+
+    @model_validator(mode="after")
+    def validate_items(self) -> "TaskListProjection":
+        identities = [item.id for item in self.items]
+        if len(set(identities)) != len(identities):
+            raise ValueError("Task List item ids must be unique")
+        if sum(item.status == "in_progress" for item in self.items) > 1:
+            raise ValueError("Task List permits at most one in-progress item")
+        return self
 
 
 class ItemStatus(str, Enum):
@@ -800,6 +823,7 @@ class ThreadProjection(FrozenProtocolModel):
     title: str | None = None
     pinned: bool = False
     active_turn_status: TurnStatus | None = None
+    last_turn_status: TurnStatus | None = None
     metadata: JsonObject = Field(default_factory=dict)
     forked_from_thread_id: str | None = None
     forked_from_turn_id: str | None = None
@@ -1490,7 +1514,7 @@ class ModelPolicyDescriptor(FrozenProtocolModel):
     policy_version: str
     local_model_id: str
     upstream_model_id: str
-    reasoning_effort: Literal["medium"]
+    reasoning_effort: Literal["medium", "high"]
     context_management: ModelContextManagementDescriptor
 
 
@@ -1547,6 +1571,23 @@ class ContextUsageProjection(FrozenProtocolModel):
     _measured_at_utc = field_validator("measured_at")(_ensure_utc)
 
 
+class TaskActivityDay(FrozenProtocolModel):
+    """Terminal Turn counts for one day in the configured Runtime timezone."""
+
+    date: date
+    completed: int = Field(default=0, ge=0, strict=True)
+    terminal: int = Field(default=0, ge=0, strict=True)
+
+
+class TaskActivityProjection(FrozenProtocolModel):
+    """Device-local task activity derived from authoritative Turn states."""
+
+    completed_today: int = Field(default=0, ge=0, strict=True)
+    waiting: int = Field(default=0, ge=0, strict=True)
+    terminal_today: int = Field(default=0, ge=0, strict=True)
+    days: list[TaskActivityDay] = Field(default_factory=list, max_length=7)
+
+
 class ConversationUsageProjection(FrozenProtocolModel):
     """Read-only usage projection for the active conversation composer."""
 
@@ -1558,6 +1599,7 @@ class ConversationUsageProjection(FrozenProtocolModel):
     today: TokenUsageWindow = Field(default_factory=TokenUsageWindow)
     week: TokenUsageWindow = Field(default_factory=TokenUsageWindow)
     context: ContextUsageProjection = Field(default_factory=ContextUsageProjection)
+    task_activity: TaskActivityProjection = Field(default_factory=TaskActivityProjection)
     calculated_at: datetime = Field(default_factory=utc_now)
 
     _calculated_at_utc = field_validator("calculated_at")(_ensure_utc)
@@ -1579,6 +1621,23 @@ class LogoutSessionResponse(FrozenProtocolModel):
     generation: int = Field(ge=1, strict=True)
     restart_required: Literal[True] = True
     restart_scheduled: bool = False
+
+
+class PasswordSessionChangeRequest(ProtocolModel):
+    schema_version: Literal[1]
+    current_password: SecretStr = Field(min_length=8, max_length=256)
+    new_password: SecretStr = Field(min_length=10, max_length=256)
+    client_request_id: str = Field(
+        min_length=8,
+        max_length=256,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,255}$",
+    )
+
+
+class PasswordSessionChangeResponse(FrozenProtocolModel):
+    schema_version: Literal[1] = 1
+    status: Literal["changed"] = "changed"
+    reauthentication_required: Literal[True] = True
 
 
 class PasswordSessionLoginRequest(ProtocolModel):
@@ -1789,7 +1848,7 @@ class ExtensionExportProjection(FrozenProtocolModel):
 
 
 class ExtensionActionProjection(FrozenProtocolModel):
-    action_id: Literal["enable", "disable", "health_check", "rollback"]
+    action_id: Literal["enable", "disable", "health_check", "rollback", "configure", "uninstall"]
     enabled: bool
     disabled_reason: str | None = None
     requires_confirmation: bool
@@ -1827,8 +1886,12 @@ class ExtensionProjection(FrozenProtocolModel):
         "legacy_import",
     ]
     trust: Literal["builtin", "administrator", "verified_publisher", "local_untrusted"]
-    status: Literal["staged", "enabled", "disabled", "quarantined"]
+    status: Literal["staged", "enabled", "disabled", "quarantined", "uninstalled"]
     health: Literal["unknown", "healthy", "degraded", "unhealthy", "circuit_open"]
+    provenance: dict[str, str | None]
+    readiness: Literal["ready", "needs_configuration", "missing_runtime", "unsupported"]
+    requirements: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
     dependencies: list[ExtensionDependencyProjection] = Field(default_factory=list)
     exports: list[ExtensionExportProjection] = Field(default_factory=list)
     actions: list[ExtensionActionProjection] = Field(default_factory=list)
@@ -1842,7 +1905,48 @@ class ExtensionProjection(FrozenProtocolModel):
 class ExtensionCatalogSnapshot(FrozenProtocolModel):
     snapshot_id: str = Field(pattern=r"^ext_[0-9a-f]{64}$")
     contract_version: Literal["1.0"] = "1.0"
+    extension_generation: int = Field(ge=0, strict=True)
     items: list[ExtensionProjection] = Field(default_factory=list)
+
+
+class SkillProvenance(FrozenProtocolModel):
+    brand: Literal["e-Mate"] = "e-Mate"
+    original_platform: str | None = Field(default=None, max_length=64)
+    original_url: str | None = Field(default=None, max_length=2048)
+
+
+class SkillHubUploaderProjection(FrozenProtocolModel):
+    nickname: str = Field(min_length=1, max_length=64)
+    author_ref: str = Field(pattern=r"^author_[0-9a-f]{24}$")
+
+
+class SkillHubCardProjection(FrozenProtocolModel):
+    slug: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,95}$")
+    title: str = Field(min_length=1, max_length=128)
+    summary: str = Field(min_length=1, max_length=2048)
+    version: str = Field(min_length=5, max_length=64)
+    package_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    package_size_bytes: int = Field(ge=1, le=64 * 1024 * 1024)
+    tags: list[str] = Field(default_factory=list, max_length=32)
+    category: Literal["third_party", "content_creation", "office_productivity"]
+    uploader: SkillHubUploaderProjection
+    provenance: SkillProvenance
+    installation_status: Literal[
+        "not_installed", "installed_enabled", "installed_disabled", "uninstalled"
+    ] = "not_installed"
+    readiness: Literal["ready", "needs_configuration", "missing_runtime", "unsupported"] = "ready"
+
+
+class SkillHubListResponse(FrozenProtocolModel):
+    schema_version: Literal[1] = 1
+    items: list[SkillHubCardProjection] = Field(default_factory=list)
+    next_cursor: str | None = Field(default=None, max_length=96)
+
+
+class SkillHubDetailProjection(FrozenProtocolModel):
+    schema_version: Literal[1] = 1
+    skill: SkillHubCardProjection
+    versions: list[SkillHubCardProjection] = Field(min_length=1, max_length=100)
 
 
 class ExtensionMutationResponse(FrozenProtocolModel):
@@ -1852,13 +1956,14 @@ class ExtensionMutationResponse(FrozenProtocolModel):
 
 def _empty_extension_catalog() -> ExtensionCatalogSnapshot:
     payload = json.dumps(
-        {"contract_version": "1.0", "items": []},
+        {"contract_version": "1.0", "extension_generation": 0, "items": []},
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
     return ExtensionCatalogSnapshot(
         snapshot_id="ext_" + hashlib.sha256(payload).hexdigest(),
+        extension_generation=0,
         items=[],
     )
 

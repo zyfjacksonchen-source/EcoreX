@@ -10,7 +10,9 @@ import hashlib
 import inspect
 import json
 import re
+import shutil
 import sqlite3
+import sys
 import threading
 from typing import Any
 import uuid
@@ -30,7 +32,12 @@ from .errors import (
     ExtensionRevisionConflict,
     ExtensionVerificationError,
 )
-from .local_bundle import LocalSkillBundle, LocalSkillBundleStore
+from .local_bundle import (
+    SKILL_RUNTIME_FILE,
+    LocalSkillBundle,
+    LocalSkillBundleStore,
+    parse_skill_runtime_manifest,
+)
 from .models import (
     EXTENSION_CONTRACT_VERSION,
     ExtensionExport,
@@ -95,6 +102,10 @@ class ExtensionProjection:
     trust: str
     status: str
     health: str
+    provenance: Mapping[str, Any]
+    readiness: str
+    requirements: tuple[str, ...]
+    tags: tuple[str, ...]
     dependencies: tuple[ExtensionRequirement, ...]
     exports: tuple[ExtensionExport, ...]
     actions: tuple[ExtensionActionProjection, ...]
@@ -117,6 +128,10 @@ class ExtensionProjection:
             "trust": self.trust,
             "status": self.status,
             "health": self.health,
+            "provenance": dict(self.provenance),
+            "readiness": self.readiness,
+            "requirements": list(self.requirements),
+            "tags": list(self.tags),
             "dependencies": [item.to_dict() for item in self.dependencies],
             "exports": [item.to_dict() for item in self.exports],
             "actions": [item.to_dict() for item in self.actions],
@@ -130,12 +145,14 @@ class ExtensionProjection:
 class ExtensionCatalogSnapshot:
     snapshot_id: str
     contract_version: str
+    extension_generation: int
     items: tuple[ExtensionProjection, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "snapshot_id": self.snapshot_id,
             "contract_version": self.contract_version,
+            "extension_generation": self.extension_generation,
             "items": [item.to_dict() for item in self.items],
         }
 
@@ -183,6 +200,8 @@ class ExtensionService:
         circuit_open_seconds: int = 300,
         health_probe_timeout_seconds: float = 20.0,
         max_concurrent_health_probes: int = 8,
+        credential_vault: Any | None = None,
+        skill_runner: Any | None = None,
     ) -> None:
         if not runtime_api_version or not platform or not architecture:
             raise ValueError("extension service requires Runtime/platform identity")
@@ -205,6 +224,8 @@ class ExtensionService:
         self.known_connector_ids = frozenset(known_connector_ids)
         self.known_pack_ids = frozenset(known_pack_ids)
         self.local_bundle_store = local_bundle_store
+        self.credential_vault = credential_vault
+        self.skill_runner = None
         self.health_probes = dict(health_probes or {})
         self.restart_budget = restart_budget
         self.restart_window_seconds = restart_window_seconds
@@ -215,6 +236,26 @@ class ExtensionService:
         self._health_probe_limiter: asyncio.BoundedSemaphore | None = None
         self._runtime_bound_revisions: set[str] = set()
         self._lock = threading.RLock()
+        if skill_runner is not None:
+            self.bind_skill_runner(skill_runner)
+
+    def bind_credential_vault(self, vault: Any) -> None:
+        if vault is None:
+            raise ValueError("Extension credential vault is required")
+        with self._lock:
+            if self.credential_vault is not None and self.credential_vault is not vault:
+                raise RuntimeError("Extension credential vault is already bound")
+            self.credential_vault = vault
+
+    def bind_skill_runner(self, runner: Any) -> None:
+        if not callable(getattr(runner, "supports", None)) or not callable(
+            getattr(runner, "run", None)
+        ):
+            raise TypeError("controlled Skill runner contract is invalid")
+        with self._lock:
+            if self.skill_runner is not None and self.skill_runner is not runner:
+                raise RuntimeError("controlled Skill runner is already bound")
+            self.skill_runner = runner
 
     def bind_health_probe(self, extension_id: str, probe: HealthProbe) -> None:
         if not callable(probe):
@@ -358,6 +399,49 @@ class ExtensionService:
             client_request_id=client_request_id,
         )
 
+    def register_migrated_skill_directory(
+        self,
+        directory: str,
+        *,
+        extension_id: str,
+        builtin: bool,
+        initially_enabled: bool,
+    ) -> ExtensionProjection:
+        """Ingest one legacy directory into CAS and converge it into this authority."""
+
+        if self.local_bundle_store is None:
+            raise ExtensionActionUnavailable("local Skill bundle storage is unavailable")
+        bundle = self.local_bundle_store.ingest_directory(
+            directory, migrated_frontmatter=True
+        )
+        manifest = self._local_bundle_manifest(
+            bundle,
+            extension_id=extension_id,
+            source=(ExtensionSource.CORE_BUNDLE if builtin else ExtensionSource.LOCAL_BUNDLE),
+            trust=(ExtensionTrust.BUILTIN if builtin else ExtensionTrust.LOCAL_UNTRUSTED),
+        )
+        verified = (
+            verify_core_extension(
+                manifest,
+                runtime_api_version=self.runtime_api_version,
+                platform=self.platform,
+                architecture=self.architecture,
+            )
+            if builtin
+            else verify_local_bundle_skill(
+                manifest,
+                artifact_sha256=self.local_bundle_store.verify(
+                    bundle.artifact_sha256
+                ).artifact_sha256,
+                runtime_api_version=self.runtime_api_version,
+                platform=self.platform,
+                architecture=self.architecture,
+            )
+        )
+        return self.register_runtime_bound(
+            verified, initially_enabled=initially_enabled
+        )
+
     def _install_local_bundle(
         self,
         bundle: LocalSkillBundle,
@@ -366,7 +450,37 @@ class ExtensionService:
         expected_revision: int,
         client_request_id: str,
     ) -> ExtensionProjection:
-        manifest = ExtensionManifest(
+        manifest = self._local_bundle_manifest(
+            bundle,
+            extension_id=extension_id,
+            source=ExtensionSource.LOCAL_BUNDLE,
+            trust=ExtensionTrust.LOCAL_UNTRUSTED,
+        )
+        verified = verify_local_bundle_skill(
+            manifest,
+            artifact_sha256=self.local_bundle_store.verify(
+                bundle.artifact_sha256
+            ).artifact_sha256,
+            runtime_api_version=self.runtime_api_version,
+            platform=self.platform,
+            architecture=self.architecture,
+        )
+        return self.install_verified(
+            verified,
+            expected_revision=expected_revision,
+            client_request_id=client_request_id,
+        )
+
+    def _local_bundle_manifest(
+        self,
+        bundle: LocalSkillBundle,
+        *,
+        extension_id: str,
+        source: ExtensionSource,
+        trust: ExtensionTrust,
+    ) -> ExtensionManifest:
+        builtin = source is ExtensionSource.CORE_BUNDLE
+        return ExtensionManifest(
             schema_version=1,
             contract_version=EXTENSION_CONTRACT_VERSION,
             extension_id=extension_id,
@@ -375,8 +489,8 @@ class ExtensionService:
             display_name=bundle.metadata.name,
             description=bundle.metadata.description,
             artifact_sha256=bundle.artifact_sha256,
-            source=ExtensionSource.LOCAL_BUNDLE,
-            trust=ExtensionTrust.LOCAL_UNTRUSTED,
+            source=source,
+            trust=trust,
             runtime_boundary=RuntimeBoundary.DECLARATIVE,
             transport=ExtensionTransport.NONE,
             compatibility=self._compatibility(
@@ -395,24 +509,10 @@ class ExtensionService:
             supported_protocol_versions=(),
             upstream_metadata=None,
             signature=ExtensionSignature(
-                algorithm="local-content-sha256",
-                key_id="local-cas-v1",
+                algorithm=("core-slot-sha256" if builtin else "local-content-sha256"),
+                key_id=("builtin-skill-cas-v1" if builtin else "local-cas-v1"),
                 value=bundle.artifact_sha256,
             ),
-        )
-        verified = verify_local_bundle_skill(
-            manifest,
-            artifact_sha256=self.local_bundle_store.verify(
-                bundle.artifact_sha256
-            ).artifact_sha256,
-            runtime_api_version=self.runtime_api_version,
-            platform=self.platform,
-            architecture=self.architecture,
-        )
-        return self.install_verified(
-            verified,
-            expected_revision=expected_revision,
-            client_request_id=client_request_id,
         )
 
     def install_verified(
@@ -802,6 +902,140 @@ class ExtensionService:
             )
             return projected
 
+    def configure_skill(
+        self,
+        extension_id: str,
+        *,
+        values: Mapping[str, str],
+        expected_revision: int,
+        client_request_id: str,
+    ) -> ExtensionProjection:
+        operation = "extension.configure"
+        state = self.repository.require_state(extension_id)
+        revision_id = state.active_revision_id or state.staged_revision_id
+        if revision_id is None:
+            raise ExtensionActionUnavailable("extension has no installed revision")
+        manifest = self.repository.manifest(revision_id)
+        runtime = self._skill_runtime_manifest(manifest)
+        if runtime is None or not runtime.environment:
+            raise ExtensionActionUnavailable("configuration_not_required")
+        material = {str(key): str(value) for key, value in values.items()}
+        if set(material) != set(runtime.environment) or any(not value for value in material.values()):
+            raise ExtensionActionUnavailable("skill_configuration_incomplete")
+        fingerprint = self._fingerprint(
+            operation,
+            extension_id,
+            expected_revision,
+            {"keys": sorted(material)},
+        )
+        if self._replay(client_request_id, operation, fingerprint):
+            return self.projection(extension_id)
+        vault = self.credential_vault
+        if vault is None:
+            raise ExtensionActionUnavailable("credential_vault_unavailable")
+        reference = self._skill_credential_reference(extension_id, revision_id)
+        try:
+            previous = vault.get(reference)
+        except (KeyError, RuntimeError):
+            previous = None
+        try:
+            vault.put(reference, material)
+            with self.repository.database.transaction() as connection:
+                if self._replay(
+                    client_request_id, operation, fingerprint, connection=connection
+                ):
+                    return self._projection_in_transaction(connection, extension_id)
+                current = self.repository.require_state(extension_id, connection=connection)
+                self._assert_expected(expected_revision, current.revision)
+                if (current.active_revision_id or current.staged_revision_id) != revision_id:
+                    raise ExtensionRevisionConflict(
+                        "Skill revision changed during configuration",
+                        current_revision=current.revision,
+                    )
+                now = utc_now_iso()
+                connection.execute(
+                    "UPDATE extension_states SET revision=revision+1,updated_at=? WHERE extension_id=?",
+                    (now, extension_id),
+                )
+                projected = self._projection_in_transaction(connection, extension_id)
+                self._append_event(
+                    connection,
+                    extension_id=extension_id,
+                    revision_id=revision_id,
+                    event_type="extension.configured",
+                    payload={"keys": sorted(material)},
+                    client_request_id=client_request_id,
+                    request_sha256=fingerprint,
+                )
+                self.repository.save_request(
+                    connection,
+                    client_request_id=client_request_id,
+                    operation=operation,
+                    request_sha256=fingerprint,
+                    response={"extension_id": extension_id, "revision": projected.revision},
+                )
+                return projected
+        except Exception:
+            try:
+                if previous is None:
+                    vault.delete(reference)
+                else:
+                    vault.put(reference, previous)
+            except Exception:
+                pass
+            raise
+
+    def uninstall(
+        self,
+        extension_id: str,
+        *,
+        expected_revision: int,
+        client_request_id: str,
+    ) -> ExtensionProjection:
+        """Uninstall the managed copy while retaining immutable migration facts."""
+
+        operation = "extension.uninstall"
+        fingerprint = self._fingerprint(operation, extension_id, expected_revision, {})
+        if self._replay(client_request_id, operation, fingerprint):
+            return self.projection(extension_id)
+        with self.repository.database.transaction() as connection:
+            if self._replay(client_request_id, operation, fingerprint, connection=connection):
+                return self._projection_in_transaction(connection, extension_id)
+            state = self.repository.require_state(extension_id, connection=connection)
+            self._assert_expected(expected_revision, state.revision)
+            if state.active_revision_id is None and state.staged_revision_id is None:
+                raise ExtensionActionUnavailable("extension is already uninstalled")
+            revision_id = state.active_revision_id or state.staged_revision_id
+            assert revision_id is not None
+            manifest = self.repository.manifest(revision_id, connection=connection)
+            if self._user_disable_disabled_reason(manifest) is not None:
+                raise ExtensionActionUnavailable("extension_required_by_product")
+            now = utc_now_iso()
+            connection.execute(
+                "UPDATE extension_states SET active_revision_id = NULL, staged_revision_id = NULL, "
+                "prior_known_good_revision_id = NULL, enabled = 0, health = 'unknown', "
+                "revision = revision + 1, last_error_code = NULL, updated_at = ? WHERE extension_id = ?",
+                (now, extension_id),
+            )
+            projected = self._projection_in_transaction(connection, extension_id)
+            self._append_event(
+                connection,
+                extension_id=extension_id,
+                revision_id=revision_id,
+                event_type="extension.uninstalled",
+                payload={"tombstone": True},
+                client_request_id=client_request_id,
+                request_sha256=fingerprint,
+            )
+            self.repository.save_request(
+                connection,
+                client_request_id=client_request_id,
+                operation=operation,
+                request_sha256=fingerprint,
+                response={"extension_id": extension_id, "revision": projected.revision},
+            )
+            return projected
+
     async def check_health(
         self,
         extension_id: str,
@@ -964,7 +1198,9 @@ class ExtensionService:
             )
             return projected
 
-    def import_legacy_skill_states(self) -> int:
+    def import_legacy_skill_states(
+        self, *, skip_names: frozenset[str] = frozenset()
+    ) -> int:
         """Preserve legacy metadata as disabled, untrusted declarations only.
 
         No SKILL.md, script, or resource is scanned or executed. A migrated row
@@ -984,6 +1220,8 @@ class ExtensionService:
         imported = 0
         for row in rows:
             original_name = str(row["name"])
+            if original_name.strip().casefold().replace("_", "-") in skip_names:
+                continue
             try:
                 metadata = json_loads(row["metadata_json"], {})
             except (TypeError, ValueError, json.JSONDecodeError):
@@ -1070,15 +1308,25 @@ class ExtensionService:
     def project_snapshot(self) -> ExtensionCatalogSnapshot:
         """Build a deterministic catalog projection without taking a write lock."""
 
-        items = self.catalog()
+        with self.repository.database.reader() as connection:
+            rows = connection.execute(
+                "SELECT extension_id FROM extension_states ORDER BY extension_id"
+            ).fetchall()
+            items = tuple(
+                self._projection_in_transaction(connection, str(row["extension_id"]))
+                for row in rows
+            )
+            generation = self.repository.generation(connection=connection)
         payload = {
             "contract_version": EXTENSION_CONTRACT_VERSION,
+            "extension_generation": generation,
             "items": [item.to_dict() for item in items],
         }
         digest = hashlib.sha256(json_dumps(payload).encode("utf-8")).hexdigest()
         return ExtensionCatalogSnapshot(
             snapshot_id="ext_" + digest,
             contract_version=EXTENSION_CONTRACT_VERSION,
+            extension_generation=generation,
             items=items,
         )
 
@@ -1088,6 +1336,7 @@ class ExtensionService:
         projected = self.project_snapshot()
         payload = {
             "contract_version": projected.contract_version,
+            "extension_generation": projected.extension_generation,
             "items": [item.to_dict() for item in projected.items],
         }
         snapshot_id, _digest = self.repository.save_snapshot(payload)
@@ -1169,6 +1418,7 @@ class ExtensionService:
         export_kind: ExtensionExportKind,
         export_id: str,
         expected_revision_id: str | None = None,
+        expected_state_revision: int | None = None,
     ) -> str:
         """Revalidate one contribution against its frozen and current revision.
 
@@ -1190,6 +1440,10 @@ class ExtensionService:
             if (
                 item.get("status") == ExtensionStatus.ENABLED.value
                 and item.get("health") == ExtensionHealth.HEALTHY.value
+                and (
+                    expected_state_revision is None
+                    or item.get("revision") == expected_state_revision
+                )
                 and isinstance(exports, list)
                 and any(
                     isinstance(exported, Mapping)
@@ -1213,9 +1467,15 @@ class ExtensionService:
             for item in self._active_items(
                 current, export_kinds=frozenset({export_kind})
             )
-            if any(
+            if (
+                (
+                    expected_state_revision is None
+                    or item.revision == expected_state_revision
+                )
+                and any(
                 exported.kind is export_kind and exported.export_id == export_id
                 for exported in item.exports
+                )
             )
         }
         if not historical_revisions & current_revisions:
@@ -1303,7 +1563,14 @@ class ExtensionService:
         state = self.repository.require_state(extension_id, connection=connection)
         selected_revision = state.staged_revision_id or state.active_revision_id
         if selected_revision is None:
-            raise ExtensionIntegrityError("extension state has no active or staged revision")
+            row = connection.execute(
+                "SELECT revision_id FROM extension_revisions WHERE extension_id = ? "
+                "ORDER BY installed_at DESC, revision_id DESC LIMIT 1",
+                (extension_id,),
+            ).fetchone()
+            if row is None:
+                raise ExtensionIntegrityError("extension state has no installed revision history")
+            selected_revision = str(row["revision_id"])
         manifest = self.repository.manifest(selected_revision, connection=connection)
         active_manifest = (
             self.repository.manifest(state.active_revision_id, connection=connection)
@@ -1313,7 +1580,9 @@ class ExtensionService:
             state.staged_revision_id
             and self.repository.is_quarantined(state.staged_revision_id, connection=connection)
         )
-        if staged_quarantined and active_manifest is None:
+        if state.active_revision_id is None and state.staged_revision_id is None:
+            status = "uninstalled"
+        elif staged_quarantined and active_manifest is None:
             status = ExtensionStatus.QUARANTINED
         elif state.enabled and active_manifest is not None:
             status = ExtensionStatus.ENABLED
@@ -1328,6 +1597,7 @@ class ExtensionService:
             export_ids=(item.export_id for item in manifest.exports),
             core_bundle=manifest.source is ExtensionSource.CORE_BUNDLE,
         )
+        readiness, requirements = self._skill_readiness(manifest)
         return ExtensionProjection(
             extension_id=extension_id,
             display_name=manifest.display_name,
@@ -1340,11 +1610,17 @@ class ExtensionService:
             active_digest=active_manifest.artifact_sha256 if active_manifest else None,
             source=manifest.source.value,
             trust=manifest.trust.value,
-            status=status.value,
+            status=status if isinstance(status, str) else status.value,
             health=state.health,
+            provenance=self._provenance(manifest),
+            readiness=readiness,
+            requirements=requirements,
+            tags=self._tags(manifest, category),
             dependencies=manifest.dependencies,
             exports=manifest.exports,
-            actions=self._actions(state, manifest, connection=connection),
+            actions=self._actions(
+                state, manifest, readiness=readiness, connection=connection
+            ),
             last_error_code=state.last_error_code,
             revision=state.revision,
             updated_at=state.updated_at,
@@ -1355,6 +1631,7 @@ class ExtensionService:
         state: ExtensionStateRecord,
         manifest: ExtensionManifest,
         *,
+        readiness: str,
         connection: sqlite3.Connection,
     ) -> tuple[ExtensionActionProjection, ...]:
         target = state.staged_revision_id or state.active_revision_id
@@ -1381,16 +1658,123 @@ class ExtensionService:
             ExtensionActionProjection("disable", disable_reason is None, disable_reason, True),
             ExtensionActionProjection("health_check", health_reason is None, health_reason, False),
             ExtensionActionProjection("rollback", rollback_reason is None, rollback_reason, True),
+            ExtensionActionProjection(
+                "configure",
+                readiness == "needs_configuration",
+                None if readiness == "needs_configuration" else "configuration_not_required",
+                True,
+            ),
+            ExtensionActionProjection(
+                "uninstall",
+                target is not None and self._user_disable_disabled_reason(manifest) is None,
+                (
+                    None
+                    if target is not None and self._user_disable_disabled_reason(manifest) is None
+                    else "extension_already_uninstalled"
+                    if target is None
+                    else "extension_required_by_product"
+                ),
+                True,
+            ),
         )
+
+    @staticmethod
+    def _provenance(manifest: ExtensionManifest) -> Mapping[str, Any]:
+        upstream = manifest.upstream_metadata
+        return {
+            "brand": "e-Mate",
+            "original_platform": upstream.registry if upstream else None,
+            "original_url": None,
+        }
+
+    def _tags(self, manifest: ExtensionManifest, category: str) -> tuple[str, ...]:
+        if (
+            manifest.kind is ExtensionKind.SKILL
+            and manifest.source in {ExtensionSource.CORE_BUNDLE, ExtensionSource.LOCAL_BUNDLE}
+            and self.local_bundle_store is not None
+        ):
+            try:
+                return self.local_bundle_store.verify(manifest.artifact_sha256).metadata.tags
+            except ExtensionIntegrityError:
+                # Catalog projection must remain available so the existing
+                # invocation fence can report/revoke tampered CAS content.
+                pass
+        return (category,)
+
+    def _skill_readiness(self, manifest: ExtensionManifest) -> tuple[str, tuple[str, ...]]:
+        if (
+            manifest.kind is not ExtensionKind.SKILL
+            or manifest.source is not ExtensionSource.LOCAL_BUNDLE
+            or self.local_bundle_store is None
+        ):
+            return "ready", ()
+        try:
+            runtime = self._skill_runtime_manifest(manifest)
+        except ExtensionIntegrityError:
+            return "unsupported", ("skill_runtime_manifest_invalid",)
+        if runtime is None:
+            return "ready", ()
+        requirements = tuple(
+            [f"environment:{name}" for name in runtime.environment]
+            + [f"domain:{name}" for name in runtime.network_domains]
+            + [f"command:{name}" for name in runtime.external_commands]
+        )
+        if runtime.runtime == "node" and shutil.which("node") is None:
+            return "missing_runtime", ("runtime:node", *requirements)
+        if runtime.runtime == "trusted-shell":
+            return "unsupported", ("runtime:trusted-shell", *requirements)
+        if runtime.network_domains or runtime.external_commands:
+            return "unsupported", ("controlled_effect_boundary_unavailable", *requirements)
+        if runtime.environment:
+            vault = self.credential_vault
+            if vault is None:
+                return "needs_configuration", requirements
+            try:
+                configured = vault.get(
+                    self._skill_credential_reference(
+                        manifest.extension_id, manifest.revision_id
+                    )
+                )
+            except (KeyError, RuntimeError):
+                return "needs_configuration", requirements
+            if set(configured) != set(runtime.environment) or any(
+                not isinstance(value, str) or not value for value in configured.values()
+            ):
+                return "needs_configuration", requirements
+        if not sys.executable:
+            return "missing_runtime", ("runtime:python",)
+        runner = self.skill_runner
+        if runner is None or not runner.supports(runtime.runtime):
+            reason = getattr(runner, "unavailable_reason", None)
+            return "unsupported", (
+                reason
+                if isinstance(reason, str) and reason
+                else "controlled_runner_unavailable",
+            )
+        return "ready", requirements
+
+    def _skill_runtime_manifest(self, manifest: ExtensionManifest):
+        if self.local_bundle_store is None:
+            return None
+        bundle = self.local_bundle_store.verify(manifest.artifact_sha256)
+        if not any(record.path == SKILL_RUNTIME_FILE for record in bundle.files):
+            return None
+        files = {record.path: b"" for record in bundle.files}
+        files[SKILL_RUNTIME_FILE] = self.local_bundle_store.read_verified_file(
+            manifest.artifact_sha256, SKILL_RUNTIME_FILE
+        )
+        return parse_skill_runtime_manifest(files)
+
+    @staticmethod
+    def _skill_credential_reference(extension_id: str, revision_id: str) -> str:
+        identity = hashlib.sha256(extension_id.encode("utf-8")).hexdigest()
+        return f"ecorex/skills/{identity}/{revision_id}"
 
     @staticmethod
     def _user_disable_disabled_reason(manifest: ExtensionManifest) -> str | None:
         if manifest.source is not ExtensionSource.CORE_BUNDLE:
             return None
-        if (
-            manifest.kind is ExtensionKind.SKILL
-            or manifest.extension_id in {"ecorex.core.tools", "ecorex.core.connectors"}
-        ):
+        if manifest.extension_id in {"ecorex.core.tools", "ecorex.core.connectors"}:
             return "extension_required_by_product"
         return None
 

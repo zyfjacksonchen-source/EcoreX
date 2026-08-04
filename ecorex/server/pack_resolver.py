@@ -45,7 +45,7 @@ def _resolve_production_pack_adapter(
         # they do not create synthetic model-callable tools.
         return {}
     if pack.manifest.pack_id in {"browser", "sandbox"}:
-        interpreter, _identity = pack_python_resolver(
+        interpreter, identity = pack_python_resolver(
             runtime_payload_root,
             platform=pack.manifest.platform,
             architecture=pack.manifest.architecture,
@@ -74,6 +74,7 @@ def _resolve_production_pack_adapter(
             pack,
             workspace_roots=workspace_roots,
             python_executable=interpreter,
+            python_identity=identity,
             sandbox_backend=sandbox_backend,
         ).handlers()
     raise ValueError(

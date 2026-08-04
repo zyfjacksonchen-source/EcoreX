@@ -98,13 +98,13 @@ class TestModelsHandler(unittest.TestCase):
         from channel.web.web_channel import ModelsHandler
 
         cap = ModelsHandler._chat_capability({
-            "model": "gpt-5.5",
+            "model": "gpt-5.6-luna",
             "bot_type": "chatGPT",
             "use_linkai": False,
         })
 
         self.assertEqual(cap["current_provider"], "openai")
-        self.assertEqual(cap["current_model"], "gpt-5.5")
+        self.assertEqual(cap["current_model"], "gpt-5.6-luna")
         self.assertEqual(cap["capabilities"]["provider"], "openai")
         self.assertFalse(cap["capabilities"]["supports_temperature"])
         self.assertFalse(cap["capabilities"]["supports_penalties"])
@@ -118,7 +118,7 @@ class TestModelsHandler(unittest.TestCase):
         self.assertIn("deepseek", cap["capability_matrix"]["providers"])
         self.assertIn("chatGPTOnAzure", cap["capability_matrix"]["providers"])
         openai_models = cap["capability_matrix"]["providers"]["openai"]["models"]
-        self.assertTrue(any(row["model"] == "gpt-5.5" for row in openai_models))
+        self.assertTrue(any(row["model"] == "gpt-5.6-luna" for row in openai_models))
         deepseek_models = cap["capability_matrix"]["providers"]["deepseek"]["models"]
         self.assertTrue(any(row["capabilities"]["supports_thinking_param"] for row in deepseek_models))
         matrix_text = json.dumps(cap["capability_matrix"], ensure_ascii=False)
@@ -150,7 +150,7 @@ class TestModelsHandler(unittest.TestCase):
             "gemini": 1,
             "doubao": 1,
         })
-        self.assertEqual(by_provider["openai"][0], const.GPT_55)
+        self.assertEqual(by_provider["openai"][0], const.GPT_56_LUNA)
         self.assertEqual(by_provider["deepseek"][0], const.DEEPSEEK_V4_PRO)
         self.assertEqual(by_provider["gemini"][0], const.GEMINI_31_PRO_PRE)
         self.assertEqual(by_provider["doubao"][0], const.DOUBAO_SEED_2_PRO)
@@ -163,12 +163,12 @@ class TestModelsHandler(unittest.TestCase):
         self.assertEqual(deepseek["contextPolicy"]["autoCompactTokenLimit"], 800000)
         self.assertEqual(deepseek["contextPolicy"]["tokenizerStatus"], "estimated")
 
-    def test_chat_model_options_preserve_gpt55_as_current_openai_model(self):
+    def test_chat_model_options_preserve_luna_as_current_openai_model(self):
         from channel.web.web_channel import ModelsHandler
         from common import const
 
         cap = ModelsHandler._chat_capability({
-            "model": const.GPT_55,
+            "model": const.GPT_56_LUNA,
             "bot_type": "chatGPT",
             "open_ai_api_key": "test-openai",
             "deepseek_api_key": "test-deepseek",
@@ -182,14 +182,14 @@ class TestModelsHandler(unittest.TestCase):
             by_provider.setdefault(option["provider"], []).append(option)
 
         self.assertEqual(cap["current_provider"], "openai")
-        self.assertEqual(cap["current_model"], const.GPT_55)
+        self.assertEqual(cap["current_model"], const.GPT_56_LUNA)
         self.assertEqual(len(options), 4)
         self.assertEqual(set(by_provider), {"openai", "deepseek", "gemini", "doubao"})
         self.assertTrue(all(len(provider_options) == 1 for provider_options in by_provider.values()))
         openai = by_provider["openai"][0]
-        self.assertEqual(openai["model"], const.GPT_55)
+        self.assertEqual(openai["model"], const.GPT_56_LUNA)
         self.assertTrue(openai["current"])
-        self.assertEqual(openai["contextPolicy"]["contextWindowTokens"], 1000000)
+        self.assertEqual(openai["contextPolicy"]["contextWindowTokens"], 400000)
         self.assertEqual(openai["contextPolicy"]["tokenizerStatus"], "local_tokenizer")
 
     def test_chat_model_options_mark_current_custom_model_configured_when_provider_has_key(self):
@@ -356,7 +356,7 @@ class TestModelsHandler(unittest.TestCase):
         from common import const
 
         local_config = {
-            "model": const.GPT_55,
+            "model": const.GPT_56_LUNA,
             "bot_type": const.CHATGPT,
             "gemini_api_key": "legacy-custom-gemini-key",
             "gemini_api_base": "http://custom-gemini.test:8080",
@@ -394,7 +394,7 @@ class TestModelsHandler(unittest.TestCase):
         from channel.web.web_channel import ModelsHandler
 
         cap = ModelsHandler._chat_capability({
-            "model": "gpt-5.5",
+            "model": "gpt-5.6-luna",
             "bot_type": "chatGPT",
             "open_ai_api_base": "https://coding-plan.test/v1",
             "use_linkai": False,
@@ -413,7 +413,7 @@ class TestModelsHandler(unittest.TestCase):
         from common import const
 
         cap = ModelsHandler._chat_capability({
-            "model": const.GPT_55,
+            "model": const.GPT_56_LUNA,
             "bot_type": const.OPENAI,
             "open_ai_api_key": "enterprise-openai-key",
             "open_ai_api_base": "https://enterprise-openai.test/v1",
@@ -433,7 +433,7 @@ class TestModelsHandler(unittest.TestCase):
         from common import const
 
         local_config = {
-            "model": const.GPT_55,
+            "model": const.GPT_56_LUNA,
             "bot_type": "chatGPT",
             "deepseek_api_key": "test-deepseek",
             "use_linkai": False,
@@ -482,7 +482,7 @@ class TestModelsHandler(unittest.TestCase):
         from common import const
 
         local_config = {
-            "model": const.GPT_55,
+            "model": const.GPT_56_LUNA,
             "bot_type": const.CHATGPT,
             "custom_api_key": "test-custom",
             "custom_api_base": "https://custom-gemini.test/v1",
@@ -550,7 +550,7 @@ class TestModelsHandler(unittest.TestCase):
         from common import const
 
         local_config = {
-            "model": const.GPT_55,
+            "model": const.GPT_56_LUNA,
             "bot_type": "chatGPT",
             "use_linkai": False,
             "text_to_image": "gpt-image-2-pro",
@@ -570,7 +570,7 @@ class TestModelsHandler(unittest.TestCase):
 
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["code"], "CHAT_MODEL_NOT_CONFIGURED")
-        self.assertEqual(local_config["model"], const.GPT_55)
+        self.assertEqual(local_config["model"], const.GPT_56_LUNA)
         write_file.assert_not_called()
         reset_bridge.assert_not_called()
 
@@ -581,7 +581,7 @@ class TestModelsHandler(unittest.TestCase):
         from config import _apply_cached_enterprise_model_policy
 
         cfg = {
-            "model": "gpt-5.5",
+            "model": "gpt-5.6-luna",
             "bot_type": "chatGPT",
             "open_ai_api_key": "",
             "open_ai_api_base": "https://api.openai.com/v1",
@@ -592,10 +592,10 @@ class TestModelsHandler(unittest.TestCase):
             policy_path.write_text(json.dumps({
                 "configured": True,
                 "provider": "openai",
-                "model": "gpt-5.5",
+                "model": "gpt-5.6-luna",
                 "userEmail": "should-not-copy@example.com",
                 "settings": {
-                    "model": "gpt-5.5",
+                    "model": "gpt-5.6-luna",
                     "bot_type": "openai",
                     "open_ai_api_key": "enterprise-openai-key",
                     "open_ai_api_base": "https://enterprise-openai.test/v1",

@@ -29,7 +29,7 @@ class ManagedChatModelPolicy:
     upstream_model_id: str
     display_name: str
     aliases: tuple[str, ...]
-    reasoning_effort: Literal["medium"]
+    reasoning_effort: Literal["medium", "high"]
     context_management_type: Literal["compaction"]
     compact_threshold_tokens: int
 
@@ -46,7 +46,7 @@ class ManagedChatModelPolicy:
             or len(self.aliases) > 32
             or any(_SAFE_ID.fullmatch(alias) is None for alias in self.aliases)
             or len(set(alias.casefold() for alias in self.aliases)) != len(self.aliases)
-            or self.reasoning_effort != "medium"
+            or self.reasoning_effort not in {"medium", "high"}
             or self.context_management_type != "compaction"
             or isinstance(self.compact_threshold_tokens, bool)
             or not 1_000 <= self.compact_threshold_tokens <= 2_000_000
@@ -70,14 +70,27 @@ class ManagedChatModelPolicy:
 
 ECOREX_CHAT_MODEL_POLICY = ManagedChatModelPolicy(
     schema_version=1,
-    policy_id="ecorex-chat-gpt-5.6-sol",
-    policy_version="1.0.0",
+    policy_id="ecorex-chat-gpt-5.6-luna",
+    policy_version="1.1.0",
     # Keep this public identity stable so v0.3.0 data and existing clients do
     # not need a model-ID rewrite when the managed provider model changes.
     local_model_id="ecorex-chat",
+    upstream_model_id="gpt-5.6-luna",
+    display_name="GPT-5.6 Luna · 高推理",
+    aliases=("chat", "default", "gpt-5.6-luna", "gpt5.6-luna"),
+    reasoning_effort="high",
+    context_management_type="compaction",
+    compact_threshold_tokens=272_000,
+)
+
+ECOREX_SOL_MODEL_POLICY = ManagedChatModelPolicy(
+    schema_version=1,
+    policy_id="ecorex-gpt-5.6-sol",
+    policy_version="1.0.0",
+    local_model_id="ecorex-gpt-5.6-sol",
     upstream_model_id="gpt-5.6-sol",
-    display_name="GPT-5.6 SOL · 中等推理",
-    aliases=("chat", "default", "gpt-5.6-sol", "gpt5.6-sol"),
+    display_name="GPT-5.6 Sol · 中推理",
+    aliases=("sol", "gpt-5.6-sol", "gpt5.6-sol"),
     reasoning_effort="medium",
     context_management_type="compaction",
     compact_threshold_tokens=272_000,
@@ -124,6 +137,7 @@ ECOREX_DOUBAO_MODEL_POLICY = ManagedChatModelPolicy(
 
 ECOREX_CHAT_MODEL_POLICIES = (
     ECOREX_CHAT_MODEL_POLICY,
+    ECOREX_SOL_MODEL_POLICY,
     ECOREX_DEEPSEEK_MODEL_POLICY,
     ECOREX_GEMINI_MODEL_POLICY,
     ECOREX_DOUBAO_MODEL_POLICY,

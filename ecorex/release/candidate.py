@@ -48,6 +48,7 @@ from .models import (
     ReleaseBuildSpec,
     WebBundleBuildInput,
 )
+from .public_index import PublicBootstrapIndexError, stable_pointer_sequence
 from .secret_scan import detect_secret
 from .signing import SigningError
 
@@ -1098,13 +1099,10 @@ def _stage_install_projection(
 
 
 def _stable_release_sequence(version: str) -> int:
-    match = re.fullmatch(r"1\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})", version)
-    if match is None:
+    try:
+        return stable_pointer_sequence(version)
+    except PublicBootstrapIndexError:
         raise CandidateBuildError("stage_bootstrap_config_invalid")
-    sequence = int(match.group(1)) * 1_000_000 + int(match.group(2)) + 1
-    if not 1 <= sequence <= 999_999_999_999:
-        raise CandidateBuildError("stage_bootstrap_config_invalid")
-    return sequence
 
 
 def _minimum_stable_payload(sequence: int, version: str) -> bytes:

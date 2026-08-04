@@ -166,8 +166,8 @@ class GitHubReleasePublisher:
                 self._repository_path("/releases"),
                 payload={
                     "tag_name": tag,
-                    "name": f"EcoreX {version}",
-                    "body": f"EcoreX signed release {release_id}",
+                    "name": f"e-Mate {version}",
+                    "body": f"e-Mate signed release {release_id}",
                     "draft": True,
                     "prerelease": channel is ReleaseChannel.CANARY,
                     "generate_release_notes": False,
@@ -408,8 +408,8 @@ class GitHubReleasePublisher:
     ) -> None:
         if (
             not isinstance(value, Mapping)
-            or value.get("name") != f"EcoreX {version}"
-            or value.get("body") != f"EcoreX signed release {release_id}"
+            or value.get("name") != f"e-Mate {version}"
+            or value.get("body") != f"e-Mate signed release {release_id}"
             or value.get("prerelease") is not (channel is ReleaseChannel.CANARY)
         ):
             raise GitHubPublicationError("github_release_identity_conflict")

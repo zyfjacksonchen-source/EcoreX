@@ -57,6 +57,7 @@ class SkillManager:
         # skills_config: full skill metadata keyed by name
         # { "web-fetch": {"name": ..., "description": ..., "source": ..., "enabled": true}, ... }
         self.skills_config: Dict[str, dict] = {}
+        self.legacy_migration_preferences: Dict[str, dict] = {}
 
         self.loader = SkillLoader()
         self.skills: Dict[str, SkillEntry] = {}
@@ -212,24 +213,24 @@ class SkillManager:
         return {}
 
     def _save_skills_config(self):
-        """Persist skills_config to custom_dir/skills_config.json."""
-        os.makedirs(self.custom_dir, exist_ok=True)
-        try:
-            with open(self._skills_config_path, "w", encoding="utf-8") as f:
-                json.dump(self.skills_config, f, indent=4, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"[SkillManager] Failed to save {SKILLS_CONFIG_FILE}: {e}")
+        """Reject legacy state writes; ExtensionService is the live authority."""
+
+        raise RuntimeError(
+            "skills_config.json is migration-only; use the ExtensionService API"
+        )
 
     def _sync_skills_config(self):
         """
-        Merge directory-scanned skills with the persisted config file.
+        Build display metadata from directory-scanned skills.
 
-        - New skills: use metadata.default_enabled as initial enabled state.
-        - Existing skills: preserve their persisted enabled state.
-        - Skills that no longer exist on disk are removed.
-        - name/description/source are always refreshed from the latest scan.
+        - New skills: enabled by default.
+        - Legacy ``skills_config.json`` is deliberately not read here.  The
+          Extension migration owns its one-time import and ExtensionService
+          owns every live enablement decision afterwards.
+        - name/description/source are refreshed from the latest scan.
         """
-        saved = self._load_skills_config()
+        saved: Dict[str, dict] = {}
+        self.legacy_migration_preferences = {}
         merged: Dict[str, dict] = {}
 
         for name, entry in self.skills.items():
@@ -238,19 +239,12 @@ class SkillManager:
             category = prev.get("category") or get_frontmatter_value(skill.frontmatter, "category") or "skill"
             builtin_catalog = self.is_builtin_catalog_skill(name) or skill.source == "builtin"
 
-            if builtin_catalog:
-                enabled = True
-            elif name in saved:
-                enabled = prev.get("enabled", True)
-            else:
-                enabled = entry.metadata.default_enabled if entry.metadata else True
-
             entry_dict = {
                 "name": name,
                 "description": skill.description,
                 "source": skill.source,
-                "enabled": enabled,
-                "default_enabled": True if builtin_catalog else bool(entry.metadata.default_enabled if entry.metadata else True),
+                "enabled": True,
+                "default_enabled": True,
                 "builtin_catalog": builtin_catalog,
                 "category": category,
             }
@@ -282,7 +276,6 @@ class SkillManager:
             merged[name] = entry_dict
 
         self.skills_config = merged
-        self._save_skills_config()
 
     def is_skill_enabled(self, name: str) -> bool:
         """
@@ -291,10 +284,16 @@ class SkillManager:
         :param name: skill name
         :return: True if enabled (default True if not in config)
         """
-        entry = self.skills_config.get(name)
-        if entry is None:
-            return True
-        return entry.get("enabled", True)
+        try:
+            from ecorex.extensions.live_authority import live_skill_enabled
+
+            current = live_skill_enabled(name)
+        except Exception:
+            current = None
+        # An unbound standalone legacy reader has no mutable state authority;
+        # it may apply only the static first-discovery default. Production
+        # RuntimeComposition always binds ExtensionService before Agent work.
+        return True if current is None else current
 
     def set_skill_enabled(self, name: str, enabled: bool):
         """
@@ -305,13 +304,9 @@ class SkillManager:
         """
         if name not in self.skills_config:
             raise ValueError(f"skill '{name}' not found in config")
-        if enabled is False and (
-            self.is_builtin_catalog_skill(name)
-            or bool(self.skills_config[name].get("builtin_catalog"))
-        ):
-            raise PermissionError("Built-in factory skills are always enabled and cannot be disabled.")
-        self.skills_config[name]["enabled"] = enabled
-        self._save_skills_config()
+        from ecorex.extensions.live_authority import set_live_skill_enabled
+
+        self.skills_config[name]["enabled"] = set_live_skill_enabled(name, enabled)
 
     def get_skills_config(self) -> Dict[str, dict]:
         """
@@ -319,7 +314,10 @@ class SkillManager:
 
         :return: copy of skills_config
         """
-        return dict(self.skills_config)
+        return {
+            name: {**row, "enabled": self.is_skill_enabled(name)}
+            for name, row in self.skills_config.items()
+        }
     
     def get_skill(self, name: str) -> Optional[SkillEntry]:
         """

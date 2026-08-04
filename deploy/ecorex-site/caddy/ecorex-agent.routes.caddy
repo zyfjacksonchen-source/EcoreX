@@ -2,7 +2,7 @@
 # Import this file inside the HTTPS site block. The Control Plane listens only
 # on loopback; its own bearer authorization remains authoritative.
 
-@ecorex_public_mutable path /ecorex-agent/ /ecorex-agent/index.html /ecorex-agent/public-bootstrap-index.json
+@ecorex_public_mutable path /ecorex-agent/ /ecorex-agent/index.html /ecorex-agent/public-bootstrap-index.json /ecorex-agent/manifest.json
 header @ecorex_public_mutable Cache-Control "no-store"
 header @ecorex_public_mutable X-Content-Type-Options "nosniff"
 header @ecorex_public_mutable Referrer-Policy "no-referrer"
@@ -47,6 +47,12 @@ handle /ecorex-agent/releases/* {
 handle /ecorex-agent/public-bootstrap-index.json {
     root * /srv/ecorex-agent-download/public-pointer
     rewrite * /public-bootstrap-index.json
+    file_server
+}
+
+handle /ecorex-agent/manifest.json {
+    root * /srv/ecorex-agent-download/legacy-pointer
+    rewrite * /manifest.json
     file_server
 }
 

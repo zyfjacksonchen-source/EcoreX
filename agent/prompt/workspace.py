@@ -525,8 +525,9 @@ _RULE_TEMPLATE_ZH = """# RULE.md - 工作空间规则
 ## 安全
 
 - 永远不要泄露秘钥等私人数据
-- 不要在未经询问的情况下运行破坏性命令
-- 当有疑问时，先问
+- 意图明确时直接执行，优先采用可逆的合理默认值；工具失败时重试或改走等价路径
+- 仅在缺少必要信息、登录凭据或目标确实歧义时询问用户
+- 破坏性操作必须精确核对目标；始终保留身份认证、租户隔离、密钥脱敏和系统完整性校验
 
 ## 工作空间演化
 
@@ -624,8 +625,9 @@ See the `knowledge-wiki` skill for detailed conventions.
 ## Security
 
 - Never leak secrets or private data
-- Don't run destructive commands without asking
-- When in doubt, ask first
+- Execute clear requests directly, prefer reversible defaults, and retry or use an equivalent path when a tool fails
+- Ask only when required information or credentials are missing, or the target is genuinely ambiguous
+- Resolve destructive targets exactly; always preserve authentication, tenant isolation, secret redaction, and system-integrity checks
 
 ## Workspace evolution
 
@@ -730,4 +732,3 @@ def _get_knowledge_index_template() -> str:
 def _get_knowledge_log_template() -> str:
     """Knowledge wiki operation log template — empty file, agent fills it."""
     return ""
-

@@ -32,8 +32,6 @@ def format_skills_for_prompt(skills: List[Skill]) -> str:
         lines.append("  <skill>")
         lines.append(f"    <name>{_escape_xml(skill.name)}</name>")
         lines.append(f"    <description>{_escape_xml(skill.description)}</description>")
-        lines.append(f"    <location>{_escape_xml(skill.file_path)}</location>")
-        lines.append(f"    <base_dir>{_escape_xml(skill.base_dir)}</base_dir>")
         compatibility_id = _frontmatter_scalar(skill.frontmatter, "compatibility-id", "compatibility_id")
         official_skill = _frontmatter_scalar(skill.frontmatter, "adopts-official-skill", "adopts_official_skill")
         native_facade = _frontmatter_bool(skill.frontmatter, "ecorex-native-facade", "ecorex_native_facade")
@@ -98,14 +96,10 @@ def format_unavailable_skills_for_prompt(
             missing_parts.append(f"{key}: {', '.join(values)}")
         missing_str = "; ".join(missing_parts) if missing_parts else "unknown"
 
-        setup_hint = _extract_setup_hint(skill)
-
         lines.append("  <skill>")
         lines.append(f"    <name>{_escape_xml(skill.name)}</name>")
         lines.append(f"    <description>{_escape_xml(skill.description)}</description>")
         lines.append(f"    <missing>{_escape_xml(missing_str)}</missing>")
-        if setup_hint:
-            lines.append(f"    <setup>{_escape_xml(setup_hint)}</setup>")
         lines.append("  </skill>")
 
     lines.append("</unavailable_skills>")
@@ -130,26 +124,6 @@ def format_skill_diagnostics_for_prompt(diagnostics: List[str], limit: int = 8) 
         lines.append(f"  <diagnostic>{_escape_xml(diagnostic[:500])}</diagnostic>")
     lines.append("</skill_load_diagnostics>")
     return "\n".join(lines)
-
-
-def _extract_setup_hint(skill: Skill) -> str:
-    """
-    Extract the Setup section from SKILL.md content as a brief hint.
-    Returns the first few lines of the ## Setup section.
-    """
-    content = skill.content
-    if not content:
-        return ""
-
-    import re
-    match = re.search(r'^##\s+Setup\s*\n(.*?)(?=\n##\s|\Z)', content, re.MULTILINE | re.DOTALL)
-    if not match:
-        return ""
-
-    setup_text = match.group(1).strip()
-    lines = setup_text.split('\n')
-    hint_lines = [l.strip() for l in lines[:6] if l.strip()]
-    return ' '.join(hint_lines)[:300]
 
 
 def _frontmatter_scalar(frontmatter: Dict[str, Any], *keys: str) -> str:

@@ -51,7 +51,8 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
       "tool_call",
       "artifact",
       "interaction",
-      "checkpoint"
+      "checkpoint",
+      "task_list"
     ],
     "itemStatuses": [
       "created",
@@ -94,7 +95,7 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
       "superseded"
     ]
   },
-  "schemaSha256": "ed81d9f65c424c47d3ec912b5143859d75d1ac0fd6c141b3b8ad36cf64c1fa1b",
+  "schemaSha256": "5fa103fc0e57972d6e12aaf0c917ccf1f9b552ff4cb7cc87f882a985dc5cb183",
   "schemaVersion": 1,
   "wireFields": {
     "ConnectorLoginBeginResponse": {
@@ -191,6 +192,13 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
         "watermark"
       ]
     },
+    "SkillHubListResponse": {
+      "SkillHubListResponse": [
+        "schema_version",
+        "items",
+        "next_cursor"
+      ]
+    },
     "ThreadListResponse": {
       "ThreadListResponse": [
         "items",
@@ -204,6 +212,7 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
         "title",
         "pinned",
         "active_turn_status",
+        "last_turn_status",
         "metadata",
         "forked_from_thread_id",
         "forked_from_turn_id",
@@ -302,6 +311,7 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
         "title",
         "pinned",
         "active_turn_status",
+        "last_turn_status",
         "metadata",
         "forked_from_thread_id",
         "forked_from_turn_id",

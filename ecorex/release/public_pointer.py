@@ -30,7 +30,9 @@ from .public_index import (
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
-_V1_VERSION = re.compile(r"^1\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
+_PRODUCT_VERSION = re.compile(
+    r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$"
+)
 _RFC3339 = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
     r"(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
@@ -752,7 +754,7 @@ def _target(value: Any) -> bool:
         )
         is not None
         and isinstance(value.get("version"), str)
-        and _V1_VERSION.fullmatch(str(value.get("version"))) is not None
+        and _PRODUCT_VERSION.fullmatch(str(value.get("version"))) is not None
         and _sha(value.get("build_digest"))
     )
 

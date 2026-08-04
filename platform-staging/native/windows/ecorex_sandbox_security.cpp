@@ -241,14 +241,21 @@ std::optional<std::string> PermissionDomainDigest(
   return Sha256Bytes(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size());
 }
 
+bool ContainedPath(const std::filesystem::path& candidate,
+                   const std::filesystem::path& root);
+
 std::optional<std::string> RelativeRootsDigest(
     const std::vector<std::filesystem::path>& roots,
-    const std::filesystem::path& base) {
+    const std::filesystem::path& base,
+    const std::filesystem::path& slot_root) {
   std::vector<std::wstring> normalized;
   normalized.reserve(roots.size());
   for (const auto& root : roots) {
     std::error_code error;
-    const auto relative = std::filesystem::relative(root, base, error);
+    const auto relative = ContainedPath(root, slot_root)
+                              ? std::filesystem::path(L"slot") /
+                                    std::filesystem::relative(root, slot_root, error)
+                              : std::filesystem::relative(root, base, error);
     if (error || relative.empty() || relative.is_absolute()) return std::nullopt;
     normalized.push_back(FoldPath(relative));
   }
@@ -518,6 +525,9 @@ bool ValidateSecurityRoots(const SecurityRoots& request) {
   if (canonical_error || ReparsePoint(slots_root) || ReparsePoint(managed_workspace)) {
     return false;
   }
+  const auto durable_cas = std::filesystem::canonical(
+      request.install_root / L"state" / L"extension-cas", canonical_error);
+  if (canonical_error || ReparsePoint(durable_cas)) return false;
   if (!IsSha256(request.slot_digest) || !IsSha256(request.workspace_digest) ||
       request.read_roots.empty() || request.workspaces.empty() ||
       !ContainedPath(request.slot_root, slots_root) ||
@@ -529,7 +539,9 @@ bool ValidateSecurityRoots(const SecurityRoots& request) {
   if (!workspace_digest || Utf8(request.workspace_digest) != *workspace_digest) return false;
   std::set<std::wstring> identities;
   for (const auto& root : request.read_roots) {
-    if (!ContainedPath(root, request.slot_root) || ReparsePoint(root) ||
+    const bool slot_read = ContainedPath(root, request.slot_root);
+    const bool cas_read = FoldPath(root) == FoldPath(durable_cas);
+    if ((!slot_read && !cas_read) || ReparsePoint(root) ||
         !identities.insert(FoldPath(root)).second) {
       return false;
     }
@@ -619,12 +631,16 @@ bool AttestSecurity(const SecurityRoots& request, PSID sid, bool full,
   const auto record_key = [&request](const std::filesystem::path& path,
                                      char kind) -> std::optional<std::wstring> {
     const auto& roots = kind == 'r' ? request.read_roots : request.workspaces;
-    const auto& base = kind == 'r' ? request.slot_root : request.install_root;
+    const auto& base = request.install_root;
     for (const auto& root : roots) {
       if (!ContainedPath(path, root)) continue;
       std::error_code root_error;
       std::error_code child_error;
-      const auto root_relative = std::filesystem::relative(root, base, root_error);
+      const auto root_relative = ContainedPath(root, request.slot_root)
+                                     ? std::filesystem::path(L"slot") /
+                                           std::filesystem::relative(
+                                               root, request.slot_root, root_error)
+                                     : std::filesystem::relative(root, base, root_error);
       const auto child_relative = std::filesystem::relative(path, root, child_error);
       if (root_error || child_error || root_relative.is_absolute() ||
           child_relative.is_absolute()) {
@@ -635,7 +651,8 @@ bool AttestSecurity(const SecurityRoots& request, PSID sid, bool full,
     }
     return std::nullopt;
   };
-  const auto append = [&records, &root_identities, &record_key](
+  const auto durable_cas = request.install_root / L"state" / L"extension-cas";
+  const auto append = [&records, &root_identities, &record_key, &durable_cas](
                           const std::filesystem::path& path, char kind) -> bool {
     const auto key = record_key(path, kind);
     const auto encoded = key ? Utf8(*key) : std::string{};
@@ -647,7 +664,9 @@ bool AttestSecurity(const SecurityRoots& request, PSID sid, bool full,
     // stable workspace root identity/security descriptor into the receipt.
     // Otherwise creating a legitimate output changes the release marker and
     // makes the next process start indistinguishable from ACL tampering.
-    if (kind == 'w' && !root) return true;
+    if ((kind == 'w' || (kind == 'r' && ContainedPath(path, durable_cas))) && !root) {
+      return true;
+    }
     records.push_back(kind);
     records.append(encoded);
     if (root) {
@@ -719,26 +738,38 @@ bool AttestSecurity(const SecurityRoots& request, PSID sid, bool full,
 }
 
 bool ProvisionSecurity(const SecurityRoots& request, PSID sid) {
-  std::vector<std::filesystem::path> read_nodes;
   std::vector<std::filesystem::path> workspace_nodes;
-  if (!CollectSecurityNodes(request, false, &read_nodes, &workspace_nodes)) return false;
-  for (const auto& path : read_nodes) {
+  std::vector<std::filesystem::path> ignored_read_nodes;
+  if (!CollectSecurityNodes(request, false, &ignored_read_nodes, &workspace_nodes)) return false;
+  const auto durable_cas = request.install_root / L"state" / L"extension-cas";
+  for (const auto& root : request.read_roots) {
+    const bool durable = FoldPath(root) == FoldPath(durable_cas);
+    std::vector<std::filesystem::path> nodes;
+    if (durable) {
+      if (!EnumerateSecureTree(root, &nodes)) return false;
+    } else {
+      nodes.push_back(root);
+    }
     std::error_code scan_error;
     size_t existing = 0;
-    for (std::filesystem::directory_iterator iterator(path, scan_error), end;
-         !scan_error && iterator != end; iterator.increment(scan_error)) {
-      ++existing;
-      if (FoldPath(iterator->path()) != FoldPath(ModulePath()) ||
-          ReparsePoint(iterator->path()) || !iterator->is_regular_file(scan_error)) {
+    if (!durable) {
+      for (std::filesystem::directory_iterator iterator(root, scan_error), end;
+           !scan_error && iterator != end; iterator.increment(scan_error)) {
+        ++existing;
+        if (FoldPath(iterator->path()) != FoldPath(ModulePath()) ||
+            ReparsePoint(iterator->path()) || !iterator->is_regular_file(scan_error)) {
+          return false;
+        }
+      }
+      if (scan_error || existing > 1) return false;
+    }
+    for (const auto& path : nodes) {
+      std::error_code error;
+      const bool directory = std::filesystem::is_directory(path, error);
+      if (error || !ResourceIntegrityAtMostMedium(path) ||
+          !ApplyGrant(path, sid, GENERIC_READ | GENERIC_EXECUTE, directory)) {
         return false;
       }
-    }
-    if (scan_error || existing > 1) return false;
-    std::error_code error;
-    const bool directory = std::filesystem::is_directory(path, error);
-    if (error || !ResourceIntegrityAtMostMedium(path) ||
-        !ApplyGrant(path, sid, GENERIC_READ | GENERIC_EXECUTE, directory)) {
-      return false;
     }
   }
   for (const auto& path : workspace_nodes) {
@@ -791,6 +822,7 @@ bool UnprovisionSlotSecurity(const SecurityRoots& request, PSID sid) {
   if (!CollectSecurityNodes(request, true, &read_nodes, &workspace_nodes)) return false;
   std::reverse(read_nodes.begin(), read_nodes.end());
   for (const auto& path : read_nodes) {
+    if (!ContainedPath(path, request.slot_root)) continue;
     if (!RemoveGrant(path, sid)) return false;
   }
   return true;
@@ -800,6 +832,11 @@ bool UnprovisionDomainSecurity(const SecurityRoots& request, PSID sid) {
   std::vector<std::filesystem::path> read_nodes;
   std::vector<std::filesystem::path> workspace_nodes;
   if (!CollectSecurityNodes(request, true, &read_nodes, &workspace_nodes)) return false;
+  const auto durable_cas = request.install_root / L"state" / L"extension-cas";
+  std::reverse(read_nodes.begin(), read_nodes.end());
+  for (const auto& path : read_nodes) {
+    if (ContainedPath(path, durable_cas) && !RemoveGrant(path, sid)) return false;
+  }
   std::reverse(workspace_nodes.begin(), workspace_nodes.end());
   for (const auto& path : workspace_nodes) {
     // Cleanup revokes only the product-owned Package SID ACE.  The original
@@ -888,7 +925,8 @@ int SecurityCommand(const std::wstring& operation, int argc, wchar_t** argv) {
   if (sid == nullptr) return 70;
   const auto sid_text = SidString(sid);
   const auto helper_digest = Sha256File(ModulePath());
-  const auto read_digest = RelativeRootsDigest(request->read_roots, request->slot_root);
+  const auto read_digest = RelativeRootsDigest(
+      request->read_roots, request->install_root, request->slot_root);
   bool ok = permission_domain.has_value() && sid_text.has_value() &&
             helper_digest.has_value() && read_digest.has_value();
   if (ok && operation == L"provision") {
@@ -939,8 +977,8 @@ int SecurityCommand(const std::wstring& operation, int argc, wchar_t** argv) {
   const char* inheritance_proof =
       (operation == L"repair" || request->mode == L"strict" ||
        (operation == L"attest" && request->mode == L"full"))
-          ? "immutable-read-tree-mutable-workspace-acl-mic-v3"
-          : (operation == L"provision" ? "fresh-empty-roots-v1"
+          ? "immutable-runtime-durable-cas-mutable-workspace-acl-mic-v4"
+          : (operation == L"provision" ? "fresh-runtime-durable-cas-v1"
                                          : "root-identity-no-reparse-tree-v1");
   std::cout << "{\"appcontainer_sid\":\"" << Utf8(*sid_text)
             << "\",\"cpu_rate_hard_cap\":" << kCpuRate

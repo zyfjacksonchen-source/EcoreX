@@ -19,6 +19,7 @@ from typing import Any, Mapping
 from urllib.parse import urlsplit
 import zipfile
 
+from ecorex.product_version import stable_release_sequence
 from ecorex.update.fetching import ArtifactFetcher
 from ecorex.update.manifest import (
     ReleaseArtifact,
@@ -44,7 +45,6 @@ _SAFE_RELEASE_ID = re.compile(r"^release-stable-[0-9a-f]{24}$")
 _SAFE_TRANSACTION_ID = re.compile(r"^[0-9a-f]{32}$")
 _SAFE_KEY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_STABLE_V1 = re.compile(r"^1\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$")
 _WINDOWS_ENTRY_NAMES = tuple(
     ["EcoreX.lnk", "EcoreX Agent.lnk", "EcoreX WebUI.lnk"]
     + [f"EcoreX Agent ({index}).lnk" for index in range(2, 10)]
@@ -674,12 +674,10 @@ class BootstrapCompanionInstaller:
             raise BootstrapCompanionError(
                 "versioned Bootstrap minimum target is invalid"
             )
-        match = _STABLE_V1.fullmatch(str(minimum.get("version", "")))
-        expected_sequence = (
-            int(match.group(1)) * 1_000_000 + int(match.group(2)) + 1
-            if match is not None
-            else -1
-        )
+        try:
+            expected_sequence = stable_release_sequence(minimum.get("version"))
+        except ValueError:
+            expected_sequence = -1
         if (
             minimum.get("version") != manifest.version
             or minimum.get("sequence") != expected_sequence

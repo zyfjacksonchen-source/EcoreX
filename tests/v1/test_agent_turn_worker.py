@@ -39,18 +39,35 @@ from ecorex.runtime import (
     create_app,
 )
 from ecorex.runtime.worker import _CheckpointLeasePulse
+from ecorex.server.app import _execute_feishu_cli
 
 
 class ScriptedGateway:
-    def __init__(self, scripts):
+    def __init__(self, scripts, *, preserve_empty=False):
         self.scripts = list(scripts)
         self.requests = []
+        self.preserve_empty = preserve_empty
 
     async def stream(self, request):
         self.requests.append(request)
         script = self.scripts.pop(0)
         if isinstance(script, Exception):
             raise script
+        if (
+            not self.preserve_empty
+            and len(script) == 1
+            and script[0].get("seq") == 1
+            and script[0].get("event_type") == "response.completed"
+        ):
+            yield GatewayEvent.model_validate(
+                {
+                    "seq": 1,
+                    "event_type": "output_text.delta",
+                    "response_id": script[0]["response_id"],
+                    "delta": "done",
+                }
+            )
+            script = [{**script[0], "seq": 2}]
         for event in script:
             yield GatewayEvent.model_validate(event)
 
@@ -69,6 +86,12 @@ class BlockingGateway:
             await self.release.wait()
             yield GatewayEvent(
                 seq=1,
+                event_type="output_text.delta",
+                response_id="resp_delayed",
+                delta="done",
+            )
+            yield GatewayEvent(
+                seq=2,
                 event_type="response.completed",
                 response_id="resp_delayed",
             )
@@ -369,7 +392,7 @@ def test_uploaded_image_reaches_gateway_as_bounded_rendition_and_is_not_repeated
                     "response_id": "resp_visual_final",
                 },
             ],
-        ]
+        ],
     )
     worker = AgentTurnWorker(
         kernel,
@@ -491,7 +514,7 @@ def test_artifact_vision_tool_continuation_carries_bounded_semantic_image(
                     "response_id": "resp_artifact_vision_final",
                 },
             ],
-        ]
+        ],
     )
     worker = AgentTurnWorker(
         kernel,
@@ -540,6 +563,65 @@ def test_artifact_vision_tool_continuation_carries_bounded_semantic_image(
     )
 
 
+def test_verified_feishu_failure_is_failed_and_recoverable(
+    tmp_path, monkeypatch
+) -> None:
+    from agent.tools.feishu_cli import FeishuCli
+
+    monkeypatch.setattr(
+        FeishuCli,
+        "execute",
+        lambda self, arguments: SimpleNamespace(
+            status="error",
+            result={"status": "error", "message": "command rejected"},
+        ),
+    )
+    app, kernel, composition, _thread, created = _runtime(
+        tmp_path,
+        input_text="读取文件",
+        capability_handlers={"read": _execute_feishu_cli},
+    )
+    del app
+    gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_feishu_failed",
+                    "tool_call_id": "call_feishu_failed",
+                    "tool_name": "read",
+                    "arguments": {"path": "manifest.json"},
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "resp_feishu_recovered",
+                }
+            ],
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+    )
+
+    result = asyncio.run(worker.run_once("worker-feishu-failed"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    execution = ToolExecutionRepository(kernel.database).get(
+        worker._execution_id(created.turn.turn_id, "call_feishu_failed")
+    )
+    assert execution.status == "failed"
+    assert execution.error_code == "capability_unavailable"
+    assert gateway.requests[1].tool_outputs[0].output["code"] == (
+        "capability_unavailable"
+    )
+
+
 def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> None:
     app, kernel, composition, thread, created = _runtime(tmp_path, input_text="hello")
     del app
@@ -565,7 +647,7 @@ def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> No
                     "usage": {"input_tokens": 3, "output_tokens": 4},
                 },
             ]
-        ]
+        ],
     )
     worker = AgentTurnWorker(
         kernel,
@@ -575,8 +657,8 @@ def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> No
     result = asyncio.run(worker.run_once("worker-1"))
     assert result.outcome is WorkerOutcome.COMPLETED
     assert gateway.requests[0].model_id == "ecorex-chat"
-    assert gateway.requests[0].model_policy.upstream_model_id == "gpt-5.6-sol"
-    assert gateway.requests[0].model_policy.reasoning_effort == "medium"
+    assert gateway.requests[0].model_policy.upstream_model_id == "gpt-5.6-luna"
+    assert gateway.requests[0].model_policy.reasoning_effort == "high"
     assert (
         gateway.requests[0].model_policy.context_management.compact_threshold_tokens
         == 272_000
@@ -601,8 +683,8 @@ def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> No
     requested = next(
         event for event in turn_events if event.event_type == "model.requested"
     )
-    assert requested.payload["model_policy"]["upstream_model_id"] == "gpt-5.6-sol"
-    assert requested.payload["model_policy"]["reasoning_effort"] == "medium"
+    assert requested.payload["model_policy"]["upstream_model_id"] == "gpt-5.6-luna"
+    assert requested.payload["model_policy"]["reasoning_effort"] == "high"
     assert requested.payload["model_policy"]["context_management"] == {
         "type": "compaction",
         "compact_threshold_tokens": 272_000,
@@ -701,7 +783,7 @@ def test_new_turn_replays_completed_thread_history_with_roles(tmp_path) -> None:
                     "response_id": "resp-second",
                 }
             ],
-        ]
+        ],
     )
     worker = AgentTurnWorker(
         kernel,
@@ -890,8 +972,8 @@ def test_worker_keeps_image_capability_ranked_and_other_tools_discoverable(
     assert result.outcome is WorkerOutcome.COMPLETED
     request = gateway.requests[0]
     direct_ids = [item["spec"]["tool_id"] for item in request.direct_tools]
-    assert {"read", "tool_search", "tool_describe"}.issubset(direct_ids)
-    assert {"imagegen", "fetch", "vision", "cdp", "shell"}.issubset(
+    assert {"read", "tool_search", "tool_describe", "imagegen"}.issubset(direct_ids)
+    assert {"fetch", "vision", "cdp", "shell"}.issubset(
         set(request.deferred_tool_ids)
     )
 
@@ -1614,6 +1696,110 @@ def test_worker_executes_discovered_tool_and_continues_model_response(tmp_path) 
     assert kernel.jobs.get(created.job.job_id).status.value == "completed"
 
 
+def test_empty_tool_continuation_forces_text_without_replaying_tool(tmp_path) -> None:
+    calls = []
+    app, kernel, composition, thread, _created = _runtime(
+        tmp_path,
+        input_text="读取报告并说明结果",
+        capability_handlers={
+            "read": lambda arguments: (
+                calls.append(dict(arguments)) or {"title": "季度报告"}
+            )
+        },
+    )
+    del app
+    gateway = ScriptedGateway(
+        [
+            [{
+                "seq": 1,
+                "event_type": "tool_call.requested",
+                "response_id": "resp_tool",
+                "tool_call_id": "call_read_empty_followup",
+                "tool_name": "read",
+                "arguments": {"path": "report.docx"},
+            }],
+            [{
+                "seq": 1,
+                "event_type": "response.completed",
+                "response_id": "resp_empty",
+            }],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "output_text.delta",
+                    "response_id": "resp_forced_text",
+                    "delta": "报告已读取完成。",
+                },
+                {
+                    "seq": 2,
+                    "event_type": "response.completed",
+                "response_id": "resp_forced_text",
+                },
+            ],
+        ],
+        preserve_empty=True,
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+    )
+
+    result = asyncio.run(worker.run_once("worker-empty-tool-followup"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert calls == [{"path": "report.docx"}]
+    assert len(gateway.requests) == 3
+    forced = gateway.requests[2]
+    assert forced.previous_response_id == "resp_empty"
+    assert forced.direct_tools == []
+    assert "不要调用任何工具" in forced.input
+    assert any(
+        event.event_type == "model.empty_final_response_recovery"
+        for event in kernel.events.page(thread.thread_id, limit=1_000).events
+    )
+
+
+def test_repeated_empty_tool_continuation_is_failed_not_completed(tmp_path) -> None:
+    calls = []
+    _app, kernel, composition, _thread, created = _runtime(
+        tmp_path,
+        input_text="读取报告并说明结果",
+        capability_handlers={
+            "read": lambda arguments: (
+                calls.append(dict(arguments)) or {"title": "季度报告"}
+            )
+        },
+    )
+    gateway = ScriptedGateway(
+        [
+            [{
+                "seq": 1,
+                "event_type": "tool_call.requested",
+                "response_id": "resp_tool",
+                "tool_call_id": "call_read_repeated_empty",
+                "tool_name": "read",
+                "arguments": {"path": "report.docx"},
+            }],
+            [{"seq": 1, "event_type": "response.completed", "response_id": "resp_empty"}],
+            [{"seq": 1, "event_type": "response.completed", "response_id": "resp_empty_again"}],
+        ],
+        preserve_empty=True,
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+    )
+
+    result = asyncio.run(worker.run_once("worker-repeated-empty-tool-followup"))
+
+    assert result.outcome is WorkerOutcome.FAILED
+    assert result.reason == "empty_final_response_after_tools"
+    assert calls == [{"path": "report.docx"}]
+    assert kernel.jobs.get(created.job.job_id).status.value == "failed"
+
+
 def test_worker_observes_and_self_repairs_failed_tool_continuation(tmp_path) -> None:
     """A provider handoff failure must not discard or repeat a completed tool.
 
@@ -1696,7 +1882,7 @@ def test_worker_observes_and_self_repairs_failed_tool_continuation(tmp_path) -> 
     ]
     assert recovered.input_items[0].content == "读取季度报告后给出摘要"
     assert recovered.input_items[1].content.startswith(
-        "[EcoreX Runtime continuity note]"
+        "[e-Mate Runtime continuity note]"
     )
     assert "营收稳定增长" in recovered.input_items[1].content
     assert "不要仅因这条运行时连续性提示而重复调用该工具" in (

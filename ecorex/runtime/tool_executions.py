@@ -62,7 +62,9 @@ class ToolExecutionRecord:
 class ToolExecutionRepository:
     def __init__(self, database: SQLiteDatabase | str | Path) -> None:
         self.database = (
-            database if isinstance(database, SQLiteDatabase) else SQLiteDatabase(database)
+            database
+            if isinstance(database, SQLiteDatabase)
+            else SQLiteDatabase(database)
         )
 
     def begin(
@@ -250,7 +252,9 @@ class ToolExecutionRepository:
         if approved and approval_interaction_id is None:
             raise ValueError("approved invocation requires its durable interaction")
         if not approved and approval_interaction_id is not None:
-            raise ValueError("unapproved invocation cannot bind an approval interaction")
+            raise ValueError(
+                "unapproved invocation cannot bind an approval interaction"
+            )
 
         with self.database.transaction() as connection:
             execution = self._require(connection, tool_call_id)
@@ -382,18 +386,18 @@ class ToolExecutionRepository:
                     raise ToolExecutionConflict(
                         "invocation approval does not bind this tool call"
                     )
-                expected_execution_id = "tool_exec_" + hashlib.sha256(
-                    (
-                        f"{turn_id}\0{raw_tool_call['tool_call_id']}"
-                    ).encode("utf-8")
-                ).hexdigest()
+                expected_execution_id = (
+                    "tool_exec_"
+                    + hashlib.sha256(
+                        (f"{turn_id}\0{raw_tool_call['tool_call_id']}").encode("utf-8")
+                    ).hexdigest()
+                )
                 checkpoint_arguments_sha256 = hashlib.sha256(
                     json_dumps(raw_tool_call["arguments"]).encode("utf-8")
                 ).hexdigest()
                 if (
                     expected_execution_id != tool_call_id
-                    or checkpoint_arguments_sha256
-                    != execution["arguments_sha256"]
+                    or checkpoint_arguments_sha256 != execution["arguments_sha256"]
                 ):
                     raise ToolExecutionConflict(
                         "invocation approval arguments do not match execution"
@@ -640,9 +644,7 @@ class ToolExecutionRepository:
             not self._durable_scope(execution_scope)
             or parsed is None
             or any(
-                not isinstance(value, str)
-                or not value.strip()
-                or len(value) > 256
+                not isinstance(value, str) or not value.strip() or len(value) > 256
                 for value in (capability_snapshot_id, policy_snapshot_id)
             )
         ):
@@ -693,9 +695,7 @@ class ToolExecutionRepository:
             not self._durable_scope(execution_scope)
             or parsed is None
             or any(
-                not isinstance(value, str)
-                or not value.strip()
-                or len(value) > 256
+                not isinstance(value, str) or not value.strip() or len(value) > 256
                 for value in identities
             )
         ):
@@ -708,29 +708,40 @@ class ToolExecutionRepository:
                 policy_snapshot_id=policy_snapshot_id,
                 tool_id="skill_search",
             )
-            batch = connection.execute(
-                "SELECT extension_snapshot_id FROM turn_execution_batches "
-                "WHERE batch_id = ? AND turn_id = ? AND thread_id = ?",
-                (
-                    execution_scope.execution_batch_id,
-                    execution_scope.turn_id,
-                    execution_scope.thread_id,
-                ),
-            ).fetchone()
-        if batch is None or batch["extension_snapshot_id"] != extension_snapshot_id:
-            return None
+        stale: ToolExecutionRecord | None = None
         for row in reversed(rows):
             record = self._from_row(row)
             if self._record_skill_search_contains(
                 record,
                 extension_snapshot_id=extension_snapshot_id,
-                extension_contribution_snapshot_id=(
-                    extension_contribution_snapshot_id
-                ),
+                extension_contribution_snapshot_id=(extension_contribution_snapshot_id),
                 discovery_id=discovery_id,
             ):
                 return record
-        return None
+            result = record.result
+            stale_snapshot = (
+                result.get("extension_snapshot_id")
+                if isinstance(result, dict)
+                else None
+            )
+            stale_contribution = (
+                result.get("extension_contribution_snapshot_id")
+                if isinstance(result, dict)
+                else None
+            )
+            if (
+                stale is None
+                and isinstance(stale_snapshot, str)
+                and isinstance(stale_contribution, str)
+                and self._record_skill_search_contains(
+                    record,
+                    extension_snapshot_id=stale_snapshot,
+                    extension_contribution_snapshot_id=stale_contribution,
+                    discovery_id=discovery_id,
+                )
+            ):
+                stale = record
+        return stale
 
     def has_completed_skill_search(
         self,
@@ -748,17 +759,6 @@ class ToolExecutionRepository:
         if not self._durable_scope(execution_scope):
             return False
         with self.database.reader() as connection:
-            batch = connection.execute(
-                "SELECT extension_snapshot_id FROM turn_execution_batches "
-                "WHERE batch_id = ? AND turn_id = ? AND thread_id = ?",
-                (
-                    execution_scope.execution_batch_id,
-                    execution_scope.turn_id,
-                    execution_scope.thread_id,
-                ),
-            ).fetchone()
-            if batch is None:
-                return False
             rows = self._completed_scope_rows(
                 connection,
                 execution_scope=execution_scope,
@@ -766,13 +766,96 @@ class ToolExecutionRepository:
                 policy_snapshot_id=policy_snapshot_id,
                 tool_id="skill_search",
             )
-        extension_snapshot_id = str(batch["extension_snapshot_id"])
         return any(
-            self._record_skill_search_shape(
-                self._from_row(row),
-                extension_snapshot_id=extension_snapshot_id,
+            isinstance((record := self._from_row(row)).result, dict)
+            and isinstance(record.result.get("extension_snapshot_id"), str)
+            and self._record_skill_search_shape(
+                record,
+                extension_snapshot_id=str(record.result["extension_snapshot_id"]),
             )
             for row in rows
+        )
+
+    def completed_skill_read_for_discovery(
+        self,
+        *,
+        execution_scope: ToolExecutionScope,
+        capability_snapshot_id: str,
+        policy_snapshot_id: str,
+        extension_snapshot_id: str,
+        extension_contribution_snapshot_id: str,
+        discovery_id: str,
+    ) -> ToolExecutionRecord | None:
+        """Return the exact durable read fact required before Skill execution."""
+
+        if not self._durable_scope(execution_scope):
+            return None
+        with self.database.reader() as connection:
+            rows = self._completed_scope_rows(
+                connection,
+                execution_scope=execution_scope,
+                capability_snapshot_id=capability_snapshot_id,
+                policy_snapshot_id=policy_snapshot_id,
+                tool_id="skill_read",
+            )
+        for row in reversed(rows):
+            record = self._from_row(row)
+            if self._record_skill_read_shape(
+                record,
+                extension_snapshot_id=extension_snapshot_id,
+                extension_contribution_snapshot_id=extension_contribution_snapshot_id,
+                discovery_id=discovery_id,
+            ):
+                return record
+            result = record.result
+            if (
+                isinstance(result, dict)
+                and isinstance(result.get("extension_snapshot_id"), str)
+                and isinstance(
+                    result.get("extension_contribution_snapshot_id"), str
+                )
+                and self._record_skill_read_shape(
+                    record,
+                    extension_snapshot_id=str(result["extension_snapshot_id"]),
+                    extension_contribution_snapshot_id=str(
+                        result["extension_contribution_snapshot_id"]
+                    ),
+                    discovery_id=discovery_id,
+                )
+            ):
+                return record
+        return None
+
+    def has_completed_skill_read(
+        self,
+        *,
+        execution_scope: ToolExecutionScope,
+        capability_snapshot_id: str,
+        policy_snapshot_id: str,
+    ) -> bool:
+        if not self._durable_scope(execution_scope):
+            return False
+        with self.database.reader() as connection:
+            rows = self._completed_scope_rows(
+                connection,
+                execution_scope=execution_scope,
+                capability_snapshot_id=capability_snapshot_id,
+                policy_snapshot_id=policy_snapshot_id,
+                tool_id="skill_read",
+            )
+        return any(
+            isinstance(record.result, dict)
+            and isinstance(record.result.get("extension_snapshot_id"), str)
+            and isinstance(record.result.get("extension_contribution_snapshot_id"), str)
+            and self._record_skill_read_shape(
+                record,
+                extension_snapshot_id=str(record.result["extension_snapshot_id"]),
+                extension_contribution_snapshot_id=str(
+                    record.result["extension_contribution_snapshot_id"]
+                ),
+                discovery_id=str(record.result.get("discovery_id", "")),
+            )
+            for record in (self._from_row(row) for row in rows)
         )
 
     def completed_connector_search_for_discovery(
@@ -790,9 +873,7 @@ class ToolExecutionRepository:
             not self._durable_scope(execution_scope)
             or self._parse_connector_discovery_id(discovery_id) is None
             or any(
-                not isinstance(value, str)
-                or not value.strip()
-                or len(value) > 256
+                not isinstance(value, str) or not value.strip() or len(value) > 256
                 for value in (
                     capability_snapshot_id,
                     policy_snapshot_id,
@@ -802,10 +883,13 @@ class ToolExecutionRepository:
         ):
             return None
         with self.database.reader() as connection:
-            if self._batch_connector_snapshot_id(
-                connection,
-                execution_scope=execution_scope,
-            ) != connector_catalog_snapshot_id:
+            if (
+                self._batch_connector_snapshot_id(
+                    connection,
+                    execution_scope=execution_scope,
+                )
+                != connector_catalog_snapshot_id
+            ):
                 return None
             rows = self._completed_scope_rows(
                 connection,
@@ -841,10 +925,13 @@ class ToolExecutionRepository:
         if self._parse_connector_discovery_id(discovery_id) is None:
             return None
         with self.database.reader() as connection:
-            if self._batch_connector_snapshot_id(
-                connection,
-                execution_scope=execution_scope,
-            ) != connector_catalog_snapshot_id:
+            if (
+                self._batch_connector_snapshot_id(
+                    connection,
+                    execution_scope=execution_scope,
+                )
+                != connector_catalog_snapshot_id
+            ):
                 return None
             rows = self._completed_scope_rows(
                 connection,
@@ -1003,6 +1090,12 @@ class ToolExecutionRepository:
                 capability_snapshot_id=capability_snapshot_id,
                 policy_snapshot_id=policy_snapshot_id,
             )
+        if tool_id == "skill_run":
+            return tool_version == "1.0.0" and self.has_completed_skill_read(
+                execution_scope=execution_scope,
+                capability_snapshot_id=capability_snapshot_id,
+                policy_snapshot_id=policy_snapshot_id,
+            )
         if tool_id in {"connector_read", "connector_write"}:
             return tool_version == "1.0.0" and self.has_completed_connector_disclosure(
                 execution_scope=execution_scope,
@@ -1016,12 +1109,9 @@ class ToolExecutionRepository:
             tool_id,
             tool_version,
         )
-        if (
-            not self._durable_scope(execution_scope)
-            or any(
+        if not self._durable_scope(execution_scope) or any(
             not isinstance(value, str) or not value.strip() or len(value) > 256
             for value in identities
-            )
         ):
             return False
         with self.database.reader() as connection:
@@ -1106,8 +1196,7 @@ class ToolExecutionRepository:
             or result.get("capability_snapshot_id") != capability_snapshot_id
             or result.get("found") is not True
             or result.get("available") is not True
-            or result.get("discovery_id")
-            != f"tool:{tool_id}@{tool_version}"
+            or result.get("discovery_id") != f"tool:{tool_id}@{tool_version}"
             or result.get("search_tool_call_id") != search_record.tool_call_id
             or result.get("search_result_sha256") != search_record.result_sha256
         ):
@@ -1129,13 +1218,12 @@ class ToolExecutionRepository:
         ):
             return False
         discovery_id = f"tool:{tool_id}@{tool_version}"
-        return (
-            arguments["discovery_id"] == discovery_id
-            and ToolExecutionRepository._record_search_contains(
-                search_record,
-                capability_snapshot_id=capability_snapshot_id,
-                discovery_id=discovery_id,
-            )
+        return arguments[
+            "discovery_id"
+        ] == discovery_id and ToolExecutionRepository._record_search_contains(
+            search_record,
+            capability_snapshot_id=capability_snapshot_id,
+            discovery_id=discovery_id,
         )
 
     @staticmethod
@@ -1220,12 +1308,39 @@ class ToolExecutionRepository:
         return any(
             isinstance(candidate, dict)
             and candidate.get("discovery_id") == discovery_id
-            and candidate.get("discovery_id")
-            == f"skill:{extension_id}@{revision_id}"
+            and candidate.get("discovery_id") == f"skill:{extension_id}@{revision_id}"
             and isinstance(candidate.get("name"), str)
             and isinstance(candidate.get("description"), str)
             and isinstance(candidate.get("tags"), list)
             for candidate in record.result["skills"]
+        )
+
+    @staticmethod
+    def _record_skill_read_shape(
+        record: ToolExecutionRecord,
+        *,
+        extension_snapshot_id: str,
+        extension_contribution_snapshot_id: str,
+        discovery_id: str,
+    ) -> bool:
+        arguments = record.arguments
+        result = record.result
+        return (
+            ToolExecutionRepository._parse_skill_discovery_id(discovery_id) is not None
+            and record.tool_id == "skill_read"
+            and record.status == "completed"
+            and isinstance(arguments, dict)
+            and set(arguments) in ({"discovery_id"}, {"discovery_id", "reference_ids"})
+            and arguments.get("discovery_id") == discovery_id
+            and isinstance(result, dict)
+            and result.get("schema_version") == 1
+            and result.get("extension_snapshot_id") == extension_snapshot_id
+            and result.get("extension_contribution_snapshot_id")
+            == extension_contribution_snapshot_id
+            and result.get("discovery_id") == discovery_id
+            and isinstance(result.get("search_tool_call_id"), str)
+            and isinstance(result.get("search_result_sha256"), str)
+            and isinstance(result.get("instructions"), str)
         )
 
     @staticmethod
@@ -1262,8 +1377,7 @@ class ToolExecutionRepository:
             and candidate.get("instance_id") == instance_id
             and candidate.get("connector_id") == connector_id
             and candidate.get("action_id") == action_id
-            and candidate.get("call_tool_id")
-            in {"connector_read", "connector_write"}
+            and candidate.get("call_tool_id") in {"connector_read", "connector_write"}
             and discovery_id.endswith("@" + contract_sha256)
             for candidate in result["actions"]
         )
@@ -1357,8 +1471,10 @@ class ToolExecutionRepository:
         ):
             return None
         prefix, separator, contract_sha256 = discovery_id.rpartition("@")
-        if not separator or len(contract_sha256) != 64 or any(
-            character not in "0123456789abcdef" for character in contract_sha256
+        if (
+            not separator
+            or len(contract_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in contract_sha256)
         ):
             return None
         instance_target = prefix[len("connector:") :]
@@ -1369,7 +1485,11 @@ class ToolExecutionRepository:
             or not slash
             or not instance_id
             or len(instance_id) > 256
-            or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:-" for character in instance_id)
+            or any(
+                character
+                not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:-"
+                for character in instance_id
+            )
             or not connector_id
             or not action_id
             or discovery_id
@@ -1411,9 +1531,11 @@ class ToolExecutionRepository:
         ):
             return None
         payload = json_loads(payload_json, {})
-        snapshot_id = payload.get("connector_catalog_snapshot_id") if isinstance(
-            payload, dict
-        ) else None
+        snapshot_id = (
+            payload.get("connector_catalog_snapshot_id")
+            if isinstance(payload, dict)
+            else None
+        )
         return snapshot_id if isinstance(snapshot_id, str) and snapshot_id else None
 
     @staticmethod
@@ -1548,9 +1670,7 @@ class ToolExecutionRepository:
             "execution_batch_id": str(row["execution_batch_id"]),
             "capability_snapshot_id": str(row["capability_snapshot_id"]),
             "permission_account_id": str(row["permission_account_id"]),
-            "frozen_permission_snapshot_id": str(
-                row["frozen_permission_snapshot_id"]
-            ),
+            "frozen_permission_snapshot_id": str(row["frozen_permission_snapshot_id"]),
             "current_permission_snapshot_id": str(
                 row["current_permission_snapshot_id"]
             ),
@@ -1568,8 +1688,7 @@ class ToolExecutionRepository:
             "admitted_at": str(row["admitted_at"]),
         }
         expected_digest = hashlib.sha256(
-            b"ecorex-invocation-admission-v1\0"
-            + json_dumps(payload).encode("utf-8")
+            b"ecorex-invocation-admission-v1\0" + json_dumps(payload).encode("utf-8")
         ).hexdigest()
         if (
             row["permit_digest"] != expected_digest
@@ -1594,9 +1713,7 @@ class ToolExecutionRepository:
             capability_snapshot_id=str(row["capability_snapshot_id"]),
             frozen_policy_snapshot_id=str(row["frozen_permission_snapshot_id"]),
             current_policy_snapshot_id=str(row["current_permission_snapshot_id"]),
-            current_permission_state_digest=str(
-                row["current_permission_state_digest"]
-            ),
+            current_permission_state_digest=str(row["current_permission_state_digest"]),
             current_availability_digest=row["current_availability_digest"],
             tool_id=str(row["tool_id"]),
             tool_version=str(row["tool_version"]),

@@ -2,6 +2,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   AlertCircle,
+  Bell,
   Copy,
   Ellipsis,
   Folder,
@@ -32,13 +33,13 @@ import {
   type ThemePreference,
 } from "./state/themePreference.ts";
 import { serviceReasonMessage } from "./state/userLanguage.ts";
-import { hasPendingRuntimeUpdate } from "./state/updatePresentation.ts";
 import "./styles/primitives.css";
 import "./styles/layout.css";
 import "./styles/features.css";
 import "./styles/plain-language.css";
 
 const loadArtifactPreviewDialog = () => import("./components/ArtifactPreviewDialog.tsx");
+const loadHomeDashboard = () => import("./components/HomeDashboard.tsx");
 const loadSidebar = () => import("./components/Sidebar.tsx");
 const loadSkillsWorkspace = () => import("./components/SkillsWorkspace.tsx");
 const loadInteractionStack = () => import("./components/InteractionStack.tsx");
@@ -49,6 +50,9 @@ const loadShareDialog = () => import("./components/ShareDialog.tsx");
 
 const ArtifactPreviewDialog = lazy(async () => ({
   default: (await loadArtifactPreviewDialog()).ArtifactPreviewDialog,
+}));
+const HomeDashboard = lazy(async () => ({
+  default: (await loadHomeDashboard()).HomeDashboard,
 }));
 const Sidebar = lazy(async () => ({
   default: (await loadSidebar()).Sidebar,
@@ -137,6 +141,7 @@ export function AppV1() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsReturnFocusRef = useRef<HTMLElement | null>(null);
   const [skillsOpen, setSkillsOpen] = useState(false);
+  const [creativeOpen, setCreativeOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const shareReturnFocusRef = useRef<HTMLElement | null>(null);
   const [replayOpen, setReplayOpen] = useState(false);
@@ -149,6 +154,8 @@ export function AppV1() {
   const [dismissedUpdateBanners, setDismissedUpdateBanners] = useState(
     initialDismissedUpdateBanners,
   );
+  const [composerPrefill, setComposerPrefill] = useState<{ key: string; text: string } | null>(null);
+  const [composerDraft, setComposerDraft] = useState("");
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -362,16 +369,15 @@ export function AppV1() {
     bootstrap?.retouch_service.reason,
     "精准修图暂时不可用，请稍后重试。",
   );
-  const hasPendingUpdate = hasPendingRuntimeUpdate(update);
-  const updateMessage = hasPendingUpdate && update?.state === "awaiting_user"
-    ? `e-Mate ${update.target_version ?? "新版"} 已准备好。`
-    : hasPendingUpdate && update?.state === "activating"
-      ? "正在启用新版，页面会自动刷新…"
-      : hasPendingUpdate && update?.state === "failed"
-        ? "新版未能启用，当前版本可继续使用。"
-        : hasPendingUpdate && (update?.state === "available" || update?.state === "downloading")
-          ? `正在后台准备 e-Mate ${update.target_version ?? "新版"}…`
-          : null;
+  const updateReady = Boolean(
+    update?.target_version
+    && update.target_version !== update.current_version
+    && update.state === "awaiting_user"
+    && update.can_activate,
+  );
+  const updateMessage = updateReady
+    ? `e-Mate ${update?.target_version ?? "新版"} 已下载并通过校验。`
+    : null;
   const updateBannerKey = updateMessage && update
     ? (update.release_id && update.build_digest
         ? `${update.release_id}:${update.build_digest}`
@@ -514,6 +520,9 @@ export function AppV1() {
 
   const composer = (
     <Composer
+      prefillRequest={composerPrefill}
+      draft={composerDraft}
+      onDraftChange={setComposerDraft}
       connectors={runtime.connectorCatalog}
       connectorLoadState={runtime.connectorCatalogState}
       connectorError={runtime.connectorError}
@@ -574,11 +583,14 @@ export function AppV1() {
           authenticated={Boolean(bootstrap?.login.authenticated)}
           accountDisplayName={bootstrap?.login.display_name ?? null}
           skillsActive={skillsOpen}
+          creativeActive={creativeOpen}
+          homeActive={isNewConversation && !skillsOpen && !creativeOpen}
           sessionBusy={runtime.sessionBusy}
           sessionError={runtime.sessionError}
           onClose={() => setSidebarOpen(false)}
           onNewTask={(project) => {
             setSkillsOpen(false);
+            setCreativeOpen(false);
             runtime.newTask(project ?? null);
             setSidebarOpen(false);
           }}
@@ -588,6 +600,7 @@ export function AppV1() {
             const opened = await runtime.openThread(threadId);
             if (opened) {
               setSkillsOpen(false);
+              setCreativeOpen(false);
               setSidebarOpen(false);
             }
             return opened;
@@ -595,6 +608,12 @@ export function AppV1() {
           onOpenSkills={() => {
             warmFeature(loadSkillsWorkspace);
             setSkillsOpen(true);
+            setCreativeOpen(false);
+            setSidebarOpen(false);
+          }}
+          onOpenCreative={() => {
+            setSkillsOpen(false);
+            setCreativeOpen(true);
             setSidebarOpen(false);
           }}
           onRenameThread={runtime.renameThread}
@@ -625,7 +644,7 @@ export function AppV1() {
           />
         ) : null}
 
-        <main className={`ex-workspace${skillsOpen ? " is-skills" : ""}`} inert={sidebarOpen && mobileNavigation ? true : undefined}>
+        <main className={`ex-workspace${skillsOpen ? " is-skills" : ""}${isNewConversation || creativeOpen ? " is-home" : ""}`} inert={sidebarOpen && mobileNavigation ? true : undefined}>
           {skillsOpen ? (
             <Suspense fallback={<section className="ex-skills-loading" role="status">正在打开技能…</section>}>
               <SkillsWorkspace
@@ -637,7 +656,22 @@ export function AppV1() {
                 onClearError={runtime.clearExtensionError}
                 onRefresh={runtime.refreshExtensions}
                 onAction={runtime.mutateExtension}
+                onConfigure={runtime.configureSkill}
                 onInstallLocalSkill={runtime.installLocalSkill}
+                hubItems={runtime.skillHubItems}
+                hubState={runtime.skillHubState}
+                hubError={runtime.skillHubError}
+                hubInstallingSlug={runtime.skillHubInstallingSlug}
+                hubDownloadingSlug={runtime.skillHubDownloadingSlug}
+                hubDetail={runtime.skillHubDetail}
+                hubDetailLoadingSlug={runtime.skillHubDetailLoadingSlug}
+                hubUploadBusy={runtime.skillHubUploadBusy}
+                onRefreshHub={runtime.refreshSkillHub}
+                onInstallHub={runtime.installHubSkill}
+                onDownloadHub={runtime.downloadHubSkill}
+                onLoadHubDetail={runtime.loadHubSkillDetail}
+                onClearHubDetail={runtime.clearHubSkillDetail}
+                onPublishHub={runtime.publishHubSkill}
               />
             </Suspense>
           ) : (
@@ -666,25 +700,48 @@ export function AppV1() {
             </div>
 
             <div className="ex-header-actions">
+              {isNewConversation || creativeOpen ? (
+                <>
+                  <span
+                    className={`ex-home-runtime-dot is-${connected ? "online" : "retrying"}`}
+                    aria-label={connected ? "运行时已连接" : "运行时正在重连"}
+                    role="status"
+                  />
+                  <IconButton label="通知"><Bell aria-hidden="true" /></IconButton>
+                </>
+              ) : null}
               <IconButton
                 label={theme === "dark" ? "切换到明亮模式" : "切换到暗色模式"}
                 onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}
               >
-                {theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
+                {theme === "dark" ? <Moon aria-hidden="true" /> : <Sun aria-hidden="true" />}
               </IconButton>
-              <IconButton
-                label={shareUnavailableReason || "分享当前任务"}
-                data-ecorex-feature-trigger="share"
-                disabled={Boolean(shareUnavailableReason)}
-                onFocus={() => warmFeature(loadShareDialog)}
-                onPointerEnter={() => warmFeature(loadShareDialog)}
-                onClick={() => {
-                  captureFeatureTrigger(shareReturnFocusRef);
-                  setShareOpen(true);
-                }}
-              >
-                <Share2 aria-hidden="true" />
-              </IconButton>
+              {isNewConversation || creativeOpen ? (
+                <IconButton
+                  label="打开设置"
+                  onClick={() => {
+                    captureFeatureTrigger(settingsReturnFocusRef);
+                    warmFeature(loadSettingsDialog);
+                    setSettingsOpen(true);
+                  }}
+                >
+                  <Settings2 aria-hidden="true" />
+                </IconButton>
+              ) : (
+                <IconButton
+                  label={shareUnavailableReason || "分享当前任务"}
+                  data-ecorex-feature-trigger="share"
+                  disabled={Boolean(shareUnavailableReason)}
+                  onFocus={() => warmFeature(loadShareDialog)}
+                  onPointerEnter={() => warmFeature(loadShareDialog)}
+                  onClick={() => {
+                    captureFeatureTrigger(shareReturnFocusRef);
+                    setShareOpen(true);
+                  }}
+                >
+                  <Share2 aria-hidden="true" />
+                </IconButton>
+              )}
             </div>
           </header>
 
@@ -692,24 +749,14 @@ export function AppV1() {
             {updateBannerVisible ? (
               <section className="ex-update-banner" aria-live="polite">
                 <span>{updateMessage}</span>
-                {update?.state === "awaiting_user" && update.can_activate ? (
+                {updateReady ? (
                   <button
                     className="ex-button is-primary"
                     type="button"
                     disabled={runtime.updateBusy}
                     onClick={() => void runtime.activateUpdate()}
                   >
-                    {runtime.updateBusy ? "正在更新" : "更新并刷新"}
-                  </button>
-                ) : null}
-                {update?.state === "failed" ? (
-                  <button
-                    className="ex-button"
-                    type="button"
-                    disabled={runtime.updateBusy}
-                    onClick={() => void runtime.checkUpdate()}
-                  >
-                    重试检查
+                    {runtime.updateBusy ? "正在切换版本" : "立即更新"}
                   </button>
                 ) : null}
                 <IconButton label="关闭更新提示" onClick={dismissUpdateBanner}>
@@ -755,7 +802,26 @@ export function AppV1() {
             ) : null}
           </div>
 
-          <section className="ex-timeline" aria-label="对话">
+          <section className="ex-timeline" aria-label={isNewConversation ? "e-Mate 首页" : "对话"}>
+            {isNewConversation || creativeOpen ? (
+              <Suspense fallback={<section className="ex-home-loading" role="status">正在打开 e-Mate 首页…</section>}>
+                <HomeDashboard
+                  mode={creativeOpen ? "creative" : "home"}
+                  composer={composer}
+                  threads={runtime.threads}
+                  projects={runtime.projects}
+                  selectedProject={runtime.newConversationProject}
+                  projectPickerBusy={runtime.projectPickerBusy}
+                  usage={runtime.accountUsage}
+                  onSelectProject={runtime.newTask}
+                  onPickProject={() => void runtime.pickProject()}
+                  onTemplate={(text) => {
+                    setComposerPrefill({ key: crypto.randomUUID(), text });
+                    setCreativeOpen(false);
+                  }}
+                />
+              </Suspense>
+            ) : (
             <Timeline
               items={runtime.items}
               turns={runtime.turns}
@@ -774,13 +840,14 @@ export function AppV1() {
               projectPickerBusy={runtime.projectPickerBusy}
               onSelectConversationProject={runtime.newTask}
               onPickProject={runtime.pickProject}
-              newConversationComposer={isNewConversation ? composer : null}
+              newConversationComposer={null}
               onLoadAttachment={runtime.loadInputAttachment}
               onLoadAttachmentThumbnail={runtime.loadInputAttachmentThumbnail}
             />
+            )}
           </section>
 
-          {!isNewConversation ? (
+          {!isNewConversation && !creativeOpen ? (
             <div className="ex-workspace-bottom">
               {runtime.pendingInteractions.length ? (
                 <Suspense fallback={(

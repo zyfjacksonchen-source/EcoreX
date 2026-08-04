@@ -18,7 +18,11 @@ from ecorex.capabilities import ManagedModelCatalog, UnknownModelError
 from ecorex.protocol import (
     ContextUsageProjection,
     ConversationUsageProjection,
+    TaskActivityDay,
+    TaskActivityProjection,
+    TERMINAL_TURN_STATUSES,
     TokenUsageWindow,
+    TurnStatus,
 )
 
 from .database import SQLiteDatabase
@@ -249,13 +253,17 @@ class UsageProjectionService:
         week = _Usage()
         latest_context_usage: _Usage | None = None
         latest_context_time: datetime | None = None
+        activity_start_local = day_start_local - timedelta(days=6)
+        activity_start = activity_start_local.astimezone(UTC)
+        activity_end = now
 
         with self.database.reader() as connection:
-            exists = connection.execute(
-                "SELECT 1 FROM threads WHERE thread_id = ?", (thread_id,)
-            ).fetchone()
-            if exists is None:
-                raise KeyError("usage projection thread does not exist")
+            if thread_id != "account":
+                exists = connection.execute(
+                    "SELECT 1 FROM threads WHERE thread_id = ?", (thread_id,)
+                ).fetchone()
+                if exists is None:
+                    raise KeyError("usage projection thread does not exist")
             rows = connection.execute(
                 "SELECT thread_id, created_at, payload_json FROM events "
                 "WHERE event_type = 'model.response_completed' AND created_at >= ? "
@@ -289,6 +297,22 @@ class UsageProjectionService:
                 context_job_id = (
                     str(context_row["job_id"]) if context_row["job_id"] else None
                 )
+            terminal_rows = connection.execute(
+                "SELECT status, updated_at FROM turns WHERE updated_at >= ? AND updated_at < ? "
+                f"AND status IN ({','.join('?' for _ in TERMINAL_TURN_STATUSES)})",
+                (
+                    _storage_time(activity_start),
+                    _storage_time(activity_end),
+                    *(status.value for status in TERMINAL_TURN_STATUSES),
+                ),
+            ).fetchall()
+            waiting = int(
+                connection.execute(
+                    f"SELECT COUNT(*) AS count FROM turns WHERE status NOT IN "
+                    f"({','.join('?' for _ in TERMINAL_TURN_STATUSES)})",
+                    tuple(status.value for status in TERMINAL_TURN_STATUSES),
+                ).fetchone()["count"]
+            )
 
         for row in rows:
             created_at = _parse_time(row["created_at"])
@@ -314,6 +338,22 @@ class UsageProjectionService:
                 payload.get("usage") if isinstance(payload, Mapping) else None
             )
             latest_context_time = _parse_time(context_row["created_at"])
+
+        activity = {
+            (activity_start_local + timedelta(days=offset)).date(): [0, 0]
+            for offset in range(7)
+        }
+        for row in terminal_rows:
+            updated_at = _parse_time(row["updated_at"])
+            if updated_at is None:
+                continue
+            counts = activity.get(updated_at.astimezone(self._zone).date())
+            if counts is None:
+                continue
+            counts[1] += 1
+            if TurnStatus(str(row["status"])) is TurnStatus.COMPLETED:
+                counts[0] += 1
+        today_counts = activity[day_start_local.date()]
 
         window_tokens: int | None = None
         model_display_name: str | None = None
@@ -343,6 +383,15 @@ class UsageProjectionService:
                 model_display_name=model_display_name,
                 model_catalog_snapshot_id=model_catalog_snapshot_id,
                 measured_at=latest_context_time,
+            ),
+            task_activity=TaskActivityProjection(
+                completed_today=today_counts[0],
+                waiting=waiting,
+                terminal_today=today_counts[1],
+                days=[
+                    TaskActivityDay(date=day, completed=counts[0], terminal=counts[1])
+                    for day, counts in activity.items()
+                ],
             ),
             calculated_at=now,
         )

@@ -29,6 +29,10 @@ const extension: ExtensionProjection = {
   trust: "verified_publisher",
   status: "enabled",
   health: "degraded",
+  provenance: { brand: "e-Mate", original_platform: null, original_url: null },
+  readiness: "ready",
+  requirements: [],
+  tags: ["office"],
   dependencies: [],
   exports: [],
   actions: [
@@ -54,6 +58,7 @@ test("extension summary counts only explicit backend status and health values", 
   const snapshot: ExtensionCatalogSnapshot = {
     snapshot_id: "ext_snapshot_1",
     contract_version: "1.0",
+    extension_generation: 1,
     items: [
       extension,
       { ...extension, extension_id: "quarantined", status: "quarantined", health: "unhealthy" },

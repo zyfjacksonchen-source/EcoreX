@@ -62,11 +62,23 @@ export default function TimelineActivity({ item }: { item: ItemProjection }) {
           generate_media: "生成媒体",
         }[effect] ?? effect)).join(" · ")
       : "";
+    if (activity.tool_id === "imagegen" && item.status === "in_progress") {
+      return (
+        <section className="ex-image-generation" aria-label="正在生成图片">
+          <div className="ex-image-generation-canvas" role="img" aria-label="图片生成占位">
+            <span className="ex-image-generation-glow" aria-hidden="true" />
+            <Image aria-hidden="true" />
+          </div>
+          <p><strong>正在生成图片</strong><span>{summary}</span></p>
+        </section>
+      );
+    }
+    const webSearch = activity.tool_id === "fetch" || activity.tool_id === "web_search";
     return (
-      <details className="ex-activity" data-status={item.status}>
+      <details className={`ex-activity${webSearch ? " is-web-search" : ""}`} data-status={item.status}>
         <summary className="ex-activity-row">
           {icon}
-          <span>{summary}</span>
+          <span className={webSearch && item.status === "in_progress" ? "ex-activity-shimmer" : undefined}>{summary}</span>
           <small>{statusLabel(item.status)}</small>
           <ChevronDown className="ex-activity-chevron" aria-hidden="true" />
         </summary>

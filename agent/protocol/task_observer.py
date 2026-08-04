@@ -81,6 +81,6 @@ class TaskObserver:
             "timeout": "task.failed",
             "failed": "task.failed",
             "error": "task.failed",
-        }.get(terminal_status, "task.completed")
+        }.get(terminal_status, "task.failed")
         self.health = terminal_status
         self.emit(event_type, {"status": terminal_status, **payload})

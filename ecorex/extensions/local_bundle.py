@@ -62,16 +62,25 @@ _BANNED_SEGMENTS = frozenset(
 _BANNED_SUFFIXES = frozenset(
     {
         ".bat", ".c", ".class", ".cmd", ".com", ".cpp", ".cs", ".dll",
-        ".dylib", ".exe", ".go", ".hta", ".jar", ".js", ".jsx", ".lua",
-        ".mjs", ".msi", ".php", ".pl", ".ps1", ".py", ".pyc", ".rb",
-        ".rs", ".sh", ".so", ".ts", ".tsx", ".vbs", ".wasm",
+        ".dylib", ".exe", ".go", ".hta", ".jar", ".jsx", ".lua",
+        ".msi", ".php", ".pl", ".ps1", ".pyc", ".rb",
+        ".rs", ".so", ".ts", ".tsx", ".vbs", ".wasm",
     }
 )
 _STATIC_SUFFIXES = frozenset(
     {
         ".avif", ".bmp", ".csv", ".gif", ".jpeg", ".jpg", ".json", ".md",
-        ".png", ".txt", ".webp", ".xml", ".yaml", ".yml", ".tsv",
+        ".js", ".mjs", ".png", ".py", ".sh", ".txt", ".webp", ".xml",
+        ".yaml", ".yml", ".tsv",
     }
+)
+_SCRIPT_SUFFIXES = frozenset({".js", ".mjs", ".py", ".sh"})
+_IGNORED_CACHE_DIRECTORIES = frozenset({"__pycache__", ".pytest_cache"})
+_IGNORED_CACHE_SUFFIXES = frozenset({".pyc", ".pyo"})
+SKILL_RUNTIME_FILE = "skill-runtime.json"
+_ENVIRONMENT_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
+_DOMAIN_NAME = re.compile(
+    r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
 )
 _WINDOWS_RESERVED = re.compile(
     r"^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$", re.IGNORECASE
@@ -133,6 +142,16 @@ class LocalSkillBundle:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class SkillRuntimeManifest:
+    runtime: str
+    entrypoint: str
+    environment: tuple[str, ...]
+    network_domains: tuple[str, ...]
+    external_commands: tuple[str, ...]
+    effects: tuple[str, ...]
+
+
 class LocalSkillBundleStore:
     """Product-owned CAS for normalized static Skill content."""
 
@@ -177,7 +196,11 @@ class LocalSkillBundleStore:
                 total = 0
                 compressed_total = 0
                 for entry in entries:
-                    path = _validate_path(entry.filename, allow_directory=True)
+                    path = _validate_path(
+                        entry.filename,
+                        allow_directory=True,
+                        allow_script_paths=True,
+                    )
                     folded = path.casefold()
                     if folded in canonical_names:
                         raise ExtensionManifestError(
@@ -215,7 +238,7 @@ class LocalSkillBundleStore:
                         and entry.file_size > entry.compress_size * MAX_ZIP_EXPANSION_RATIO
                     ):
                         raise ExtensionManifestError("local Skill ZIP expansion ratio is unsafe")
-                    _validate_static_resource(path)
+                    _validate_static_resource(path, allow_scripts=True)
                     with archive.open(entry, "r") as stream:
                         content = stream.read(MAX_LOCAL_FILE_BYTES + 1)
                         trailing = stream.read(1)
@@ -232,7 +255,9 @@ class LocalSkillBundleStore:
             raise ExtensionManifestError("local Skill bundle must be a valid bounded ZIP") from error
         return self._ingest_files(files)
 
-    def ingest_directory(self, directory: str | Path) -> LocalSkillBundle:
+    def ingest_directory(
+        self, directory: str | Path, *, migrated_frontmatter: bool = False
+    ) -> LocalSkillBundle:
         source = Path(directory).expanduser()
         try:
             root_metadata = source.lstat()
@@ -263,7 +288,11 @@ class LocalSkillBundleStore:
                     raise ExtensionManifestError(
                         "local Skill directory may not contain links or special directories"
                     )
+                if name.casefold() in _IGNORED_CACHE_DIRECTORIES:
+                    directories.remove(name)
             for name in names:
+                if name == ".ecorex-custom-override":
+                    continue
                 child = current_path / name
                 metadata = child.lstat()
                 if (
@@ -276,12 +305,14 @@ class LocalSkillBundleStore:
                     raise ExtensionManifestError(
                         "local Skill directory may contain only non-linked static files"
                     )
+                if child.suffix.casefold() in _IGNORED_CACHE_SUFFIXES:
+                    continue
                 identity = (int(metadata.st_dev), int(metadata.st_ino))
                 if identity in identities:
                     raise ExtensionManifestError("local Skill hard-linked files are forbidden")
                 identities.add(identity)
                 relative = child.relative_to(root).as_posix()
-                path = _validate_path(relative)
+                path = _validate_path(relative, allow_script_paths=True)
                 folded = path.casefold()
                 if folded in canonical_names:
                     raise ExtensionManifestError(
@@ -291,7 +322,7 @@ class LocalSkillBundleStore:
                 path_total += len(path.encode("utf-8"))
                 if path_total > MAX_LOCAL_PATH_TOTAL_BYTES:
                     raise ExtensionManifestError("local Skill path inventory is too large")
-                _validate_static_resource(path)
+                _validate_static_resource(path, allow_scripts=True)
                 if metadata.st_size > MAX_LOCAL_FILE_BYTES:
                     raise ExtensionManifestError("a local Skill file exceeds the 2 MiB limit")
                 content = child.read_bytes()
@@ -310,7 +341,7 @@ class LocalSkillBundleStore:
                 total += len(content)
                 if len(files) > MAX_LOCAL_BUNDLE_FILES or total > MAX_LOCAL_BUNDLE_BYTES:
                     raise ExtensionManifestError("local Skill directory exceeds product limits")
-        return self._ingest_files(files)
+        return self._ingest_files(files, migrated_frontmatter=migrated_frontmatter)
 
     def verify(self, artifact_sha256: str) -> LocalSkillBundle:
         if not isinstance(artifact_sha256, str) or not _SHA256.fullmatch(artifact_sha256):
@@ -409,7 +440,7 @@ class LocalSkillBundleStore:
         """
 
         bundle = self.verify(artifact_sha256)
-        normalized = _validate_path(resource_id)
+        normalized = _validate_path(resource_id, allow_script_paths=True)
         records = {record.path: record for record in bundle.files}
         record = records.get(normalized)
         if record is None:
@@ -439,7 +470,40 @@ class LocalSkillBundleStore:
             raise ExtensionIntegrityError("local Skill CAS resource identity is invalid")
         return content
 
-    def _ingest_files(self, files: Mapping[str, bytes]) -> LocalSkillBundle:
+    def resolve_verified_file(
+        self, artifact_sha256: str, resource_id: str
+    ) -> tuple[Path, LocalBundleFile]:
+        """Resolve one CAS file only after complete revision verification.
+
+        This is the sole host-path bridge used by the controlled Skill process
+        boundary.  Callers receive both the canonical path and its manifest
+        digest, so an OS launcher can bind the exact CAS tree and entry bytes
+        instead of accepting an arbitrary path supplied by Skill content.
+        """
+
+        bundle = self.verify(artifact_sha256)
+        normalized = _validate_path(resource_id, allow_script_paths=True)
+        records = {record.path: record for record in bundle.files}
+        record = records.get(normalized)
+        if record is None:
+            raise ExtensionIntegrityError(
+                "local Skill resource is absent from its CAS revision"
+            )
+        root = (self._directory(artifact_sha256) / "files").resolve(strict=True)
+        target = root.joinpath(*PurePosixPath(normalized).parts).resolve(strict=True)
+        if target.parent != root and root not in target.parents:
+            raise ExtensionIntegrityError("local Skill CAS resource escaped its revision")
+        # Reuse the stable-file and digest checks rather than returning a path
+        # merely because it was present in the verified inventory.
+        self.read_verified_file(artifact_sha256, normalized)
+        return target, record
+
+    def _ingest_files(
+        self,
+        files: Mapping[str, bytes],
+        *,
+        migrated_frontmatter: bool = False,
+    ) -> LocalSkillBundle:
         if not files or len(files) > MAX_LOCAL_BUNDLE_FILES:
             raise ExtensionManifestError("local Skill must contain between 1 and 256 files")
         if "SKILL.md" not in files:
@@ -450,7 +514,15 @@ class LocalSkillBundleStore:
             raise ExtensionManifestError("local Skill normalized inventory exceeds product limits")
         for path, content in files.items():
             _validate_static_content(path, content)
-        metadata = parse_skill_frontmatter(files["SKILL.md"])
+        metadata = (
+            parse_migrated_skill_frontmatter(files["SKILL.md"])
+            if migrated_frontmatter
+            else parse_skill_frontmatter(files["SKILL.md"])
+        )
+        parse_skill_runtime_manifest(
+            files,
+            allow_undeclared_scripts=migrated_frontmatter,
+        )
         _validate_skill_execution_budget(files["SKILL.md"])
         records = tuple(
             LocalBundleFile(
@@ -580,6 +652,123 @@ def parse_skill_frontmatter(payload: bytes) -> LocalSkillMetadata:
     )
 
 
+def parse_migrated_skill_frontmatter(payload: bytes) -> LocalSkillMetadata:
+    """Read identity fields from legacy YAML without trusting legacy metadata."""
+
+    if not isinstance(payload, bytes) or not 1 <= len(payload) <= MAX_SKILL_DOCUMENT_BYTES:
+        raise ExtensionManifestError("SKILL.md size is invalid")
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ExtensionManifestError("SKILL.md must be strict UTF-8") from error
+    if text.startswith("\ufeff") or _CONTROL.search(text):
+        raise ExtensionManifestError("SKILL.md contains a BOM or control character")
+    lines = text.splitlines()
+    if not lines or lines[0] != "---":
+        raise ExtensionManifestError("SKILL.md must begin with YAML frontmatter")
+    closing = next((index for index, line in enumerate(lines[1:], 1) if line == "---"), None)
+    if closing is None:
+        raise ExtensionManifestError("SKILL.md frontmatter is not closed")
+    if len("\n".join(lines[: closing + 1]).encode("utf-8")) > MAX_FRONTMATTER_BYTES:
+        raise ExtensionManifestError("SKILL.md frontmatter exceeds 16 KiB")
+    values: dict[str, str] = {}
+    for line in lines[1:closing]:
+        if not line or line[0].isspace() or ":" not in line:
+            continue
+        key, raw = line.split(":", 1)
+        if key in {"name", "description", "version", "license", "compatibility"}:
+            values.setdefault(key, _frontmatter_scalar(raw.strip(), label=key))
+    missing = _REQUIRED_FRONTMATTER_KEYS - set(values)
+    if missing:
+        raise ExtensionManifestError("SKILL.md frontmatter is missing name or description")
+    name = _bounded_text(values["name"], label="name", maximum=128)
+    description = _bounded_text(values["description"], label="description", maximum=2048)
+    version = _bounded_text(values.get("version", "0.0.0"), label="version", maximum=128)
+    parse_semver(version)
+    compatibility = _bounded_text(
+        values.get("compatibility", "*"), label="compatibility", maximum=256
+    )
+    validate_version_range(compatibility)
+    license_value = values.get("license")
+    return LocalSkillMetadata(
+        name=name,
+        description=description,
+        version=version,
+        license=(
+            _bounded_text(license_value, label="license", maximum=128)
+            if license_value is not None
+            else None
+        ),
+        compatibility=compatibility,
+    )
+
+
+def parse_skill_runtime_manifest(
+    files: Mapping[str, bytes],
+    *,
+    allow_undeclared_scripts: bool = False,
+) -> SkillRuntimeManifest | None:
+    scripts = tuple(
+        path for path in files if PurePosixPath(path).suffix.casefold() in _SCRIPT_SUFFIXES
+    )
+    payload = files.get(SKILL_RUNTIME_FILE)
+    if payload is None:
+        if scripts and not allow_undeclared_scripts:
+            raise ExtensionManifestError("Skill scripts require skill-runtime.json")
+        return None
+    try:
+        value = json.loads(payload.decode("utf-8"), object_pairs_hook=_reject_duplicate_pairs)
+    except (UnicodeDecodeError, json.JSONDecodeError, ExtensionManifestError) as error:
+        raise ExtensionManifestError("skill-runtime.json must be canonical JSON") from error
+    required = {
+        "schema_version", "runtime", "entrypoint", "environment",
+        "network_domains", "external_commands", "effects",
+    }
+    if not isinstance(value, Mapping) or set(value) != required or value["schema_version"] != 1:
+        raise ExtensionManifestError("skill-runtime.json contract is invalid")
+    runtime = value["runtime"]
+    if runtime not in {"python", "node", "trusted-shell"}:
+        raise ExtensionManifestError("Skill runtime is unsupported")
+    entrypoint = _validate_path(str(value["entrypoint"]), allow_script_paths=True)
+    expected_suffixes = {
+        "python": frozenset({".py"}),
+        "node": frozenset({".js", ".mjs"}),
+        "trusted-shell": frozenset({".sh"}),
+    }[runtime]
+    if (
+        entrypoint not in files
+        or PurePosixPath(entrypoint).suffix.casefold() not in expected_suffixes
+    ):
+        raise ExtensionManifestError("Skill entrypoint does not match its declared runtime")
+
+    def string_list(key: str, *, maximum: int = 32) -> tuple[str, ...]:
+        raw = value[key]
+        if (
+            not isinstance(raw, list)
+            or len(raw) > maximum
+            or not all(isinstance(item, str) and item for item in raw)
+            or len(set(raw)) != len(raw)
+        ):
+            raise ExtensionManifestError(f"Skill {key} declaration is invalid")
+        return tuple(raw)
+
+    environment = string_list("environment")
+    domains = tuple(item.casefold() for item in string_list("network_domains"))
+    commands = string_list("external_commands")
+    effects = string_list("effects", maximum=4)
+    if any(_ENVIRONMENT_NAME.fullmatch(item) is None for item in environment):
+        raise ExtensionManifestError("Skill environment declarations are invalid")
+    if any(_DOMAIN_NAME.fullmatch(item) is None for item in domains):
+        raise ExtensionManifestError("Skill network domain declarations are invalid")
+    if any(not _TAG.fullmatch(item) for item in commands):
+        raise ExtensionManifestError("Skill external command declarations are invalid")
+    if not effects or any(item not in {"read", "write", "network", "execute"} for item in effects):
+        raise ExtensionManifestError("Skill effect declarations are invalid")
+    if bool(domains) != ("network" in effects) or bool(commands) != ("execute" in effects):
+        raise ExtensionManifestError("Skill effects do not match network or command declarations")
+    return SkillRuntimeManifest(runtime, entrypoint, environment, domains, commands, effects)
+
+
 def _validate_skill_execution_budget(payload: bytes) -> None:
     try:
         text = payload.decode("utf-8")
@@ -633,7 +822,12 @@ def _bounded_text(value: Any, *, label: str, maximum: int) -> str:
     return value
 
 
-def _validate_path(value: str, *, allow_directory: bool = False) -> str:
+def _validate_path(
+    value: str,
+    *,
+    allow_directory: bool = False,
+    allow_script_paths: bool = False,
+) -> str:
     if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
         raise ExtensionManifestError("local Skill contains an unsafe path")
     candidate = value[:-1] if allow_directory and value.endswith("/") else value
@@ -655,7 +849,11 @@ def _validate_path(value: str, *, allow_directory: bool = False) -> str:
         )
     ):
         raise ExtensionManifestError("local Skill path escapes the static bundle boundary")
-    if any(part.casefold() in _BANNED_SEGMENTS for part in parts):
+    if any(
+        part.casefold() in _BANNED_SEGMENTS
+        and not (allow_script_paths and part.casefold() == "scripts")
+        for part in parts
+    ):
         raise ExtensionManifestError("local Skill contains a forbidden executable namespace")
     return path.as_posix()
 
@@ -680,10 +878,14 @@ def _require_real_directory(path: Path, *, label: str) -> None:
         raise ExtensionIntegrityError(f"{label} is not a real directory")
 
 
-def _validate_static_resource(path: str) -> None:
+def _validate_static_resource(path: str, *, allow_scripts: bool = False) -> None:
     if path == "SKILL.md":
         return
     suffix = PurePosixPath(path).suffix.casefold()
+    if "scripts" in (part.casefold() for part in PurePosixPath(path).parts) and suffix not in _SCRIPT_SUFFIXES:
+        raise ExtensionManifestError("Skill scripts namespace may contain only declared script files")
+    if suffix in _SCRIPT_SUFFIXES and not allow_scripts:
+        raise ExtensionManifestError("local Skill scripts require migrated package provenance")
     if suffix in _BANNED_SUFFIXES or suffix not in _STATIC_SUFFIXES:
         raise ExtensionManifestError("local Skill resources must use a static data format")
 
@@ -691,7 +893,8 @@ def _validate_static_resource(path: str) -> None:
 def _validate_static_content(path: str, content: bytes) -> None:
     suffix = PurePosixPath(path).suffix.casefold()
     if path == "SKILL.md" or suffix in {
-        ".csv", ".json", ".md", ".tsv", ".txt", ".xml", ".yaml", ".yml"
+        ".csv", ".js", ".json", ".md", ".mjs", ".py", ".sh", ".tsv",
+        ".txt", ".xml", ".yaml", ".yml"
     }:
         try:
             decoded = content.decode("utf-8")
@@ -772,8 +975,8 @@ def _bundle_from_manifest(value: Any) -> LocalSkillBundle:
     for raw in files_raw:
         if not isinstance(raw, Mapping) or set(raw) != {"path", "size_bytes", "sha256"}:
             raise ExtensionIntegrityError("local Skill CAS file record is invalid")
-        path = _validate_path(str(raw["path"]))
-        _validate_static_resource(path)
+        path = _validate_path(str(raw["path"]), allow_script_paths=True)
+        _validate_static_resource(path, allow_scripts=True)
         size = raw["size_bytes"]
         digest = raw["sha256"]
         if (
@@ -819,5 +1022,6 @@ __all__ = [
     "LocalSkillBundle",
     "LocalSkillBundleStore",
     "LocalSkillMetadata",
+    "parse_migrated_skill_frontmatter",
     "parse_skill_frontmatter",
 ]

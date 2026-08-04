@@ -1275,7 +1275,9 @@
                 "enable",
                 "disable",
                 "health_check",
-                "rollback"
+                "rollback",
+                "configure",
+                "uninstall"
               ],
               "title": "Action Id",
               "type": "string"
@@ -1318,6 +1320,11 @@
               "title": "Contract Version",
               "type": "string"
             },
+            "extension_generation": {
+              "minimum": 0,
+              "title": "Extension Generation",
+              "type": "integer"
+            },
             "items": {
               "items": {
                 "$ref": "#/$defs/ExtensionProjection"
@@ -1332,7 +1339,8 @@
             }
           },
           "required": [
-            "snapshot_id"
+            "snapshot_id",
+            "extension_generation"
           ],
           "title": "ExtensionCatalogSnapshot",
           "type": "object"
@@ -1544,6 +1552,37 @@
               "default": null,
               "title": "Last Error Code"
             },
+            "provenance": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "title": "Provenance",
+              "type": "object"
+            },
+            "readiness": {
+              "enum": [
+                "ready",
+                "needs_configuration",
+                "missing_runtime",
+                "unsupported"
+              ],
+              "title": "Readiness",
+              "type": "string"
+            },
+            "requirements": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Requirements",
+              "type": "array"
+            },
             "revision": {
               "minimum": 1,
               "title": "Revision",
@@ -1566,10 +1605,18 @@
                 "staged",
                 "enabled",
                 "disabled",
-                "quarantined"
+                "quarantined",
+                "uninstalled"
               ],
               "title": "Status",
               "type": "string"
+            },
+            "tags": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Tags",
+              "type": "array"
             },
             "trust": {
               "enum": [
@@ -1598,6 +1645,8 @@
             "trust",
             "status",
             "health",
+            "provenance",
+            "readiness",
             "revision",
             "updated_at"
           ],
@@ -1832,7 +1881,10 @@
               "type": "string"
             },
             "reasoning_effort": {
-              "const": "medium",
+              "enum": [
+                "medium",
+                "high"
+              ],
               "title": "Reasoning Effort",
               "type": "string"
             },
@@ -3974,6 +4026,68 @@
           "title": "ContextUsageProjection",
           "type": "object"
         },
+        "TaskActivityDay": {
+          "additionalProperties": false,
+          "description": "Terminal Turn counts for one day in the configured Runtime timezone.",
+          "properties": {
+            "completed": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Completed",
+              "type": "integer"
+            },
+            "date": {
+              "format": "date",
+              "title": "Date",
+              "type": "string"
+            },
+            "terminal": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Terminal",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "date"
+          ],
+          "title": "TaskActivityDay",
+          "type": "object"
+        },
+        "TaskActivityProjection": {
+          "additionalProperties": false,
+          "description": "Device-local task activity derived from authoritative Turn states.",
+          "properties": {
+            "completed_today": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Completed Today",
+              "type": "integer"
+            },
+            "days": {
+              "items": {
+                "$ref": "#/$defs/TaskActivityDay"
+              },
+              "maxItems": 7,
+              "title": "Days",
+              "type": "array"
+            },
+            "terminal_today": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Terminal Today",
+              "type": "integer"
+            },
+            "waiting": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Waiting",
+              "type": "integer"
+            }
+          },
+          "title": "TaskActivityProjection",
+          "type": "object"
+        },
         "TokenUsageWindow": {
           "additionalProperties": false,
           "description": "Provider-reported token totals for one calendar window.\n\nThe Runtime deliberately does not estimate token counts in the WebUI. A\nzero means that no completed model response reported usage in the window;\nit is not a proxy for a configured quota.",
@@ -4034,6 +4148,9 @@
           ],
           "title": "Source",
           "type": "string"
+        },
+        "task_activity": {
+          "$ref": "#/$defs/TaskActivityProjection"
         },
         "thread_id": {
           "minLength": 1,
@@ -6107,7 +6224,8 @@
             "tool_call",
             "artifact",
             "interaction",
-            "checkpoint"
+            "checkpoint",
+            "task_list"
           ],
           "title": "ItemKind",
           "type": "string"
@@ -9052,6 +9170,199 @@
       "title": "RetouchWorkspaceSubmitBody",
       "type": "object"
     },
+    "SkillHubListResponse": {
+      "$defs": {
+        "SkillHubCardProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "category": {
+              "enum": [
+                "third_party",
+                "content_creation",
+                "office_productivity"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "installation_status": {
+              "default": "not_installed",
+              "enum": [
+                "not_installed",
+                "installed_enabled",
+                "installed_disabled",
+                "uninstalled"
+              ],
+              "title": "Installation Status",
+              "type": "string"
+            },
+            "package_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Package Sha256",
+              "type": "string"
+            },
+            "package_size_bytes": {
+              "maximum": 67108864,
+              "minimum": 1,
+              "title": "Package Size Bytes",
+              "type": "integer"
+            },
+            "provenance": {
+              "$ref": "#/$defs/SkillProvenance"
+            },
+            "readiness": {
+              "default": "ready",
+              "enum": [
+                "ready",
+                "needs_configuration",
+                "missing_runtime",
+                "unsupported"
+              ],
+              "title": "Readiness",
+              "type": "string"
+            },
+            "slug": {
+              "pattern": "^[a-z0-9][a-z0-9-]{1,95}$",
+              "title": "Slug",
+              "type": "string"
+            },
+            "summary": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "title": "Summary",
+              "type": "string"
+            },
+            "tags": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "title": "Tags",
+              "type": "array"
+            },
+            "title": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "uploader": {
+              "$ref": "#/$defs/SkillHubUploaderProjection"
+            },
+            "version": {
+              "maxLength": 64,
+              "minLength": 5,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "slug",
+            "title",
+            "summary",
+            "version",
+            "package_sha256",
+            "package_size_bytes",
+            "category",
+            "uploader",
+            "provenance"
+          ],
+          "title": "SkillHubCardProjection",
+          "type": "object"
+        },
+        "SkillHubUploaderProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "author_ref": {
+              "pattern": "^author_[0-9a-f]{24}$",
+              "title": "Author Ref",
+              "type": "string"
+            },
+            "nickname": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Nickname",
+              "type": "string"
+            }
+          },
+          "required": [
+            "nickname",
+            "author_ref"
+          ],
+          "title": "SkillHubUploaderProjection",
+          "type": "object"
+        },
+        "SkillProvenance": {
+          "additionalProperties": false,
+          "properties": {
+            "brand": {
+              "const": "e-Mate",
+              "default": "e-Mate",
+              "title": "Brand",
+              "type": "string"
+            },
+            "original_platform": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Original Platform"
+            },
+            "original_url": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Original Url"
+            }
+          },
+          "title": "SkillProvenance",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/SkillHubCardProjection"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Next Cursor"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        }
+      },
+      "title": "SkillHubListResponse",
+      "type": "object"
+    },
     "SteerTurnRequest": {
       "additionalProperties": false,
       "properties": {
@@ -9500,6 +9811,17 @@
               "default": null,
               "title": "Forked From Turn Id"
             },
+            "last_turn_status": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TurnStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "metadata": {
               "additionalProperties": true,
               "title": "Metadata",
@@ -9687,6 +10009,17 @@
           ],
           "default": null,
           "title": "Forked From Turn Id"
+        },
+        "last_turn_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "metadata": {
           "additionalProperties": true,
@@ -10196,7 +10529,8 @@
             "tool_call",
             "artifact",
             "interaction",
-            "checkpoint"
+            "checkpoint",
+            "task_list"
           ],
           "title": "ItemKind",
           "type": "string"
@@ -10444,6 +10778,17 @@
               ],
               "default": null,
               "title": "Forked From Turn Id"
+            },
+            "last_turn_status": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TurnStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "metadata": {
               "additionalProperties": true,

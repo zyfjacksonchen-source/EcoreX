@@ -1,0 +1,47 @@
+{
+  "current_release": "20260727T101723Z-hide-idle-users",
+  "endpoint_identity": {
+    "domain_hash": "A753D877497CBE35",
+    "ssh_host_hash": "CDF1CF905198CA97"
+  },
+  "files": {
+    "app.js": {
+      "has_projection_v030": false,
+      "has_reconciliation": false,
+      "has_root_kpis": false,
+      "sha256": "0b606e8209aee176b365cefe8cfebd0ff125af361f701457a569282076bffdbb",
+      "size_bytes": 93932
+    },
+    "index.html": {
+      "has_projection_v030": false,
+      "has_reconciliation": false,
+      "has_root_kpis": false,
+      "sha256": "37b4f8092a650a1d501fc5c241343a7447198abc4e9d2b8434086c9809eebea3",
+      "size_bytes": 9327
+    },
+    "process/usage_panel_api.py": {
+      "has_projection_v030": true,
+      "has_reconciliation": true,
+      "has_root_kpis": true,
+      "sha256": "37385424610e650d0db5da3467c386cd1601a4eb783f8f89a9bb3989f0425db6",
+      "size_bytes": 62775
+    },
+    "styles.css": {
+      "has_projection_v030": false,
+      "has_reconciliation": false,
+      "has_root_kpis": false,
+      "sha256": "50a8a5f1cbab0f37fb56860daf8437b784967d1ec8a673f1f7348dd76ab05cbc",
+      "size_bytes": 20278
+    }
+  },
+  "generated_at": "2026-08-04T11:30:09.878368+00:00",
+  "health": {
+    "ok": true,
+    "service": "ecorex-usage-panel-api",
+    "version": "1.0.5"
+  },
+  "process_working_release": "server",
+  "schema_version": 1,
+  "service_active": true,
+  "status": "passed"
+}

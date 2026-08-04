@@ -59,7 +59,7 @@ def _components(*, overall: str = "healthy") -> tuple[dict, list[dict]]:
     return {
         "sample_id": "syssample_01K00000000000000000000000",
         "overall": overall,
-        "summary": "EcoreX 运行正常",
+        "summary": "e-Mate 运行正常",
         "components": components,
         "sampled_at": NOW,
     }, components

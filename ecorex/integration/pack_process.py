@@ -22,6 +22,7 @@ from typing import Any
 import zipfile
 
 from ecorex.capabilities import ToolInvocationContext, VerifiedCapabilityPack
+from ecorex.integration.pack_python import PackPythonIdentity
 
 from .sandbox import (
     SandboxBackend,
@@ -55,6 +56,13 @@ _PRE_EXECUTION_PACK_FAILURE_CODES = frozenset(
         "shell_sandbox_contract_missing",
         "shell_sandbox_contract_invalid",
         "shell_process_supervision_unavailable",
+        "browser_operation_not_supported",
+        "browser_parameters_invalid",
+        "browser_evaluate_requires_full_access",
+        "browser_batch_invalid",
+        "browser_selector_invalid",
+        "browser_evaluate_invalid",
+        "browser_url_not_allowed",
     }
 )
 
@@ -147,6 +155,7 @@ class ProcessCapabilityPackAdapter:
         *,
         workspace_roots: tuple[str | os.PathLike[str], ...],
         python_executable: str | os.PathLike[str],
+        python_identity: PackPythonIdentity | None = None,
         default_timeout_seconds: float = 120,
         sandbox_backend: SandboxBackend | None = None,
     ) -> None:
@@ -168,6 +177,7 @@ class ProcessCapabilityPackAdapter:
         self.workspace_roots = tuple(roots)
         self._workspace_root_resolver: Callable[[Any], tuple[Path, ...]] | None = None
         self.python_executable = executable
+        self.python_identity = python_identity
         self.default_timeout_seconds = float(default_timeout_seconds)
         self.descriptor = _inspect_zipapp(pack)
         self._sandbox_backend = sandbox_backend or default_workspace_sandbox_backend()
@@ -592,6 +602,22 @@ class _ProcessPackToolHandler:
         if self._tool_id != "shell":
             return {}
         return self._adapter.sandbox_profile_availability
+
+    @property
+    def controlled_skill_sandbox_authority(
+        self,
+    ) -> tuple[Any, Path, PackPythonIdentity] | None:
+        if (
+            self._tool_id != "shell"
+            or self._adapter.descriptor.pack_id != "sandbox"
+            or self._adapter.python_identity is None
+        ):
+            return None
+        return (
+            self._adapter._sandbox_backend,
+            self._adapter.python_executable,
+            self._adapter.python_identity,
+        )
 
     def bind_workspace_root_resolver(
         self, resolver: Callable[[Any], tuple[Path, ...]] | None

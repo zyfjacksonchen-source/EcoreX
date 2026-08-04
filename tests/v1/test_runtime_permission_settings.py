@@ -136,6 +136,31 @@ def test_permission_profile_is_persistent_idempotent_and_only_affects_future_tur
     assert persisted == full
 
 
+def test_v030_promotes_existing_default_once_then_preserves_user_revocation(
+    tmp_path,
+) -> None:
+    auth, mutation = _headers()
+    legacy = TestClient(create_app(settings=_settings(tmp_path, full_access=False)))
+    assert legacy.get("/api/v1/bootstrap", headers=auth).json()["permissions"]["full_access"] is False
+
+    upgraded = TestClient(create_app(settings=_settings(tmp_path, full_access=True)))
+    promoted = upgraded.get("/api/v1/bootstrap", headers=auth).json()["permissions"]
+    assert promoted["full_access"] is True
+    revoked = upgraded.put(
+        "/api/v1/settings/permissions",
+        json={
+            "profile": "default",
+            "expected_revision": promoted["revision"],
+            "client_request_id": "user-revokes-full-access",
+        },
+        headers=mutation,
+    ).json()["permissions"]
+    assert revoked["full_access"] is False
+
+    restarted = TestClient(create_app(settings=_settings(tmp_path, full_access=True)))
+    assert restarted.get("/api/v1/bootstrap", headers=auth).json()["permissions"] == revoked
+
+
 @pytest.mark.parametrize("operation", ["create", "queue", "replace"])
 def test_permission_update_linearizes_with_every_http_turn_acceptance(
     tmp_path,

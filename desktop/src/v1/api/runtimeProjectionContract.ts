@@ -150,6 +150,12 @@ function thread(value: unknown, path = "root"): asserts value is ThreadProjectio
   assertString(value.thread_id, contract, `${path}.thread_id`);
   assertOneOf(value.status, values.threadStatuses, contract, `${path}.status`);
   assertNullableString(value.title, contract, `${path}.title`);
+  if (value.active_turn_status !== null) {
+    assertOneOf(value.active_turn_status, values.turnStatuses, contract, `${path}.active_turn_status`);
+  }
+  if (value.last_turn_status !== null) {
+    assertOneOf(value.last_turn_status, values.turnStatuses, contract, `${path}.last_turn_status`);
+  }
   assertRecord(value.metadata, contract, `${path}.metadata`);
   assertNullableString(value.forked_from_thread_id, contract, `${path}.forked_from_thread_id`);
   assertNullableString(value.forked_from_turn_id, contract, `${path}.forked_from_turn_id`);

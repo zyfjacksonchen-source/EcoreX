@@ -231,9 +231,7 @@ def project_connector_catalog(
     registry: ConnectorRegistry,
     catalog: tuple[ConnectorCatalogItem, ...] | None = None,
 ) -> list[ConnectorDescriptor]:
-    catalog_by_id = {
-        item.definition.connector_id: item for item in (catalog or ())
-    }
+    catalog_by_id = {item.definition.connector_id: item for item in (catalog or ())}
 
     def health(connector_id: str) -> str:
         item = catalog_by_id.get(connector_id)
@@ -311,6 +309,7 @@ class RuntimeComposition:
         availability_provider: Callable[[], RuntimeAvailability] | None = None,
         output_policy_provider: Callable[[], str] | None = None,
         extension_service: "ExtensionService | None" = None,
+        controlled_skill_runner: Any | None = None,
         extension_governance_enabled: bool | None = None,
         mcp_runtime_bindings: tuple["MCPRuntimeBinding", ...] = (),
         tenant_id: str = "local-user",
@@ -383,6 +382,11 @@ class RuntimeComposition:
                 ),
             )
         self.extension_service = extension_service
+        from ecorex.extensions.live_authority import bind_live_extension_service
+
+        bind_live_extension_service(self.extension_service)
+        if controlled_skill_runner is not None:
+            self.extension_service.bind_skill_runner(controlled_skill_runner)
         from ecorex.extensions.execution import SkillRuntime
         from ecorex.extensions.mcp import MCPClientSupervisor
 
@@ -391,11 +395,15 @@ class RuntimeComposition:
             snapshot_resolver=self._extension_snapshot_for_scope,
             turn_intent_resolver=self._turn_input_for_scope,
             search_fact_resolver=self._skill_search_fact,
+            read_fact_resolver=self._skill_read_fact,
+            controlled_runner=controlled_skill_runner,
         )
         if not isinstance(tenant_id, str) or not tenant_id:
             raise ValueError("Extension execution tenant identity is required")
         self.permission_account_id = tenant_id
-        mcp_tenant_id = "tenant_" + hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()
+        mcp_tenant_id = (
+            "tenant_" + hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()
+        )
         effective_mcp_bindings = (
             mcp_runtime_bindings if self._persist_startup_snapshots else ()
         )
@@ -423,7 +431,9 @@ class RuntimeComposition:
                     self.capability_registry.register(spec)
                 else:
                     if existing.to_dict() != spec.to_dict():
-                        raise ValueError("MCP tool contract collides with the Core catalog")
+                        raise ValueError(
+                            "MCP tool contract collides with the Core catalog"
+                        )
         resolved_handlers = dict(capability_handlers or {})
         for protected_tool_id in (
             "tool_search",
@@ -434,6 +444,7 @@ class RuntimeComposition:
             "connector_write",
             "artifact_read",
             "input_attachment_read",
+            "task_list",
         ):
             if protected_tool_id in resolved_handlers:
                 raise ValueError(
@@ -450,9 +461,7 @@ class RuntimeComposition:
                     if self._enforce_admin_tool_denies
                     else frozenset()
                 ),
-                frozen_admin_hard_denies_resolver=(
-                    self._frozen_admin_hard_denies
-                ),
+                frozen_admin_hard_denies_resolver=(self._frozen_admin_hard_denies),
             )
             if connector_service is not None
             else None
@@ -478,8 +487,12 @@ class RuntimeComposition:
             input_attachments = InputAttachmentService(
                 artifact_service, account_id=tenant_id
             )
-            self.input_attachment_read_runtime = InputAttachmentReadRuntime(input_attachments)
-            resolved_handlers["input_attachment_read"] = self.input_attachment_read_runtime.read
+            self.input_attachment_read_runtime = InputAttachmentReadRuntime(
+                input_attachments
+            )
+            resolved_handlers["input_attachment_read"] = (
+                self.input_attachment_read_runtime.read
+            )
             if "ocr" in installed_packs:
                 if "ocr" in resolved_handlers:
                     raise ValueError("a caller cannot replace the Core OCR handler")
@@ -501,6 +514,7 @@ class RuntimeComposition:
             if tool_id in resolved_handlers:
                 raise ValueError("an injected handler cannot replace a Core Skill tool")
             resolved_handlers[tool_id] = handler
+        resolved_handlers["task_list"] = self._task_list
         if self.mcp_supervisor is not None:
             for tool_id, handler in self.mcp_supervisor.handlers().items():
                 if tool_id in resolved_handlers:
@@ -535,7 +549,9 @@ class RuntimeComposition:
         if static_permission.full_access != full_access:
             raise ValueError("permission profile does not match its payload")
         if frozenset(static_permission.admin_hard_denies) != admin_hard_denies:
-            raise ValueError("administrator permission policy does not match its payload")
+            raise ValueError(
+                "administrator permission policy does not match its payload"
+            )
         # Control-plane denial facts remain in the immutable permission
         # projection for audit and reconciliation.  They are not an execution
         # gate for the local product by default: local permissions, local
@@ -544,9 +560,8 @@ class RuntimeComposition:
         self._admin_hard_denies = admin_hard_denies
         self._enforce_admin_tool_denies = bool(enforce_admin_tool_denies)
         self._permission_provider = permission_provider or (lambda: static_permission)
-        self._permission_state_digest_provider = (
-            permission_state_digest_provider
-            or (lambda: self._read_permission_state_digest(tenant_id))
+        self._permission_state_digest_provider = permission_state_digest_provider or (
+            lambda: self._read_permission_state_digest(tenant_id)
         )
         self._current_execution_policy_provider = self.current_execution_policy
         self.capability_service.bind_current_policy_provider(
@@ -576,7 +591,9 @@ class RuntimeComposition:
         self.availability = self._apply_input_attachment_ocr_availability(
             self.availability
         )
-        self._availability_provider = availability_provider or (lambda: self.availability)
+        self._availability_provider = availability_provider or (
+            lambda: self.availability
+        )
         # Invocation must see the same post-composition availability as Turn
         # planning.  Binding the raw provider here reintroduced stale
         # ``verified_handler_not_installed`` facts for Core handlers and
@@ -750,7 +767,11 @@ class RuntimeComposition:
             runtime_direct_tools=tuple(
                 dict.fromkeys(
                     (
-                        *(("input_attachment_read",) if has_bound_input_attachments else ()),
+                        *(
+                            ("input_attachment_read",)
+                            if has_bound_input_attachments
+                            else ()
+                        ),
                         *(("vision", "ocr") if has_bound_image_attachments else ()),
                     )
                 )
@@ -813,9 +834,7 @@ class RuntimeComposition:
                 close = getattr(result, "close", None)
                 if callable(close):
                     close()
-                raise TypeError(
-                    "Turn acceptance callback must not return an awaitable"
-                )
+                raise TypeError("Turn acceptance callback must not return an awaitable")
             return result
 
     def record_permission(
@@ -1001,9 +1020,7 @@ class RuntimeComposition:
     ) -> RuntimeAvailability:
         disabled = dict(availability.disabled_tools)
         reason = "connector_runtime_not_bound"
-        handler_missing_reasons = frozenset(
-            {"verified_handler_not_installed", reason}
-        )
+        handler_missing_reasons = frozenset({"verified_handler_not_installed", reason})
         tool_ids = (
             "connector_search",
             "connector_describe",
@@ -1035,9 +1052,7 @@ class RuntimeComposition:
     ) -> RuntimeAvailability:
         disabled = dict(availability.disabled_tools)
         reason = "artifact_runtime_not_bound"
-        handler_missing_reasons = frozenset(
-            {"verified_handler_not_installed", reason}
-        )
+        handler_missing_reasons = frozenset({"verified_handler_not_installed", reason})
         if self.artifact_service is None:
             if (
                 "artifact_read" not in disabled
@@ -1061,9 +1076,7 @@ class RuntimeComposition:
         """
         disabled = dict(availability.disabled_tools)
         reason = "input_attachment_runtime_not_bound"
-        handler_missing_reasons = frozenset(
-            {"verified_handler_not_installed", reason}
-        )
+        handler_missing_reasons = frozenset({"verified_handler_not_installed", reason})
         if self.input_attachment_read_runtime is None:
             if (
                 "input_attachment_read" not in disabled
@@ -1083,9 +1096,7 @@ class RuntimeComposition:
     ) -> RuntimeAvailability:
         disabled = dict(availability.disabled_tools)
         reason = "input_attachment_ocr_runtime_not_bound"
-        handler_missing_reasons = frozenset(
-            {"verified_handler_not_installed", reason}
-        )
+        handler_missing_reasons = frozenset({"verified_handler_not_installed", reason})
         if self.input_attachment_ocr_runtime is None:
             if "ocr" not in disabled or disabled["ocr"] in handler_missing_reasons:
                 disabled["ocr"] = reason
@@ -1119,8 +1130,13 @@ class RuntimeComposition:
         }
         if self._output_policy_provider is not None:
             output_policy_snapshot_id = self._output_policy_provider()
-            if not isinstance(output_policy_snapshot_id, str) or not output_policy_snapshot_id:
-                raise ValueError("output policy provider returned an invalid snapshot ID")
+            if (
+                not isinstance(output_policy_snapshot_id, str)
+                or not output_policy_snapshot_id
+            ):
+                raise ValueError(
+                    "output policy provider returned an invalid snapshot ID"
+                )
             payload["output_policy_snapshot_id"] = output_policy_snapshot_id
         snapshot = self._runtime_snapshot("config", payload)
         self.config_snapshot = snapshot
@@ -1242,8 +1258,7 @@ class RuntimeComposition:
                 matched_references = {
                     reference
                     for reference in references
-                    if reference
-                    and _reference_is_selected(intent, reference)
+                    if reference and _reference_is_selected(intent, reference)
                 }
                 if not matched_references:
                     continue
@@ -1444,7 +1459,19 @@ class RuntimeComposition:
             ).fetchone()
         if row is None:
             raise ValueError("Skill execution batch is invalid")
-        return str(row["extension_snapshot_id"])
+        frozen_snapshot_id = str(row["extension_snapshot_id"])
+        frozen = self.extension_service.repository.snapshot_payload(
+            frozen_snapshot_id
+        )
+        frozen_generation = frozen.get("extension_generation")
+        current_generation = self.extension_service.repository.generation()
+        if frozen_generation == current_generation:
+            return frozen_snapshot_id
+        # Skill state is intentionally live between model tool rounds. The
+        # capability and permission snapshots remain batch-frozen; only the
+        # content-addressed Extension catalog advances to the current durable
+        # generation.
+        return self.extension_service.snapshot().snapshot_id
 
     def _connector_snapshot_for_scope(self, scope: ToolExecutionScope):
         if (
@@ -1542,14 +1569,48 @@ class RuntimeComposition:
             capability_snapshot_id=context.capability_snapshot_id,
             policy_snapshot_id=context.policy_snapshot_id,
             extension_snapshot_id=extension_snapshot_id,
-            extension_contribution_snapshot_id=(
-                extension_contribution_snapshot_id
-            ),
+            extension_contribution_snapshot_id=(extension_contribution_snapshot_id),
             discovery_id=discovery_id,
         )
         if record is None or record.result_sha256 is None:
             return None
         return SkillSearchFact(
+            tool_call_id=record.tool_call_id,
+            arguments=record.arguments,
+            result=record.result,
+            result_sha256=record.result_sha256,
+        )
+
+    @staticmethod
+    def _task_list(arguments):
+        items = tuple(arguments.get("items", ()))
+        identities = [item.get("id") for item in items]
+        if len(set(identities)) != len(identities):
+            raise ValueError("Task List item ids must be unique")
+        if sum(item.get("status") == "in_progress" for item in items) > 1:
+            raise ValueError("Task List permits at most one in-progress item")
+        return {"schema_version": 1, "items": list(items)}
+
+    def _skill_read_fact(
+        self,
+        context,
+        extension_snapshot_id: str,
+        extension_contribution_snapshot_id: str,
+        discovery_id: str,
+    ):
+        from ecorex.extensions.execution import SkillReadFact
+
+        record = self.tool_execution_repository.completed_skill_read_for_discovery(
+            execution_scope=getattr(context, "execution_scope", None),
+            capability_snapshot_id=context.capability_snapshot_id,
+            policy_snapshot_id=context.policy_snapshot_id,
+            extension_snapshot_id=extension_snapshot_id,
+            extension_contribution_snapshot_id=extension_contribution_snapshot_id,
+            discovery_id=discovery_id,
+        )
+        if record is None or record.result_sha256 is None:
+            return None
+        return SkillReadFact(
             tool_call_id=record.tool_call_id,
             arguments=record.arguments,
             result=record.result,
@@ -1566,6 +1627,7 @@ class RuntimeComposition:
         # valid search result, not a missing executable handler.
         disabled.pop("skill_search", None)
         disabled.pop("skill_read", None)
+        disabled.pop("skill_run", None)
         disabled.pop("tool_search", None)
         disabled.pop("tool_describe", None)
         if self.mcp_supervisor is not None:

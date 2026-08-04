@@ -90,7 +90,7 @@
       "properties": {
         "manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "release_id": { "type": "string", "pattern": "^release-stable-[0-9a-f]{24}$" },
-        "version": { "type": "string", "pattern": "^1\\.(?:0|[1-9][0-9]{0,5})\\.(?:0|[1-9][0-9]{0,5})$" },
+        "version": { "type": "string", "pattern": "^(?:0|[1-9][0-9]{0,3})\\.(?:0|[1-9][0-9]{0,3})\\.(?:0|[1-9][0-9]{0,3})$" },
         "build_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       },
       "additionalProperties": false
@@ -276,7 +276,7 @@
       ],
       "properties": {
         "release_id": { "type": "string", "pattern": "^release-stable-[0-9a-f]{24}$" },
-        "version": { "type": "string", "pattern": "^1\\.(?:0|[1-9][0-9]{0,5})\\.(?:0|[1-9][0-9]{0,5})$" },
+        "version": { "type": "string", "pattern": "^(?:0|[1-9][0-9]{0,3})\\.(?:0|[1-9][0-9]{0,3})\\.(?:0|[1-9][0-9]{0,3})$" },
         "channel": { "const": "stable" },
         "created_at": {
           "type": "string",

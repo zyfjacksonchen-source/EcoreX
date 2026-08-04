@@ -190,6 +190,7 @@ def test_thread_pin_and_active_turn_status_are_backend_authoritative(tmp_path) -
         "accepted", "queued", "preparing", "model_requested", "streaming",
         "tool_pending", "waiting_human", "tool_running", "retry_wait", "finalizing",
     }
+    assert catalog_item["last_turn_status"] == catalog_item["active_turn_status"]
 
     pinned = http.put(
         f"/api/v1/threads/{thread_id}/pin",

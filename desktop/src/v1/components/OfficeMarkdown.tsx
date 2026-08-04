@@ -1,9 +1,7 @@
-import { useDeferredValue, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 const MARKDOWN_PARSE_LIMIT = 256 * 1024;
-const STREAM_FLUSH_MS = 48;
 const SAFE_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 
 interface OfficeMarkdownProps {
@@ -29,45 +27,15 @@ function safeLinkUrl(value: string): string {
   }
 }
 
-function useBufferedText(text: string, streaming: boolean): string {
-  const latest = useRef(text);
-  const timer = useRef<number | null>(null);
-  const [visible, setVisible] = useState(text);
-
-  useEffect(() => {
-    latest.current = text;
-    if (!streaming) {
-      if (timer.current !== null) window.clearTimeout(timer.current);
-      timer.current = null;
-      setVisible(text);
-      return;
-    }
-    if (timer.current === null) {
-      timer.current = window.setTimeout(() => {
-        timer.current = null;
-        setVisible(latest.current);
-      }, STREAM_FLUSH_MS);
-    }
-  }, [streaming, text]);
-
-  useEffect(() => () => {
-    if (timer.current !== null) window.clearTimeout(timer.current);
-  }, []);
-
-  return visible;
-}
-
 export default function OfficeMarkdown({ text, streaming }: OfficeMarkdownProps) {
-  const buffered = useBufferedText(text, streaming);
-  const deferred = useDeferredValue(buffered);
-
-  if (deferred.length > MARKDOWN_PARSE_LIMIT) {
+  if (text.length > MARKDOWN_PARSE_LIMIT) {
     return (
       <div className="ex-rich-text is-long" data-render-mode="bounded-plain-text">
         <span className="ex-rich-text-notice">
           内容较长，已切换为纯文本显示，避免页面卡顿。
         </span>
-        <pre>{deferred}</pre>
+        <pre>{text}</pre>
+        {streaming ? <span className="ex-stream-caret" aria-hidden="true" /> : null}
       </div>
     );
   }
@@ -94,8 +62,9 @@ export default function OfficeMarkdown({ text, streaming }: OfficeMarkdownProps)
           ),
         }}
       >
-        {deferred}
+        {text}
       </ReactMarkdown>
+      {streaming ? <span className="ex-stream-caret" aria-hidden="true" /> : null}
     </div>
   );
 }

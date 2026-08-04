@@ -184,7 +184,7 @@ class ExtensionRegistry:
                 skill = skill_entry.skill if skill_entry else None
                 previous = saved.get(name, {})
                 metadata = getattr(skill_entry, "metadata", None)
-                default_enabled = getattr(metadata, "default_enabled", True)
+                default_enabled = True
                 source = str(getattr(skill, "source", "") or previous.get("source") or "custom")
                 is_builtin_catalog = bool(getattr(manager, "is_builtin_catalog_skill", lambda _: False)(name))
                 origin = "builtin" if source == "builtin" else "workspace" if source == "custom" else "global"
@@ -206,7 +206,7 @@ class ExtensionRegistry:
                 _decorate_mention_metadata(row)
                 kind = "builtin_skill" if row.get("source_group") == "builtin" else "user_skill"
                 enabled = bool(row.get("enabled", previous.get("enabled", default_enabled)))
-                policy = "built-in-locked" if row.get("source_group") == "builtin" else "user-overlay" if source == "custom" else "global-skill"
+                policy = "built-in" if row.get("source_group") == "builtin" else "user-overlay" if source == "custom" else "global-skill"
                 callable_tool = resolve_callable_tool_name(skill) if skill else resolve_callable_tool_name(name)
                 agent_surface = skill_tool_binding_surface(skill or name, agent_tool_names, enabled=enabled)
                 tool_binding = agent_surface.get("toolBinding")

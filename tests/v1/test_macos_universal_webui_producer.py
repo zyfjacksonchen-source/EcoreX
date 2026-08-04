@@ -1,0 +1,242 @@
+from __future__ import annotations
+
+import argparse
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from ecorex.release.legacy_webui_manifest import (
+    build_legacy_webui_manifest,
+    RECEIPT_SCHEMA,
+)
+from ecorex.release.windows_webui import WINDOWS_RECEIPT_SCHEMA
+
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = ROOT / "scripts" / "build-v030-macos-universal-webui.py"
+WORKFLOW = ROOT / ".github" / "workflows" / "emate-v030-macos-universal.yml"
+
+
+def _module():
+    spec = importlib.util.spec_from_file_location("macos_webui_producer", SCRIPT)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_non_macos_fixture_fails_closed_before_creating_release_bytes(
+    tmp_path, monkeypatch
+):
+    module = _module()
+    monkeypatch.setattr(module.platform, "system", lambda: "Windows")
+    args = argparse.Namespace(
+        candidate_root=tmp_path / "candidate",
+        web_dist=tmp_path / "dist",
+        windows_package=tmp_path / "windows.zip",
+        windows_receipt=tmp_path / "windows-receipt.json",
+        output=tmp_path / "output",
+        version="0.3.0",
+        commit_sha="a" * 40,
+        identity="",
+        notary_profile="",
+        notary_keychain="",
+    )
+
+    with pytest.raises(module.MacWebUIBuildError, match="macos_host_required"):
+        module.build(args)
+    assert not args.output.exists()
+
+
+def test_missing_distribution_authority_never_falls_back_to_ad_hoc_signing(
+    tmp_path, monkeypatch
+):
+    module = _module()
+    monkeypatch.setattr(module, "_require_tools", lambda: None)
+    args = argparse.Namespace(
+        candidate_root=tmp_path / "candidate",
+        web_dist=tmp_path / "dist",
+        windows_package=tmp_path / "windows.zip",
+        windows_receipt=tmp_path / "windows-receipt.json",
+        output=tmp_path / "output",
+        version="0.3.0",
+        commit_sha="a" * 40,
+        identity="",
+        notary_profile="",
+        notary_keychain="",
+    )
+
+    with pytest.raises(
+        module.MacWebUIBuildError, match="macos_distribution_authority_missing"
+    ):
+        module.build(args)
+    assert not args.output.exists()
+
+
+def test_verified_receipt_binds_exact_windows_and_notarized_macos_bytes(tmp_path):
+    module = _module()
+    windows = tmp_path / "EcoreX_0.3.0-webui-windows-x64.zip"
+    macos = tmp_path / "EcoreX_0.3.0-webui-macos-universal.zip"
+    windows.write_bytes(b"verified-windows")
+    macos.write_bytes(b"accepted-notarized-macos-webui-zip")
+
+    receipt = module._write_legacy_receipt(
+        tmp_path,
+        version="0.3.0",
+        windows=windows,
+        macos=macos,
+        generated_at="2026-08-04T12:00:00Z",
+    )
+    value = json.loads(receipt.read_text(encoding="utf-8"))
+    assert value["schema"] == RECEIPT_SCHEMA
+    assert value["status"] == "verified"
+    assert [item["id"] for item in value["artifacts"]] == [
+        "webui-windows-x64",
+        "webui-macos-universal",
+    ]
+    assert (
+        value["artifacts"][1]["sha256"]
+        == hashlib.sha256(macos.read_bytes()).hexdigest()
+    )
+    assert build_legacy_webui_manifest(receipt)["version"] == "0.3.0"
+
+
+def test_distribution_receipt_rejects_missing_accepted_notarization(tmp_path):
+    module = _module()
+    valid = {
+        "schema": "emate.macos-distribution-receipt.v1",
+        "status": "verified",
+        "notarization": {"status": "Accepted", "submission_id": "123"},
+        "stapling": {"applicable": False, "reason": "zip-ticket-cannot-be-stapled"},
+    }
+    path = tmp_path / "macos-distribution-receipt.json"
+    module._write_distribution_receipt(path, valid)
+    assert (
+        json.loads(path.read_text(encoding="utf-8"))["notarization"]["status"]
+        == "Accepted"
+    )
+
+    tampered = {**valid, "notarization": {"status": "Invalid", "submission_id": "123"}}
+    with pytest.raises(
+        module.MacWebUIBuildError, match="macos_distribution_receipt_invalid"
+    ):
+        module._write_distribution_receipt(tmp_path / "tampered.json", tampered)
+    assert not (tmp_path / "tampered.json").exists()
+
+
+def test_windows_partial_receipt_must_bind_exact_package_and_candidate(tmp_path):
+    module = _module()
+    package = tmp_path / "EcoreX_0.3.0-webui-windows-x64.zip"
+    package.write_bytes(b"windows")
+    manifest_path = tmp_path / "release-manifest.json"
+    manifest_path.write_bytes(b"manifest")
+    candidate_receipt = tmp_path / "candidate-build-receipt.json"
+    candidate_receipt.write_bytes(b"candidate")
+    receipt = tmp_path / "windows-receipt.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "schema": WINDOWS_RECEIPT_SCHEMA,
+                "status": "partial",
+                "production_eligible": True,
+                "artifacts": [
+                    {
+                        "id": "webui-windows-x64",
+                        "file_name": package.name,
+                        "size_bytes": package.stat().st_size,
+                        "sha256": hashlib.sha256(package.read_bytes()).hexdigest(),
+                        "provenance": {
+                            "release_id": "release-1",
+                            "build_digest": "a" * 64,
+                            "manifest_sha256": hashlib.sha256(
+                                manifest_path.read_bytes()
+                            ).hexdigest(),
+                            "candidate_receipt_sha256": hashlib.sha256(
+                                candidate_receipt.read_bytes()
+                            ).hexdigest(),
+                            "signing_key_id": "release-key",
+                            "core_artifact_id": "core-windows-x64",
+                            "core_sha256": "b" * 64,
+                            "web_manifest_sha256": "c" * 64,
+                            "included_artifact_ids": [
+                                "core-windows-x64",
+                                "web-manifest",
+                            ],
+                            "mode": "production",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    artifacts = {
+        "core-windows-x64": SimpleNamespace(sha256="b" * 64),
+        "web-manifest": SimpleNamespace(sha256="c" * 64),
+    }
+    manifest = SimpleNamespace(
+        release_id="release-1",
+        build_digest="a" * 64,
+        signature=SimpleNamespace(key_id="release-key"),
+        artifact=lambda artifact_id: artifacts[artifact_id],
+    )
+    module._verify_windows_partial_receipt(
+        receipt, package, manifest, manifest_path, candidate_receipt
+    )
+    package.write_bytes(b"tampered")
+    with pytest.raises(
+        module.MacWebUIBuildError, match="windows_webui_receipt_invalid"
+    ):
+        module._verify_windows_partial_receipt(
+            receipt, package, manifest, manifest_path, candidate_receipt
+        )
+
+
+def test_workflow_requires_protected_stages_notary_acceptance_before_upload():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    producer = SCRIPT.read_text(encoding="utf-8")
+
+    assert "github.sha == vars.ECOREX_V030_RELEASE_COMMIT_SHA" in workflow
+    assert "github.ref == 'refs/heads/main'" in workflow
+    assert "github.ref_protected" not in workflow
+    assert "ecorex-v1-candidate-stable" in workflow
+    assert "name: emate-v030-windows-webui" in workflow
+    assert "windows_package_artifact" not in workflow
+    assert "APPLE_NOTARY_KEY_BASE64" in workflow
+    assert workflow.index("build-v030-macos-universal-webui.py") < workflow.index(
+        "actions/upload-artifact"
+    )
+    assert (
+        workflow.index("build-v030-macos-universal-webui.py")
+        < workflow.index("ecorex.release.legacy_webui_manifest")
+        < workflow.index("actions/upload-artifact")
+    )
+    assert "--web-dist desktop/dist" in workflow
+    assert "--candidate-root .producer/candidate" in workflow
+    assert "--windows-receipt" in workflow
+    assert "macos-distribution-receipt.json" in workflow
+    assert "_verify_candidate_receipt(" in producer
+    assert producer.index("verify_windows_webui_package(") < producer.index(
+        "_verify_windows_partial_receipt(\n        windows_receipt"
+    )
+    assert 'package_root / "evidence"' in producer
+    assert 'expected_platform="macos"' in producer
+    assert 'for architecture in ("arm64", "x64")' in producer
+    assert 'shutil.copytree(web, package_root / "web"' not in producer
+    assert '"--keychain"' in producer and "args.notary_keychain" in producer
+    assert '"notarytool"' in producer and '"submit"' in producer
+    assert '"status") != "Accepted"' in producer
+    assert "stapler" not in producer
+    assert "WebUI.app" not in producer
+    assert '"-create"' not in producer
+    assert 'case "$(uname -m)"' in producer
+    assert '--local-release "$BASE_DIR/signed"' in producer
+    assert "zip-ticket-cannot-be-stapled" in producer
+    assert (
+        '"--assess"' in producer and '"--type"' in producer and '"execute"' in producer
+    )
+    assert '"--verify"' in producer and '"--strict"' in producer

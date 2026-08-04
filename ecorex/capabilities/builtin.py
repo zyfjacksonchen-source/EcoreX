@@ -24,6 +24,42 @@ from .registry import CapabilityRegistry
 
 
 _OBJECT = {"type": "object"}
+_FEISHU_CLI_INPUT = {
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": [
+                "status",
+                "ensure",
+                "diagnose",
+                "install",
+                "agent_auth",
+                "config_init",
+                "config_init_status",
+                "auth_login",
+                "auth_login_status",
+                "agent_auth_status",
+                "run",
+            ],
+        },
+        "session_id": {"type": "string"},
+        "args": {"type": "array", "items": {"type": "string"}},
+        "scope": {"type": "string"},
+        "domain": {"type": "string"},
+        "device_code": {"type": "string"},
+        "app_id": {"type": "string"},
+        "app_secret": {"type": "string"},
+        "brand": {"type": "string"},
+        "timeout": {"type": "integer", "minimum": 1, "maximum": 3600},
+        "registry": {"type": "string"},
+        "discovery_source": {"type": "string"},
+        "find_skill_result": {"type": "object"},
+        "expected_paths": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["action"],
+    "additionalProperties": False,
+}
 _JSON_VALUE = {
     "type": ["object", "array", "string", "integer", "number", "boolean", "null"]
 }
@@ -62,8 +98,16 @@ _INPUT_ATTACHMENT_READ_OUTPUT = {
         "eof": {"type": "boolean"},
     },
     "required": [
-        "schema_version", "kind", "attachment_id", "revision_id", "mime_type",
-        "size_bytes", "sha256", "content", "next_offset_chars", "eof",
+        "schema_version",
+        "kind",
+        "attachment_id",
+        "revision_id",
+        "mime_type",
+        "size_bytes",
+        "sha256",
+        "content",
+        "next_offset_chars",
+        "eof",
     ],
     "additionalProperties": False,
 }
@@ -121,9 +165,76 @@ _OCR_INPUT = {
 _CDP_INPUT = {
     "type": "object",
     "properties": {
-        "operation": {"type": "string", "minLength": 1, "maxLength": 128},
-        "target": {"type": "string", "maxLength": 4096},
-        "parameters": {"type": "object"},
+        "operation": {
+            "type": "string",
+            "enum": [
+                "navigate",
+                "snapshot",
+                "evaluate",
+                "click",
+                "type",
+                "wait",
+                "screenshot",
+                "batch",
+            ],
+            "description": "Browser operation to perform.",
+        },
+        "target": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "Public http(s), data, or about:blank page URL.",
+        },
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "maxLength": 20000,
+                    "description": "JavaScript expression for evaluate.",
+                },
+                "selector": {"type": "string", "maxLength": 2048},
+                "text": {"type": "string", "maxLength": 20000},
+                "timeout_ms": {
+                    "type": "integer",
+                    "minimum": 100,
+                    "maximum": 60000,
+                },
+                "steps": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 32,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "operation": {
+                                "type": "string",
+                                "enum": [
+                                    "navigate",
+                                    "snapshot",
+                                    "evaluate",
+                                    "click",
+                                    "type",
+                                    "wait",
+                                    "screenshot",
+                                ],
+                            },
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "expression": {"type": "string", "maxLength": 20000},
+                                    "selector": {"type": "string", "maxLength": 2048},
+                                    "text": {"type": "string", "maxLength": 20000},
+                                },
+                                "additionalProperties": False,
+                            },
+                        },
+                        "required": ["operation"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "additionalProperties": False,
+        },
     },
     "required": ["operation"],
     "additionalProperties": False,
@@ -156,6 +267,37 @@ _IMAGE_INPUT = {
         "quality": {"type": "string", "maxLength": 64},
     },
     "required": ["instruction"],
+    "additionalProperties": False,
+}
+_TASK_LIST_INPUT = {
+    "type": "object",
+    "properties": {
+        "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 8,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
+                    "title": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
+                },
+                "required": ["id", "title", "status"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["items"],
+    "additionalProperties": False,
+}
+_TASK_LIST_OUTPUT = {
+    "type": "object",
+    "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "items": _TASK_LIST_INPUT["properties"]["items"],
+    },
+    "required": ["schema_version", "items"],
     "additionalProperties": False,
 }
 _SKILL_SEARCH_INPUT = {
@@ -293,6 +435,25 @@ _SKILL_READ_OUTPUT = {
         "available_references",
         "references",
     ],
+    "additionalProperties": False,
+}
+_SKILL_RUN_INPUT = {
+    "type": "object",
+    "properties": {
+        "discovery_id": {"type": "string", "minLength": 1, "maxLength": 512},
+        "parameters": {"type": "object"},
+    },
+    "required": ["discovery_id"],
+    "additionalProperties": False,
+}
+_SKILL_RUN_OUTPUT = {
+    "type": "object",
+    "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "discovery_id": {"type": "string", "minLength": 1, "maxLength": 512},
+        "result": {"type": "object"},
+    },
+    "required": ["schema_version", "discovery_id", "result"],
     "additionalProperties": False,
 }
 _CONNECTOR_SEARCH_INPUT = {
@@ -706,12 +867,24 @@ _TOOL_SEARCH_OUTPUT = {
     "properties": {
         "schema_version": {"type": "integer", "const": 1},
         "capability_snapshot_id": {"type": "string", "minLength": 1, "maxLength": 256},
-        "capability_catalog_digest": {"type": "string", "minLength": 64, "maxLength": 64},
+        "capability_catalog_digest": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+        },
         "routing_policy_digest": {"type": "string", "minLength": 64, "maxLength": 64},
         "discovery_policy_id": {"type": "string", "minLength": 1, "maxLength": 128},
-        "discovery_policy_version": {"type": "string", "minLength": 5, "maxLength": 128},
+        "discovery_policy_version": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128,
+        },
         "discovery_policy_digest": {"type": "string", "minLength": 64, "maxLength": 64},
-        "model_catalog_snapshot_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "model_catalog_snapshot_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+        },
         "query": {"type": "string", "minLength": 1, "maxLength": 4096},
         "tools": {
             "type": "array",
@@ -801,7 +974,7 @@ def builtin_model_catalog() -> ManagedModelCatalog:
             ),
             ManagedModelSpec(
                 model_id="gpt-image-2",
-                display_name="EcoreX Image 2",
+                display_name="e-Mate Image 2",
                 modalities=frozenset({ModelModality.IMAGE}),
                 # ``normalize_reference`` canonicalizes underscores to
                 # hyphens, so image_2 resolves through the single image-2
@@ -856,6 +1029,17 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             intent_tags=frozenset({"skill", "workflow", "instructions"}),
         ),
         ToolSpec(
+            tool_id="task_list",
+            version="1.0.0",
+            display_name="更新任务清单",
+            description="仅为包含多个实际步骤的任务创建或更新 2–8 项清单；最多一项进行中，状态必须反映真实进度",
+            input_schema=_TASK_LIST_INPUT,
+            output_schema=_TASK_LIST_OUTPUT,
+            aliases=("todo-list", "update-plan"),
+            default_exposure=Exposure.DIRECT,
+            intent_tags=frozenset({"task", "plan", "workflow", "multi-step", "任务", "计划"}),
+        ),
+        ToolSpec(
             tool_id="skill_read",
             version="1.0.0",
             display_name="读取技能",
@@ -868,6 +1052,20 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             aliases=("use-skill",),
             default_exposure=Exposure.DEFERRED,
             intent_tags=frozenset({"skill", "workflow", "instructions"}),
+        ),
+        ToolSpec(
+            tool_id="skill_run",
+            version="1.0.0",
+            display_name="运行技能",
+            description=(
+                "仅运行已通过 skill_search 和 skill_read 绑定的精确 Skill 修订；"
+                "说明型或无受控入口的 Skill 不可执行"
+            ),
+            input_schema=_SKILL_RUN_INPUT,
+            output_schema=_SKILL_RUN_OUTPUT,
+            aliases=("run-skill",),
+            default_exposure=Exposure.DEFERRED,
+            intent_tags=frozenset({"skill", "workflow", "execute"}),
         ),
         ToolSpec(
             tool_id="connector_search",
@@ -1025,10 +1223,13 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             tool_id="cdp",
             version="1.0.0",
             display_name="浏览器控制",
-            description="通过浏览器调试协议检查或操作网页",
+            description=(
+                "通过浏览器调试协议检查或操作网页；支持导航、快照、点击、"
+                "输入、等待、截图、JavaScript evaluate 和同页批量步骤"
+            ),
             input_schema=_CDP_INPUT,
             output_schema=_OBJECT,
-            aliases=("browser", "browser-cdp"),
+            aliases=("browser", "browser-cdp", "浏览器"),
             effects=frozenset(
                 {CapabilityEffect.NETWORK, CapabilityEffect.UI_AUTOMATION}
             ),
@@ -1036,6 +1237,31 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             approval_requirement=ApprovalRequirement.ON_REQUEST,
             intent_tags=frozenset({"browser", "web", "cdp", "浏览器"}),
             required_packs=frozenset({"browser"}),
+        ),
+        ToolSpec(
+            tool_id="feishu_cli",
+            version="1.0.0",
+            display_name="飞书办公工具",
+            description="通过官方 lark-cli 执行飞书文档、表格、云盘和消息等结构化办公操作",
+            input_schema=_FEISHU_CLI_INPUT,
+            output_schema=_OBJECT,
+            aliases=("lark-cli", "feishu", "lark"),
+            effects=frozenset(
+                {
+                    CapabilityEffect.READ,
+                    CapabilityEffect.WRITE,
+                    CapabilityEffect.NETWORK,
+                    CapabilityEffect.EXECUTE,
+                }
+            ),
+            idempotency=IdempotencyClass.NON_IDEMPOTENT,
+            concurrency_safe=False,
+            required_sandbox=SandboxLevel.WORKSPACE_WRITE,
+            approval_requirement=ApprovalRequirement.ON_REQUEST,
+            default_exposure=Exposure.DIRECT,
+            intent_tags=frozenset(
+                {"feishu", "lark", "document", "spreadsheet", "飞书", "表格"}
+            ),
         ),
         ToolSpec(
             tool_id="shell",

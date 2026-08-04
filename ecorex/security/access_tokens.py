@@ -44,6 +44,7 @@ class VerifiedAccessClaims:
     organization_id: str | None
     roles: frozenset[str]
     entitlements: AccessEntitlements
+    token_id: str | None = None
 
 
 def parse_ed25519_public_keyring(value: str) -> dict[str, bytes]:
@@ -212,6 +213,11 @@ class Ed25519AccessTokenVerifier:
             or len(set(roles_raw)) != len(roles_raw)
         ):
             raise ValueError
+        token_id = claims.get("jti")
+        if token_id is not None and (
+            not isinstance(token_id, str) or _IDENTITY.fullmatch(token_id) is None
+        ):
+            raise ValueError
         return VerifiedAccessClaims(
             subject=_identity_claim(claims, "sub"),
             client_id=_identity_claim(claims, "client_id"),
@@ -219,6 +225,7 @@ class Ed25519AccessTokenVerifier:
             organization_id=organization,
             roles=frozenset(roles_raw),
             entitlements=_entitlements(claims),
+            token_id=token_id,
         )
 
 

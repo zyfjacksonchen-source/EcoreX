@@ -22,10 +22,12 @@ from .device_identity import (
     ManagedDeviceIdentityBroker,
 )
 from .management import (
+    AdminManagementConflict,
     AdminManagementRepository,
     AdminPasswordAuthenticationError,
     AdminPasswordLocked,
 )
+from .models import ControlPrincipal
 
 
 class _StrictModel(BaseModel):
@@ -94,6 +96,17 @@ class PasswordLoginRequest(DeviceAuthorizeRequest):
     password: SecretStr = Field(min_length=8, max_length=256)
 
 
+class AccountPasswordChangeRequest(_StrictModel):
+    schema_version: Literal[1]
+    current_password: SecretStr = Field(min_length=8, max_length=256)
+    new_password: SecretStr = Field(min_length=10, max_length=256)
+    client_request_id: str = Field(
+        min_length=8,
+        max_length=256,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,255}$",
+    )
+
+
 def _password_login_source_ip(request: Request) -> str | None:
     """Resolve one rate-limit source without trusting public proxy headers."""
 
@@ -138,6 +151,7 @@ def create_device_identity_router(
     broker: ManagedDeviceIdentityBroker,
     *,
     admin_dependency: Callable[..., object] | None = None,
+    account_dependency: Callable[..., ControlPrincipal] | None = None,
     password_repository: AdminManagementRepository | None = None,
 ) -> APIRouter:
     if not isinstance(broker, ManagedDeviceIdentityBroker):
@@ -293,6 +307,51 @@ def create_device_identity_router(
             finally:
                 password = ""
             return result.to_dict()
+
+        if account_dependency is not None:
+
+            @router.post("/v1/account/password")
+            async def change_account_password(
+                payload: AccountPasswordChangeRequest,
+                current: ControlPrincipal = Depends(account_dependency),
+            ) -> dict[str, object]:
+                current_password = payload.current_password.get_secret_value()
+                new_password = payload.new_password.get_secret_value()
+                try:
+                    result = await asyncio.to_thread(
+                        password_repository.change_password,
+                        current_password=current_password,
+                        new_password=new_password,
+                        client_request_id=payload.client_request_id,
+                        actor=current,
+                    )
+                    await asyncio.to_thread(
+                        broker.revoke_account_sessions,
+                        account_id=current.account_id,
+                        idempotency_key=f"password-change:{payload.client_request_id}",
+                    )
+                except AdminPasswordAuthenticationError:
+                    raise HTTPException(
+                        status_code=401,
+                        detail={
+                            "code": "invalid_current_password",
+                            "message": "current password is invalid",
+                        },
+                    ) from None
+                except AdminManagementConflict:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "password_change_conflict",
+                            "message": "password change conflicted; retry safely",
+                        },
+                    ) from None
+                except DeviceIdentityError as error:
+                    raise device_identity_error_response(error) from None
+                finally:
+                    current_password = ""
+                    new_password = ""
+                return result.model_dump(mode="json")
 
     @router.post("/v1/device/verify/legacy")
     async def verify_legacy(request: LegacyDeviceVerifyRequest) -> dict[str, object]:

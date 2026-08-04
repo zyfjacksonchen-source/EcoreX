@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -143,6 +143,12 @@ class BrokerRevocationReceipt:
     already_revoked: bool
 
 
+@dataclass(frozen=True, slots=True)
+class BrokerPasswordChangeReceipt:
+    status: str = "changed"
+    reauthentication_required: bool = True
+
+
 class DeviceAuthorizationBroker(Protocol):
     async def begin(self, *, idempotency_key: str) -> BrokerDeviceChallenge:
         ...
@@ -174,6 +180,69 @@ class DeviceAuthorizationBroker(Protocol):
         idempotency_key: str,
     ) -> BrokerRevocationReceipt:
         ...
+
+    async def change_password(
+        self,
+        *,
+        current_password: str,
+        new_password: str,
+        access_token: str,
+        client_request_id: str,
+        idempotency_key: str,
+    ) -> BrokerPasswordChangeReceipt:
+        ...
+
+    async def skill_hub_list(
+        self,
+        *,
+        access_token: str,
+        query: str,
+        category: str | None,
+        tag: str | None,
+        source: str | None,
+        cursor: str | None,
+        limit: int,
+    ) -> Mapping[str, Any]: ...
+
+    async def skill_hub_detail(
+        self, *, access_token: str, slug: str
+    ) -> Mapping[str, Any]: ...
+
+    async def skill_hub_download(
+        self,
+        *,
+        access_token: str,
+        slug: str,
+        version: str,
+    ) -> tuple[bytes, str]: ...
+
+    async def skill_hub_upload(
+        self,
+        *,
+        access_token: str,
+        slug: str,
+        category: str,
+        bundle_base64: str,
+        client_request_id: str,
+    ) -> Mapping[str, Any]: ...
+
+    async def skill_hub_create_install_intent(
+        self,
+        *,
+        access_token: str,
+        slug: str,
+        version: str,
+        package_sha256: str,
+        client_request_id: str,
+    ) -> Mapping[str, Any]: ...
+
+    async def skill_hub_consume_install_intent(
+        self, *, access_token: str, install_intent: str
+    ) -> Mapping[str, Any]: ...
+
+    async def skill_hub_complete_install_intent(
+        self, *, access_token: str, completion_receipt: str, status: str
+    ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -561,6 +630,161 @@ class ManagedDeviceAuthorizationService:
             self.session.logout,
             client_request_id=client_request_id,
             expected_lease_digest=expected_lease_digest,
+        )
+
+    async def change_password(
+        self,
+        *,
+        current_password: str,
+        new_password: str,
+        client_request_id: str,
+        expected_lease_digest: str,
+    ) -> SessionLogoutReceipt:
+        """Change the credential remotely, then clear this device's session."""
+
+        self._require_converged()
+        request_hash = _request_hash(client_request_id)
+        context = await asyncio.to_thread(self.session.revocation_context)
+        if not hmac.compare_digest(context.lease.digest, expected_lease_digest):
+            raise DeviceAuthorizationConflict("password change target is no longer active")
+        access_token = await asyncio.to_thread(self.session.bearer_token)
+        try:
+            receipt = await asyncio.wait_for(
+                self.broker.change_password(
+                    current_password=current_password,
+                    new_password=new_password,
+                    access_token=access_token,
+                    client_request_id=client_request_id,
+                    idempotency_key=f"password-change:{request_hash}",
+                ),
+                timeout=self.broker_timeout_seconds,
+            )
+            if receipt.status != "changed" or not receipt.reauthentication_required:
+                raise DeviceAuthorizationUnavailable("password change response is invalid")
+        except (DeviceAuthorizationUnauthorized, DeviceAuthorizationConflict):
+            raise
+        except Exception as exc:
+            raise DeviceAuthorizationUnavailable(
+                f"password change provider failed: {type(exc).__name__}"
+            ) from None
+        await asyncio.to_thread(
+            self.session.repository.record_remote_logout_state,
+            client_request_hash=request_hash,
+            expected_lease_digest=expected_lease_digest,
+            state_name="remote_revoked",
+            reason_code=None,
+            now=_iso(self._utc_now()),
+        )
+        return await asyncio.to_thread(
+            self.session.logout,
+            client_request_id=client_request_id,
+            expected_lease_digest=expected_lease_digest,
+        )
+
+    async def list_skills(
+        self, *, query: str, category: str | None, tag: str | None,
+        source: str | None, cursor: str | None, limit: int
+    ) -> Mapping[str, Any]:
+        self._require_converged()
+        access_token = await asyncio.to_thread(self.session.bearer_token)
+        return await asyncio.wait_for(
+            self.broker.skill_hub_list(
+                access_token=access_token,
+                query=query,
+                category=category,
+                tag=tag,
+                source=source,
+                cursor=cursor,
+                limit=limit,
+            ),
+            timeout=self.broker_timeout_seconds,
+        )
+
+    async def skill_detail(self, *, slug: str) -> Mapping[str, Any]:
+        self._require_converged()
+        access_token = await asyncio.to_thread(self.session.bearer_token)
+        return await asyncio.wait_for(
+            self.broker.skill_hub_detail(access_token=access_token, slug=slug),
+            timeout=self.broker_timeout_seconds,
+        )
+
+    async def download_package(self, *, slug: str, version: str) -> tuple[bytes, str]:
+        self._require_converged()
+        access_token = await asyncio.to_thread(self.session.bearer_token)
+        return await asyncio.wait_for(
+            self.broker.skill_hub_download(
+                access_token=access_token,
+                slug=slug,
+                version=version,
+            ),
+            timeout=max(self.broker_timeout_seconds, 120.0),
+        )
+
+    async def upload_skill(
+        self,
+        *,
+        slug: str,
+        category: str,
+        bundle_base64: str,
+        client_request_id: str,
+    ) -> Mapping[str, Any]:
+        self._require_converged()
+        access_token = await asyncio.to_thread(self.session.bearer_token)
+        return await asyncio.wait_for(
+            self.broker.skill_hub_upload(
+                access_token=access_token,
+                slug=slug,
+                category=category,
+                bundle_base64=bundle_base64,
+                client_request_id=client_request_id,
+            ),
+            timeout=max(self.broker_timeout_seconds, 120.0),
+        )
+
+    async def create_install_intent(
+        self,
+        *,
+        slug: str,
+        version: str,
+        package_sha256: str,
+        client_request_id: str,
+    ) -> Mapping[str, Any]:
+        self._require_converged()
+        access_token = await asyncio.to_thread(self.session.bearer_token)
+        return await asyncio.wait_for(
+            self.broker.skill_hub_create_install_intent(
+                access_token=access_token,
+                slug=slug,
+                version=version,
+                package_sha256=package_sha256,
+                client_request_id=client_request_id,
+            ),
+            timeout=self.broker_timeout_seconds,
+        )
+
+    async def consume_install_intent(self, *, install_intent: str) -> Mapping[str, Any]:
+        self._require_converged()
+        access_token = await asyncio.to_thread(self.session.bearer_token)
+        return await asyncio.wait_for(
+            self.broker.skill_hub_consume_install_intent(
+                access_token=access_token,
+                install_intent=install_intent,
+            ),
+            timeout=self.broker_timeout_seconds,
+        )
+
+    async def complete_install_intent(
+        self, *, completion_receipt: str, status: str
+    ) -> None:
+        self._require_converged()
+        access_token = await asyncio.to_thread(self.session.bearer_token)
+        await asyncio.wait_for(
+            self.broker.skill_hub_complete_install_intent(
+                access_token=access_token,
+                completion_receipt=completion_receipt,
+                status=status,
+            ),
+            timeout=self.broker_timeout_seconds,
         )
 
     def get(self, flow_id: str) -> DeviceFlowProjection:

@@ -60,6 +60,7 @@ from ecorex.extensions.api import register_extension_routes
 from ecorex.extensions.local_bundle import LocalSkillBundleStore
 from ecorex.extensions.repository import SQLiteExtensionRepository
 from ecorex.extensions.service import ExtensionService
+from ecorex.extensions.hub_api import SkillHubCloudClient, register_skill_hub_runtime_routes
 from ecorex.integration import (
     ArtifactEventOutbox,
     ArtifactEventOutboxSupervisor,
@@ -141,6 +142,8 @@ from ecorex.protocol import (
     LiveReplayResponse,
     LogoutSessionRequest,
     LogoutSessionResponse,
+    PasswordSessionChangeRequest,
+    PasswordSessionChangeResponse,
     ModelCatalog,
     ModelDescriptor,
     ModelServiceSnapshot,
@@ -182,6 +185,7 @@ from ecorex.sharing import (
 )
 from ecorex.session import (
     DeviceAuthorizationConflict,
+    DeviceAuthorizationUnauthorized,
     DeviceAuthorizationUnavailable,
     DeviceAuthorizationSupervisor,
     ManagedDeviceAuthorizationService,
@@ -230,7 +234,7 @@ class RuntimeSettings:
     database_path: str | Path
     product_version: str = __version__
     account_id: str = "local-user"
-    account_display_name: str = "EcoreX User"
+    account_display_name: str = "e-Mate User"
     authenticated: bool = True
     require_managed_session: bool = False
     allow_unmanaged_model_gateway_for_testing: bool = False
@@ -268,6 +272,7 @@ class RuntimeSettings:
     platform: str = field(default_factory=lambda: sys.platform)
     architecture: str = field(default_factory=platform_module.machine)
     extension_service: ExtensionService | None = field(default=None, repr=False)
+    skill_hub_client: SkillHubCloudClient | None = field(default=None, repr=False)
     installed_capability_packs: frozenset[str] = frozenset()
     disabled_capability_tools: Mapping[str, str] = field(
         default_factory=dict, repr=False
@@ -1362,7 +1367,7 @@ def create_app(
     )
     if app is None:
         app = FastAPI(
-            title="EcoreX Local Runtime",
+            title="e-Mate Local Runtime",
             version=settings.product_version,
             docs_url=None,
             redoc_url=None,
@@ -1380,7 +1385,30 @@ def create_app(
         admin_hard_denies=frozenset(settings.admin_hard_denies),
         initialize=startup_convergence_allowed,
     )
+    if startup_convergence_allowed and settings.full_access:
+        marker_key = "permission_default_migration_v030"
+        with permission_authority.mutation_lock:
+            with kernel.database.transaction() as connection:
+                migrated = connection.execute(
+                    "SELECT 1 FROM runtime_meta WHERE key = ?", (marker_key,)
+                ).fetchone()
+                if migrated is None:
+                    current_permission = permission_authority.current()
+                    if not current_permission.full_access:
+                        permission_authority.update_in_transaction(
+                            connection,
+                            "full_access",
+                            expected_revision=current_permission.revision,
+                            client_request_id="v030-default-full-access",
+                        )
+                    connection.execute(
+                        "INSERT INTO runtime_meta(key, value) VALUES (?, ?)",
+                        (marker_key, "complete"),
+                    )
     permission_projection = permission_authority.current()
+    from common.ecorex_tool_permissions import sync_verified_runtime_permission
+
+    sync_verified_runtime_permission(full_access=permission_projection.full_access)
     builtin_models = builtin_model_catalog()
     managed_mode = managed_session is not None or settings.require_managed_session
     signed_models = (
@@ -1514,6 +1542,9 @@ def create_app(
             create=startup_convergence_allowed,
         ),
     )
+    bind_extension_vault = getattr(extension_service, "bind_credential_vault", None)
+    if callable(bind_extension_vault):
+        bind_extension_vault(connector_vault)
     if startup_convergence_allowed:
         converge_extensions = getattr(extension_service, "converge_startup", None)
         if callable(converge_extensions):
@@ -1813,6 +1844,12 @@ def create_app(
     app.state.migration_quarantine_service = migration_quarantine_service
     app.include_router(create_migration_quarantine_router(migration_quarantine_service))
     register_extension_routes(app, extension_service)
+    if settings.skill_hub_client is not None:
+        register_skill_hub_runtime_routes(
+            app,
+            client=settings.skill_hub_client,
+            extensions=extension_service,
+        )
     replay_service = ReplayService(kernel, composition=composition)
     trace_projector = TraceProjector(
         replay_service, service_version=settings.product_version
@@ -2615,6 +2652,7 @@ def create_app(
 
     recovery_mutation_scopes: dict[tuple[str, str], RecoveryExecutionScope] = {
         ("POST", "/api/v1/session/logout"): "session_logout",
+        ("POST", "/api/v1/session/password"): "session_password",
         ("POST", "/api/v1/update/activate"): "update_activate",
     }
 
@@ -2707,7 +2745,7 @@ def create_app(
                         return JSONResponse(
                             status_code=409,
                             content={
-                                "detail": "managed account changed; restart EcoreX to continue",
+                                "detail": "managed account changed; restart e-Mate to continue",
                                 "code": "managed_session_restart_required",
                             },
                             headers={"Cache-Control": "no-store"},
@@ -2742,7 +2780,7 @@ def create_app(
                     status_code=503,
                     content={
                         "detail": (
-                            "运行状态校验未通过，EcoreX 已进入只读保护；"
+                            "运行状态校验未通过，e-Mate 已进入只读保护；"
                             "历史记录和诊断仍可查看。"
                         ),
                         "code": "RUNTIME_READ_ONLY",
@@ -2785,7 +2823,7 @@ def create_app(
                         status_code=503,
                         content={
                             "detail": (
-                                "运行状态校验未通过，EcoreX 已进入只读保护；"
+                                "运行状态校验未通过，e-Mate 已进入只读保护；"
                                 "请刷新状态后再重试。"
                             ),
                             "code": "RUNTIME_READ_ONLY",
@@ -2938,7 +2976,7 @@ def create_app(
                         status_code=409,
                         detail={
                             "code": "managed_session_restart_required",
-                            "message": "managed account changed; restart EcoreX to continue",
+                            "message": "managed account changed; restart e-Mate to continue",
                         },
                     ) from error
                 except ManagedSessionError:
@@ -3026,6 +3064,64 @@ def create_app(
             }
         )
 
+    @app.get("/api/version", response_model=None)
+    def legacy_product_version() -> JSONResponse:
+        """Keep the installed WebUI health probe stable across the 0.3.0 upgrade."""
+
+        snapshot = (
+            update_service.snapshot()
+            if update_service is not None
+            else bootstrap_snapshot.update
+        )
+        return JSONResponse(
+            {
+                "status": "success",
+                "product": "e-Mate",
+                "version": settings.product_version,
+                "updateState": snapshot.model_dump(mode="json"),
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/update-check", response_model=None)
+    def legacy_update_check(platform: str = Query(default="win32")) -> JSONResponse:
+        """Project signed v1 update state for older WebUI callers."""
+
+        artifact_id = {
+            "win32": "webui-windows-x64",
+            "darwin": "webui-macos-universal",
+        }.get(platform)
+        if artifact_id is None:
+            raise HTTPException(status_code=422, detail="unsupported update platform")
+        snapshot = (
+            update_service.snapshot()
+            if update_service is not None
+            else bootstrap_snapshot.update
+        )
+        latest = snapshot.target_version or snapshot.current_version
+        has_update = latest != snapshot.current_version
+        return JSONResponse(
+            {
+                "status": "success",
+                "currentVersion": snapshot.current_version,
+                "latestVersion": latest,
+                "hasUpdate": has_update,
+                "updateReason": "version" if has_update else "current",
+                "artifact": {"id": artifact_id, "version": latest},
+                "update": {
+                    "webui": {
+                        "authority": "/api/v1/update",
+                        "connectorHealthCheck": {
+                            "required": True,
+                            "preserve": ["configured", "connected", "callable"],
+                            "failureAction": "rollback",
+                        },
+                    }
+                },
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
     def require_model_task_service() -> None:
         if not managed_mode:
             return
@@ -3036,7 +3132,7 @@ def create_app(
                 status_code=409,
                 detail={
                     "code": "managed_session_restart_required",
-                    "message": "managed account changed; restart EcoreX to continue",
+                    "message": "managed account changed; restart e-Mate to continue",
                 },
             ) from error
         except ManagedSessionError as error:
@@ -3061,6 +3157,77 @@ def create_app(
                     "message": "managed model service is unavailable",
                 },
             )
+
+    @app.post(
+        "/api/v1/session/password",
+        response_model=PasswordSessionChangeResponse,
+    )
+    async def change_session_password(
+        payload: PasswordSessionChangeRequest,
+        http_request: Request,
+    ) -> PasswordSessionChangeResponse:
+        recovery_permit = require_recovery_permit(http_request, "session_password")
+        if managed_session is None or settings.device_authorization_service is None:
+            raise HTTPException(
+                status_code=503,
+                detail="managed password service is not configured",
+            )
+        current = await asyncio.to_thread(current_managed_session)
+        current_password = payload.current_password.get_secret_value()
+        new_password = payload.new_password.get_secret_value()
+        try:
+            receipt = await settings.device_authorization_service.change_password(
+                current_password=current_password,
+                new_password=new_password,
+                client_request_id=payload.client_request_id,
+                expected_lease_digest=current.lease_digest,
+            )
+            recovery_execution_gate.assert_permit(recovery_permit)
+        except DeviceAuthorizationUnauthorized as error:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "code": "invalid_current_password",
+                    "message": "current password is invalid",
+                },
+            ) from error
+        except DeviceAuthorizationConflict as error:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "password_change_conflict",
+                    "message": "password change conflicted; retry safely",
+                },
+            ) from error
+        except DeviceAuthorizationUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "password_change_unavailable",
+                    "message": "password change is temporarily unavailable",
+                },
+            ) from error
+        finally:
+            current_password = ""
+            new_password = ""
+        managed_runtime_state["logged_out"] = True
+        settings.authenticated = False
+        app.state.logout_shutdown_failures = await stop_service_phases_isolated(
+            (
+                (phase, name, service)
+                for phase, name, service in lifecycle_services
+                if name not in {"update", "output_filesystem"}
+            ),
+            timeout_seconds=settings.lifecycle_shutdown_seconds,
+        )
+        if settings.session_reload_requester is not None:
+            try:
+                settings.session_reload_requester(
+                    f"session-password-changed:{receipt.generation}"
+                )
+            except Exception:
+                pass
+        return PasswordSessionChangeResponse()
 
     @app.post(
         "/api/v1/session/logout",
@@ -3263,6 +3430,7 @@ def create_app(
                 permission_policy,
             )
             kernel.events.default_permission_snapshot_id = permissions.snapshot_id
+            sync_verified_runtime_permission(full_access=permissions.full_access)
             return PermissionMutationResponse(permissions=permissions)
 
     @app.get("/api/v1/projects", response_model=ProjectListResponse)
@@ -3653,6 +3821,19 @@ def create_app(
             local_projection = usage_projection_service.project(thread_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="thread not found") from error
+        return await account_usage_projection(local_projection)
+
+    @app.get(
+        "/api/v1/usage",
+        response_model=ConversationUsageProjection,
+    )
+    async def account_usage() -> ConversationUsageProjection:
+        local_projection = usage_projection_service.project("account")
+        return await account_usage_projection(local_projection)
+
+    async def account_usage_projection(
+        local_projection: ConversationUsageProjection,
+    ) -> ConversationUsageProjection:
         remote_usage = getattr(settings.model_gateway, "usage", None)
         if not callable(remote_usage):
             return local_projection

@@ -368,6 +368,24 @@ class SQLiteExtensionRepository:
             )
         return tuple(result)
 
+    def generation(self, *, connection: sqlite3.Connection | None = None) -> int:
+        """Return the durable Extension mutation generation.
+
+        The append-only event sequence already advances for every committed
+        lifecycle change, so it is the authority instead of a second counter.
+        """
+
+        if connection is not None:
+            row = connection.execute(
+                "SELECT COALESCE(MAX(seq), 0) AS generation FROM extension_events"
+            ).fetchone()
+        else:
+            with self.database.reader() as reader:
+                row = reader.execute(
+                    "SELECT COALESCE(MAX(seq), 0) AS generation FROM extension_events"
+                ).fetchone()
+        return int(row["generation"])
+
     @staticmethod
     def _state(row: sqlite3.Row) -> ExtensionStateRecord:
         return ExtensionStateRecord(

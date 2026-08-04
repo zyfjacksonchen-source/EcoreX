@@ -78,7 +78,6 @@ textarea {
 
 .ex-sidebar {
   border: 0;
-  border-right: 1px solid var(--color-rule);
   border-radius: var(--radius-none);
   display: flex;
   flex-direction: column;
@@ -87,8 +86,11 @@ textarea {
 }
 
 .ex-workspace {
-  border: 0;
-  border-radius: var(--radius-panel);
+  height: calc(100dvh - 16px);
+  max-height: calc(100dvh - 16px);
+  margin: 8px 8px 8px 0;
+  border: 1px solid var(--color-rule);
+  border-radius: 16px;
   background: var(--color-workspace-surface);
   overflow: clip;
   display: grid;
@@ -125,8 +127,8 @@ textarea {
 }
 
 .ex-sidebar-brand {
-  min-height: 48px;
-  padding: 0 var(--space-3);
+  min-height: 64px;
+  padding: 8px 12px 8px 30px;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -143,8 +145,8 @@ textarea {
 }
 
 .ex-emate-logo {
-  width: 116px;
-  height: 28px;
+  width: 126px;
+  height: 40px;
   display: block;
   background: url("../assets/emate-logo.png") center / contain no-repeat;
 }
@@ -163,10 +165,7 @@ textarea {
 }
 
 .ex-emate-version {
-  color: var(--color-ink-subtle);
-  font-size: 11px;
-  line-height: var(--text-caption-line);
-  font-weight: 500;
+  display: none;
 }
 
 .ex-brand-mark {
@@ -216,6 +215,10 @@ textarea {
   justify-content: flex-start;
 }
 
+.ex-new-task.is-current {
+  background: var(--color-selected);
+}
+
 .ex-sidebar-skill-link {
   width: calc(100% - (2 * var(--space-2)));
   min-height: var(--target-desktop);
@@ -235,7 +238,7 @@ textarea {
 .ex-sidebar-skill-link svg {
   width: var(--icon-size);
   height: var(--icon-size);
-  color: var(--color-brand-strong);
+  color: currentColor;
 }
 
 .ex-sidebar-skill-link.is-current {
@@ -623,6 +626,8 @@ textarea {
 
 .ex-sidebar-footer {
   padding: var(--space-2);
+  display: grid;
+  gap: 2px;
 }
 
 .ex-account-trigger {
@@ -675,6 +680,35 @@ textarea {
   align-items: center;
   gap: var(--space-3);
   background: var(--color-workspace-surface);
+}
+
+.ex-workspace.is-home .ex-workspace-header {
+  min-height: 48px;
+  border-bottom-color: transparent;
+}
+
+.ex-workspace.is-home .ex-header-title {
+  visibility: hidden;
+}
+
+.ex-workspace.is-home .ex-header-actions {
+  color: var(--color-brand-strong);
+}
+
+.ex-workspace.is-home .ex-header-actions .ex-icon-button {
+  color: inherit;
+}
+
+.ex-home-runtime-dot {
+  width: 8px;
+  height: 8px;
+  margin-right: var(--space-2);
+  border-radius: 50%;
+  background: var(--color-ink-subtle);
+}
+
+.ex-home-runtime-dot.is-retrying {
+  animation: ex-pulse 1.4s ease-in-out infinite;
 }
 
 .ex-header-title,

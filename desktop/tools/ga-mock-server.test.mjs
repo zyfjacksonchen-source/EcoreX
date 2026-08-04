@@ -168,8 +168,8 @@ test("GA harness exposes managed bootstrap, strict CSRF, state reset, and unique
   assert.equal(authenticated.login.organization_id, "org-ga");
   assert.deepEqual(authenticated.login.roles, ["member"]);
   assert.equal(authenticated.models.chat[0].model_id, "ecorex-chat");
-  assert.equal(authenticated.models.chat[0].model_policy.upstream_model_id, "gpt-5.6-sol");
-  assert.equal(authenticated.models.chat[0].model_policy.reasoning_effort, "medium");
+  assert.equal(authenticated.models.chat[0].model_policy.upstream_model_id, "gpt-5.6-luna");
+  assert.equal(authenticated.models.chat[0].model_policy.reasoning_effort, "high");
   assert.equal(
     authenticated.models.chat[0].model_policy.context_management.compact_threshold_tokens,
     272_000,
@@ -178,6 +178,36 @@ test("GA harness exposes managed bootstrap, strict CSRF, state reset, and unique
   assert.equal(authenticated.models.image[0].model_policy, null);
   assert.equal(authenticated.extensions.contract_version, "1.0");
   assert.equal(authenticated.extensions.items.length, 3);
+
+  const hub = await fetch(`${harness.url}/api/v1/skill-hub/skills?category=office_productivity`)
+    .then((response) => response.json());
+  assert.equal(hub.schema_version, 1);
+  assert.deepEqual(hub.items.map((item) => item.slug), ["office-documents"]);
+  assert.equal(hub.items[0].provenance.brand, "e-Mate");
+  assert.equal(hub.items[0].installation_status, "installed_enabled");
+  const plannerDetail = await fetch(`${harness.url}/api/v1/skill-hub/skills/content-planner`)
+    .then((response) => response.json());
+  assert.equal(plannerDetail.skill.slug, "content-planner");
+  const installedPlanner = await fetch(
+    `${harness.url}/api/v1/skill-hub/skills/content-planner/install`,
+    {
+      method: "POST",
+      headers: MUTATION_HEADERS,
+      body: JSON.stringify({
+        version: plannerDetail.skill.version,
+        package_sha256: plannerDetail.skill.package_sha256,
+        client_request_id: "skill-install-ga",
+      }),
+    },
+  ).then((response) => response.json());
+  assert.equal(installedPlanner.extension.extension_id, "hub.content-planner");
+  assert.equal(installedPlanner.extension.status, "enabled");
+  const refreshedHub = await fetch(`${harness.url}/api/v1/skill-hub/skills`)
+    .then((response) => response.json());
+  assert.equal(
+    refreshedHub.items.find((item) => item.slug === "content-planner").installation_status,
+    "installed_enabled",
+  );
 
   const usage = await fetch(`${harness.url}/api/v1/threads/thread-ga/usage`).then((response) => response.json());
   assert.deepEqual(usage.today, { input_tokens: 4280, output_tokens: 960, total_tokens: 5240 });
@@ -192,7 +222,7 @@ test("GA harness exposes managed bootstrap, strict CSRF, state reset, and unique
   const technicalHealth = await fetch(`${harness.url}/api/v1/system/health?technical=true`).then((response) => response.json());
   assert.equal(health.summary, "e-Mate 运行正常");
   assert.equal("metrics" in health, false);
-  assert.equal(technicalHealth.metrics.services.extensions.total, 3);
+  assert.equal(technicalHealth.metrics.services.extensions.total, 4);
 
   const memoryBefore = await fetch(`${harness.url}/api/v1/memory`).then((response) => response.json());
   assert.equal(memoryBefore.resettable_count, 2);

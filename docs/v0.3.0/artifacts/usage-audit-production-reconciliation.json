@@ -1,0 +1,53 @@
+{
+  "canonical_record_count": 186,
+  "endpoint_identity": {
+    "domain_hash": "A753D877497CBE35",
+    "ssh_host_hash": "CDF1CF905198CA97",
+    "transport": "ssh-loopback",
+    "usage_port": 18105
+  },
+  "environment": "production",
+  "generated_at": "2026-08-04T11:32:45.868259+00:00",
+  "kpis": {
+    "avgCompletionMinutes": 14.68,
+    "effectiveArtifacts": 325,
+    "failedTasks": 53,
+    "inputTokens": 54962,
+    "interventionRate": 26.2,
+    "interventions": 60,
+    "invalidArtifacts": 0,
+    "missingTokenTasks": 217,
+    "outputTokens": 577391,
+    "rawEvents": 3255,
+    "stoppedTasks": 5,
+    "successRate": 74.7,
+    "successTasks": 171,
+    "tasks": 229,
+    "tokenUsageRate": 5.2,
+    "tokenUsageTasks": 12,
+    "totalTokens": 632353,
+    "users": 44
+  },
+  "missing_provider_usage_count": 0,
+  "projection_version": "v0.3.0-usage-1",
+  "range": {
+    "end": "2026-08-05",
+    "start": "2026-08-01"
+  },
+  "reconciliation": {
+    "canonical_record_count": 186,
+    "missing_provider_usage_count": 0,
+    "replaced_duplicate_count": 0,
+    "unassociated_record_count": 186
+  },
+  "replaced_duplicate_count": 0,
+  "request_correlation": {
+    "audit_response_id": "",
+    "client_request_id": "a168b677-09e0-43a7-9007-d093a2186b43",
+    "usage_response_id": ""
+  },
+  "schema_version": 1,
+  "timezone": "Asia/Shanghai",
+  "unassociated_record_count": 186,
+  "usage_audit_match": true
+}

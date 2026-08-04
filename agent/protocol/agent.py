@@ -447,13 +447,18 @@ class Agent:
         try:
             response = executor.run_stream(user_message)
         except Exception:
-            # If executor cleared its messages (context overflow / message format error),
-            # sync that back to the Agent's own message list so the next request
-            # starts fresh instead of hitting the same overflow forever.
-            if len(executor.messages) == 0:
-                with self.messages_lock:
-                    self.messages.clear()
-                    logger.info("[Agent] Cleared Agent message history after executor recovery")
+            # Keep the repaired/current run boundary so a provider-format failure
+            # cannot erase completed tool facts or make the next turn start over.
+            with self.messages_lock:
+                self._last_run_new_messages = new_messages_since_user_query(
+                    executor.messages,
+                    original_length,
+                    user_message,
+                )
+                self.messages = list(executor.messages)
+            self.stream_executor = executor
+            self._last_run_outcome = executor.last_outcome
+            self._last_run_final_response_persistable = executor.final_response_persistable
             raise
 
         # Sync executor's messages back to agent (thread-safe). Persist the
@@ -471,6 +476,8 @@ class Agent:
         
         # Store executor reference for agent_bridge to access files_to_send
         self.stream_executor = executor
+        self._last_run_outcome = executor.last_outcome
+        self._last_run_final_response_persistable = executor.final_response_persistable
 
         # Execute all post-process tools
         self._execute_post_process_tools()

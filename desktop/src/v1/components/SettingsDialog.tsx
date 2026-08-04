@@ -23,7 +23,10 @@ import {
   type ExtensionLoadState,
 } from "../state/extensions.ts";
 import { userFacingError } from "../state/userLanguage.ts";
-import { hasPendingRuntimeUpdate } from "../state/updatePresentation.ts";
+import {
+  isVerifiedRuntimeUpdateReady,
+  runtimeUpdateStatusText,
+} from "../state/updatePresentation.ts";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -121,8 +124,17 @@ export function SettingsDialog({
   const [technicalHealth, setTechnicalHealth] = useState<SystemHealthSample | null>(null);
   const [technicalHealthLoading, setTechnicalHealthLoading] = useState(false);
   const [technicalHealthError, setTechnicalHealthError] = useState<string | null>(null);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const passwordRequestId = useRef<string | null>(null);
   const extensionSummary = extensionCatalogSummary(extensions);
-  const hasPendingUpdate = hasPendingRuntimeUpdate(bootstrap?.update);
+  const updateReady = isVerifiedRuntimeUpdateReady(bootstrap?.update);
+  const updateInProgress = bootstrap?.update.state === "available"
+    || bootstrap?.update.state === "downloading"
+    || bootstrap?.update.state === "activating";
 
   const refreshMigrationQuarantine = useCallback(async (signal?: AbortSignal) => {
     setMigrationQuarantineLoadState((current) => current === "ready" ? current : "loading");
@@ -180,12 +192,46 @@ export function SettingsDialog({
       setTechnicalHealth(null);
       setTechnicalHealthLoading(false);
       setTechnicalHealthError(null);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setPasswordError(null);
+      passwordRequestId.current = null;
     }
   }, [open]);
 
   const applyPermission = async (profile: "default" | "full_access") => {
     const applied = await onPermissionChange(profile);
     if (applied) setConfirmElevation(false);
+  };
+
+  const changePassword = async () => {
+    if (passwordBusy) return;
+    if (newPassword.length < 10 || newPassword.length > 256) {
+      setPasswordError("新密码需为 10–256 个字符。");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordError("两次输入的新密码不一致。");
+      return;
+    }
+    const requestId = passwordRequestId.current ?? createClientRequestId("session_password");
+    passwordRequestId.current = requestId;
+    setPasswordBusy(true);
+    setPasswordError(null);
+    try {
+      await client.changeSessionPassword(currentPassword, newPassword, requestId);
+      passwordRequestId.current = null;
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setPasswordError("密码已更新，正在返回登录页…");
+      window.setTimeout(() => window.location.reload(), 1_500);
+    } catch (error) {
+      setPasswordError(userFacingError(error));
+    } finally {
+      setPasswordBusy(false);
+    }
   };
 
   const handleOpenChange = (nextOpen: boolean) => {
@@ -253,6 +299,17 @@ export function SettingsDialog({
                   ? "请关闭设置，在工作区登录卡中完成安全设备登录；授权后 e-Mate 会受控重启并刷新页面。"
                   : "设备登录暂不可用，请稍后重试或联系管理员。"}
             </p>
+            {authenticated ? (
+              <form className="ex-password-form" onSubmit={(event) => { event.preventDefault(); void changePassword(); }}>
+                <label className="ex-field"><span>当前密码</span><input type="password" autoComplete="current-password" value={currentPassword} disabled={passwordBusy} minLength={8} maxLength={256} onChange={(event) => setCurrentPassword(event.target.value)} /></label>
+                <label className="ex-field"><span>新密码</span><input type="password" autoComplete="new-password" value={newPassword} disabled={passwordBusy} minLength={10} maxLength={256} onChange={(event) => setNewPassword(event.target.value)} /></label>
+                <label className="ex-field"><span>确认新密码</span><input type="password" autoComplete="new-password" value={confirmPassword} disabled={passwordBusy} minLength={10} maxLength={256} onChange={(event) => setConfirmPassword(event.target.value)} /></label>
+                <div className="ex-password-form-actions">
+                  <p className={`ex-field-help${passwordError ? " is-error" : ""}`} role={passwordError ? "status" : undefined}>{passwordError ?? "修改后所有设备会退出登录，请使用新密码重新登录。"}</p>
+                  <button className="ex-button is-primary" type="submit" disabled={passwordBusy || !currentPassword || !newPassword || !confirmPassword}>{passwordBusy ? "正在修改" : "修改密码"}</button>
+                </div>
+              </form>
+            ) : null}
           </section>
 
           <section className="ex-settings-section">
@@ -724,32 +781,34 @@ export function SettingsDialog({
               <div>
                 <strong>e-Mate {bootstrap?.update.current_version ?? "版本未读取"}</strong>
                 <p>
-                  {hasPendingUpdate && bootstrap?.update.target_version
-                    ? `新版 ${bootstrap.update.target_version} 已进入更新流程`
-                    : hasPendingUpdate && bootstrap?.update.state === "failed"
-                      ? "更新检查遇到问题"
-                      : hasPendingUpdate && bootstrap?.update.state === "activating"
-                        ? "正在启用新版本"
-                        : "当前已是可用版本"}
+                  {runtimeUpdateStatusText(bootstrap?.update, updateBusy)}
                 </p>
               </div>
-              {hasPendingUpdate && bootstrap?.update.state === "awaiting_user" && bootstrap.update.can_activate ? (
+              {updateReady ? (
                 <button
                   className="ex-button is-primary ex-permission-change"
                   type="button"
                   disabled={updateBusy}
                   onClick={() => void onActivateUpdate()}
                 >
-                  {updateBusy ? "正在激活" : "更新并刷新"}
+                  {updateBusy ? "正在切换版本" : "立即更新"}
                 </button>
               ) : (
                 <button
                   className="ex-button ex-permission-change"
                   type="button"
-                  disabled={!bootstrap || updateBusy || bootstrap.update.state === "activating"}
+                  disabled={!bootstrap || updateBusy || updateInProgress}
                   onClick={() => void onCheckUpdate()}
                 >
-                  {updateBusy ? "正在检查" : "检查更新"}
+                  {updateBusy
+                    ? "正在检查"
+                    : bootstrap?.update.state === "downloading"
+                      ? "后台下载中"
+                      : bootstrap?.update.state === "available"
+                        ? "等待后台下载"
+                      : bootstrap?.update.state === "activating"
+                        ? "正在切换版本"
+                        : "检查更新"}
                 </button>
               )}
             </div>

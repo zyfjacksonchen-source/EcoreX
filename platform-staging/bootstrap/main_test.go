@@ -822,10 +822,15 @@ func TestFreshInstallRejectsPointerBelowSignedBootstrapFloor(t *testing.T) {
 	}
 }
 
-func TestPointerAuthorityRejectsNonFinalOrPreV1Version(t *testing.T) {
-	for _, version := range []string{"0.9.9", "1.0.0-rc.1", "1.0.0+rebuilt", "2.0.0"} {
+func TestPointerAuthorityAcceptsFinalProductSemverAndRejectsDecoratedVersions(t *testing.T) {
+	for _, version := range []string{"0.3.0", "1.0.0", "2.0.0"} {
+		if _, err := stableReleaseSequence(version); err != nil {
+			t.Fatalf("final product target was rejected: %s", version)
+		}
+	}
+	for _, version := range []string{"01.0.0", "1.0.0-rc.1", "1.0.0+rebuilt", "10000.0.0"} {
 		if _, err := stableReleaseSequence(version); err == nil {
-			t.Fatalf("non-final v1 target was accepted: %s", version)
+			t.Fatalf("non-final product target was accepted: %s", version)
 		}
 	}
 }
@@ -1195,5 +1200,31 @@ func TestOrphanRuntimeIsOpenedWithoutRotatingItsOwnerNonce(t *testing.T) {
 	)
 	if err != nil || opened || openCalls != 0 {
 		t.Fatal("a service without the persisted owner nonce was hot-opened")
+	}
+}
+
+func TestLocalInstallWaitsForLaunchOwnerInsteadOfOpeningOldRuntime(t *testing.T) {
+	root := canonicalTestTempDir(t)
+	path := filepath.Join(root, "bootstrap-launch.lock")
+	held, err := acquireProductLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(75 * time.Millisecond)
+		held.close()
+		close(released)
+	}()
+
+	started := time.Now()
+	acquired, err := acquireLocalInstallLock(path, time.Second, 10*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer acquired.close()
+	<-released
+	if time.Since(started) < 50*time.Millisecond {
+		t.Fatal("local install did not wait for the running Bootstrap to exit")
 	}
 }

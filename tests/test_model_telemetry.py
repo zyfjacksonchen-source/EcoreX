@@ -35,7 +35,7 @@ class FakeOpenAIClient:
 
 class FakeTelemetryBot:
     @staticmethod
-    def build(client, *, provider="openai", model="gpt-5.5"):
+    def build(client, *, provider="openai", model="gpt-5.6-luna"):
         from models.openai_compatible_bot import OpenAICompatibleBot
 
         class Bot(OpenAICompatibleBot):
@@ -134,7 +134,7 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(len(events), 1)
         event = events[0]
         self.assertEqual(event["provider"], "openai")
-        self.assertEqual(event["model"], "gpt-5.5")
+        self.assertEqual(event["model"], "gpt-5.6-luna")
         self.assertTrue(event["stream"])
         self.assertEqual(event["status"], "completed")
         self.assertEqual(event["retry_count"], 0)
@@ -455,7 +455,7 @@ class TestModelTelemetry(unittest.TestCase):
 
             @property
             def model(self):
-                return "gpt-5.5"
+                return "gpt-5.6-luna"
 
         def retry_sleep(delay):
             return None
@@ -3134,7 +3134,7 @@ class TestModelTelemetry(unittest.TestCase):
         ]
         client = FakeOpenAIClient(chunks=chunks)
         bot = FakeTelemetryBot.build(client)
-        model = self._native_agent_model(bot, model_name="gpt-5.5", provider="openai")
+        model = self._native_agent_model(bot, model_name="gpt-5.6-luna", provider="openai")
 
         result = list(model.call_stream(LLMRequest(
             messages=[{"role": "user", "content": "hi"}],

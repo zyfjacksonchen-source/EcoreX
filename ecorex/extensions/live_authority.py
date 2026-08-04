@@ -1,0 +1,129 @@
+"""Process-local bridge from legacy Skill readers to ExtensionService state.
+
+Legacy ``skills_config.json`` is migration input only.  Runtime discovery must
+never treat it as a second mutable enablement authority after v0.3.0 startup.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import re
+import threading
+import weakref
+from typing import Any
+
+from .models import ExtensionStatus
+from .skill_migration import SKILL_ALIASES
+
+
+_SAFE_SLUG = re.compile(r"^[a-z][a-z0-9-]{0,95}$")
+_LOCK = threading.RLock()
+_SERVICE: weakref.ReferenceType[Any] | None = None
+
+
+def bind_live_extension_service(service: Any) -> None:
+    """Bind the verified product authority used by in-process legacy readers."""
+
+    if service is None or not callable(getattr(service, "projection", None)):
+        raise ValueError("live Extension authority is invalid")
+    global _SERVICE
+    with _LOCK:
+        _SERVICE = weakref.ref(service)
+
+
+def live_skill_enabled(name: str) -> bool | None:
+    """Return current Extension state, or ``None`` when no authority/item exists."""
+
+    extension_id = _extension_id(name)
+    if extension_id is None:
+        return None
+    with _LOCK:
+        service = _SERVICE() if _SERVICE is not None else None
+    if service is None:
+        return None
+    try:
+        projection = service.projection(extension_id)
+    except Exception:
+        return None
+    return projection.status is ExtensionStatus.ENABLED
+
+
+def live_extension_generation() -> int | None:
+    with _LOCK:
+        service = _SERVICE() if _SERVICE is not None else None
+    if service is None:
+        return None
+    try:
+        return int(service.repository.generation())
+    except Exception:
+        return None
+
+
+def set_live_skill_enabled(name: str, enabled: bool) -> bool:
+    """Mutate one Skill only through the bound ExtensionService authority."""
+
+    extension_id = _extension_id(name)
+    with _LOCK:
+        service = _SERVICE() if _SERVICE is not None else None
+    if extension_id is None or service is None:
+        raise RuntimeError("live ExtensionService authority is unavailable")
+    projection = service.projection(extension_id)
+    desired = bool(enabled)
+    if (projection.status is ExtensionStatus.ENABLED) is desired:
+        return desired
+    request_id = (
+        f"legacy-skill-bridge:{extension_id}:{projection.revision}:"
+        f"{'enable' if desired else 'disable'}"
+    )
+    if desired:
+        _run_async(
+            service.enable(
+                extension_id,
+                expected_revision=projection.revision,
+                client_request_id=request_id,
+            )
+        )
+    else:
+        service.disable(
+            extension_id,
+            expected_revision=projection.revision,
+            client_request_id=request_id,
+        )
+    return desired
+
+
+def _run_async(awaitable: Any) -> Any:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(awaitable)
+    result: list[Any] = []
+    failure: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            result.append(asyncio.run(awaitable))
+        except BaseException as error:  # preserve the exact authority failure
+            failure.append(error)
+
+    thread = threading.Thread(target=run, name="emate-extension-authority", daemon=True)
+    thread.start()
+    thread.join()
+    if failure:
+        raise failure[0]
+    return result[0] if result else None
+
+
+def _extension_id(name: str) -> str | None:
+    slug = str(name or "").strip().casefold().replace("_", "-")
+    if _SAFE_SLUG.fullmatch(slug) is None:
+        return None
+    return "skill." + SKILL_ALIASES.get(slug, slug)
+
+
+__all__ = [
+    "bind_live_extension_service",
+    "live_extension_generation",
+    "live_skill_enabled",
+    "set_live_skill_enabled",
+]

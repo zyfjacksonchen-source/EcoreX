@@ -65,6 +65,7 @@ function bootstrap(revision: number, fullAccess: boolean, serverTime: string): B
     extensions: {
       snapshot_id: "extensions_1",
       contract_version: "1.0",
+      extension_generation: 0,
       items: [],
     },
     update: {
@@ -91,6 +92,7 @@ function projection(status: TurnStatus = "queued"): ThreadProjectionResponse {
       title: null,
       pinned: false,
       active_turn_status: null,
+      last_turn_status: null,
       metadata: {},
       forked_from_thread_id: null,
       forked_from_turn_id: null,
@@ -565,7 +567,7 @@ test("terminal phase alone cannot hide reasoning; explicit archive does", () => 
       { item_id: "reasoning_item" },
     ),
   });
-  assert.equal(selectVisibleReasoning(state), null);
+  assert.equal(selectVisibleReasoning(state)?.item_id, "reasoning_item");
   assert.equal(state.items.reasoning_item.content.presentation, "collapsed");
 });
 
@@ -801,4 +803,35 @@ test("switching tasks accepts the target projection even with a lower independen
   assert.equal(cleared.thread, null);
   assert.deepEqual(cleared.items, {});
   assert.deepEqual(cleared.turns, {});
+});
+
+test("task list events update real progress without completing pending work", () => {
+  let state = runtimeReducer(initialRuntimeViewState, {
+    type: "projection.received",
+    projection: projection("tool_running"),
+  });
+  state = runtimeReducer(state, {
+    type: "event.received",
+    event: event(5, "item.created", {
+      kind: "task_list",
+      status: "in_progress",
+      content: { schema_version: 1, turn_id: "trn_1", items: [], updated_at: now },
+    }, { item_id: "task_list_1" }),
+  });
+  state = runtimeReducer(state, {
+    type: "event.received",
+    event: event(6, "task_list.updated", {
+      schema_version: 1,
+      turn_id: "trn_1",
+      items: [
+        { id: "one", title: "第一项", status: "completed" },
+        { id: "two", title: "第二项", status: "in_progress" },
+      ],
+      updated_at: now,
+    }, { item_id: "task_list_1" }),
+  });
+
+  const item = state.items.task_list_1;
+  assert.equal(item.status, "in_progress");
+  assert.equal((item.content.items as Array<{ status: string }>)[1]?.status, "in_progress");
 });

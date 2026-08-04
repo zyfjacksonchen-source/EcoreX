@@ -59,7 +59,7 @@ def builtin_extension_manifests(
                 product_version=product_version,
                 build_digest=core_build_digest,
                 kind=ExtensionKind.TOOL_PROVIDER,
-                display_name="EcoreX 核心工具",
+                display_name="e-Mate 核心工具",
                 description="随已验证 Core 发布的内置办公工具合同。",
                 exports=tuple(_tool_export(spec) for spec in base_tools),
                 runtime_api_version=runtime_api_version,
@@ -103,7 +103,7 @@ def builtin_extension_manifests(
                 product_version=product_version,
                 build_digest=core_build_digest,
                 kind=ExtensionKind.CONNECTOR_PROVIDER,
-                display_name="EcoreX 连接器适配层",
+                display_name="e-Mate 连接器适配层",
                 description="随已验证 Core 发布的连接器定义与受管适配合同。",
                 exports=tuple(
                     sorted(

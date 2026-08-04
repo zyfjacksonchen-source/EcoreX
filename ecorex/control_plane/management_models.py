@@ -43,6 +43,7 @@ MANAGED_MODEL_SLOTS: Mapping[str, str] = MappingProxyType(
 MANAGED_MODEL_PROVIDER_PROTOCOLS: Mapping[str, ProviderPreset] = MappingProxyType(
     {
         "ecorex-chat": "responses",
+        "ecorex-gpt-5.6-sol": "responses",
         "ecorex-deepseek-v4-pro": "openai_compatible_chat",
         "ecorex-gemini-3.1-pro": "openai_compatible_chat",
         "ecorex-doubao-seed-2.0-pro": "openai_compatible_chat",
@@ -53,6 +54,7 @@ MANAGED_MODEL_PROVIDER_PROTOCOLS: Mapping[str, ProviderPreset] = MappingProxyTyp
 MANAGED_MODEL_ORIGIN_PRESETS: Mapping[str, ProviderOriginPreset] = MappingProxyType(
     {
         "ecorex-chat": "ecorex_chat",
+        "ecorex-gpt-5.6-sol": "ecorex_chat",
         "ecorex-deepseek-v4-pro": "deepseek_chat",
         "ecorex-gemini-3.1-pro": "gemini_chat",
         "ecorex-doubao-seed-2.0-pro": "doubao_chat",
@@ -66,14 +68,14 @@ def provider_protocol_for_slot(local_model_id: str) -> ProviderPreset:
     try:
         return MANAGED_MODEL_PROVIDER_PROTOCOLS[local_model_id]
     except KeyError:
-        raise ValueError("model ID is not a managed EcoreX model slot") from None
+        raise ValueError("model ID is not a managed e-Mate model slot") from None
 
 
 def provider_origin_preset_for_slot(local_model_id: str) -> ProviderOriginPreset:
     try:
         return MANAGED_MODEL_ORIGIN_PRESETS[local_model_id]
     except KeyError:
-        raise ValueError("model ID is not a managed EcoreX model slot") from None
+        raise ValueError("model ID is not a managed e-Mate model slot") from None
 
 
 class ManagementModel(BaseModel):
@@ -103,6 +105,12 @@ class AdminUserListProjection(ManagementModel):
     total: int = Field(ge=0)
     offset: int = Field(ge=0)
     limit: int = Field(ge=1, le=200)
+
+
+class PasswordChangeProjection(ManagementModel):
+    schema_version: Literal[1] = 1
+    status: Literal["changed"] = "changed"
+    reauthentication_required: Literal[True] = True
 
 
 class CreateAdminUserRequest(ManagementModel):
@@ -247,9 +255,9 @@ class CreateModelConfigurationRequest(ManagementModel):
     @model_validator(mode="after")
     def _provider_matches_modality(self) -> "CreateModelConfigurationRequest":
         if MANAGED_MODEL_SLOTS.get(self.local_model_id) != self.modality:
-            raise ValueError("model ID is not a managed EcoreX model slot")
+            raise ValueError("model ID is not a managed e-Mate model slot")
         if self.provider_preset != provider_protocol_for_slot(self.local_model_id):
-            raise ValueError("model provider protocol is fixed by its EcoreX slot")
+            raise ValueError("model provider protocol is fixed by its e-Mate slot")
         return self
 
 

@@ -896,6 +896,111 @@ class ManagedDeviceIdentityBroker:
             finally:
                 connection.close()
 
+    def access_token_is_current(
+        self,
+        *,
+        account_id: str,
+        token_id: str,
+    ) -> bool | None:
+        """Return None for non-device tokens, otherwise the current lease fact."""
+
+        connection = self._connect()
+        try:
+            grant = connection.execute(
+                "SELECT grants.lease_id,flows.account_id FROM device_identity_grants grants "
+                "JOIN device_identity_flows flows USING(flow_id) WHERE grants.access_jti=? "
+                "UNION ALL SELECT lease_id,account_id FROM device_identity_refresh_grants "
+                "WHERE access_jti=?",
+                (token_id, token_id),
+            ).fetchone()
+            if grant is None:
+                return None
+            authority = connection.execute(
+                "SELECT account_id,auth_epoch FROM device_identity_grant_authority "
+                "WHERE lease_id=?",
+                (grant["lease_id"],),
+            ).fetchone()
+            revoked = self._lease_is_revoked(connection, str(grant["lease_id"]))
+        finally:
+            connection.close()
+        if (
+            grant["account_id"] != account_id
+            or authority is None
+            or authority["account_id"] != account_id
+            or revoked
+        ):
+            return False
+        try:
+            current = self.account_directory.resolve(account_id)
+        except DeviceIdentityError:
+            return False
+        return int(authority["auth_epoch"]) == current.auth_epoch
+
+    def revoke_account_sessions(
+        self,
+        *,
+        account_id: str,
+        idempotency_key: str,
+    ) -> int:
+        """Revoke every durable device lease for one authenticated account."""
+
+        self._idempotency(idempotency_key)
+        with self._approval_lock:
+            connection = self._connect()
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                rows = connection.execute(
+                    "SELECT authority.lease_id,COALESCE(refresh.client_id,flows.client_id) "
+                    "AS client_id FROM device_identity_grant_authority authority "
+                    "LEFT JOIN device_identity_grants grants "
+                    "ON grants.lease_id=authority.lease_id "
+                    "LEFT JOIN device_identity_flows flows ON flows.flow_id=grants.flow_id "
+                    "LEFT JOIN device_identity_refresh_grants refresh "
+                    "ON refresh.lease_id=authority.lease_id "
+                    "LEFT JOIN device_identity_revocations revoked "
+                    "ON revoked.lease_id=authority.lease_id "
+                    "WHERE authority.account_id=? AND revoked.lease_id IS NULL "
+                    "ORDER BY authority.lease_id",
+                    (account_id,),
+                ).fetchall()
+                now = self._now().replace(microsecond=0)
+                for row in rows:
+                    lease_id = str(row["lease_id"])
+                    connection.execute(
+                        "INSERT INTO device_identity_revocations("
+                        "lease_id,account_id,client_id,idempotency_hash,request_hash,revoked_at"
+                        ") VALUES(?,?,?,?,?,?)",
+                        (
+                            lease_id,
+                            account_id,
+                            str(row["client_id"]),
+                            self._commitment(
+                                "account-revoke-idempotency",
+                                f"{idempotency_key}\0{lease_id}",
+                            ),
+                            self._commitment(
+                                "account-revoke-request", f"{account_id}\0{lease_id}"
+                            ),
+                            _iso(now),
+                        ),
+                    )
+                self._audit(
+                    connection,
+                    "device.account.sessions.revoked",
+                    "revoked",
+                    account_id=account_id,
+                    details={"revoked_count": len(rows)},
+                    now=now,
+                )
+                connection.commit()
+                return len(rows)
+            except BaseException:
+                if connection.in_transaction:
+                    connection.rollback()
+                raise
+            finally:
+                connection.close()
+
     def verify_legacy_credential(self, *, user_code: str, credential: str) -> str:
         if not isinstance(credential, str) or not 8 <= len(credential) <= 4096:
             raise DeviceIdentityUnauthorized("legacy credential verification failed")

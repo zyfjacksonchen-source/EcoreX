@@ -287,6 +287,9 @@ def test_admin_dom_and_script_contract_are_csp_safe_and_ephemeral() -> None:
     assert 'id="refresh-state-button"' in html
     assert 'id="admin-identifier"' in html
     assert 'id="admin-password"' in html
+    assert "<title>e-Mate 管理员</title>" in html
+    assert ">EcoreX<" not in html
+    assert 'aria-label="EcoreX' not in html
     assert 'id="login-button"' in html
     assert 'id="device-login-button"' not in html
     assert 'id="manual-token-fallback"' not in html

@@ -109,6 +109,7 @@ export interface ThreadProjection {
   title: string | null;
   pinned: boolean;
   active_turn_status: TurnStatus | null;
+  last_turn_status: TurnStatus | null;
   metadata: JsonObject;
   forked_from_thread_id: string | null;
   forked_from_turn_id: string | null;
@@ -158,6 +159,19 @@ export interface ContextUsageProjection {
   measured_at: string | null;
 }
 
+export interface TaskActivityDay {
+  date: string;
+  completed: number;
+  terminal: number;
+}
+
+export interface TaskActivityProjection {
+  completed_today: number;
+  waiting: number;
+  terminal_today: number;
+  days: TaskActivityDay[];
+}
+
 export interface ConversationUsageProjection {
   thread_id: string;
   timezone: string;
@@ -167,6 +181,7 @@ export interface ConversationUsageProjection {
   today: TokenUsageWindow;
   week: TokenUsageWindow;
   context: ContextUsageProjection;
+  task_activity: TaskActivityProjection;
   calculated_at: string;
 }
 
@@ -390,7 +405,7 @@ export interface ModelPolicyDescriptor {
   policy_version: string;
   local_model_id: string;
   upstream_model_id: string;
-  reasoning_effort: "medium";
+  reasoning_effort: "medium" | "high";
   context_management: {
     type: "compaction";
     compact_threshold_tokens: number;
@@ -502,7 +517,8 @@ export type ExtensionStatus =
   | "staged"
   | "enabled"
   | "disabled"
-  | "quarantined";
+  | "quarantined"
+  | "uninstalled";
 
 export type ExtensionHealth =
   | "unknown"
@@ -521,7 +537,9 @@ export type ExtensionActionId =
   | "enable"
   | "disable"
   | "health_check"
-  | "rollback";
+  | "rollback"
+  | "configure"
+  | "uninstall";
 
 export interface ExtensionDependencyProjection {
   extension_id: string;
@@ -570,6 +588,14 @@ export interface ExtensionProjection {
   trust: ExtensionTrust;
   status: ExtensionStatus;
   health: ExtensionHealth;
+  provenance: {
+    brand: "e-Mate";
+    original_platform: string | null;
+    original_url: string | null;
+  };
+  readiness: "ready" | "needs_configuration" | "missing_runtime" | "unsupported";
+  requirements: string[];
+  tags: string[];
   dependencies: ExtensionDependencyProjection[];
   exports: ExtensionExportProjection[];
   actions: ExtensionActionProjection[];
@@ -581,12 +607,40 @@ export interface ExtensionProjection {
 export interface ExtensionCatalogSnapshot {
   snapshot_id: string;
   contract_version: "1.0";
+  extension_generation: number;
   items: ExtensionProjection[];
 }
 
 export interface ExtensionMutationResponse {
   extension: ExtensionProjection;
   extensions: ExtensionCatalogSnapshot;
+}
+
+export interface SkillHubCardProjection {
+  slug: string;
+  title: string;
+  summary: string;
+  version: string;
+  package_sha256: string;
+  package_size_bytes: number;
+  tags: string[];
+  category: "third_party" | "content_creation" | "office_productivity";
+  uploader: { nickname: string; author_ref: string };
+  provenance: { brand: "e-Mate"; original_platform: string | null; original_url: string | null };
+  installation_status: "not_installed" | "installed_enabled" | "installed_disabled" | "uninstalled";
+  readiness: "ready" | "needs_configuration" | "missing_runtime" | "unsupported";
+}
+
+export interface SkillHubListResponse {
+  schema_version: 1;
+  items: SkillHubCardProjection[];
+  next_cursor: string | null;
+}
+
+export interface SkillHubDetailProjection {
+  schema_version: 1;
+  skill: SkillHubCardProjection;
+  versions: SkillHubCardProjection[];
 }
 
 export interface ConnectorAuthChallenge {
@@ -791,6 +845,12 @@ export interface LogoutSessionResponse {
   generation: number;
   restart_required: true;
   restart_scheduled: boolean;
+}
+
+export interface PasswordSessionChangeResponse {
+  schema_version: 1;
+  status: "changed";
+  reauthentication_required: true;
 }
 
 export interface PermissionMutationResponse {

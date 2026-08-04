@@ -217,7 +217,7 @@ class HTTPSModelConnectionTester:
                             "content": [
                                 {
                                     "type": "input_text",
-                                    "text": "EcoreX administrator activation probe.",
+                                    "text": "e-Mate administrator activation probe.",
                                 }
                             ],
                         }
@@ -259,7 +259,7 @@ class HTTPSModelConnectionTester:
                         },
                         {
                             "role": "user",
-                            "content": "EcoreX administrator activation probe.",
+                            "content": "e-Mate administrator activation probe.",
                         },
                     ],
                     "max_tokens": 64,

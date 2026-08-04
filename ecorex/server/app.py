@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse, Response
 
 from ecorex.capabilities import (
     CapabilityPackRuntime,
+    CapabilityUnavailableError,
     build_capability_handler_set,
     builtin_capability_registry,
 )
@@ -38,7 +39,13 @@ from ecorex.session import (
 )
 from ecorex.update import Ed25519SignatureVerifier
 
-from .bundle import RUNTIME_CONFIG_MARKER, VerifiedWebBundle, load_verified_web_bundle
+from .bundle import (
+    RUNTIME_CONFIG_MARKER,
+    VerifiedWebBundle,
+    _validate_index,
+    load_verified_web_bundle,
+)
+from .skill_runner import create_production_controlled_skill_runner
 from .errors import ServerConfigurationError
 
 
@@ -76,6 +83,15 @@ def _origin(host: str, port: int) -> str:
     return f"http://{authority}:{port}"
 
 
+def _execute_feishu_cli(arguments: Mapping[str, Any], _context: Any) -> dict[str, Any]:
+    from agent.tools.feishu_cli import FeishuCli
+
+    result = FeishuCli().execute(dict(arguments))
+    if result.status != "success":
+        raise CapabilityUnavailableError("Feishu CLI returned a verified failure")
+    return {"status": result.status, "result": result.result}
+
+
 @dataclass(frozen=True, slots=True)
 class ProductServerSettings:
     database_path: str | Path
@@ -92,7 +108,7 @@ class ProductServerSettings:
     secret_factory: SecretFactory | None = field(
         default=None, repr=False, compare=False
     )
-    full_access: bool = False
+    full_access: bool = True
     admin_hard_denies: tuple[str, ...] = ()
     enforce_admin_tool_denies: bool = False
     managed_session_service: ManagedSessionService | None = field(
@@ -416,9 +432,11 @@ def _index_response(
     request: Request,
     bundle: VerifiedWebBundle,
     bearer_token: str,
+    *,
+    template: str | None = None,
 ) -> Response:
     nonce = secrets.token_urlsafe(24)
-    injected = bundle.index_template.replace(
+    injected = (template or bundle.index_template).replace(
         RUNTIME_CONFIG_MARKER, _runtime_script(bundle, bearer_token, nonce)
     ).encode("utf-8")
     content = b"" if request.method == "HEAD" else injected
@@ -503,7 +521,10 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
     capability_runtime = build_capability_handler_set(
         capability_registry,
         workspace_roots=settings.workspace_roots,
-        trusted_core_handlers=settings.capability_handlers,
+        trusted_core_handlers={
+            "feishu_cli": _execute_feishu_cli,
+            **settings.capability_handlers,
+        },
         pack_runtime=settings.capability_pack_runtime,
         workspace_root_resolver=ProjectWorkspaceAuthority(settings.database_path),
     )
@@ -539,6 +560,10 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         raise ServerConfigurationError(
             "retouch adapter requires a verified image capability pack"
         )
+    shell_handler = capability_runtime.handlers.get("shell")
+    skill_sandbox_authority = getattr(
+        shell_handler, "controlled_skill_sandbox_authority", None
+    )
     try:
         extension_service = compose_extension_service(
             database_path=settings.database_path,
@@ -551,6 +576,14 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
             connector_registry=builtin_connector_registry(),
             installed_pack_ids=capability_runtime.installed_pack_ids,
             signature_verifier=Ed25519SignatureVerifier(settings.trusted_public_keys),
+            builtin_skill_root=Path(__file__).resolve().parents[2] / "skills",
+            legacy_skill_roots=tuple(root / "skills" for root in settings.workspace_roots),
+            skill_runner_factory=lambda store: create_production_controlled_skill_runner(
+                store,
+                platform=settings.platform,
+                sandbox_authority=skill_sandbox_authority,
+                workspace_roots=settings.workspace_roots,
+            ),
             initialize=False,
             create_storage=False,
         )
@@ -560,7 +593,7 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         ) from error
 
     app = FastAPI(
-        title="EcoreX",
+        title="e-Mate",
         version=bundle.release_manifest.version,
         docs_url=None,
         redoc_url=None,
@@ -585,6 +618,7 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
             settings.managed_session_refresh_poll_seconds
         ),
         device_authorization_service=settings.device_authorization_service,
+        skill_hub_client=settings.device_authorization_service,
         device_authorization_poll_seconds=(settings.device_authorization_poll_seconds),
         close_device_authorization_broker_on_shutdown=(
             settings.close_device_authorization_broker_on_shutdown
@@ -643,6 +677,14 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
     register_runtime(settings=runtime_settings, app=app)
     app.state.web_bundle = bundle
     app.state.runtime_bearer_token = bearer_token
+    skill_hub_pages = [
+        value
+        for path, value in bundle.files.items()
+        if path.startswith("assets/skill-hub-page.") and path.endswith(".json")
+    ]
+    skill_hub_template = (
+        _validate_index(skill_hub_pages[0].content) if len(skill_hub_pages) == 1 else None
+    )
 
     @app.get(
         "/api/v1/runtime-owner",
@@ -697,6 +739,15 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
             return _not_found()
         if requested_path == "":
             return _index_response(request, bundle, bearer_token)
+        if folded_path.rstrip("/") == "ecorex-agent/skills":
+            if skill_hub_template is None:
+                return _not_found()
+            return _index_response(
+                request,
+                bundle,
+                bearer_token,
+                template=skill_hub_template,
+            )
         if not _safe_request_path(requested_path):
             return _not_found()
         verified = bundle.file(requested_path)

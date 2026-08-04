@@ -19,6 +19,7 @@ class ControlPrincipal:
     account_id: str
     organization_id: str | None = None
     roles: frozenset[str] = frozenset()
+    token_id: str | None = None
 
 
 class ControlPlaneAuthenticator(Protocol):

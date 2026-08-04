@@ -181,9 +181,7 @@ def _decorate_skill_governance(row: dict) -> None:
     purpose_group = _purpose_group_for(row)
     is_builtin = source_group == "builtin"
 
-    if is_builtin:
-        row["enabled"] = True
-        row["default_enabled"] = True
+    row["default_enabled"] = True
 
     row["builtin_catalog"] = is_builtin
     row["builtinCatalog"] = is_builtin
@@ -195,11 +193,10 @@ def _decorate_skill_governance(row: dict) -> None:
     row["purposeGroup"] = purpose_group
     row["purpose_label"] = SKILL_PURPOSE_GROUP_LABELS[purpose_group]
     row["purposeLabel"] = SKILL_PURPOSE_GROUP_LABELS[purpose_group]
-    row["toggleable"] = not is_builtin
-    row["locked"] = is_builtin
-    if is_builtin:
-        row["lock_reason"] = "builtin-default-enabled"
-        row["lockReason"] = "builtin-default-enabled"
+    row["toggleable"] = True
+    row["locked"] = False
+    row.pop("lock_reason", None)
+    row.pop("lockReason", None)
 
 
 def _is_lark_cli_skill(row: dict) -> bool:
@@ -399,7 +396,7 @@ class SkillService:
                     row["quality_gates"] = quality_gates
                 if entry.metadata:
                     row["always"] = bool(entry.metadata.always)
-                    row["default_enabled"] = bool(entry.metadata.default_enabled)
+                    row["default_enabled"] = True
                     row["primary_env"] = entry.metadata.primary_env
                     row["os"] = list(entry.metadata.os or [])
             _decorate_skill_governance(row)
@@ -474,7 +471,6 @@ class SkillService:
         category = payload.get("category")
         if category and name in self.manager.skills_config:
             self.manager.skills_config[name]["category"] = category
-            self.manager._save_skills_config()
 
     def _add_url(self, name: str, payload: dict) -> None:
         """Install a skill by downloading individual files."""
@@ -585,8 +581,6 @@ class SkillService:
         if not name:
             raise ValueError("skill name is required")
         self._validate_skill_name(name)
-        if self._skill_source_group(name) == "builtin":
-            raise PermissionError("Built-in factory skills are always enabled and cannot be disabled.")
         self._ensure_skill_mutation_allowed("close", payload)
         self.manager.set_skill_enabled(name, enabled=False)
         logger.info(f"[SkillService] close: skill '{name}' disabled")
@@ -710,6 +704,11 @@ class SkillService:
             logger.warning(f"[SkillService] Failed to write override marker for '{name}': {exc}")
 
     def _ensure_skill_mutation_allowed(self, action: str, payload: dict) -> None:
+        if action in {"add", "delete"}:
+            raise RuntimeError(
+                "legacy Skill filesystem mutation is disabled; use the "
+                "ExtensionService install/uninstall API"
+            )
         if payload.get("_permission_checked") is True:
             return
         try:

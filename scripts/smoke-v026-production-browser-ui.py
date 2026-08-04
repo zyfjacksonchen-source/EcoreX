@@ -160,7 +160,7 @@ def main() -> None:
         provider_labels = [label for label in ("OpenAI", "DeepSeek", "Gemini", "豆包") if label in menu_text]
         metrics["providerLabels"] = provider_labels
         add(checks, "model popover opened", option_count > 0, {"count": option_count})
-        add(checks, "model menu has more than gpt-5.5", option_count > 1, {"count": option_count})
+        add(checks, "model menu has more than gpt-5.6-luna", option_count > 1, {"count": option_count})
         add(checks, "model menu has no Unauthorized", "Unauthorized" not in menu_text)
         add(checks, "model menu shows provider labels", len(provider_labels) >= 4, {"labels": provider_labels})
 

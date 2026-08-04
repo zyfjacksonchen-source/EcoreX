@@ -18,6 +18,7 @@ from ecorex.bootstrap.companion import (
     BootstrapCompanionError,
     BootstrapCompanionInstaller,
 )
+from ecorex.product_version import stable_release_sequence
 from ecorex.release import (
     ArtifactBuildInput,
     ArtifactKind,
@@ -89,8 +90,7 @@ def _built_bootstrap(
         serialization.Encoding.Raw,
         serialization.PublicFormat.Raw,
     )
-    _major, minor, patch = (int(item) for item in __version__.split("."))
-    sequence = minor * 1_000_000 + patch + 1
+    sequence = stable_release_sequence(__version__)
     minimum_payload = (
         b"ecorex.bootstrap-minimum-stable.v1\0"
         + str(sequence).encode()

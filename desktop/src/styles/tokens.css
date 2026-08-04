@@ -68,7 +68,7 @@
   --target-desktop: 32px;
   --target-touch: 44px;
   --workspace-inset: 10px;
-  --layout-sidebar-width: 252px;
+  --layout-sidebar-width: 248px;
   --artifact-action-rail-width: 132px;
   --focus-primary-ring: 0 0 0 2px var(--color-brand-ink);
   --focus-subtle-ring: 0 0 0 1px var(--color-brand-strong);
@@ -85,22 +85,22 @@
   color-scheme: light;
 
   --theme-contrast: 45;
-  --color-canvas: oklch(0.976139 0 0);
-  --color-workspace-surface: oklch(1 0 0);
-  --color-surface: oklch(1 0 0);
-  --color-raised: oklch(0.965 0.004 258);
-  --color-hover: oklch(0.94 0.006 258);
+  --color-canvas: #f4f4f1;
+  --color-workspace-surface: #fafaf8;
+  --color-surface: #f4f4f1;
+  --color-raised: #eeeee9;
+  --color-hover: #efefeb;
   --color-session-emphasis: oklch(0.94007 0 0);
   --color-selected: var(--color-session-emphasis);
   --color-composer-surface: var(--color-workspace-surface);
   --color-overlay-surface: oklch(1 0 0);
 
-  --color-ink: oklch(0.225591 0.006566 258.364);
-  --color-ink-muted: oklch(0.42 0.012 258);
-  --color-ink-subtle: oklch(0.45 0.01 258);
+  --color-ink: #2d2d2b;
+  --color-ink-muted: #666662;
+  --color-ink-subtle: #666662;
   --color-ink-disabled: oklch(0.62 0.008 258);
-  --color-rule: oklch(0.89 0.006 258);
-  --color-rule-strong: oklch(0.78 0.008 258);
+  --color-rule: #e0e0da;
+  --color-rule-strong: #c2c2bb;
 
   --color-accent: oklch(0.682034 0.173444 251.11);
   --color-accent-strong: oklch(0.528649 0.173447 254.975);
@@ -108,9 +108,9 @@
   --color-accent-ink: oklch(0.177638 0 0);
   --color-focus: oklch(0.528649 0.173447 254.975);
 
-  --color-brand: oklch(0.72 0.17 55);
-  --color-brand-strong: oklch(0.61 0.185 48);
-  --color-brand-soft: oklch(0.925 0.055 62);
+  --color-brand: #e5601c;
+  --color-brand-strong: #e5601c;
+  --color-brand-soft: #fff0e8;
   --color-brand-ink: oklch(0.205 0.018 55);
 
   --color-info: oklch(0.528649 0.173447 254.975);
@@ -137,22 +137,22 @@
   color-scheme: dark;
 
   --theme-contrast: 60;
-  --color-canvas: oklch(0.168416 0 0);
-  --color-workspace-surface: oklch(0.177638 0 0);
-  --color-surface: oklch(0.177638 0 0);
-  --color-raised: oklch(0.22 0.004 258);
-  --color-hover: oklch(0.27 0.006 258);
-  --color-session-emphasis: oklch(0.243535 0 0);
+  --color-canvas: #2d2d2b;
+  --color-workspace-surface: #111111;
+  --color-surface: #202020;
+  --color-raised: #262626;
+  --color-hover: #393936;
+  --color-session-emphasis: #262626;
   --color-selected: var(--color-session-emphasis);
   --color-composer-surface: var(--color-session-emphasis);
   --color-overlay-surface: oklch(0.23 0.004 258);
 
-  --color-ink: oklch(0.991069 0 0);
-  --color-ink-muted: oklch(0.76 0.008 258);
-  --color-ink-subtle: oklch(0.66 0.008 258);
+  --color-ink: #f9f9f7;
+  --color-ink-muted: #b8b8b1;
+  --color-ink-subtle: #b8b8b1;
   --color-ink-disabled: oklch(0.5 0.008 258);
-  --color-rule: oklch(0.32 0.008 258);
-  --color-rule-strong: oklch(0.42 0.01 258);
+  --color-rule: #393939;
+  --color-rule-strong: #484844;
 
   --color-accent: oklch(0.528649 0.173447 254.975);
   --color-accent-strong: oklch(0.682034 0.173444 251.11);
@@ -160,13 +160,13 @@
   --color-accent-ink: oklch(0.991069 0 0);
   --color-focus: oklch(0.682034 0.173444 251.11);
 
-  --color-brand: oklch(0.78 0.16 58);
-  --color-brand-strong: oklch(0.84 0.145 62);
-  --color-brand-soft: oklch(0.31 0.07 52);
+  --color-brand: #e5601c;
+  --color-brand-strong: #e5601c;
+  --color-brand-soft: #4a2a1d;
   --color-brand-ink: oklch(0.19 0.02 52);
 
   --color-info: oklch(0.682034 0.173444 251.11);
-  --color-success: oklch(0.621162 0.179736 148.011);
+  --color-success: oklch(0.68 0.17 148);
   --color-warning: oklch(0.82 0.14 80);
   --color-danger: oklch(0.72 0.18 28);
   --color-diff-added: oklch(0.621162 0.179736 148.011);

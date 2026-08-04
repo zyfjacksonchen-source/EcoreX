@@ -111,10 +111,11 @@ test("assistant office Markdown is lazy, bounded, and cannot load raw HTML or im
   assert.doesNotMatch(richMessage, /dangerouslySetInnerHTML/u);
 });
 
-test("streaming Markdown parsing is rate-limited independently of event batching", () => {
-  assert.match(richMessage, /STREAM_FLUSH_MS = 48/u);
-  assert.match(richMessage, /window\.setTimeout/u);
-  assert.match(richMessage, /useDeferredValue\(buffered\)/u);
+test("streaming Markdown renders the frame-batched text without a second delay", () => {
+  assert.doesNotMatch(richMessage, /STREAM_FLUSH_MS/u);
+  assert.doesNotMatch(richMessage, /window\.setTimeout/u);
+  assert.doesNotMatch(richMessage, /useDeferredValue/u);
+  assert.match(richMessage, /\{text\}/u);
 });
 
 test("continuing by task ID keeps the current transcript until the target is verified", () => {

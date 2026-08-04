@@ -15,6 +15,7 @@ import ecorex.release.builder as release_builder_module
 from ecorex import __version__
 from ecorex.bootstrap import install_local
 from ecorex.bootstrap.companion import BootstrapCompanionInstaller
+from ecorex.product_version import stable_release_sequence
 from ecorex.integration.pack_verification import verify_product_capability_pack
 from ecorex.pack_catalog import (
     CAPABILITY_PACK_SERVICE_IDS,
@@ -154,8 +155,7 @@ def _release(
         serialization.Encoding.Raw,
         serialization.PublicFormat.Raw,
     )
-    _major, minor, patch = (int(value) for value in __version__.split("."))
-    sequence = minor * 1_000_000 + patch + 1
+    sequence = stable_release_sequence(__version__)
     minimum_payload = (
         b"ecorex.bootstrap-minimum-stable.v1\0"
         + str(sequence).encode()

@@ -21,6 +21,7 @@ import tempfile
 from typing import Any, Mapping
 from urllib.parse import quote, urlparse
 
+from ecorex.product_version import stable_release_sequence
 from ecorex.update import (
     MAX_MANIFEST_BYTES,
     ReleaseChannel,
@@ -54,11 +55,13 @@ _SHA256_LENGTH = 64
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SAFE_FILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 _STABLE_RELEASE_ID = re.compile(r"^release-stable-[0-9a-f]{24}$")
-_V1_VERSION = re.compile(
-    r"^1\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+_PRODUCT_VERSION = re.compile(
+    r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
     r"(?:[-+][0-9A-Za-z.-]+)?$"
 )
-_STABLE_SEQUENCE_VERSION = re.compile(r"^1\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$")
+_STABLE_SEQUENCE_VERSION = re.compile(
+    r"^(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})$"
+)
 _RFC3339 = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
     r"(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
@@ -340,23 +343,14 @@ def build_public_bootstrap_index(
 
 
 def stable_pointer_sequence(version: str) -> int:
-    """Map one immutable v1 stable SemVer to its monotonic pointer sequence."""
+    """Map one immutable product SemVer to its monotonic pointer sequence."""
 
-    match = (
-        _STABLE_SEQUENCE_VERSION.fullmatch(version)
-        if isinstance(version, str)
-        else None
-    )
-    if match is None:
+    try:
+        return stable_release_sequence(version)
+    except ValueError:
         raise PublicBootstrapIndexError(
-            "stable public pointer version must be a final v1 SemVer"
-        )
-    minor = int(match.group(1))
-    patch = int(match.group(2))
-    # v1.0.0 is sequence 1. Each minor owns one million patch positions.  This
-    # remains exactly representable by JavaScript and int64 for the schema's
-    # bounded six-digit SemVer components.
-    return minor * 1_000_000 + patch + 1
+            "stable public pointer version must be a final product SemVer"
+        ) from None
 
 
 def public_bootstrap_authority_signing_bytes(
@@ -480,7 +474,7 @@ def validate_public_bootstrap_index(
     )
     if (
         not _matches(release.get("release_id"), _STABLE_RELEASE_ID)
-        or not _matches(release.get("version"), _V1_VERSION)
+        or not _matches(release.get("version"), _PRODUCT_VERSION)
         or release.get("channel") != "stable"
         or not _is_aware_datetime(release.get("created_at"))
         or not _is_sha256_value(release.get("build_digest"))

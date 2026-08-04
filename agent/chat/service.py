@@ -192,11 +192,13 @@ class ChatService:
         try:
             response = executor.run_stream(query)
         except Exception:
-            # If executor cleared messages (context overflow), sync back
-            if len(executor.messages) == 0:
-                with agent.messages_lock:
-                    agent.messages.clear()
-                    logger.info("[ChatService] Cleared agent message history after executor recovery")
+            new_messages = new_messages_since_user_query(
+                executor.messages, original_length, query
+            )
+            with agent.messages_lock:
+                agent.messages = list(executor.messages)
+            if new_messages:
+                self._persist_messages(session_id, list(new_messages), channel_type)
             raise
         finally:
             # Release cancel token to keep the registry bounded.

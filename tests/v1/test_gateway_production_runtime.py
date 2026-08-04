@@ -107,7 +107,7 @@ def _environment(tmp_path: Path, keyring: str) -> dict[str, str]:
         "ECOREX_GATEWAY_DATABASE_PATH": str((tmp_path / "gateway.sqlite3").resolve()),
         "ECOREX_GATEWAY_STORAGE_ENCRYPTION_AT_REST": "true",
         "ECOREX_GATEWAY_MODEL_MAPPING_JSON": json.dumps(
-            {"ecorex-chat": "gpt-5.6-sol"}
+            {"ecorex-chat": "unsupported-upstream-model"}
         ),
         "ECOREX_GATEWAY_PROVIDER_ORIGIN": "https://provider.ecorex.invalid",
         "ECOREX_GATEWAY_PROVIDER_ALLOWED_ORIGINS_JSON": json.dumps(
@@ -178,11 +178,11 @@ def test_gateway_request_carries_the_authoritative_chat_model_policy() -> None:
     assert request.model_id == "ecorex-chat"
     assert request.model_policy.model_dump(mode="json") == {
         "schema_version": 1,
-        "policy_id": "ecorex-chat-gpt-5.6-sol",
-        "policy_version": "1.0.0",
+        "policy_id": "ecorex-chat-gpt-5.6-luna",
+        "policy_version": "1.1.0",
         "local_model_id": "ecorex-chat",
-        "upstream_model_id": "gpt-5.6-sol",
-        "reasoning_effort": "medium",
+        "upstream_model_id": "gpt-5.6-luna",
+        "reasoning_effort": "high",
         "context_management": {
             "type": "compaction",
             "compact_threshold_tokens": 272_000,
@@ -321,15 +321,15 @@ def test_fixed_https_responses_adapter_translates_real_sse_contract() -> None:
             if request.url.path == "/v1/models":
                 return httpx.Response(
                     200,
-                    json={"object": "list", "data": [{"id": "gpt-5.6-sol"}]},
+                    json={"object": "list", "data": [{"id": "gpt-5.6-luna"}]},
                     headers={"Content-Type": "application/json"},
                 )
             assert request.url == "https://provider.ecorex.invalid/v1/responses"
             assert request.headers["authorization"] == "Bearer " + PROVIDER_TOKEN
             assert request.headers["idempotency-key"] == "request-1"
             submitted = json.loads(request.content)
-            assert submitted["model"] == "gpt-5.6-sol"
-            assert submitted["reasoning"] == {"effort": "medium"}
+            assert submitted["model"] == "gpt-5.6-luna"
+            assert submitted["reasoning"] == {"effort": "high"}
             assert submitted["context_management"] == [
                 {"type": "compaction", "compact_threshold": 272_000}
             ]
@@ -354,7 +354,7 @@ def test_fixed_https_responses_adapter_translates_real_sse_contract() -> None:
             body = _sse(
                 {
                     "type": "response.created",
-                    "response": {"id": "resp_1", "model": "gpt-5.6-sol"},
+                    "response": {"id": "resp_1", "model": "gpt-5.6-luna"},
                 },
                 {
                     "type": "response.reasoning_summary_text.delta",
@@ -404,7 +404,7 @@ def test_fixed_https_responses_adapter_translates_real_sse_contract() -> None:
                     "type": "response.completed",
                     "response": {
                         "id": "resp_1",
-                        "model": "gpt-5.6-sol",
+                        "model": "gpt-5.6-luna",
                         "status": "completed",
                         "usage": {
                             "input_tokens": 10,
@@ -428,7 +428,7 @@ def test_fixed_https_responses_adapter_translates_real_sse_contract() -> None:
         provider = ManagedHTTPSResponsesProvider(
             origin="https://provider.ecorex.invalid",
             allowed_origins=frozenset({"https://provider.ecorex.invalid"}),
-            model_mapping={"ecorex-chat": "gpt-5.6-sol"},
+            model_mapping={"ecorex-chat": "gpt-5.6-luna"},
             bearer_token=lambda: PROVIDER_TOKEN,
             client=client,
         )
@@ -477,7 +477,7 @@ def test_responses_adapter_only_exposes_snapshot_disclosed_deferred_tools() -> N
         provider = ManagedHTTPSResponsesProvider(
             origin="https://provider.ecorex.invalid",
             allowed_origins=frozenset({"https://provider.ecorex.invalid"}),
-            model_mapping={"ecorex-chat": "gpt-5.6-sol"},
+            model_mapping={"ecorex-chat": "gpt-5.6-luna"},
             bearer_token=lambda: PROVIDER_TOKEN,
             client=client,
         )
@@ -547,7 +547,7 @@ def test_responses_adapter_preserves_ordered_tool_outputs_and_user_revisions() -
         provider = ManagedHTTPSResponsesProvider(
             origin="https://provider.ecorex.invalid",
             allowed_origins=frozenset({"https://provider.ecorex.invalid"}),
-            model_mapping={"ecorex-chat": "gpt-5.6-sol"},
+            model_mapping={"ecorex-chat": "gpt-5.6-luna"},
             bearer_token=lambda: PROVIDER_TOKEN,
             client=client,
         )
@@ -654,7 +654,7 @@ def test_responses_adapter_preserves_completed_assistant_history_roles() -> None
         provider = ManagedHTTPSResponsesProvider(
             origin="https://provider.ecorex.invalid",
             allowed_origins=frozenset({"https://provider.ecorex.invalid"}),
-            model_mapping={"ecorex-chat": "gpt-5.6-sol"},
+            model_mapping={"ecorex-chat": "gpt-5.6-luna"},
             bearer_token=lambda: PROVIDER_TOKEN,
             client=client,
         )
@@ -895,13 +895,13 @@ def test_responses_adapter_has_total_deadline_and_bounded_sse() -> None:
             yield _sse(
                 {
                     "type": "response.created",
-                    "response": {"id": "resp_slow", "model": "gpt-5.6-sol"},
+                    "response": {"id": "resp_slow", "model": "gpt-5.6-luna"},
                 },
                 {
                     "type": "response.completed",
                     "response": {
                         "id": "resp_slow",
-                        "model": "gpt-5.6-sol",
+                        "model": "gpt-5.6-luna",
                         "status": "completed",
                     },
                 },
@@ -932,7 +932,7 @@ def test_responses_adapter_has_total_deadline_and_bounded_sse() -> None:
         provider = ManagedHTTPSResponsesProvider(
             origin="https://provider.ecorex.invalid",
             allowed_origins=frozenset({"https://provider.ecorex.invalid"}),
-            model_mapping={"ecorex-chat": "gpt-5.6-sol"},
+            model_mapping={"ecorex-chat": "gpt-5.6-luna"},
             bearer_token=lambda: PROVIDER_TOKEN,
             connect_timeout_seconds=0.1,
             read_timeout_seconds=0.5,
@@ -953,14 +953,14 @@ def test_responses_adapter_rejects_ssrf_redirect_and_secret_errors() -> None:
         ManagedHTTPSResponsesProvider(
             origin="https://169.254.169.254",
             allowed_origins=frozenset({"https://169.254.169.254"}),
-            model_mapping={"ecorex-chat": "gpt-5.6-sol"},
+            model_mapping={"ecorex-chat": "gpt-5.6-luna"},
             bearer_token=lambda: PROVIDER_TOKEN,
         )
     with pytest.raises(ResponsesProviderConfigurationError, match="allowlisted"):
         ManagedHTTPSResponsesProvider(
             origin="https://provider.ecorex.invalid",
             allowed_origins=frozenset({"https://other.ecorex.invalid"}),
-            model_mapping={"ecorex-chat": "gpt-5.6-sol"},
+            model_mapping={"ecorex-chat": "gpt-5.6-luna"},
             bearer_token=lambda: PROVIDER_TOKEN,
         )
 
@@ -980,7 +980,7 @@ def test_responses_adapter_rejects_ssrf_redirect_and_secret_errors() -> None:
         redirect_provider = ManagedHTTPSResponsesProvider(
             origin="https://provider.ecorex.invalid",
             allowed_origins=frozenset({"https://provider.ecorex.invalid"}),
-            model_mapping={"ecorex-chat": "gpt-5.6-sol"},
+            model_mapping={"ecorex-chat": "gpt-5.6-luna"},
             bearer_token=lambda: PROVIDER_TOKEN,
             client=redirect_client,
         )
@@ -1007,7 +1007,7 @@ def test_responses_adapter_rejects_ssrf_redirect_and_secret_errors() -> None:
         provider = ManagedHTTPSResponsesProvider(
             origin="https://provider.ecorex.invalid",
             allowed_origins=frozenset({"https://provider.ecorex.invalid"}),
-            model_mapping={"ecorex-chat": "gpt-5.6-sol"},
+            model_mapping={"ecorex-chat": "gpt-5.6-luna"},
             bearer_token=lambda: (_ for _ in ()).throw(
                 RuntimeError("provider secret " + PROVIDER_TOKEN)
             ),
@@ -1204,7 +1204,7 @@ def test_production_configuration_fails_closed_without_schema_or_secrets(
         GatewayProductionConfig.from_environment(missing_backend)
     wrong_upstream = dict(environment)
     wrong_upstream["ECOREX_GATEWAY_MODEL_MAPPING_JSON"] = json.dumps(
-        {"ecorex-chat": "gpt-5.5"}
+        {"ecorex-chat": "gpt-5.6-luna"}
     )
     with pytest.raises(
         GatewayProductionConfigurationError,

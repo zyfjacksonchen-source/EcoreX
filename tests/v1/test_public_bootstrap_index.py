@@ -223,10 +223,10 @@ def test_public_index_is_only_a_three_target_discovery_hint(tmp_path: Path) -> N
 def test_pointer_sequence_is_deterministic_monotonic_and_signature_reproducible(
     tmp_path: Path,
 ) -> None:
-    assert stable_pointer_sequence("1.0.0") == 1
-    assert stable_pointer_sequence("1.0.1") == 2
-    assert stable_pointer_sequence("1.1.0") == 1_000_001
-    with pytest.raises(PublicBootstrapIndexError, match="final v1 SemVer"):
+    assert stable_pointer_sequence("0.3.0") == 30_001
+    assert stable_pointer_sequence("0.3.1") == 30_002
+    assert stable_pointer_sequence("1.0.0") == 100_000_001
+    with pytest.raises(PublicBootstrapIndexError, match="final product SemVer"):
         stable_pointer_sequence("1.0.1-rc.1")
 
     built, verifier, _public, signer, fresh_verifier, _fresh_public, fresh_signer = (

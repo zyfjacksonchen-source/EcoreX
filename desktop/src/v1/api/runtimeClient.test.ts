@@ -26,9 +26,9 @@ import {
 } from "../deferred/clientOperationOutbox.ts";
 import {
   RuntimeContractError,
-  validateConversationUsageProjection,
   validateEventEnvelope,
 } from "./runtimeContract.ts";
+import { validateConversationUsageProjection } from "./usageRuntimeContract.ts";
 import {
   validateConnectorLoginCheckResponse,
   validateInteractionMutationResponse,
@@ -144,17 +144,17 @@ const bootstrap: BootstrapResponse = {
     snapshot_id: "models_test",
     chat: [{
       model_id: "ecorex-chat",
-      display_name: "GPT-5.6 SOL · 中等推理",
+      display_name: "GPT-5.6 Luna · 高推理",
       capabilities: ["chat", "tools", "vision", "reasoning"],
-      aliases: ["chat", "default", "gpt-5.6-sol", "gpt5.6-sol"],
+      aliases: ["chat", "default", "gpt-5.6-luna", "gpt5.6-luna"],
       is_default: true,
       model_policy: {
         schema_version: 1,
-        policy_id: "ecorex-chat-gpt-5.6-sol",
-        policy_version: "1.0.0",
+        policy_id: "ecorex-chat-gpt-5.6-luna",
+        policy_version: "1.1.0",
         local_model_id: "ecorex-chat",
-        upstream_model_id: "gpt-5.6-sol",
-        reasoning_effort: "medium",
+        upstream_model_id: "gpt-5.6-luna",
+        reasoning_effort: "high",
         context_management: {
           type: "compaction",
           compact_threshold_tokens: 272_000,
@@ -185,6 +185,7 @@ const bootstrap: BootstrapResponse = {
   extensions: {
     snapshot_id: "extensions_test",
     contract_version: "1.0",
+    extension_generation: 0,
     items: [],
   },
   update: {
@@ -214,9 +215,23 @@ const conversationUsage: ConversationUsageProjection = {
     used_tokens: 120,
     window_tokens: 272_000,
     model_id: "ecorex-chat",
-    model_display_name: "GPT-5.6 SOL · 中等推理",
+    model_display_name: "GPT-5.6 Luna · 高推理",
     model_catalog_snapshot_id: "models_test",
     measured_at: "2026-07-13T01:00:00Z",
+  },
+  task_activity: {
+    completed_today: 1,
+    waiting: 2,
+    terminal_today: 2,
+    days: [
+      { date: "2026-07-07", completed: 0, terminal: 0 },
+      { date: "2026-07-08", completed: 0, terminal: 0 },
+      { date: "2026-07-09", completed: 0, terminal: 0 },
+      { date: "2026-07-10", completed: 0, terminal: 0 },
+      { date: "2026-07-11", completed: 0, terminal: 0 },
+      { date: "2026-07-12", completed: 0, terminal: 0 },
+      { date: "2026-07-13", completed: 1, terminal: 2 },
+    ],
   },
   calculated_at: "2026-07-13T01:00:01Z",
 };
@@ -231,7 +246,11 @@ test("conversation usage is a strict provider-reported Runtime projection", asyn
   try {
     const client = new RuntimeClient({ apiBase: "http://127.0.0.1:8765" });
     assert.deepEqual(await client.conversationUsage("thr_usage"), conversationUsage);
-    assert.deepEqual(requests, ["http://127.0.0.1:8765/api/v1/threads/thr_usage/usage"]);
+    assert.deepEqual(await client.accountUsage(), conversationUsage);
+    assert.deepEqual(requests, [
+      "http://127.0.0.1:8765/api/v1/threads/thr_usage/usage",
+      "http://127.0.0.1:8765/api/v1/usage",
+    ]);
     assert.throws(
       () => validateConversationUsageProjection({
         ...conversationUsage,
@@ -351,6 +370,10 @@ test("bootstrap rejects an unknown extension enum before it reaches feature stat
     trust: "builtin",
     status: "enabled",
     health: "healthy",
+    provenance: { brand: "e-Mate", original_platform: null, original_url: null },
+    readiness: "ready",
+    requirements: [],
+    tags: [],
     dependencies: [],
     exports: [],
     actions: [],
@@ -438,6 +461,7 @@ test("bootstrap bearer is sent and returned CSRF protects later mutations", asyn
       title: null,
       pinned: false,
       active_turn_status: null,
+      last_turn_status: null,
       metadata: {},
       forked_from_thread_id: null,
       forked_from_turn_id: null,
@@ -479,6 +503,7 @@ test("bootstrap accepts CSRF when the injected Runtime bridge is frozen", async 
       title: null,
       pinned: false,
       active_turn_status: null,
+      last_turn_status: null,
       metadata: {},
       forked_from_thread_id: null,
       forked_from_turn_id: null,
@@ -558,6 +583,39 @@ test("account login rejects a malformed success receipt", async () => {
       (error: unknown) => error instanceof RuntimeApiError
         && error.code === "login_receipt_invalid",
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("password change sends the current principal credentials and validates reauthentication", async () => {
+  const requests: Request[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    requests.push(new Request(input, init));
+    return Response.json({
+      schema_version: 1,
+      status: "changed",
+      reauthentication_required: true,
+    });
+  };
+  try {
+    const client = new RuntimeClient({ apiBase: "http://127.0.0.1:8765", bearerToken: "b".repeat(43) });
+    client.acceptBootstrap(bootstrap);
+    const receipt = await client.changeSessionPassword(
+      "old-password",
+      "new-password-123",
+      "session-password-stable-id",
+    );
+    assert.equal(receipt.reauthentication_required, true);
+    assert.equal(requests[0].url, "http://127.0.0.1:8765/api/v1/session/password");
+    assert.equal(requests[0].headers.get("x-ecorex-csrf"), bootstrap.csrf_token);
+    assert.deepEqual(JSON.parse(await requests[0].text()), {
+      schema_version: 1,
+      current_password: "old-password",
+      new_password: "new-password-123",
+      client_request_id: "session-password-stable-id",
+    });
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -743,10 +801,17 @@ test("extension catalog and actions use backend projections, revision fencing, a
       0,
       "extension-local-install",
     );
+    const configured = await client.configureSkill(
+      extension.extension_id,
+      { OFFICE_API_KEY: "configured-secret" },
+      extension.revision,
+      "extension-configure",
+    );
 
     assert.equal(catalog.snapshot_id, snapshot.snapshot_id);
     assert.equal(mutated.extension.extension_id, extension.extension_id);
     assert.equal(installed.extensions.snapshot_id, snapshot.snapshot_id);
+    assert.equal(configured.extension.extension_id, extension.extension_id);
     assert.equal(requests[0].url, "http://127.0.0.1:8765/api/v1/extensions");
     assert.equal(requests[0].headers.get("x-ecorex-csrf"), null);
     assert.equal(
@@ -768,6 +833,15 @@ test("extension catalog and actions use backend projections, revision fencing, a
       bundle_base64: "UEsDBA==",
       expected_revision: 0,
       client_request_id: "extension-local-install",
+    });
+    assert.equal(
+      requests[3].url,
+      "http://127.0.0.1:8765/api/v1/extensions/office-tools/configure",
+    );
+    assert.deepEqual(JSON.parse(await requests[3].text()), {
+      values: { OFFICE_API_KEY: "configured-secret" },
+      expected_revision: 4,
+      client_request_id: "extension-configure",
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -1533,6 +1607,7 @@ test("new-thread first message is a recoverable two-phase operation after lost r
         title: null,
         pinned: false,
         active_turn_status: null,
+        last_turn_status: null,
         metadata: {},
         forked_from_thread_id: null,
         forked_from_turn_id: null,
@@ -1683,6 +1758,7 @@ test("thread projections reject stale nested wire shapes before reducer state", 
       title: null,
       pinned: false,
       active_turn_status: null,
+      last_turn_status: null,
       metadata: {},
       forked_from_thread_id: null,
       forked_from_turn_id: null,
@@ -1876,6 +1952,7 @@ test("thread catalog mutations preserve backend order and authenticated idempote
     title: "月度经营复盘",
     pinned: false,
     active_turn_status: null,
+    last_turn_status: null,
     metadata: {},
     forked_from_thread_id: null,
     forked_from_turn_id: null,
@@ -2002,6 +2079,7 @@ test("Replay transport keeps Mock read-only and sends an explicitly confirmed st
     title: "诊断任务",
     pinned: false,
     active_turn_status: null,
+    last_turn_status: null,
     metadata: {},
     forked_from_thread_id: null,
     forked_from_turn_id: null,

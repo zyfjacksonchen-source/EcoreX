@@ -12,6 +12,7 @@ from ecorex.release import (
     HTTPSPublicBootstrapIndexPublisher,
     PublicBootstrapPublicationError,
     public_bootstrap_authority_signing_bytes,
+    stable_pointer_sequence,
 )
 
 
@@ -32,6 +33,7 @@ class AcceptingVerifier:
 
 def _index_bytes() -> bytes:
     release_id = "release-stable-" + "a" * 24
+    sequence = stable_pointer_sequence("1.0.0")
     target = {
         "manifest_sha256": "d" * 64,
         "release_id": release_id,
@@ -50,7 +52,7 @@ def _index_bytes() -> bytes:
     }
     authority_sha256 = hashlib.sha256(
         public_bootstrap_authority_signing_bytes(
-            sequence=1,
+            sequence=sequence,
             revision=release_id,
             target=target,
         )
@@ -84,7 +86,7 @@ def _index_bytes() -> bytes:
         "trust": "untrusted-discovery-hint",
         "status": "published",
         "authority": {
-            "sequence": 1,
+            "sequence": sequence,
             "revision": release_id,
             "target": target,
             "signature": signature,

@@ -12,6 +12,7 @@ import { GENERATED_RUNTIME_PROJECTION_CONTRACT } from "../src/v1/api/generatedRu
 import { GENERATED_SETTINGS_RUNTIME_CONTRACT } from "../src/v1/api/generatedSettingsRuntimeContract.ts";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const pythonRunner = path.join(desktopRoot, "tools", "run-python.mjs");
 const generator = path.join(desktopRoot, "tools", "generate-runtime-contracts.py");
 const schemaPath = path.join(desktopRoot, "src", "v1", "api", "runtime-contract.schema.json");
 const manifestPath = path.join(desktopRoot, "src", "v1", "api", "generatedRuntimeContract.ts");
@@ -41,8 +42,7 @@ function canonical(value) {
 }
 
 test("generated Runtime contract is current with authoritative Python schemas", () => {
-  const python = process.env.PYTHON ?? (process.platform === "win32" ? "python" : "python3");
-  const result = spawnSync(python, [generator, "--check"], {
+  const result = spawnSync(process.execPath, [pythonRunner, generator, "--check"], {
     cwd: desktopRoot,
     encoding: "utf8",
   });
@@ -93,6 +93,7 @@ test("generated manifest pins the canonical full-schema digest", async () => {
     "RetouchJobResponse",
     "RetouchWorkspaceResponse",
     "RetouchWorkspaceSubmitBody",
+    "SkillHubListResponse",
     "SteerTurnRequest",
     "SystemHealthPublicResponse",
     "SystemHealthTechnicalResponse",

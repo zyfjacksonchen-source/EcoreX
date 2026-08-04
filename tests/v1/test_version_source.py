@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_product_version_has_one_python_source() -> None:
-    assert ecorex.__version__ == "1.0.17"
+    assert ecorex.__version__ == "0.3.0"
 
     config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = config["project"]
@@ -29,6 +29,7 @@ def test_product_version_has_one_python_source() -> None:
     assert web_package["version"] == ecorex.__version__
     assert web_lock["version"] == ecorex.__version__
     assert web_lock["packages"][""]["version"] == ecorex.__version__
+    assert (ROOT / "cli" / "VERSION").read_text(encoding="utf-8").strip() == ecorex.__version__
 
 
 def test_runtime_default_uses_the_product_version_source(tmp_path: Path) -> None:
