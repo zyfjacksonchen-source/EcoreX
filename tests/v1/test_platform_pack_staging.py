@@ -1481,6 +1481,12 @@ def test_windows_native_receipt_is_bound_to_pinned_toolchain_and_binaries(
     )
 
     receipt["authority_mode"] = "github-hosted-ci-compatibility"
+    receipt["library_set_sha256"] = "5" * 64
+    for name in ("compiler", "linker", "c1xx", "c2"):
+        receipt[f"{name}_sha256"] = "6" * 64
+        receipt[f"{name}_authenticode_thumbprint"] = "7" * 40
+    receipt["compiler_file_version"] = "19.44.99999.0"
+    receipt["linker_file_version"] = "14.44.99999.0"
     receipt_path.write_text(
         json.dumps(receipt, separators=(",", ":")) + "\n", encoding="utf-8"
     )
@@ -1491,6 +1497,12 @@ def test_windows_native_receipt_is_bound_to_pinned_toolchain_and_binaries(
             output,
             toolchain_manifest=manifest,
         )
+
+    stager["_validate_windows_native_receipt"](
+        output,
+        toolchain_manifest=manifest,
+        github_hosted_compatibility=True,
+    )
 
     receipt["authority_mode"] = "caller-pinned"
     receipt["compiler_sha256"] = "0" * 64

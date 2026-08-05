@@ -486,9 +486,10 @@ def _build_native(platform: str, architecture: str, evidence: Path) -> Path:
                 "-ExpectedSourceSetSha256",
                 expected_source_set,
             )
-            if environment.get(
+            github_hosted_compatibility = environment.get(
                 "ECOREX_GITHUB_HOSTED_WINDOWS_NATIVE_COMPATIBILITY"
-            ) == "1":
+            ) == "1"
+            if github_hosted_compatibility:
                 command += ("-GitHubHostedCompatibility",)
         else:
             shell = Path("/bin/sh")
@@ -521,6 +522,7 @@ def _build_native(platform: str, architecture: str, evidence: Path) -> Path:
                 output,
                 toolchain_manifest=toolchain_manifest,
                 source_root=authority_source,
+                github_hosted_compatibility=github_hosted_compatibility,
             )
         return output
     finally:
@@ -533,6 +535,7 @@ def _validate_windows_native_receipt(
     *,
     toolchain_manifest: Path,
     source_root: Path | None = None,
+    github_hosted_compatibility: bool = False,
 ) -> None:
     code = "windows_native_build_receipt_invalid"
     try:
@@ -675,38 +678,60 @@ def _validate_windows_native_receipt(
         library_binding = "\0".join(
             f"{name}={libraries[name]}" for name in sorted(libraries)
         ).encode("utf-8")
+        authority_mode = (
+            "github-hosted-ci-compatibility"
+            if github_hosted_compatibility
+            else "caller-pinned"
+        )
         if (
             receipt.get("schema_version") != 2
             or receipt.get("status") != "passed"
             or receipt.get("target") != "windows-x64"
-            or receipt.get("authority_mode") != "caller-pinned"
+            or receipt.get("authority_mode") != authority_mode
             or receipt.get("toolchain_manifest_sha256")
             != hashlib.sha256(manifest_payload).hexdigest()
             or receipt.get("source_set_sha256")
             != hashlib.sha256(source_binding).hexdigest()
             or receipt.get("msvc_tools_version") != manifest["msvc_tools_version"]
             or receipt.get("windows_sdk_version") != manifest["windows_sdk_version"]
-            or receipt.get("library_set_sha256")
-            != hashlib.sha256(library_binding).hexdigest()
-            or receipt.get("compiler_sha256") != tools["compiler"]["sha256"]
-            or receipt.get("compiler_file_version") != tools["compiler"]["file_version"]
-            or receipt.get("compiler_authenticode_thumbprint")
-            != tools["compiler"]["authenticode_thumbprint"]
-            or receipt.get("linker_sha256") != tools["linker"]["sha256"]
-            or receipt.get("linker_file_version") != tools["linker"]["file_version"]
-            or receipt.get("linker_authenticode_thumbprint")
-            != tools["linker"]["authenticode_thumbprint"]
-            or receipt.get("c1xx_sha256") != tools["c1xx"]["sha256"]
-            or receipt.get("c1xx_authenticode_thumbprint")
-            != tools["c1xx"]["authenticode_thumbprint"]
-            or receipt.get("c2_sha256") != tools["c2"]["sha256"]
-            or receipt.get("c2_authenticode_thumbprint")
-            != tools["c2"]["authenticode_thumbprint"]
             or receipt.get("runtime_launcher_sha256") != _sha256(output / "ecorex.exe")
             or receipt.get("sandbox_helper_sha256")
             != _sha256(output / "ecorex-sandbox-host.exe")
         ):
             raise ValueError("binding")
+        tool_names = ("compiler", "linker", "c1xx", "c2")
+        if github_hosted_compatibility:
+            for name in tool_names:
+                thumbprint = receipt.get(f"{name}_authenticode_thumbprint")
+                if not isinstance(thumbprint, str) or re.fullmatch(
+                    r"[0-9a-f]{40}", thumbprint
+                ) is None:
+                    raise ValueError("compatibility_thumbprint")
+            for name in ("compiler", "linker"):
+                actual_version = receipt.get(f"{name}_file_version")
+                expected_version = tools[name]["file_version"]
+                if (
+                    not isinstance(actual_version, str)
+                    or re.fullmatch(r"[0-9]+(?:\.[0-9]+){3}", actual_version)
+                    is None
+                    or actual_version.split(".")[:2]
+                    != expected_version.split(".")[:2]
+                ):
+                    raise ValueError("compatibility_version")
+        elif (
+            receipt.get("library_set_sha256")
+            != hashlib.sha256(library_binding).hexdigest()
+            or any(
+                receipt.get(f"{name}_sha256") != tools[name]["sha256"]
+                or receipt.get(f"{name}_authenticode_thumbprint")
+                != tools[name]["authenticode_thumbprint"]
+                for name in tool_names
+            )
+            or receipt.get("compiler_file_version")
+            != tools["compiler"]["file_version"]
+            or receipt.get("linker_file_version") != tools["linker"]["file_version"]
+        ):
+            raise ValueError("pinned_toolchain")
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
         raise StageError(code) from None
 
