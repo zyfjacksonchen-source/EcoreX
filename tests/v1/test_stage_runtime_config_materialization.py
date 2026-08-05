@@ -232,12 +232,11 @@ def test_workflows_isolate_exact_windows_stage_and_privileged_runners() -> None:
     )
     contract = default_release_repository_contract()
 
-    assert 'runs_on: \'"windows-2022"\'' in stage
-    assert "default: false" in stage
-    assert "inputs.include_windows && '__none__' || 'windows-x64'" in stage
+    assert 'runs_on: \'"windows-2022"\'' not in stage
+    assert "windows-x64" not in stage
     assert "fromJSON(matrix.runs_on)" in stage
     assert "runs_on: windows-latest" not in stage
-    assert "ECOREX_GITHUB_HOSTED_WINDOWS_NATIVE_COMPATIBILITY" in stage
+    assert "ECOREX_GITHUB_HOSTED_WINDOWS_NATIVE_COMPATIBILITY" not in stage
     assert "macos-15" in stage
     assert "macos-15-intel" in stage
     assert "ECOREX_STAGE_RUNTIME_CONFIG_{0}_BASE64" in stage

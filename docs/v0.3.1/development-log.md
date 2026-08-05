@@ -180,5 +180,6 @@
 
 - 用户确认 GitHub 仅用于构建 macOS 产物，不通过 CI 发布；Windows 包、候选签名整合、GitHub Release 与服务器部署均在本机手动执行。所有 GitHub CLI 上传/API 调用只在单次命令内显式使用 UniClash `127.0.0.1:7993`，不改系统代理。
 - 误启动的普通 CI `31053583222` 与含 Windows 的三平台 staging `31053607940` 已在产物发布前取消；两者 conclusion 均为 `cancelled`，未生成候选、Release 或线上指针变更。
-- 平台 staging 手动调度默认排除 Windows，只保留 macOS arm64/x64；最终 macOS workflow 不再分配 Windows Runner，而是从手动候选 Release 读取已验证的 Windows 包与 partial receipt，用于生成双端一致的最终收据。
+- 平台 staging 手动 workflow 只保留 macOS arm64/x64，不再分配 Windows Runner；最终 macOS workflow 从手动候选 Release 读取已验证的 Windows 包与 partial receipt，用于生成双端一致的最终收据。
+- 首次 macOS-only staging `31054215210` 在创建 Job 前失败：GitHub workflow planner 不接受 matrix `exclude` 中的动态表达式。该 run 为零 Job、未占用 Runner、未产生产物；已改为字面量 macOS 双架构 matrix，消除计划阶段不确定性。
 - 手动/macOS 工作流合同回归 80/80 通过；精确依赖锁、源码树和 `git diff --check` 通过。

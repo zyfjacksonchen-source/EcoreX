@@ -1,13 +1,7 @@
-name: EcoreX v1 protected platform stage
+name: EcoreX v1 macOS protected platform stage
 
 on:
   workflow_dispatch:
-    inputs:
-      include_windows:
-        description: Also build the Windows stage (v0.3.1 release uses macOS only)
-        required: true
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -25,12 +19,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - id: windows-x64
-            config_key: WINDOWS_X64
-            label: Windows x64
-            platform: windows
-            architecture: x64
-            runs_on: '"windows-2022"'
           - id: macos-arm64
             config_key: MACOS_ARM64
             label: macOS arm64
@@ -43,8 +31,6 @@ jobs:
             platform: macos
             architecture: x64
             runs_on: '"macos-15-intel"'
-        exclude:
-          - id: ${{ inputs.include_windows && '__none__' || 'windows-x64' }}
     runs-on: ${{ fromJSON(matrix.runs_on) }}
     timeout-minutes: 60
 
@@ -63,70 +49,9 @@ jobs:
           clean: true
 
       - name: Set up Python 3.11
-        if: ${{ runner.os != 'Windows' }}
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11.9"
-
-      - name: Set up isolated Python 3.11 on Windows
-        if: ${{ runner.os == 'Windows' }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $uvVersion = "0.11.7"
-          $uvArchive = Join-Path $env:RUNNER_TEMP "uv-$uvVersion-x86_64-pc-windows-msvc.zip"
-          $uvRoot = Join-Path $env:RUNNER_TEMP "uv-$uvVersion"
-          $pythonRoot = Join-Path $env:RUNNER_TEMP "python-3.11.9"
-          Invoke-WebRequest -Uri "https://github.com/astral-sh/uv/releases/download/$uvVersion/uv-x86_64-pc-windows-msvc.zip" -OutFile $uvArchive -UseBasicParsing
-          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $uvArchive).Hash.ToLowerInvariant()
-          $expected = "fe0c7815acf4fc45f8a5eff58ed3cf7ae2e15c3cf1dceadbd10c816ec1690cc1"
-          if ($actual -ne $expected) {
-            throw "uv_archive_digest_mismatch"
-          }
-          Expand-Archive -LiteralPath $uvArchive -DestinationPath $uvRoot -Force
-          $uv = Join-Path $uvRoot "uv.exe"
-          $observedUv = (& $uv --version).Trim()
-          if ($observedUv -notmatch "^uv 0\.11\.7 \(9d177269e ") {
-            throw "uv_toolchain_mismatch:$observedUv"
-          }
-          $env:UV_PYTHON_INSTALL_DIR = $pythonRoot
-          & $uv --no-config python install --install-dir $pythonRoot --no-bin --no-registry --no-cache --managed-python --compile-bytecode 3.11.9
-          if ($LASTEXITCODE -ne 0) {
-            throw "python_toolchain_install_failed:$LASTEXITCODE"
-          }
-          $python = (& $uv --no-config python find --no-project --managed-python --no-python-downloads --resolve-links 3.11.9).Trim()
-          if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
-            throw "python_executable_missing"
-          }
-          $observedVersion = (& $python -c "import platform; print(platform.python_version())").Trim()
-          if ($observedVersion -ne "3.11.9") {
-            throw "python_toolchain_mismatch:$observedVersion"
-          }
-          # uv-managed base interpreters are PEP 668 protected.  The Stage
-          # dependencies belong in a disposable venv rooted in RUNNER_TEMP;
-          # mutating or bypassing the managed base would make the build both
-          # non-repeatable and dependent on runner state.
-          $venvName = "ecorex-platform-stage-venv-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.id }}"
-          $venvRoot = Join-Path $env:RUNNER_TEMP $venvName
-          if (Test-Path -LiteralPath $venvRoot) {
-            throw "python_venv_root_not_clean:$venvName"
-          }
-          & $python -m venv $venvRoot
-          if ($LASTEXITCODE -ne 0) {
-            throw "python_venv_creation_failed:$LASTEXITCODE"
-          }
-          $installRoot = $venvRoot
-          $venvPython = Join-Path $installRoot "Scripts\python.exe"
-          $venvVersion = (& $venvPython -c "import platform; print(platform.python_version())").Trim()
-          if ($venvVersion -ne "3.11.9") {
-            throw "python_venv_toolchain_mismatch:$venvVersion"
-          }
-          @(
-            "pythonLocation=$installRoot",
-            "Python_ROOT_DIR=$installRoot",
-            "Python3_ROOT_DIR=$installRoot"
-          ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          (Join-Path $installRoot "Scripts") | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Prove checkout workspace is clean before dependency installation
         run: python scripts/run-v1-platform-stage-step.py clean-check
@@ -162,7 +87,6 @@ jobs:
 
       - name: Build real Core and six Packs with the source-pinned stager
         env:
-          ECOREX_GITHUB_HOSTED_WINDOWS_NATIVE_COMPATIBILITY: ${{ matrix.id == 'windows-x64' && '1' || '0' }}
           ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE: ${{ runner.temp }}/ecorex-runtime-config.json
           ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE_SHA256: ${{ vars[format('ECOREX_STAGE_RUNTIME_CONFIG_{0}_SHA256', matrix.config_key)] }}
           ECOREX_PUBLIC_BOOTSTRAP_INDEX_URL: ${{ vars.ECOREX_PUBLIC_BOOTSTRAP_INDEX_URL }}

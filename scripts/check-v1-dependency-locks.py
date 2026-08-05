@@ -416,10 +416,7 @@ def _validate_platform_stage_workflow_binding(text: str) -> None:
         raise ValueError("workflow_stage_checkout_clean_invalid")
     clean_binding = _PLATFORM_STAGE_WORKFLOW_BINDINGS[0]
     install_binding = _PLATFORM_STAGE_WORKFLOW_BINDINGS[1]
-    python_setup_markers = (
-        "- name: Set up Python 3.11",
-        "- name: Set up isolated Python 3.11 on Windows",
-    )
+    python_setup_markers = ("- name: Set up Python 3.11",)
     if (
         any(text.count(marker) != 1 for marker in python_setup_markers)
         or any(text.index(marker) >= text.index(clean_binding) for marker in python_setup_markers)
