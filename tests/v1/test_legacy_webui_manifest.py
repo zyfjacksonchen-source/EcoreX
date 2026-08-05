@@ -225,7 +225,7 @@ def test_manifest_readback_failure_restores_v0292_pointer(tmp_path):
     assert paths.pointer.read_bytes() == original
 
 
-def test_macos_workflow_hands_verified_bytes_to_production_publisher():
+def test_user_package_workflow_hands_verified_bytes_to_direct_publisher():
     workflow = (ROOT / ".github/workflows/emate-v030-macos-universal.yml").read_text(
         encoding="utf-8"
     )
@@ -236,23 +236,16 @@ def test_macos_workflow_hands_verified_bytes_to_production_publisher():
         " && github.sha == vars.ECOREX_V030_RELEASE_COMMIT_SHA"
     )
     assert workflow.count(admission) == 2
-    assert (
-        "verified_artifact_sha256: ${{ steps.verified_handoff.outputs.artifact-digest }}"
-        in workflow
-    )
-    assert '--expected-sha256 "$ARTIFACT_SHA256"' in workflow
-    assert "secrets.ECOREX_GITHUB_RELEASE_TOKEN" in workflow
-    assert 'repository="zyfjacksonchen-source/EcoreX-installers"' in workflow
-    assert 'tag="v0.3.0"' in workflow
-    assert "gh release upload" in workflow
-    assert "python -m ecorex.release.legacy_webui_publication" in workflow
-    assert workflow.index("Upload notarized bytes and receipt") < workflow.index(
-        "Publish immutable bytes, read back both origins, and switch manifest last"
-    )
-    assert workflow.index(
-        "Publish or verify immutable GitHub installer assets"
-    ) < workflow.index(
-        "Publish immutable bytes, read back both origins, and switch manifest last"
+    assert "EcoreX_0.3.0-webui-windows-x64.zip" in workflow
+    assert "EcoreX_0.3.0-webui-macos-universal.zip" in workflow
+    assert "webui-build-receipt.json" in workflow
+    assert "macos-arm64-user-smoke.json" in workflow
+    assert "macos-x64-user-smoke.json" in workflow
+    assert "secrets.ECOREX_GITHUB_RELEASE_TOKEN" not in workflow
+    assert "gh release upload" not in workflow
+    assert "ecorex.release.legacy_webui_publication" not in workflow
+    assert workflow.index("ecorex.release.legacy_webui_manifest") < workflow.index(
+        "Upload package handoff and arm64 user evidence"
     )
     assert PACKAGE_ORIGINS[0] == (
         "https://gh-proxy.com/https://github.com/zyfjacksonchen-source/"

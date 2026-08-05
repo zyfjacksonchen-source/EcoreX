@@ -68,7 +68,7 @@ def _runtime_config(public_key: bytes, session_key: bytes) -> bytes:
     ).encode()
 
 
-def _candidate(tmp_path: Path):
+def _candidate(tmp_path: Path, bootstrap_payload: bytes = b"test-bootstrap"):
     private = Ed25519PrivateKey.generate()
     signer = Ed25519MemorySigner("test-release", private)
     public = signer.public_key_bytes
@@ -79,7 +79,7 @@ def _candidate(tmp_path: Path):
     (core / "runtime-config.json").write_bytes(_runtime_config(public, session_public))
     bootstrap = tmp_path / "bootstrap"
     (bootstrap / "bin").mkdir(parents=True)
-    (bootstrap / "bin/ecorex-bootstrap.exe").write_bytes(b"test-bootstrap")
+    (bootstrap / "bin/ecorex-bootstrap.exe").write_bytes(bootstrap_payload)
     helper = b"test-sandbox-helper"
     (bootstrap / "bin/ecorex-sandbox-host.exe").write_bytes(helper)
     (bootstrap / "EcoreX Installer.cmd").write_bytes(
@@ -204,6 +204,23 @@ def test_production_requires_explicit_signing_key_admission(tmp_path: Path) -> N
         )
 
 
+def test_compressible_bootstrap_can_be_larger_than_its_signed_zip(tmp_path: Path) -> None:
+    built, candidate_receipt, public = _candidate(
+        tmp_path, bootstrap_payload=b"e-Mate" * 1024 * 1024
+    )
+
+    package, _ = build_windows_webui_package(
+        release_dir=built.output_dir,
+        candidate_receipt_path=candidate_receipt,
+        output_dir=tmp_path / "output",
+        trusted_public_keys={"test-release": public},
+        generated_at="2026-08-04T12:00:00+08:00",
+        production=False,
+    )
+
+    assert package.is_file()
+
+
 def test_final_windows_package_is_reopened_and_rejects_layout_or_semantic_tampering(
     tmp_path: Path,
 ) -> None:
@@ -295,7 +312,7 @@ def test_windows_webui_workflow_is_pinned_and_emits_only_verified_handoff() -> N
         Path(__file__).resolve().parents[2]
         / ".github"
         / "workflows"
-        / "emate-v030-windows-webui.yml"
+        / "emate-v030-macos-universal.yml"
     ).read_text(encoding="utf-8")
 
     assert "github.sha == vars.ECOREX_V030_RELEASE_COMMIT_SHA" in workflow
@@ -303,8 +320,11 @@ def test_windows_webui_workflow_is_pinned_and_emits_only_verified_handoff() -> N
     assert "github.repository == 'zyfjacksonchen-source/EcoreX'" in workflow
     assert "github.ref_protected" not in workflow
     assert "candidate_commit_mismatch" in workflow
-    assert "ecorex-v1-candidate-stable" in workflow
+    assert "EcoreX_0.3.0-direct-candidate.zip" in workflow
     assert "build-v030-windows-webui.py" in workflow
+    assert "smoke-v030-windows-terminal-package.ps1" in workflow
+    assert "runs-on: windows-2022" in workflow
+    assert "include-hidden-files: true" in workflow
     assert workflow.index("build-v030-windows-webui.py") < workflow.index(
         "actions/upload-artifact"
     )

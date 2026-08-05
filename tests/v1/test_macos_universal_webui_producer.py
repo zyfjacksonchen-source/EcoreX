@@ -56,7 +56,7 @@ def test_missing_distribution_authority_never_falls_back_to_ad_hoc_signing(
     tmp_path, monkeypatch
 ):
     module = _module()
-    monkeypatch.setattr(module, "_require_tools", lambda: None)
+    monkeypatch.setattr(module, "_require_tools", lambda **_: None)
     args = argparse.Namespace(
         candidate_root=tmp_path / "candidate",
         web_dist=tmp_path / "dist",
@@ -127,6 +127,22 @@ def test_distribution_receipt_rejects_missing_accepted_notarization(tmp_path):
         module._write_distribution_receipt(tmp_path / "tampered.json", tampered)
     assert not (tmp_path / "tampered.json").exists()
 
+    terminal = {
+        "schema": "emate.macos-distribution-receipt.v1",
+        "status": "verified",
+        "distribution_mode": "terminal-command",
+        "notarization": {
+            "status": "not-applicable",
+            "reason": "terminal-command-distribution",
+        },
+        "stapling": {"applicable": False, "reason": "no-app-bundle"},
+    }
+    terminal_path = tmp_path / "terminal.json"
+    module._write_distribution_receipt(terminal_path, terminal)
+    assert json.loads(terminal_path.read_text(encoding="utf-8"))[
+        "distribution_mode"
+    ] == "terminal-command"
+
 
 def test_windows_partial_receipt_must_bind_exact_package_and_candidate(tmp_path):
     module = _module()
@@ -196,7 +212,7 @@ def test_windows_partial_receipt_must_bind_exact_package_and_candidate(tmp_path)
         )
 
 
-def test_workflow_requires_protected_stages_notary_acceptance_before_upload():
+def test_workflow_builds_and_runs_both_terminal_macos_architectures():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     producer = SCRIPT.read_text(encoding="utf-8")
 
@@ -204,19 +220,26 @@ def test_workflow_requires_protected_stages_notary_acceptance_before_upload():
     assert "github.ref == 'refs/heads/main'" in workflow
     assert "github.repository == 'zyfjacksonchen-source/EcoreX'" in workflow
     assert "github.ref_protected" not in workflow
-    assert "ecorex-v1-candidate-stable" in workflow
-    assert "name: emate-v030-windows-webui" in workflow
-    assert "windows_package_artifact" not in workflow
-    assert "APPLE_NOTARY_KEY_BASE64" in workflow
+    assert "EcoreX_0.3.0-direct-candidate.zip" in workflow
+    assert "candidate_bundle_sha256" in workflow
+    assert "candidate_commit_sha" in workflow
+    assert "APPLE_NOTARY_KEY_BASE64" not in workflow
+    assert "--terminal-distribution" in workflow
+    assert "runs-on: macos-15" in workflow
+    assert "runs-on: macos-15-intel" in workflow
+    assert workflow.count("smoke-v030-macos-terminal-package.sh") == 2
     assert workflow.index("build-v030-macos-universal-webui.py") < workflow.index(
-        "actions/upload-artifact"
+        "Upload package handoff and arm64 user evidence"
     )
     assert (
         workflow.index("build-v030-macos-universal-webui.py")
         < workflow.index("ecorex.release.legacy_webui_manifest")
-        < workflow.index("actions/upload-artifact")
+        < workflow.index("Upload package handoff and arm64 user evidence")
     )
-    assert "--web-dist desktop/dist" in workflow
+    assert workflow.count("include-hidden-files: true") == 3
+    assert "emate-v030-verified-webui-packages" not in workflow
+    assert "emate-v030-arm64-qualified-webui-packages" in workflow
+    assert "--web-dist .producer/source/desktop/dist" in workflow
     assert "--candidate-root .producer/candidate" in workflow
     assert "--windows-receipt" in workflow
     assert "macos-distribution-receipt.json" in workflow
@@ -228,6 +251,9 @@ def test_workflow_requires_protected_stages_notary_acceptance_before_upload():
     assert 'expected_platform="macos"' in producer
     assert 'for architecture in ("arm64", "x64")' in producer
     assert 'shutil.copytree(web, package_root / "web"' not in producer
+    assert "_verify_terminal_slice(" in producer
+    assert '"Signature=adhoc"' in producer
+    assert 'distribution_mode = "terminal-command"' in producer
     assert '"--keychain"' in producer and "args.notary_keychain" in producer
     assert '"notarytool"' in producer and '"submit"' in producer
     assert '"status") != "Accepted"' in producer

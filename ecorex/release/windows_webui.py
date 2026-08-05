@@ -44,6 +44,7 @@ _BOOTSTRAP_MEMBERS = frozenset(
     }
 )
 _MAX_JSON = 4 * 1024 * 1024
+_MAX_BOOTSTRAP_EXPANDED_BYTES = 32 * 1024 * 1024
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _WEBUI_URL = "http://127.0.0.1:8765/"
@@ -281,10 +282,11 @@ def verify_windows_webui_package(
             or members["README.txt"].file_size != len(_README)
             or members["release.json"].file_size > _MAX_JSON
             or members["signed/candidate-build-receipt.json"].file_size > _MAX_JSON
-            or any(
-                members[name].file_size > manifest.artifact(_BOOTSTRAP_ID).size_bytes
+            or sum(
+                members[name].file_size
                 for name in _BOOTSTRAP_MEMBERS - {"EcoreX Installer.cmd"}
             )
+            > _MAX_BOOTSTRAP_EXPANDED_BYTES
         ):
             raise WindowsWebUIBuildError("Windows WebUI package launcher is invalid")
         for item in included:
@@ -459,6 +461,7 @@ def _extract_bootstrap(
     except (OSError, zipfile.BadZipFile) as exc:
         raise WindowsWebUIBuildError("signed Bootstrap archive is invalid") from exc
     observed: set[str] = set()
+    expanded = 0
     with archive:
         for member in archive.infolist():
             name = member.filename.replace("\\", "/").rstrip("/")
@@ -472,6 +475,9 @@ def _extract_bootstrap(
                 or stat.S_ISLNK(member.external_attr >> 16)
             ):
                 raise WindowsWebUIBuildError("signed Bootstrap layout is invalid")
+            expanded += member.file_size
+            if expanded > _MAX_BOOTSTRAP_EXPANDED_BYTES:
+                raise WindowsWebUIBuildError("signed Bootstrap expands beyond its bound")
             observed.add(name)
             target = destination.joinpath(*PurePosixPath(name).parts)
             target.parent.mkdir(parents=True, exist_ok=True)

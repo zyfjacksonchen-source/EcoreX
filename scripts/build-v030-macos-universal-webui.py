@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Produce the notarized e-Mate macOS universal WebUI ZIP.
+"""Produce the e-Mate macOS universal WebUI ZIP.
 
 The artifact remains a browser WebUI distribution: React assets, a universal
 Bootstrap/Runtime launcher, and the exact protected arm64/x64 stage payloads.
@@ -104,16 +104,17 @@ def _directory(path: Path, code: str) -> Path:
     return resolved
 
 
-def _require_tools() -> None:
+def _require_tools(*, terminal_distribution: bool) -> None:
     if platform.system() != "Darwin":
         _fail("macos_host_required")
-    for tool in (
+    tools = [
         "/usr/bin/codesign",
         "/usr/bin/ditto",
         "/usr/bin/lipo",
-        "/usr/sbin/spctl",
-        "/usr/bin/xcrun",
-    ):
+    ]
+    if not terminal_distribution:
+        tools.extend(("/usr/sbin/spctl", "/usr/bin/xcrun"))
+    for tool in tools:
         if not Path(tool).is_file():
             _fail("macos_distribution_toolchain_missing")
 
@@ -144,6 +145,30 @@ def _verify_signed_slice(
     ):
         _fail("macos_developer_id_readback_invalid")
     return values
+
+
+def _verify_terminal_slice(path: Path, architecture: str) -> dict[str, str]:
+    _run("/usr/bin/codesign", "--verify", "--strict", "--verbose=2", str(path))
+    if architecture not in set(_run("/usr/bin/lipo", "-archs", str(path)).split()):
+        _fail("macos_stage_slice_missing")
+    diagnostic = _run(
+        "/usr/bin/codesign", "-d", "--verbose=4", str(path), stderr_output=True
+    )
+    identifier = next(
+        (
+            line.partition("=")[2].strip()
+            for line in diagnostic.splitlines()
+            if line.startswith("Identifier=")
+        ),
+        "",
+    )
+    if "Signature=adhoc" not in diagnostic or not identifier:
+        _fail("macos_terminal_signature_invalid")
+    return {
+        "architecture": architecture,
+        "identifier": identifier,
+        "signature": "adhoc",
+    }
 
 
 def _write_legacy_receipt(
@@ -187,13 +212,28 @@ def _write_legacy_receipt(
 
 
 def _write_distribution_receipt(path: Path, value: dict[str, Any]) -> None:
+    mode = value.get("distribution_mode", "developer-id-notarized")
+    notarization = value.get("notarization", {})
+    stapling = value.get("stapling")
+    mode_valid = (
+        mode == "developer-id-notarized"
+        and notarization.get("status") == "Accepted"
+        and notarization.get("submission_id")
+        and stapling
+        == {"applicable": False, "reason": "zip-ticket-cannot-be-stapled"}
+    ) or (
+        mode == "terminal-command"
+        and notarization
+        == {
+            "status": "not-applicable",
+            "reason": "terminal-command-distribution",
+        }
+        and stapling == {"applicable": False, "reason": "no-app-bundle"}
+    )
     if (
         value.get("schema") != _DIST_SCHEMA
         or value.get("status") != "verified"
-        or value.get("notarization", {}).get("status") != "Accepted"
-        or not value.get("notarization", {}).get("submission_id")
-        or value.get("stapling")
-        != {"applicable": False, "reason": "zip-ticket-cannot-be-stapled"}
+        or not mode_valid
     ):
         _fail("macos_distribution_receipt_invalid")
     path.write_text(
@@ -242,13 +282,19 @@ def _verify_windows_partial_receipt(
 
 
 def build(args: argparse.Namespace) -> tuple[Path, Path, Path]:
-    _require_tools()
+    terminal_distribution = bool(getattr(args, "terminal_distribution", False))
+    _require_tools(terminal_distribution=terminal_distribution)
     if (
         args.version != __version__
         or not _COMMIT.fullmatch(args.commit_sha)
-        or not args.identity.strip()
-        or not args.notary_profile.strip()
-        or not args.notary_keychain.strip()
+        or (
+            not terminal_distribution
+            and (
+                not args.identity.strip()
+                or not args.notary_profile.strip()
+                or not args.notary_keychain.strip()
+            )
+        )
     ):
         _fail("macos_distribution_authority_missing")
     candidate = _directory(args.candidate_root, "signed_candidate_missing")
@@ -405,8 +451,12 @@ def build(args: argparse.Namespace) -> tuple[Path, Path, Path]:
                     str(release / artifact.file_name),
                     str(target),
                 )
-                signed_binaries[f"{arch}/{binary}"] = _verify_signed_slice(
-                    target / "bin" / binary, slice_name, args.identity
+                signed_binaries[f"{arch}/{binary}"] = (
+                    _verify_terminal_slice(target / "bin" / binary, slice_name)
+                    if terminal_distribution
+                    else _verify_signed_slice(
+                        target / "bin" / binary, slice_name, args.identity
+                    )
                 )
         installer = package_root / "Install e-Mate WebUI.command"
         installer.write_text(
@@ -423,43 +473,72 @@ def build(args: argparse.Namespace) -> tuple[Path, Path, Path]:
             str(package_root),
             str(package),
         )
-        notary_raw = _run(
-            "/usr/bin/xcrun",
-            "notarytool",
-            "submit",
-            str(package),
-            "--keychain-profile",
-            args.notary_profile,
-            "--keychain",
-            args.notary_keychain,
-            "--wait",
-            "--output-format",
-            "json",
-        )
-        try:
-            notary = json.loads(notary_raw)
-            submission_id = str(uuid.UUID(str(notary.get("id"))))
-        except (ValueError, TypeError, json.JSONDecodeError):
-            _fail("macos_notarization_receipt_invalid")
-        if notary.get("status") != "Accepted":
-            _fail("macos_notarization_rejected")
-        assessments: dict[str, dict[str, str]] = {}
-        for key in signed_binaries:
-            architecture, binary = key.split("/", 1)
-            kind = "bootstrap" if binary == "ecorex-bootstrap" else "core"
-            result = _run(
-                "/usr/sbin/spctl",
-                "--assess",
-                "--type",
-                "execute",
-                "--verbose=4",
-                str(inspection / f"{kind}-{architecture}" / "bin" / binary),
-                stderr_output=True,
-            )
-            assessments[key] = {
-                "status": "passed",
-                "readback_sha256": hashlib.sha256(result.encode()).hexdigest(),
+        if terminal_distribution:
+            distribution_mode = "terminal-command"
+            developer_id = {
+                "hardened_runtime": False,
+                "signature_mode": "candidate-ad-hoc",
+                "signed_candidate_binaries": signed_binaries,
             }
+            notarization = {
+                "status": "not-applicable",
+                "reason": "terminal-command-distribution",
+            }
+            stapling = {"applicable": False, "reason": "no-app-bundle"}
+            assessments: dict[str, Any] = {
+                "app_bundle": {
+                    "status": "not-applicable",
+                    "reason": "no-app-bundle",
+                }
+            }
+        else:
+            notary_raw = _run(
+                "/usr/bin/xcrun",
+                "notarytool",
+                "submit",
+                str(package),
+                "--keychain-profile",
+                args.notary_profile,
+                "--keychain",
+                args.notary_keychain,
+                "--wait",
+                "--output-format",
+                "json",
+            )
+            try:
+                notary = json.loads(notary_raw)
+                submission_id = str(uuid.UUID(str(notary.get("id"))))
+            except (ValueError, TypeError, json.JSONDecodeError):
+                _fail("macos_notarization_receipt_invalid")
+            if notary.get("status") != "Accepted":
+                _fail("macos_notarization_rejected")
+            distribution_mode = "developer-id-notarized"
+            developer_id = {
+                "hardened_runtime": True,
+                "signed_candidate_binaries": signed_binaries,
+            }
+            notarization = {"status": "Accepted", "submission_id": submission_id}
+            stapling = {
+                "applicable": False,
+                "reason": "zip-ticket-cannot-be-stapled",
+            }
+            assessments = {}
+            for key in signed_binaries:
+                architecture, binary = key.split("/", 1)
+                kind = "bootstrap" if binary == "ecorex-bootstrap" else "core"
+                result = _run(
+                    "/usr/sbin/spctl",
+                    "--assess",
+                    "--type",
+                    "execute",
+                    "--verbose=4",
+                    str(inspection / f"{kind}-{architecture}" / "bin" / binary),
+                    stderr_output=True,
+                )
+                assessments[key] = {
+                    "status": "passed",
+                    "readback_sha256": hashlib.sha256(result.encode()).hexdigest(),
+                }
         shutil.copy2(windows, staging / windows.name)
         generated_at = (
             datetime.now(timezone.utc)
@@ -473,6 +552,7 @@ def build(args: argparse.Namespace) -> tuple[Path, Path, Path]:
                 "schema": _DIST_SCHEMA,
                 "version": args.version,
                 "status": "verified",
+                "distribution_mode": distribution_mode,
                 "generated_at": generated_at,
                 "source_commit": args.commit_sha,
                 "web_bundle": {"sha256": scanned_web.bundle_sha256},
@@ -490,15 +570,9 @@ def build(args: argparse.Namespace) -> tuple[Path, Path, Path]:
                         for item in selected
                     ],
                 },
-                "developer_id": {
-                    "hardened_runtime": True,
-                    "signed_candidate_binaries": signed_binaries,
-                },
-                "notarization": {"status": "Accepted", "submission_id": submission_id},
-                "stapling": {
-                    "applicable": False,
-                    "reason": "zip-ticket-cannot-be-stapled",
-                },
+                "developer_id": developer_id,
+                "notarization": notarization,
+                "stapling": stapling,
                 "gatekeeper": assessments,
                 "package": {
                     "file_name": package.name,
@@ -529,6 +603,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--version", default=__version__)
     parser.add_argument("--commit-sha", required=True)
+    parser.add_argument("--terminal-distribution", action="store_true")
     parser.add_argument(
         "--identity", default=os.environ.get("ECOREX_APPLE_DEVELOPER_ID", "")
     )

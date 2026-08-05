@@ -468,11 +468,6 @@ def _validate_workflows(repo: Path) -> dict[str, object]:
             "npm_ci": 0,
             "node": False,
         },
-        "emate-v030-windows-webui.yml": {
-            "profiles": {"runtime": 1},
-            "npm_ci": 0,
-            "node": False,
-        },
         "emate-v030-macos-universal.yml": {
             "profiles": {"runtime": 2},
             "npm_ci": 1,
