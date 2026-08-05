@@ -217,8 +217,7 @@ class LocalSkillBundleStore:
                         raise ExtensionManifestError(
                             "local Skill ZIP may not contain links, devices, or special files"
                         )
-                    if mode & 0o111:
-                        raise ExtensionManifestError("local Skill resources may not be executable")
+                    _validate_executable_resource_mode(path, mode)
                     if entry.flag_bits & 0x1:
                         raise ExtensionManifestError("encrypted local Skill ZIP entries are forbidden")
                     if entry.file_size < 0 or entry.file_size > MAX_LOCAL_FILE_BYTES:
@@ -300,7 +299,6 @@ class LocalSkillBundleStore:
                     or stat.S_ISLNK(metadata.st_mode)
                     or _is_reparse(metadata)
                     or metadata.st_nlink != 1
-                    or metadata.st_mode & 0o111
                 ):
                     raise ExtensionManifestError(
                         "local Skill directory may contain only non-linked static files"
@@ -313,6 +311,7 @@ class LocalSkillBundleStore:
                 identities.add(identity)
                 relative = child.relative_to(root).as_posix()
                 path = _validate_path(relative, allow_script_paths=True)
+                _validate_executable_resource_mode(path, metadata.st_mode)
                 folded = path.casefold()
                 if folded in canonical_names:
                     raise ExtensionManifestError(
@@ -888,6 +887,13 @@ def _validate_static_resource(path: str, *, allow_scripts: bool = False) -> None
         raise ExtensionManifestError("local Skill scripts require migrated package provenance")
     if suffix in _BANNED_SUFFIXES or suffix not in _STATIC_SUFFIXES:
         raise ExtensionManifestError("local Skill resources must use a static data format")
+
+
+def _validate_executable_resource_mode(path: str, mode: int) -> None:
+    if mode & 0o111 and PurePosixPath(path).suffix.casefold() not in _SCRIPT_SUFFIXES:
+        raise ExtensionManifestError(
+            "only declared Skill script formats may carry an executable mode"
+        )
 
 
 def _validate_static_content(path: str, content: bytes) -> None:

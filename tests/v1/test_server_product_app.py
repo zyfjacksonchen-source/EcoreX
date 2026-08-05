@@ -231,7 +231,6 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
     capability_service = app.state.runtime_composition.capability_service
     assert set(capability_service.handlers) == {
         "read",
-        "feishu_cli",
         "skill_search",
         "skill_read",
         "skill_run",
@@ -269,6 +268,7 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
     assert app.state.runtime_composition.availability.disabled_tools == {
         "cdp": "verified_handler_not_installed",
         "fetch": "verified_handler_not_installed",
+        "feishu_cli": "verified_handler_not_installed",
         "imagegen": "verified_handler_not_installed",
         "ocr": "input_attachment_ocr_runtime_not_bound",
         "shell": "verified_handler_not_installed",
@@ -393,6 +393,27 @@ def test_product_app_disables_imagegen_when_managed_image_service_is_absent(
     assert availability.disabled_tools["imagegen"] == (
         "managed_image_orchestration_not_configured"
     )
+
+
+def test_product_app_binds_feishu_only_from_explicit_capability_authority(
+    tmp_path,
+):
+    signed = _write_signed_bundle(tmp_path)
+
+    def feishu_handler(_arguments, _context):
+        return {"status": "completed"}
+
+    settings = replace(
+        _settings(tmp_path, signed),
+        capability_handlers={"feishu_cli": feishu_handler},
+    )
+    app = create_product_app(settings)
+
+    assert (
+        app.state.runtime_composition.capability_service.handlers["feishu_cli"]
+        is feishu_handler
+    )
+    assert "feishu_cli" not in app.state.runtime_composition.availability.disabled_tools
 
 
 def test_product_settings_inject_cloud_authoritative_session(tmp_path):

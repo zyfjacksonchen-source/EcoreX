@@ -19,7 +19,6 @@ from fastapi.responses import JSONResponse, Response
 
 from ecorex.capabilities import (
     CapabilityPackRuntime,
-    CapabilityUnavailableError,
     build_capability_handler_set,
     builtin_capability_registry,
 )
@@ -81,15 +80,6 @@ def _origin(host: str, port: int) -> str:
     if port == 80:
         return f"http://{authority}"
     return f"http://{authority}:{port}"
-
-
-def _execute_feishu_cli(arguments: Mapping[str, Any], _context: Any) -> dict[str, Any]:
-    from agent.tools.feishu_cli import FeishuCli
-
-    result = FeishuCli().execute(dict(arguments))
-    if result.status != "success":
-        raise CapabilityUnavailableError("Feishu CLI returned a verified failure")
-    return {"status": result.status, "result": result.result}
 
 
 @dataclass(frozen=True, slots=True)
@@ -521,10 +511,7 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
     capability_runtime = build_capability_handler_set(
         capability_registry,
         workspace_roots=settings.workspace_roots,
-        trusted_core_handlers={
-            "feishu_cli": _execute_feishu_cli,
-            **settings.capability_handlers,
-        },
+        trusted_core_handlers=settings.capability_handlers,
         pack_runtime=settings.capability_pack_runtime,
         workspace_root_resolver=ProjectWorkspaceAuthority(settings.database_path),
     )

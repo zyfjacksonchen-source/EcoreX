@@ -5,6 +5,7 @@ import base64
 from dataclasses import replace
 import io
 import json
+import os
 from pathlib import Path
 import threading
 import time
@@ -164,11 +165,14 @@ def test_script_skill_requires_a_normalized_runtime_manifest_and_reports_configu
         "external_commands": [],
         "effects": ["read"],
     }, sort_keys=True, separators=(",", ":"))
-    payload = _zip({
-        "SKILL.md": _skill(),
-        "skill-runtime.json": runtime_manifest,
-        "scripts/main.py": "import json\nprint(json.dumps({'ok': True}))\n",
-    })
+    payload = _zip(
+        {
+            "SKILL.md": _skill(),
+            "skill-runtime.json": runtime_manifest,
+            "scripts/main.py": "import json\nprint(json.dumps({'ok': True}))\n",
+        },
+        executable="scripts/main.py",
+    )
     service = _service(tmp_path, credential_vault=InMemoryCredentialVault())
     staged = service.install_local_skill_zip(
         payload,
@@ -202,10 +206,15 @@ def test_script_skill_requires_a_normalized_runtime_manifest_and_reports_configu
     assert "secret-value" not in serialized
 
     with pytest.raises(ExtensionManifestError, match="skill-runtime.json"):
-        LocalSkillBundleStore(tmp_path / "other-cas").ingest_zip(_zip({
-            "SKILL.md": _skill(),
-            "scripts/main.py": "print('undeclared')\n",
-        }))
+        LocalSkillBundleStore(tmp_path / "other-cas").ingest_zip(
+            _zip(
+                {
+                    "SKILL.md": _skill(),
+                    "scripts/main.py": "print('undeclared')\n",
+                },
+                executable="scripts/main.py",
+            )
+        )
 
     node_manifest = json.dumps(
         {
@@ -267,6 +276,46 @@ def test_local_bundle_rejects_executable_and_symlink(tmp_path: Path) -> None:
     except OSError:
         pytest.skip("the test account cannot create a symlink")
     with pytest.raises(ExtensionManifestError):
+        store.ingest_directory(source)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable mode is not represented on Windows")
+def test_posix_executable_declared_script_normalizes_like_zip(tmp_path: Path) -> None:
+    runtime = json.dumps(
+        {
+            "schema_version": 1,
+            "runtime": "python",
+            "entrypoint": "scripts/main.py",
+            "environment": [],
+            "network_domains": [],
+            "external_commands": [],
+            "effects": ["read"],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    files = {
+        "SKILL.md": _skill(),
+        "skill-runtime.json": runtime,
+        "scripts/main.py": "print('ok')\n",
+    }
+    source = tmp_path / "source"
+    for name, content in files.items():
+        target = source / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content if isinstance(content, bytes) else content.encode())
+    (source / "scripts/main.py").chmod(0o755)
+    store = LocalSkillBundleStore(tmp_path / "cas")
+
+    assert store.ingest_directory(source) == store.ingest_zip(
+        _zip(files, executable="scripts/main.py")
+    )
+
+    forbidden = source / "references/help.txt"
+    forbidden.parent.mkdir()
+    forbidden.write_text("help", encoding="utf-8")
+    forbidden.chmod(0o755)
+    with pytest.raises(ExtensionManifestError, match="declared Skill script formats"):
         store.ingest_directory(source)
 
 
