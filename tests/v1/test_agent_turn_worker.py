@@ -11,6 +11,7 @@ import pytest
 from ecorex.capabilities import (
     CapabilityDecision,
     CapabilityPlan,
+    CapabilityUnavailableError,
     Exposure,
     SandboxLevel,
     ToolExecutionScope,
@@ -39,7 +40,6 @@ from ecorex.runtime import (
     create_app,
 )
 from ecorex.runtime.worker import _CheckpointLeasePulse
-from ecorex.server.app import _execute_feishu_cli
 
 
 class ScriptedGateway:
@@ -563,23 +563,14 @@ def test_artifact_vision_tool_continuation_carries_bounded_semantic_image(
     )
 
 
-def test_verified_feishu_failure_is_failed_and_recoverable(
-    tmp_path, monkeypatch
-) -> None:
-    from agent.tools.feishu_cli import FeishuCli
+def test_verified_capability_failure_is_failed_and_recoverable(tmp_path) -> None:
+    def unavailable_handler(_arguments, _context):
+        raise CapabilityUnavailableError("verified handler rejected the command")
 
-    monkeypatch.setattr(
-        FeishuCli,
-        "execute",
-        lambda self, arguments: SimpleNamespace(
-            status="error",
-            result={"status": "error", "message": "command rejected"},
-        ),
-    )
     app, kernel, composition, _thread, created = _runtime(
         tmp_path,
         input_text="读取文件",
-        capability_handlers={"read": _execute_feishu_cli},
+        capability_handlers={"read": unavailable_handler},
     )
     del app
     gateway = ScriptedGateway(
