@@ -285,6 +285,17 @@ def test_artifact_manifest_is_bound_to_expected_source_and_lock(tmp_path: Path) 
         )
 
 
+def test_v030_accepts_only_the_retired_v10_internal_release_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(deployment, "PRODUCT_VERSION", "0.3.0")
+    spec, _ = _signed_artifact(tmp_path, version="1.0.17")
+
+    deployment._validate_artifact(spec, historical_release=True)
+    assert deployment._historical_product_version_is_compatible("1.0.0")
+    assert not deployment._historical_product_version_is_compatible("1.0.18")
+
+
 def test_transition_release_uses_its_signed_source_commit_not_target_spec(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1336,7 +1347,7 @@ def test_absent_404_route_seeds_canonical_unpublished_pointer(
         tmp_path, monkeypatch
     )
     server.write_bytes(
-        deployment._without_legacy_pointer_location(server.read_bytes())
+        deployment._without_legacy_managed_locations(server.read_bytes())
     )
     expected = _unpublished_pointer_bytes() + b"\n"
 
@@ -1353,6 +1364,22 @@ def test_absent_404_route_seeds_canonical_unpublished_pointer(
         deployment.CloudDeployError, match="public_bootstrap_seed_identity_changed"
     ):
         deployment._verify_public_bootstrap_seed_before_route_retire(spec, seed)
+
+
+def test_managed_nginx_migration_removes_the_nested_legacy_download_location() -> None:
+    source = b"""server {
+    location ^~ /ecorex-agent/downloads/ {
+        types {
+            application/zip zip;
+        }
+    }
+}
+"""
+
+    migrated = deployment._without_legacy_managed_locations(source)
+
+    assert deployment.LEGACY_DOWNLOAD_LOCATION_HEADER.encode() not in migrated
+    assert migrated == b"server {\n}\n"
 
 
 def test_legacy_source_mutation_between_seed_and_retire_keeps_old_route(

@@ -14,6 +14,7 @@ import pytest
 
 from ecorex import __version__
 from ecorex.control_plane.cli import run
+from ecorex.control_plane.repository import _parse_bootstrap_index_bytes
 from ecorex.release import (
     ArtifactBuildInput,
     ArtifactKind,
@@ -26,6 +27,7 @@ from ecorex.release import (
     build_public_bootstrap_index,
     public_bootstrap_authority_signing_bytes,
     public_bootstrap_freshness_signing_bytes,
+    refresh_public_bootstrap_freshness,
     stable_pointer_sequence,
     unpublished_public_bootstrap_index,
     validate_public_bootstrap_index,
@@ -278,6 +280,86 @@ def test_pointer_sequence_is_deterministic_monotonic_and_signature_reproducible(
         )
         is True
     )
+
+
+def test_legacy_v1017_sequence_is_only_accepted_by_explicit_migration_mode(
+    tmp_path: Path,
+) -> None:
+    built, verifier, _public, signer, fresh_verifier, _fresh_public, fresh_signer = (
+        _release(tmp_path)
+    )
+    receipt, receipt_digest = _receipt(built)
+    legacy = build_public_bootstrap_index(
+        manifest=built.manifest,
+        manifest_bytes=built.manifest_path.read_bytes(),
+        manifest_sha256=_sha256(built.manifest_path),
+        publication_receipt=receipt,
+        publication_receipt_sha256=receipt_digest,
+        verifier=verifier,
+        freshness_verifier=fresh_verifier,
+        signer=signer,
+        freshness_signer=fresh_signer,
+    )
+    legacy["release"]["version"] = "1.0.17"
+    legacy["authority"]["target"]["version"] = "1.0.17"
+    legacy["authority"]["sequence"] = 18
+    authority_payload = public_bootstrap_authority_signing_bytes(
+        sequence=18,
+        revision=legacy["authority"]["revision"],
+        target=legacy["authority"]["target"],
+    )
+    legacy["authority"]["signature"] = SignatureEnvelope(
+        "ed25519",
+        signer.key_id,
+        base64.b64encode(signer.sign(authority_payload)).decode("ascii"),
+    ).to_dict()
+    legacy["freshness"]["authority_sha256"] = hashlib.sha256(
+        authority_payload
+    ).hexdigest()
+    freshness_payload = public_bootstrap_freshness_signing_bytes(
+        authority_sha256=legacy["freshness"]["authority_sha256"],
+        issued_at=legacy["freshness"]["issued_at"],
+        expires_at=legacy["freshness"]["expires_at"],
+    )
+    legacy["freshness"]["signature"] = SignatureEnvelope(
+        "ed25519",
+        fresh_signer.key_id,
+        base64.b64encode(fresh_signer.sign(freshness_payload)).decode("ascii"),
+    ).to_dict()
+
+    with pytest.raises(PublicBootstrapIndexError, match="target is inconsistent"):
+        validate_public_bootstrap_index(legacy)
+    validate_public_bootstrap_index(
+        legacy,
+        verifier=verifier,
+        freshness_verifier=fresh_verifier,
+        allow_legacy_v1017_sequence=True,
+    )
+    _parse_bootstrap_index_bytes(
+        json.dumps(
+            legacy,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n",
+        verifier=verifier,
+        freshness_verifier=fresh_verifier,
+    )
+    refresh_now = datetime.strptime(
+        legacy["freshness"]["issued_at"], "%Y-%m-%dT%H:%M:%SZ"
+    ).replace(tzinfo=UTC)
+    refreshed = refresh_public_bootstrap_freshness(
+        legacy,
+        verifier=verifier,
+        freshness_verifier=fresh_verifier,
+        freshness_signer=fresh_signer,
+        issued_at=refresh_now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        expires_at=(refresh_now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        now=refresh_now,
+        allow_legacy_v1017_sequence=True,
+    )
+    assert refreshed["authority"] == legacy["authority"]
 
 
 def test_freshness_uses_independent_online_key_and_exact_bounded_window(

@@ -352,6 +352,7 @@ class BootstrapFreshnessRefresher:
                     issued_at=str(begun["issued_at"]),
                     expires_at=str(begun["expires_at"]),
                     now=observed,
+                    allow_legacy_v1017_sequence=True,
                 )
                 candidate_bytes = (
                     json.dumps(

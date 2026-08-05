@@ -415,6 +415,7 @@ def validate_public_bootstrap_index(
     freshness_verifier: SignatureVerifier | None = None,
     now: datetime | None = None,
     allow_expired_freshness: bool = False,
+    allow_legacy_v1017_sequence: bool = False,
 ) -> None:
     """Fail closed unless *index* is one exact v1 discovery document.
 
@@ -495,9 +496,15 @@ def validate_public_bootstrap_index(
         "public authority target",
     )
     expected_sequence = stable_pointer_sequence(str(release.get("version") or ""))
+    legacy_sequence = (
+        allow_legacy_v1017_sequence
+        and release.get("version") == "1.0.17"
+        and authority.get("sequence") == 18
+    )
+    validated_sequence = 18 if legacy_sequence else expected_sequence
     if (
         isinstance(authority.get("sequence"), bool)
-        or authority.get("sequence") != expected_sequence
+        or (authority.get("sequence") != expected_sequence and not legacy_sequence)
         or authority.get("revision") != release.get("release_id")
         or target.get("manifest_sha256")
         != _require_mapping(release.get("manifest"), "public manifest").get("sha256")
@@ -516,7 +523,7 @@ def validate_public_bootstrap_index(
             )
             verdict = verifier.verify(
                 public_bootstrap_authority_signing_bytes(
-                    sequence=expected_sequence,
+                    sequence=validated_sequence,
                     revision=str(authority["revision"]),
                     target=target,
                 ),
@@ -536,7 +543,7 @@ def validate_public_bootstrap_index(
         "public freshness",
     )
     authority_payload = public_bootstrap_authority_signing_bytes(
-        sequence=expected_sequence,
+        sequence=validated_sequence,
         revision=str(authority["revision"]),
         target=target,
     )
@@ -671,6 +678,7 @@ def refresh_public_bootstrap_freshness(
     issued_at: str,
     expires_at: str,
     now: datetime | None = None,
+    allow_legacy_v1017_sequence: bool = False,
 ) -> dict[str, object]:
     """Re-sign only freshness while preserving immutable authority and target."""
 
@@ -681,6 +689,7 @@ def refresh_public_bootstrap_freshness(
         freshness_verifier=freshness_verifier,
         now=observed_now,
         allow_expired_freshness=True,
+        allow_legacy_v1017_sequence=allow_legacy_v1017_sequence,
     )
     if index.get("status") != "published":
         raise PublicBootstrapIndexError(
@@ -740,6 +749,7 @@ def refresh_public_bootstrap_freshness(
         verifier=verifier,
         freshness_verifier=freshness_verifier,
         now=observed_now,
+        allow_legacy_v1017_sequence=allow_legacy_v1017_sequence,
     )
     return refreshed
 

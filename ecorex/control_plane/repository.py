@@ -1473,6 +1473,7 @@ class ControlPlaneRepository:
                 freshness_verifier=self._require_bootstrap_freshness_verifier(),
                 now=observed,
                 allow_expired_freshness=True,
+                allow_legacy_v1017_sequence=True,
             )
             freshness = index["freshness"]
             authority = index["authority"]
@@ -4542,6 +4543,7 @@ def _parse_bootstrap_index_bytes(
     freshness_verifier: SignatureVerifier,
     now: datetime | None = None,
     allow_expired_freshness: bool = False,
+    allow_legacy_v1017_sequence: bool = True,
 ) -> dict[str, Any]:
     if (
         not isinstance(payload, bytes)
@@ -4568,6 +4570,7 @@ def _parse_bootstrap_index_bytes(
             freshness_verifier=freshness_verifier,
             now=now,
             allow_expired_freshness=allow_expired_freshness,
+            allow_legacy_v1017_sequence=allow_legacy_v1017_sequence,
         )
     except (PublicBootstrapIndexError, TypeError):
         raise ValueError(

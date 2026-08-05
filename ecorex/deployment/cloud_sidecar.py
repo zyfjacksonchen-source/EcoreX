@@ -140,6 +140,7 @@ LEGACY_ADMIN_LOCATION_HEADERS = (
 LEGACY_POINTER_LOCATION_HEADER = (
     "location = /ecorex-agent/public-bootstrap-index.json"
 )
+LEGACY_DOWNLOAD_LOCATION_HEADER = "location ^~ /ecorex-agent/downloads/"
 CONTROL_PLANE_ADMIN_ROUTE_CONTRACT = {
     "location = /ecorex-agent/admin": (
         "return 308 /ecorex-agent/admin/;",
@@ -576,6 +577,15 @@ def _product_version_key(value: object) -> tuple[int, int, int]:
     return int(major), int(minor), int(patch)
 
 
+def _historical_product_version_is_compatible(value: object) -> bool:
+    version = str(value)
+    current = str(PRODUCT_VERSION)
+    parsed = _product_version_key(version)
+    return parsed <= _product_version_key(current) or (
+        current == "0.3.0" and parsed[:2] == (1, 0) and parsed[2] <= 17
+    )
+
+
 def _validate_artifact(
     spec: CloudDeploymentSpec,
     *,
@@ -607,7 +617,7 @@ def _validate_artifact(
         raise CloudDeployError("artifact_manifest_invalid")
     version = manifest.get("version")
     version_matches = (
-        _product_version_key(version) <= _product_version_key(PRODUCT_VERSION)
+        _historical_product_version_is_compatible(version)
         if historical_release
         else version == PRODUCT_VERSION
     )
@@ -1476,38 +1486,43 @@ def _legacy_admin_route_payload(source: bytes) -> tuple[bytes, bytes]:
     return migrated.encode("utf-8"), legacy.encode("utf-8")
 
 
-def _without_legacy_pointer_location(source: bytes) -> bytes:
-    """Remove at most one pre-v1 exact pointer location from a server file."""
+def _without_legacy_managed_locations(source: bytes) -> bytes:
+    """Remove legacy locations now owned by the signed managed include."""
 
     try:
         text = source.decode("utf-8")
     except UnicodeDecodeError:
         raise CloudDeployError("nginx_legacy_admin_route_invalid") from None
     lines = text.splitlines(keepends=True)
-    matches = [
-        index
-        for index, line in enumerate(lines)
-        if line.strip() == f"{LEGACY_POINTER_LOCATION_HEADER} {{"
-    ]
-    if not matches:
+    spans: list[tuple[int, int]] = []
+    headers = (LEGACY_POINTER_LOCATION_HEADER, LEGACY_DOWNLOAD_LOCATION_HEADER)
+    for header in headers:
+        matches = [
+            index for index, line in enumerate(lines) if line.strip() == f"{header} {{"
+        ]
+        if len(matches) > 1:
+            raise CloudDeployError("nginx_legacy_admin_route_invalid")
+        if not matches:
+            continue
+        start = matches[0]
+        depth = 0
+        end: int | None = None
+        for index in range(start, len(lines)):
+            statement = lines[index].split("#", 1)[0]
+            depth += statement.count("{") - statement.count("}")
+            if depth == 0:
+                end = index + 1
+                break
+            if depth < 0:
+                break
+        if end is None or end <= start:
+            raise CloudDeployError("nginx_legacy_admin_route_invalid")
+        spans.append((start, end))
+    if not spans:
         return source
-    if len(matches) != 1:
-        raise CloudDeployError("nginx_legacy_admin_route_invalid")
-    start = matches[0]
-    depth = 0
-    end: int | None = None
-    for index in range(start, len(lines)):
-        statement = lines[index].split("#", 1)[0]
-        depth += statement.count("{") - statement.count("}")
-        if depth == 0:
-            end = index + 1
-            break
-        if depth < 0:
-            break
-    if end is None or end <= start:
-        raise CloudDeployError("nginx_legacy_admin_route_invalid")
-    migrated = "".join((*lines[:start], *lines[end:]))
-    if f"{LEGACY_POINTER_LOCATION_HEADER} {{" in migrated:
+    removed = {index for start, end in spans for index in range(start, end)}
+    migrated = "".join(line for index, line in enumerate(lines) if index not in removed)
+    if any(f"{header} {{" in migrated for header in headers):
         raise CloudDeployError("nginx_legacy_admin_route_invalid")
     return migrated.encode("utf-8")
 
@@ -1641,7 +1656,7 @@ def _install_legacy_admin_route_wiring(
         ):
             raise CloudDeployError("nginx_admin_route_wiring_invalid")
         _validate_admin_route_resources()
-        migrated = _without_legacy_pointer_location(guarded_source)
+        migrated = _without_legacy_managed_locations(guarded_source)
         if migrated != source:
             _verify_public_bootstrap_seed_before_route_retire(
                 spec, public_bootstrap_seed
@@ -1794,9 +1809,8 @@ def _prepare_release_replica_storage() -> None:
     )
     namespace = f"v{PRODUCT_VERSION}"
     try:
-        base_version_is_compatible = (
-            _product_version_key(base_product_version)
-            <= _product_version_key(PRODUCT_VERSION)
+        base_version_is_compatible = _historical_product_version_is_compatible(
+            base_product_version
         )
     except CloudDeployError:
         base_version_is_compatible = False
@@ -1959,6 +1973,7 @@ def _validate_public_bootstrap_seed_payload(
             verifier=Ed25519SignatureVerifier(release_raw),
             freshness_verifier=Ed25519SignatureVerifier(publication_raw),
             allow_expired_freshness=True,
+            allow_legacy_v1017_sequence=True,
         )
     except (
         UnicodeDecodeError,

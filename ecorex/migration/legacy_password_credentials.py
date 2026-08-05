@@ -230,6 +230,19 @@ def _commit(
                 if len(existing) == 1 and existing[0]["source_version"] == "admin":
                     admin_reset += 1
                     continue
+                if len(existing) == 1 and (
+                    str(existing[0]["account_id"]) == account_id
+                    and existing[0]["source_version"] == "0.2.9.2"
+                ):
+                    connection.execute(
+                        "UPDATE admin_ops_password_credentials SET "
+                        "encoded_hash=?,credential_version=credential_version+1,"
+                        "source_record_sha256=?,password_changed_at=?,updated_at=? "
+                        "WHERE account_id=?",
+                        (encoded, record_sha, now, now, account_id),
+                    )
+                    imported += 1
+                    continue
                 raise LegacyPasswordCredentialImportError(
                     "legacy password import identity changed"
                 )

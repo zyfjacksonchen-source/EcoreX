@@ -224,6 +224,50 @@ def test_legacy_import_isolates_bad_rows_and_login_atomically_upgrades(
     assert replay.skipped_admin_reset == 2
 
 
+def test_legacy_import_reconciles_a_password_changed_after_the_first_import(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target.db"
+    repository = _repository(target)
+    repository.create_user(
+        _request("account-1", "user@example.com", request_id="create-account-1"),
+        actor=ACTOR,
+    )
+    source = tmp_path / "legacy.db"
+    _legacy_source(
+        source,
+        [
+            (
+                "account-1",
+                "user@example.com",
+                "active",
+                _ecorex_v0292_hash("first-password"),
+                None,
+            )
+        ],
+    )
+    assert import_v0292_password_credentials(source, target).imported == 1
+
+    connection = sqlite3.connect(source)
+    try:
+        connection.execute(
+            "UPDATE users SET password_hash=? WHERE id='account-1'",
+            (_ecorex_v0292_hash("changed-password"),),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    reconciled = import_v0292_password_credentials(source, target)
+    assert reconciled.imported == 1
+    assert repository.authenticate_password(
+        "user@example.com",
+        "changed-password",
+        source_ip="203.0.113.10",
+        now=NOW,
+    ).account_id == "account-1"
+
+
 def test_password_idempotency_fingerprint_replays_same_and_conflicts_different(
     tmp_path: Path,
 ) -> None:
