@@ -174,4 +174,11 @@
 - v0.3.0 部署期间用于读取旧 `1.0.17`/sequence 18 指针的过渡兼容仅保留在已执行的移行候选中；线上指针已迁移为 v0.3.0，v0.3.1 继续使用严格的新版本验证，不将临时放行扩大为常驻产品逻辑。
 - 接手时保留了该任务尚未提交的 6 个生产根因修复：旧云端制品验证、Nginx 指针/下载路由收敛、旧密码迁移重试及对应测试；同时补全候选目录中已验证但未回到主源码的 Control Plane 旧指针读取与 freshness 续签链。普通发布验证仍默认严格，只有签名校验的明确迁移路径可接受旧 sequence 18。
 - 生产迁移定向回归：公开指针、云端部署和密码凭据 110 通过、14 跳过，零失败，耗时 37.58 秒。
-- 用户提供的短期 GitHub 凭据仅在子进程内使用，未写入 Git 配置、remote、文件或日志。凭据能识别为目标仓库所有者，仓库元数据也返回 `push=true`，且 main 无生效 ruleset；但包含 workflow 更新的直接推送仍被 GitHub 以 403 拒绝。该 fine-grained PAT 仍缺少对选定仓库实际生效的 Contents 和/或 Workflows 写权限；远端尚未变更。
+- 用户提供的短期 GitHub 凭据仅在子进程内使用，未写入 Git 配置、remote、文件或日志。首枚 fine-grained PAT 虽能识别为目标仓库所有者，仓库元数据也返回 `push=true`，但包含 workflow 更新的推送被 403 拒绝；其后使用具备 `repo/workflow` 权限的用户授权成功将 `f56a26f` 推送至 `zyfjacksonchen-source/EcoreX:main`，发布提交变量读回一致。
+
+## 2026-08-06 S12 手动发布边界确认
+
+- 用户确认 GitHub 仅用于构建 macOS 产物，不通过 CI 发布；Windows 包、候选签名整合、GitHub Release 与服务器部署均在本机手动执行。所有 GitHub CLI 上传/API 调用只在单次命令内显式使用 UniClash `127.0.0.1:7993`，不改系统代理。
+- 误启动的普通 CI `31053583222` 与含 Windows 的三平台 staging `31053607940` 已在产物发布前取消；两者 conclusion 均为 `cancelled`，未生成候选、Release 或线上指针变更。
+- 平台 staging 手动调度默认排除 Windows，只保留 macOS arm64/x64；最终 macOS workflow 不再分配 Windows Runner，而是从手动候选 Release 读取已验证的 Windows 包与 partial receipt，用于生成双端一致的最终收据。
+- 手动/macOS 工作流合同回归 80/80 通过；精确依赖锁、源码树和 `git diff --check` 通过。

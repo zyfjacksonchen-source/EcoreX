@@ -1,10 +1,10 @@
-name: e-Mate v0.3.1 Windows and macOS WebUI packages
+name: e-Mate v0.3.1 macOS WebUI package
 
 on:
   workflow_dispatch:
     inputs:
       candidate_tag:
-        description: Draft release tag containing the direct signed Candidate handoff
+        description: Draft release tag containing the manual signed handoffs
         required: true
         type: string
       candidate_bundle_sha256:
@@ -15,6 +15,7 @@ on:
         description: Exact product commit bound by the signed Candidate
         required: true
         type: string
+
 permissions:
   actions: read
   contents: read
@@ -24,109 +25,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  windows-x64-user:
-    name: Build, install, and launch Windows x64 package
-    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'zyfjacksonchen-source/EcoreX' && github.ref == 'refs/heads/main' && github.sha == vars.ECOREX_V031_RELEASE_COMMIT_SHA }}
-    runs-on: windows-2022
-    timeout-minutes: 45
-    environment:
-      name: ecorex-release-signing-stable
-    steps:
-      - name: Checkout exact package producer
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-          clean: true
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.11.9"
-
-      - name: Install exact package verification dependencies
-        run: python scripts/install-v1-python-profile.py --profile runtime
-
-      - name: Download the authenticated direct Candidate
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Path ".producer/downloads" -Force | Out-Null
-          gh release download $env:CANDIDATE_TAG `
-            --repo $env:GITHUB_REPOSITORY `
-            --dir .producer/downloads `
-            --pattern EcoreX_0.3.1-direct-candidate.zip
-          if ($LASTEXITCODE -ne 0) { throw "candidate_download_failed" }
-
-      - name: Verify and extract the exact Candidate handoff
-        shell: pwsh
-        env:
-          CANDIDATE_BUNDLE_SHA256: ${{ inputs.candidate_bundle_sha256 }}
-          CANDIDATE_COMMIT_SHA: ${{ inputs.candidate_commit_sha }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          if ($env:CANDIDATE_BUNDLE_SHA256 -notmatch '^[0-9a-f]{64}$' -or $env:CANDIDATE_COMMIT_SHA -notmatch '^[0-9a-f]{40}$') { throw "candidate_identity_invalid" }
-          $archive = ".producer/downloads/EcoreX_0.3.1-direct-candidate.zip"
-          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
-          if ($digest -ne $env:CANDIDATE_BUNDLE_SHA256) { throw "candidate_bundle_digest_mismatch" }
-          python scripts/extract-v1-workflow-artifact.py `
-            --archive $archive `
-            --expected-sha256 $env:CANDIDATE_BUNDLE_SHA256 `
-            --output .producer/candidate `
-            --required-root output `
-            --receipt .producer/candidate-extraction.json
-          if ($LASTEXITCODE -ne 0) { throw "candidate_extraction_failed" }
-          $receipt = Get-Content -Raw -LiteralPath ".producer/candidate/output/candidate-build-receipt.json" | ConvertFrom-Json
-          if ($receipt.status -ne "passed" -or $receipt.commit_sha -ne $env:CANDIDATE_COMMIT_SHA) { throw "candidate_commit_mismatch" }
-
-      - name: Materialize the admitted release public key
-        shell: pwsh
-        env:
-          RELEASE_PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $key = [Convert]::FromBase64String($env:RELEASE_PUBLIC_KEY)
-          if ($key.Length -ne 32) { throw "release_public_key_invalid" }
-          [IO.File]::WriteAllBytes((Join-Path $env:RUNNER_TEMP "release-public-key.bin"), $key)
-
-      - name: Build and reopen the Candidate-bound Windows package
-        shell: pwsh
-        env:
-          RELEASE_KEY_ID: ${{ vars.ECOREX_RELEASE_SIGNER_KEY_ID }}
-        run: >-
-          python scripts/build-v030-windows-webui.py
-          --release-dir .producer/candidate/output/release
-          --candidate-receipt .producer/candidate/output/candidate-build-receipt.json
-          --output .producer/windows
-          --trusted-public-key "$env:RELEASE_KEY_ID=$env:RUNNER_TEMP/release-public-key.bin"
-          --production-key-id "$env:RELEASE_KEY_ID"
-
-      - name: Install, launch, and verify as a real Windows user
-        shell: pwsh
-        run: >-
-          & scripts/smoke-v030-windows-terminal-package.ps1
-          -PackagePath .producer/windows/EcoreX_0.3.1-webui-windows-x64.zip
-          -ReceiptPath .producer/windows/windows-x64-user-smoke.json
-
-      - name: Upload verified Windows handoff
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: emate-v031-windows-webui
-          path: |
-            .producer/windows/EcoreX_0.3.1-webui-windows-x64.zip
-            .producer/windows/emate-webui-build-receipt.json
-            .producer/windows/windows-x64-user-smoke.json
-          if-no-files-found: error
-          include-hidden-files: true
-          retention-days: 7
   terminal-universal:
     name: Build and test macOS arm64 terminal package
     if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'zyfjacksonchen-source/EcoreX' && github.ref == 'refs/heads/main' && github.sha == vars.ECOREX_V031_RELEASE_COMMIT_SHA }}
-    needs: windows-x64-user
     runs-on: macos-15
     timeout-minutes: 60
     environment:
@@ -170,23 +71,23 @@ jobs:
           npm ci
           npm run build
 
-      - name: Download the authenticated direct Candidate and Windows handoff
+      - name: Download authenticated manual Candidate and Windows handoffs
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
         run: |
           set -euo pipefail
           mkdir -p .producer/downloads
-          gh release download "$CANDIDATE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --dir .producer/downloads \
-            --pattern EcoreX_0.3.1-direct-candidate.zip
-
-      - name: Download the verified Windows handoff from this run
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: emate-v031-windows-webui
-          path: .producer/windows
+          for name in \
+            EcoreX_0.3.1-direct-candidate.zip \
+            EcoreX_0.3.1-webui-windows-x64.zip \
+            emate-webui-build-receipt.json
+          do
+            gh release download "$CANDIDATE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --dir .producer/downloads \
+              --pattern "$name"
+          done
 
       - name: Verify and extract the exact Candidate handoff
         env:
@@ -229,8 +130,8 @@ jobs:
           --terminal-distribution
           --candidate-root .producer/candidate
           --web-dist .producer/source/desktop/dist
-          --windows-package .producer/windows/EcoreX_0.3.1-webui-windows-x64.zip
-          --windows-receipt .producer/windows/emate-webui-build-receipt.json
+          --windows-package .producer/downloads/EcoreX_0.3.1-webui-windows-x64.zip
+          --windows-receipt .producer/downloads/emate-webui-build-receipt.json
           --output .producer/output
           --version 0.3.1
           --commit-sha ${{ inputs.candidate_commit_sha }}
@@ -260,6 +161,7 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 7
+
   macos-x64-user:
     name: Install and launch macOS x64 terminal package
     needs: terminal-universal

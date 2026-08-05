@@ -234,7 +234,7 @@ def test_user_package_workflow_hands_verified_bytes_to_direct_publisher():
         " && github.ref == 'refs/heads/main'"
         " && github.sha == vars.ECOREX_V031_RELEASE_COMMIT_SHA"
     )
-    assert workflow.count(admission) == 2
+    assert workflow.count(admission) == 1
     assert "EcoreX_0.3.1-webui-windows-x64.zip" in workflow
     assert "EcoreX_0.3.1-webui-macos-universal.zip" in workflow
     assert "webui-build-receipt.json" in workflow
@@ -242,6 +242,7 @@ def test_user_package_workflow_hands_verified_bytes_to_direct_publisher():
     assert "macos-x64-user-smoke.json" in workflow
     assert "secrets.ECOREX_GITHUB_RELEASE_TOKEN" not in workflow
     assert "gh release upload" not in workflow
+    assert "build-v030-windows-webui.py" not in workflow
     assert "ecorex.release.legacy_webui_publication" not in workflow
     assert workflow.index("ecorex.release.legacy_webui_manifest") < workflow.index(
         "Upload package handoff and arm64 user evidence"

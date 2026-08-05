@@ -2,6 +2,12 @@ name: EcoreX v1 protected platform stage
 
 on:
   workflow_dispatch:
+    inputs:
+      include_windows:
+        description: Also build the Windows stage (v0.3.1 release uses macOS only)
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -37,6 +43,8 @@ jobs:
             platform: macos
             architecture: x64
             runs_on: '"macos-15-intel"'
+        exclude:
+          - id: ${{ inputs.include_windows && '__none__' || 'windows-x64' }}
     runs-on: ${{ fromJSON(matrix.runs_on) }}
     timeout-minutes: 60
 

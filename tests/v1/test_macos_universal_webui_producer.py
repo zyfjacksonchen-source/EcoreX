@@ -256,6 +256,9 @@ def test_workflow_builds_and_runs_both_terminal_macos_architectures():
     assert "--terminal-distribution" in workflow
     assert "runs-on: macos-15" in workflow
     assert "runs-on: macos-15-intel" in workflow
+    assert "runs-on: windows-2022" not in workflow
+    assert "build-v030-windows-webui.py" not in workflow
+    assert "Download authenticated manual Candidate and Windows handoffs" in workflow
     assert workflow.count("smoke-v030-macos-terminal-package.sh") == 2
     assert workflow.index("build-v030-macos-universal-webui.py") < workflow.index(
         "Upload package handoff and arm64 user evidence"
@@ -265,12 +268,14 @@ def test_workflow_builds_and_runs_both_terminal_macos_architectures():
         < workflow.index("ecorex.release.legacy_webui_manifest")
         < workflow.index("Upload package handoff and arm64 user evidence")
     )
-    assert workflow.count("include-hidden-files: true") == 3
+    assert workflow.count("include-hidden-files: true") == 2
     assert "emate-v031-verified-webui-packages" not in workflow
     assert "emate-v031-arm64-qualified-webui-packages" in workflow
     assert "--web-dist .producer/source/desktop/dist" in workflow
     assert "--candidate-root .producer/candidate" in workflow
     assert "--windows-receipt" in workflow
+    assert "--windows-package .producer/downloads/EcoreX_0.3.1-webui-windows-x64.zip" in workflow
+    assert "--windows-receipt .producer/downloads/emate-webui-build-receipt.json" in workflow
     assert "macos-distribution-receipt.json" in workflow
     assert "_verify_candidate_receipt(" in producer
     assert producer.index("verify_windows_webui_package(") < producer.index(

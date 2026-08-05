@@ -307,7 +307,7 @@ def test_go_bootstrap_local_release_path_is_fail_closed_and_network_independent(
     assert "Bootstrap accepts stable v1 releases only" not in source
 
 
-def test_windows_webui_workflow_is_pinned_and_emits_only_verified_handoff() -> None:
+def test_macos_workflow_consumes_only_the_manual_verified_windows_handoff() -> None:
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github"
@@ -321,11 +321,11 @@ def test_windows_webui_workflow_is_pinned_and_emits_only_verified_handoff() -> N
     assert "github.ref_protected" not in workflow
     assert "candidate_commit_mismatch" in workflow
     assert "EcoreX_0.3.1-direct-candidate.zip" in workflow
-    assert "build-v030-windows-webui.py" in workflow
-    assert "smoke-v030-windows-terminal-package.ps1" in workflow
-    assert "runs-on: windows-2022" in workflow
+    assert "EcoreX_0.3.1-webui-windows-x64.zip" in workflow
+    assert "emate-webui-build-receipt.json" in workflow
+    assert "Download authenticated manual Candidate and Windows handoffs" in workflow
+    assert "build-v030-windows-webui.py" not in workflow
+    assert "smoke-v030-windows-terminal-package.ps1" not in workflow
+    assert "runs-on: windows-2022" not in workflow
     assert "include-hidden-files: true" in workflow
-    assert workflow.index("build-v030-windows-webui.py") < workflow.index(
-        "actions/upload-artifact"
-    )
-    assert "emate-v031-windows-webui" in workflow
+    assert "emate-v031-windows-webui" not in workflow
