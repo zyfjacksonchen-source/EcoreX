@@ -17,6 +17,7 @@ from typing import Any, Mapping
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from ecorex.product_version import is_stable_release_version
 
 
 DOMAIN = b"ecorex.protected-deployment-admission.v1\0"
@@ -132,8 +133,7 @@ def validate_admission_payload(value: Mapping[str, Any]) -> dict[str, Any]:
         or candidate["artifact_id"] <= 0
         or not isinstance(candidate["release_id"], str)
         or _IDENTITY.fullmatch(candidate["release_id"]) is None
-        or not isinstance(candidate["version"], str)
-        or re.fullmatch(r"1\.[0-9]+\.[0-9]+", candidate["version"]) is None
+        or not is_stable_release_version(candidate["version"])
     ):
         raise ProtectedDeploymentAdmissionError(
             "protected_deployment_candidate_invalid"

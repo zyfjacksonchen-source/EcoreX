@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from ecorex.product_version import is_stable_release_version
 
 
 class ControlModel(BaseModel):
@@ -80,8 +82,15 @@ class RolloutActionRequest(ControlModel):
 class BootstrapIndexTargetProjection(ControlModel):
     manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     release_id: str = Field(pattern=r"^release-stable-[0-9a-f]{24}$")
-    version: str = Field(pattern=r"^1\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
+    version: str
     build_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("version")
+    @classmethod
+    def validate_version(cls, value: str) -> str:
+        if not is_stable_release_version(value):
+            raise ValueError("version must be a final product SemVer")
+        return value
 
 
 class BootstrapIndexProofProjection(ControlModel):

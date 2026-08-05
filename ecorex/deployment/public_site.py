@@ -29,6 +29,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from ecorex import __version__
 from ecorex.control_plane.admin_web import AdminWebAssetError, AdminWebAssets
 from ecorex.deployment.cloud_artifact import cloud_manifest_signing_payload
+from ecorex.product_version import is_stable_release_version
 from ecorex.release import validate_public_bootstrap_index
 from ecorex.release.evidence_io import (
     read_stable_regular_file,
@@ -114,9 +115,6 @@ SAFE_HASHED_ASSET = re.compile(
     r"(?P<stem>[A-Za-z0-9][A-Za-z0-9._-]{0,127})\."
     r"(?P<digest>[0-9a-f]{12})\."
     r"(?P<suffix>js|css|png|svg|webp|woff2)\Z"
-)
-SAFE_VERSION = re.compile(
-    r"1\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\Z"
 )
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 TRANSACTION_ID = re.compile(r"site-[0-9a-f]{32}\Z")
@@ -465,7 +463,7 @@ def _validate_direct_receipt(
         or parsed.get("protected_pipeline_passed") is not False
         or parsed.get("release_id") != expected_release_id
         or parsed.get("public_index_status") != "published"
-        or SAFE_VERSION.fullmatch(str(parsed.get("version") or "")) is None
+        or not is_stable_release_version(parsed.get("version"))
         or any(
             SHA256.fullmatch(str(parsed.get(name) or "")) is None
             for name in (
@@ -1862,7 +1860,7 @@ def _journal(paths: DeploymentPaths) -> dict[str, Any] | None:
         or value.get("receipt_type") != "ecorex-public-site-activation-journal"
         or TRANSACTION_ID.fullmatch(str(value.get("transaction_id") or "")) is None
         or SAFE_RELEASE_ID.fullmatch(str(value.get("release_id") or "")) is None
-        or SAFE_VERSION.fullmatch(str(value.get("version") or "")) is None
+        or not is_stable_release_version(value.get("version"))
         or value.get("phase") not in _JOURNAL_PHASES
         or SHA256.fullmatch(str(value.get("build_digest") or "")) is None
         or SHA256.fullmatch(str(value.get("site_tree_sha256") or "")) is None

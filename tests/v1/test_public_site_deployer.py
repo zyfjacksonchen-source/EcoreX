@@ -104,6 +104,12 @@ def _canonical(value: object) -> bytes:
     ).encode()
 
 
+def test_public_site_uses_the_product_version_policy() -> None:
+    assert deployment.is_stable_release_version("0.3.0")
+    assert deployment.is_stable_release_version("2.1.4")
+    assert not deployment.is_stable_release_version("0.3.0-rc.1")
+
+
 def _signature(
     private: Ed25519PrivateKey,
     *,

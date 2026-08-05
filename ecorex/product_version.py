@@ -10,6 +10,15 @@ _FINAL_PRODUCT_VERSION = re.compile(
 )
 
 
+def is_stable_release_version(version: object) -> bool:
+    """Return whether ``version`` is one final product SemVer."""
+
+    return (
+        isinstance(version, str)
+        and _FINAL_PRODUCT_VERSION.fullmatch(version) is not None
+    )
+
+
 def stable_release_sequence(version: str) -> int:
     """Map one final product SemVer to its monotonic anti-rollback sequence."""
 
