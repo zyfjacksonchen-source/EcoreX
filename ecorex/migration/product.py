@@ -796,7 +796,7 @@ class ProductLegacyMigrationCoordinator:
             "plan_sha256": _plan_sha256(plan),
             "slot_id": slot_id,
         }
-        if receipt.get("state") == "publishing":
+        if receipt.get("state") in {"dry_run_verified", "publishing"}:
             for key in _TARGET_AUTHORITY_FIELDS:
                 expected.pop(key, None)
         if any(receipt.get(key) != value for key, value in expected.items()):
@@ -1180,6 +1180,30 @@ class ProductLegacyMigrationCoordinator:
             assert committed is not None
             self._persist_completion(plan=plan, report=report, receipt=committed)
             return True
+        if os.path.lexists(self.prepared_root):
+            report = self._verify_target(self.prepared_root)
+            receipt = self._assert_receipt_matches(
+                receipt=self._receipt(),
+                plan=plan,
+                report=report,
+                slot_id=slot_id,
+                allowed_states={
+                    "dry_run_verified",
+                    "publishing",
+                    "prepared",
+                    "swap_pending",
+                },
+                transaction_id=None,
+            )
+            if receipt["state"] == "publishing":
+                self._write_receipt(
+                    state="prepared",
+                    slot_id=slot_id,
+                    report=report,
+                    plan=plan,
+                    transaction_id=receipt.get("transaction_id"),
+                )
+            return True
         late_merge = self._late_merge_required()
         self._validate_plan_source(plan)
         dry_target = self.migration_root / f".dry-run-{slot_id}"
@@ -1245,7 +1269,7 @@ class ProductLegacyMigrationCoordinator:
             )
         except MigrationError:
             raise TargetConflictError("v1 state path is not a real directory")
-        allowed = {"migration-receipts"}
+        allowed = {"migration-receipts", "extension-cas"}
         observed = {child.name for child in target.iterdir()}
         if not observed.issubset(allowed):
             raise TargetConflictError("v1 state already contains non-migration data")
@@ -1258,6 +1282,27 @@ class ProductLegacyMigrationCoordinator:
                 )
             except MigrationError:
                 raise TargetConflictError("v1 state contains an unsafe preflight entry")
+            if child.name == "extension-cas" and any(child.iterdir()):
+                raise TargetConflictError("v1 state already contains Extension data")
+
+    @staticmethod
+    def _preserve_empty_extension_cas(backup: Path, prepared: Path) -> None:
+        source = backup / "extension-cas"
+        if not os.path.lexists(source):
+            return
+        try:
+            source = secure_directory(
+                source,
+                label="v1 Extension CAS preflight entry",
+                root=backup,
+            )
+        except MigrationError:
+            raise TargetConflictError("v1 Extension CAS preflight entry is unsafe")
+        if any(source.iterdir()) or os.path.lexists(prepared / "extension-cas"):
+            raise TargetConflictError("v1 state already contains Extension data")
+        os.replace(source, prepared / "extension-cas")
+        _fsync_directory(prepared)
+        _fsync_directory(backup)
 
     def _late_merge_required(self) -> bool:
         if not self.database_path.exists():
@@ -1427,6 +1472,8 @@ class ProductLegacyMigrationCoordinator:
             _fsync_directory(self.root)
             _fsync_directory(self.migration_root)
             self.fault_hook("prior_state_renamed")
+        if os.path.lexists(backup):
+            self._preserve_empty_extension_cas(backup, self.prepared_root)
         if not os.path.lexists(self.target_root):
             if not os.path.lexists(self.prepared_root):
                 raise ProductMigrationError("prepared migration state disappeared during activation")
@@ -1552,10 +1599,22 @@ class ProductLegacyMigrationCoordinator:
                 plan=plan,
                 report=report,
                 slot_id=slot_id,
-                allowed_states={"publishing", "prepared", "swap_pending"},
-                transaction_id=effective_transaction_id,
+                allowed_states={
+                    "dry_run_verified",
+                    "publishing",
+                    "prepared",
+                    "swap_pending",
+                },
+                transaction_id=(
+                    None
+                    if receipt["state"] in {"dry_run_verified", "prepared"}
+                    else effective_transaction_id
+                ),
             )
-            if receipt["state"] == "publishing":
+            if (
+                receipt["state"] in {"dry_run_verified", "publishing"}
+                or receipt.get("transaction_id") != effective_transaction_id
+            ):
                 self._write_receipt(
                     state="prepared",
                     slot_id=slot_id,

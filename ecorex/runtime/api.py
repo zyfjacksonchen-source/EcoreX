@@ -1406,7 +1406,7 @@ def create_app(
                         (marker_key, "complete"),
                     )
     permission_projection = permission_authority.current()
-    from common.ecorex_tool_permissions import sync_verified_runtime_permission
+    from ecorex.permission_bridge import sync_verified_runtime_permission
 
     sync_verified_runtime_permission(full_access=permission_projection.full_access)
     builtin_models = builtin_model_catalog()

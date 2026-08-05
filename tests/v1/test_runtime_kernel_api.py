@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 from datetime import datetime, timezone
 
 import pytest
@@ -300,7 +301,6 @@ def test_api_bootstrap_polling_sse_and_mutations(tmp_path):
     assert update.status_code == 200
     assert update.json()["artifact"]["id"] == "webui-windows-x64"
     assert update.json()["update"]["webui"]["authority"] == "/api/v1/update"
-
     thread_response = client.post(
         "/api/v1/threads", json={"title": "Office"}, headers=mutation
     )
@@ -392,3 +392,23 @@ def test_api_bootstrap_polling_sse_and_mutations(tmp_path):
     )
     assert denied.status_code == 403
     assert bootstrap.headers["cache-control"] == "no-store"
+
+
+def test_runtime_app_composes_without_legacy_common_package(tmp_path, monkeypatch):
+    import_module = builtins.__import__
+
+    def reject_legacy_common(name, *args, **kwargs):
+        if name == "common" or name.startswith("common."):
+            raise ModuleNotFoundError(name)
+        return import_module(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", reject_legacy_common)
+    app = create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "runtime.db",
+            runtime_bearer_token=RUNTIME_TOKEN,
+            csrf_token=CSRF_TOKEN,
+            webui_origins=("http://testserver",),
+        )
+    )
+    assert app.title == "e-Mate Local Runtime"

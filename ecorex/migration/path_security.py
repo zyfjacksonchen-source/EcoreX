@@ -161,6 +161,30 @@ def _opened_identity(stream: BinaryIO) -> PathIdentity:
     return PathIdentity.from_stat(os.fstat(stream.fileno()))
 
 
+def _same_file_object(left: PathIdentity, right: PathIdentity) -> bool:
+    """Match a path and opened handle without trusting Windows permission bits."""
+
+    return (
+        left.device,
+        left.inode,
+        stat.S_IFMT(left.mode),
+        left.size,
+        left.mtime_ns,
+        left.ctime_ns,
+        left.links,
+        left.file_attributes,
+    ) == (
+        right.device,
+        right.inode,
+        stat.S_IFMT(right.mode),
+        right.size,
+        right.mtime_ns,
+        right.ctime_ns,
+        right.links,
+        right.file_attributes,
+    )
+
+
 def _assert_stable(
     path: Path,
     *,
@@ -172,7 +196,9 @@ def _assert_stable(
     after = lstat_identity(path, label=label)
     reject_link_or_reparse(after, label=label)
     if not after.is_regular_file or not (
-        before == opened_before == opened_after == after
+        before == after
+        and opened_before == opened_after
+        and _same_file_object(before, opened_before)
     ):
         raise SourceChangedError(f"{label} changed while it was being read")
 

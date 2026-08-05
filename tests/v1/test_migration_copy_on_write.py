@@ -1394,6 +1394,38 @@ def test_target_inside_source_is_rejected_before_any_write(tmp_path):
     assert inventory_source(source) == before
 
 
+def test_installed_v0292_runtime_pointer_supplies_release_evidence(tmp_path):
+    source = tmp_path / "legacy-install"
+    target = tmp_path / "v1"
+    runtime_name = "runtime-0.2.9.2-371cb4af"
+    (source / "state").mkdir(parents=True)
+    (source / runtime_name).mkdir()
+    (source / "state" / "current-runtime.txt").write_text(
+        f"C:\\Users\\person\\AppData\\Local\\EcoreX WebUI\\{runtime_name}\n",
+        encoding="utf-8",
+    )
+    _write_json(
+        source / runtime_name / "runtime-manifest.json",
+        {
+            "schemaVersion": "v0.2.5-runtime-manifest-v1",
+            "product": "EcoreX",
+            "version": "0.2.9.2",
+        },
+    )
+
+    report = migrate_legacy_to_v1(
+        source,
+        target,
+        source_version="0.2.9.2",
+        quarantine_key=QUARANTINE_KEY,
+    )
+
+    assert report.source_evidence["declared_version"] == "0.2.9.2"
+    assert report.source_evidence["marker_label"] == (
+        f"{runtime_name}/runtime-manifest.json"
+    )
+
+
 def test_released_v030_runtime_state_is_preserved_but_never_auto_executes(tmp_path):
     source = tmp_path / "legacy"
     target = tmp_path / "v1"

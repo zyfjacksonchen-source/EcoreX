@@ -24,6 +24,7 @@ from ecorex.migration import (
     SourceLayoutError,
     TARGET_ARTIFACT_ROOT_NAME,
     TARGET_DATABASE_NAME,
+    TargetConflictError,
     inventory_source,
     migrate_v030_to_v1,
     write_product_migration_plan,
@@ -155,6 +156,45 @@ def test_product_upgrade_preserves_v0292_generation_identity(tmp_path: Path) -> 
     assert report["source_version"] == "0.2.9.2"
     assert _count(state / TARGET_DATABASE_NAME, "threads") == 1
     assert _count(state / TARGET_DATABASE_NAME, "project_thread_bindings") == 1
+
+
+def test_product_upgrade_preserves_precreated_empty_extension_cas(
+    tmp_path: Path,
+) -> None:
+    install, state, candidate, _source = _product(tmp_path)
+    extension_cas = state / "extension-cas"
+    extension_cas.mkdir()
+    original_identity = extension_cas.stat().st_ino
+    migration = ProductLegacyMigrationCoordinator(
+        install,
+        state / TARGET_DATABASE_NAME,
+        vault=InMemoryCredentialVault(),
+    )
+
+    assert migration.commit(candidate, "sandbox-cas-commit") is True
+
+    assert extension_cas.is_dir()
+    assert not list(extension_cas.iterdir())
+    assert extension_cas.stat().st_ino == original_identity
+
+
+def test_product_upgrade_rejects_nonempty_unowned_extension_cas(
+    tmp_path: Path,
+) -> None:
+    install, state, candidate, _source = _product(tmp_path)
+    extension_cas = state / "extension-cas"
+    extension_cas.mkdir()
+    (extension_cas / "unknown").write_bytes(b"do-not-replace")
+    migration = ProductLegacyMigrationCoordinator(
+        install,
+        state / TARGET_DATABASE_NAME,
+        vault=InMemoryCredentialVault(),
+    )
+
+    with pytest.raises(TargetConflictError, match="Extension data"):
+        migration.commit(candidate, "sandbox-cas-rejected")
+
+    assert (extension_cas / "unknown").read_bytes() == b"do-not-replace"
 
 
 def test_late_v0292_merge_preserves_existing_v1_rows_settings_and_artifacts(
@@ -546,6 +586,41 @@ def test_prepared_publish_crash_recovers_exact_target_without_legacy_source(
     assert recovered.commit(candidate, "transaction-publish-crash") is True
     assert recovered.has_completion is True
     assert recovered.has_plan is False
+
+
+def test_prepared_migration_can_join_a_retried_install_transaction(
+    tmp_path: Path,
+) -> None:
+    install, state, candidate, _source = _product(tmp_path)
+    vault = InMemoryCredentialVault()
+
+    def stop_after_prepare(phase: str) -> None:
+        if phase == "migration_prepared":
+            raise KeyboardInterrupt("simulated failed install transaction")
+
+    interrupted = ProductLegacyMigrationCoordinator(
+        install,
+        state / TARGET_DATABASE_NAME,
+        vault=vault,
+        fault_hook=stop_after_prepare,
+    )
+    with pytest.raises(KeyboardInterrupt):
+        interrupted.commit(candidate, "failed-install-transaction")
+    prepared = install / "migration" / "v030-imported-state"
+    report_before = (prepared / "migration-report.json").read_bytes()
+
+    recovered = ProductLegacyMigrationCoordinator(
+        install,
+        state / TARGET_DATABASE_NAME,
+        vault=vault,
+    )
+    assert recovered.dry_run(candidate) is True
+    assert (prepared / "migration-report.json").read_bytes() == report_before
+    assert recovered.commit(candidate, "retried-install-transaction") is True
+
+    receipt = json.loads((install / PRODUCT_MIGRATION_RECEIPT_NAME).read_text())
+    assert receipt["state"] == "committed"
+    assert receipt["transaction_id"] == "retried-install-transaction"
 
 
 def test_product_plan_rejects_install_root_inside_source_before_writing(

@@ -56,6 +56,7 @@ V030_LAST_HOTFIX_COMMIT = "9ac3b958a006e82bd53d8a26edf8e119110435d8"
 _SAFE_LEGACY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _HEX_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _HEX_COMMIT = re.compile(r"^[0-9a-fA-F]{40}$")
+_VERSIONED_RUNTIME = re.compile(r"^runtime-(?P<version>[0-9]+(?:\.[0-9]+){2,3})-[0-9a-fA-F]{8}$")
 _ACTIVE_RUN_STATUSES = {"queued", "running", "cancelling", "finalizing", "recovering"}
 
 
@@ -905,6 +906,34 @@ def read_release_evidence(
                 raise LegacySchemaError("legacy release evidence is unsafe") from error
             label = candidate
             break
+    if path is None:
+        pointer = root / "state" / "current-runtime.txt"
+        if os.path.lexists(pointer):
+            try:
+                current = stable_read_bytes(
+                    pointer,
+                    label="legacy current Runtime pointer",
+                    maximum=4096,
+                    root=root,
+                ).decode("utf-8").strip()
+            except (SourceLayoutError, UnicodeDecodeError) as error:
+                raise LegacySchemaError("legacy current Runtime pointer is unsafe") from error
+            runtime_name = current.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+            match = _VERSIONED_RUNTIME.fullmatch(runtime_name)
+            if match is None or match.group("version") != expected_source_version:
+                raise LegacySchemaError("legacy current Runtime pointer is invalid")
+            relative = f"{runtime_name}/runtime-manifest.json"
+            try:
+                path = secure_regular_file(
+                    root / runtime_name / "runtime-manifest.json",
+                    label="legacy installed Runtime release evidence",
+                    root=root,
+                )
+            except SourceLayoutError as error:
+                raise LegacySchemaError(
+                    "legacy installed Runtime release evidence is unsafe"
+                ) from error
+            label = relative
     if path is None:
         if not schema_tables:
             raise LegacySchemaError(

@@ -284,7 +284,7 @@ def test_windows_fallback_entry_is_preserved_and_update_rollback_is_exact(
     publication_key = Ed25519PrivateKey.generate()
     desktop = tmp_path / "Desktop"
     desktop.mkdir()
-    user_entry = desktop / "EcoreX.lnk"
+    user_entry = desktop / "e-Mate.lnk"
     user_entry.write_bytes(b"user-owned-shortcut")
     root = tmp_path / "install"
 
@@ -305,7 +305,7 @@ def test_windows_fallback_entry_is_preserved_and_update_rollback_is_exact(
         desktop_directory=desktop,
     )
     _prepare(installer, first, "1" * 32)
-    fallback = desktop / "EcoreX Agent.lnk"
+    fallback = desktop / "e-Mate Agent.lnk"
     assert user_entry.read_bytes() == b"user-owned-shortcut"
     assert fallback.is_file()
     installer.commit_activation("1" * 32)
@@ -339,6 +339,80 @@ def test_windows_fallback_entry_is_preserved_and_update_rollback_is_exact(
         (root / "bootstrap" / "desktop-entry.json").read_text(encoding="utf-8")
     ) == first_receipt
     assert user_entry.read_bytes() == b"user-owned-shortcut"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows e-Mate shortcut migration")
+def test_windows_replaces_exact_legacy_emate_shortcut_in_place(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_key = Ed25519PrivateKey.generate()
+    publication_key = Ed25519PrivateKey.generate()
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    local_app_data = tmp_path / "LocalAppData"
+    legacy_root = local_app_data / "Programs" / "e-Mate"
+    legacy_root.mkdir(parents=True)
+    legacy_executable = legacy_root / "e-Mate.exe"
+    legacy_executable.write_bytes(b"legacy-electron")
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    entry = desktop / "e-Mate.lnk"
+    companion_module._run_powershell(
+        ";".join(
+            (
+                "$shell=New-Object -ComObject WScript.Shell",
+                "$link=$shell.CreateShortcut($env:ECOREX_TEST_SHORTCUT)",
+                "$link.TargetPath=$env:ECOREX_TEST_TARGET",
+                "$link.Arguments=''",
+                "$link.WorkingDirectory=$env:ECOREX_TEST_WORKDIR",
+                "$link.Description='亦芯开发的全能办公/创意 Agent'",
+                "$link.Save()",
+            )
+        ),
+        companion_module._shortcut_environment(
+            ECOREX_TEST_SHORTCUT=str(entry),
+            ECOREX_TEST_TARGET=str(legacy_executable),
+            ECOREX_TEST_WORKDIR=str(legacy_root),
+        ),
+    )
+    original_digest = hashlib.sha256(entry.read_bytes()).hexdigest()
+    built, verifier, fetcher = _built_bootstrap(
+        tmp_path,
+        platform="windows",
+        architecture="x64",
+        release_key=release_key,
+        publication_key=publication_key,
+        suffix="legacy-emate",
+    )
+    root = tmp_path / "install"
+    installer = BootstrapCompanionInstaller(
+        root,
+        platform="windows",
+        architecture="x64",
+        verifier=verifier,
+        fetcher=fetcher,
+        desktop_directory=desktop,
+    )
+
+    _prepare(installer, built, "e" * 32)
+
+    projection = companion_module._read_windows_shortcut(entry)
+    assert projection is not None
+    assert projection["description"] == "e-Mate"
+    assert Path(projection["target"]).name.casefold() == "ecorex-bootstrap.exe"
+    assert hashlib.sha256(entry.read_bytes()).hexdigest() != original_digest
+    assert [path.name for path in desktop.iterdir()] == ["e-Mate.lnk"]
+
+    installer.rollback_activation("e" * 32)
+    assert hashlib.sha256(entry.read_bytes()).hexdigest() == original_digest
+
+    _prepare(installer, built, "f" * 32)
+    installer.commit_activation("f" * 32)
+    receipt = json.loads(
+        (root / "bootstrap" / "desktop-entry.json").read_text(encoding="utf-8")
+    )
+    assert receipt["entry_name"] == "e-Mate.lnk"
+    assert [path.name for path in desktop.iterdir()] == ["e-Mate.lnk"]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows legacy shortcut migration")
@@ -407,7 +481,7 @@ def test_windows_fresh_install_keeps_legacy_webui_out_of_canonical_name_selectio
 
     _prepare(installer, built, "d" * 32)
 
-    canonical = desktop / "EcoreX.lnk"
+    canonical = desktop / "e-Mate.lnk"
     assert canonical.is_file()
     assert hashlib.sha256(legacy_entry.read_bytes()).hexdigest() == original_legacy_digest
 
@@ -418,7 +492,7 @@ def test_windows_fresh_install_keeps_legacy_webui_out_of_canonical_name_selectio
     receipt = json.loads(
         (root / "bootstrap" / "desktop-entry.json").read_text(encoding="utf-8")
     )
-    assert receipt["entry_name"] == "EcoreX.lnk"
+    assert receipt["entry_name"] == "e-Mate.lnk"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows legacy shortcut migration")
@@ -456,7 +530,7 @@ def test_windows_upgrade_atomically_takes_over_exact_legacy_webui_shortcut(
     )
     _prepare(installer, first, "a" * 32)
     installer.commit_activation("a" * 32)
-    current_entry = desktop / "EcoreX.lnk"
+    current_entry = desktop / "e-Mate.lnk"
     assert current_entry.is_file()
     current_receipt = json.loads(
         (root / "bootstrap" / "desktop-entry.json").read_text(encoding="utf-8")
@@ -514,7 +588,7 @@ def test_windows_upgrade_atomically_takes_over_exact_legacy_webui_shortcut(
     _prepare(second_installer, second, "b" * 32)
     migrated = companion_module._read_windows_shortcut(current_entry)
     assert migrated is not None
-    assert migrated["description"] == "EcoreX"
+    assert migrated["description"] == "e-Mate"
     assert Path(migrated["target"]).name.casefold() == "ecorex-bootstrap.exe"
     assert hashlib.sha256(current_entry.read_bytes()).hexdigest() != current_receipt[
         "entry_digest"
@@ -534,7 +608,7 @@ def test_windows_upgrade_atomically_takes_over_exact_legacy_webui_shortcut(
     receipt = json.loads(
         (root / "bootstrap" / "desktop-entry.json").read_text(encoding="utf-8")
     )
-    assert receipt["entry_name"] == "EcoreX.lnk"
+    assert receipt["entry_name"] == "e-Mate.lnk"
     assert current_entry.exists()
     assert not legacy_entry.exists()
     assert second_installer.remove_desktop_entry() is True
@@ -589,7 +663,7 @@ def test_windows_upgrade_cleans_released_url_and_cmd_with_rollback_and_uninstall
 
     first_transaction = "6" * 32
     _prepare(installer, built, first_transaction)
-    current = desktop / "EcoreX.lnk"
+    current = desktop / "e-Mate.lnk"
     assert current.exists()
     assert url_entry.read_bytes() == url_payload
     assert cmd_entry.read_bytes() == cmd_payload
@@ -613,7 +687,7 @@ def test_windows_upgrade_cleans_released_url_and_cmd_with_rollback_and_uninstall
 
     second_transaction = "7" * 32
     _prepare(installer, built, second_transaction)
-    current = desktop / "EcoreX.lnk"
+    current = desktop / "e-Mate.lnk"
     original_remove = companion_module._remove_legacy_windows_entry_path
     removals = 0
 
@@ -656,7 +730,7 @@ def test_windows_upgrade_cleans_released_url_and_cmd_with_rollback_and_uninstall
         ).read_text(encoding="utf-8")
     )
     assert committed_record["legacy_entries"] == []
-    assert [path.name for path in desktop.iterdir()] == ["EcoreX.lnk"]
+    assert [path.name for path in desktop.iterdir()] == ["e-Mate.lnk"]
 
     assert installer.remove_desktop_entry() is True
     assert not any(desktop.iterdir())
@@ -728,7 +802,7 @@ def test_windows_legacy_entry_matchers_preserve_custom_and_malicious_files(
     )
     transaction_id = "8" * 32
     _prepare(installer, built, transaction_id)
-    current = desktop / "EcoreX.lnk"
+    current = desktop / "e-Mate.lnk"
     # Ownership must be revoked if the exact tag fixture is changed between
     # prepare and commit.
     url_entry.write_bytes(custom_url)
@@ -757,7 +831,7 @@ def test_macos_fallback_app_and_receipt_owned_removal(tmp_path: Path) -> None:
     publication_key = Ed25519PrivateKey.generate()
     desktop = tmp_path / "Desktop"
     desktop.mkdir()
-    user_app = desktop / "EcoreX.app"
+    user_app = desktop / "e-Mate.app"
     user_app.mkdir()
     (user_app / "user.txt").write_text("preserve", encoding="utf-8")
     root = tmp_path / "install"
@@ -778,7 +852,7 @@ def test_macos_fallback_app_and_receipt_owned_removal(tmp_path: Path) -> None:
         desktop_directory=desktop,
     )
     _prepare(installer, built, "3" * 32)
-    fallback = desktop / "EcoreX Agent.app"
+    fallback = desktop / "e-Mate Agent.app"
     assert fallback.is_dir()
     assert (user_app / "user.txt").read_text(encoding="utf-8") == "preserve"
     installer.commit_activation("3" * 32)
@@ -814,7 +888,7 @@ def test_rollback_reenters_after_backup_restore_crash(
     )
     _prepare(installer, first, "4" * 32)
     installer.commit_activation("4" * 32)
-    entry = desktop / "EcoreX.app"
+    entry = desktop / "e-Mate.app"
     first_digest = companion_module._entry_digest(entry, "macos")
     first_receipt = json.loads(
         (root / "bootstrap" / "desktop-entry.json").read_text(encoding="utf-8")
@@ -908,7 +982,7 @@ def test_backup_creation_crash_converges_and_same_transaction_retries(
     )
     _prepare(installer, first, "b" * 32)
     installer.commit_activation("b" * 32)
-    entry = desktop / "EcoreX.app"
+    entry = desktop / "e-Mate.app"
     first_digest = companion_module._entry_digest(entry, "macos")
     first_receipt = json.loads(
         (root / "bootstrap" / "desktop-entry.json").read_text(encoding="utf-8")
@@ -1114,7 +1188,7 @@ def test_activation_record_and_receipt_cannot_escape_resolved_desktop(
     desktop.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
-    outside_entry = outside / "EcoreX.app"
+    outside_entry = outside / "e-Mate.app"
     outside_entry.mkdir()
     (outside_entry / "user.txt").write_text("preserve", encoding="utf-8")
     root = tmp_path / "install"
@@ -1155,8 +1229,8 @@ def test_activation_record_and_receipt_cannot_escape_resolved_desktop(
         installer.rollback_activation(transaction_id)
     assert (outside_entry / "user.txt").read_text(encoding="utf-8") == "preserve"
 
-    record["entry_path"] = str(desktop / "EcoreX.app")
-    record["new_receipt"]["entry_path"] = str(desktop / "EcoreX.app")
+    record["entry_path"] = str(desktop / "e-Mate.app")
+    record["new_receipt"]["entry_path"] = str(desktop / "e-Mate.app")
     record_path.write_text(json.dumps(record), encoding="utf-8")
     installer.commit_activation(transaction_id)
     receipt_path = root / "bootstrap" / "desktop-entry.json"

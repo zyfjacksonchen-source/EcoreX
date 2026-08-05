@@ -27,7 +27,7 @@ def test_public_download_site_static_gate_passes() -> None:
     evidence = json.loads(result.stdout)
     assert evidence["status"] == "passed"
     assert evidence["public_pointer"] == "unpublished"
-    assert evidence["hashed_asset_count"] == 6
+    assert evidence["hashed_asset_count"] == 7
     html = (ROOT / "deploy" / "ecorex-site" / "index.html").read_text(
         encoding="utf-8"
     )

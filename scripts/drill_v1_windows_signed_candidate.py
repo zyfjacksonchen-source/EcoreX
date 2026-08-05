@@ -1296,6 +1296,7 @@ def _snapshot_legacy_source(
 
     before = inventory_source(source, source_version=source_version)
     destination.mkdir(parents=True, exist_ok=False)
+    snapshot_root = _windows_extended_path(destination)
     for entry in before.entries:
         deadline.remaining()
         if entry.kind != "file" or entry.relative_path.startswith("@pinned/"):
@@ -1318,7 +1319,7 @@ def _snapshot_legacy_source(
             or bool(attributes & reparse)
         ):
             raise DrillError("the user-selected legacy source contains an unsafe entry")
-        target = destination.joinpath(*relative.parts)
+        target = snapshot_root.joinpath(*relative.parts)
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
             shutil.copy2(origin, target, follow_symlinks=False)
@@ -1327,11 +1328,11 @@ def _snapshot_legacy_source(
         if _sha256_file(target) != entry.sha256:
             raise DrillError("the user-selected legacy source changed during snapshot")
     after = inventory_source(source, source_version=source_version)
-    copied = inventory_source(destination, source_version=source_version)
+    copied = inventory_source(snapshot_root, source_version=source_version)
     if before != after or copied.digest != before.digest:
         raise DrillError("the user-selected legacy source changed during snapshot")
     return {
-        "source": destination,
+        "source": snapshot_root,
         "source_version": source_version,
         "inventory_digest": copied.digest,
         "inventory_entries": len(copied.entries),
@@ -1341,6 +1342,15 @@ def _snapshot_legacy_source(
         "corpus_mode": "user-selected-readonly-snapshot",
         "source_unchanged": True,
     }
+
+
+def _windows_extended_path(path: Path) -> Path:
+    absolute = os.path.abspath(os.fspath(path))
+    if os.name != "nt" or absolute.startswith("\\\\?\\"):
+        return Path(absolute)
+    if absolute.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + absolute[2:])
+    return Path("\\\\?\\" + absolute)
 
 
 def _prepare_legacy_source(

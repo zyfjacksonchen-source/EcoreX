@@ -45,7 +45,11 @@ _SAFE_RELEASE_ID = re.compile(r"^release-stable-[0-9a-f]{24}$")
 _SAFE_TRANSACTION_ID = re.compile(r"^[0-9a-f]{32}$")
 _SAFE_KEY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_WINDOWS_ENTRY_NAMES = tuple(
+_WINDOWS_CANONICAL_ENTRY_NAMES = tuple(
+    ["e-Mate.lnk", "e-Mate Agent.lnk"]
+    + [f"e-Mate Agent ({index}).lnk" for index in range(2, 10)]
+)
+_WINDOWS_ENTRY_NAMES = _WINDOWS_CANONICAL_ENTRY_NAMES + tuple(
     ["EcoreX.lnk", "EcoreX Agent.lnk", "EcoreX WebUI.lnk"]
     + [f"EcoreX Agent ({index}).lnk" for index in range(2, 10)]
 )
@@ -53,7 +57,11 @@ _WINDOWS_LEGACY_ENTRY_KINDS = {
     "EcoreX WebUI.url": "windows-url",
     "EcoreX WebUI.cmd": "windows-cmd",
 }
-_MAC_ENTRY_NAMES = tuple(
+_MAC_CANONICAL_ENTRY_NAMES = tuple(
+    ["e-Mate.app", "e-Mate Agent.app"]
+    + [f"e-Mate Agent ({index}).app" for index in range(2, 10)]
+)
+_MAC_ENTRY_NAMES = _MAC_CANONICAL_ENTRY_NAMES + tuple(
     ["EcoreX.app", "EcoreX Agent.app"]
     + [f"EcoreX Agent ({index}).app" for index in range(2, 10)]
 )
@@ -789,16 +797,26 @@ class BootstrapCompanionInstaller:
                 raise BootstrapCompanionError(
                     "Bootstrap desktop activation transaction was already resolved"
                 )
-        names = _WINDOWS_ENTRY_NAMES if self.platform == "windows" else _MAC_ENTRY_NAMES
+        names = (
+            _WINDOWS_CANONICAL_ENTRY_NAMES
+            if self.platform == "windows"
+            else _MAC_CANONICAL_ENTRY_NAMES
+        )
         selected: Path | None = None
-        # A receipt-owned v1 entry always wins over the independently
-        # recognized v0.3.0 ``EcoreX WebUI.lnk``. Otherwise an online update
-        # can switch a user back to the obsolete shortcut name even though the
-        # current ``EcoreX.lnk`` is already known-good. The old shortcut is
-        # captured separately and removed only after this transaction commits.
+        # Converge installs and updates on the visible e-Mate name.  A strict
+        # product-owned legacy e-Mate entry is safe to replace atomically.
+        canonical = desktop / names[0]
+        if not _lexists(canonical) or _entry_is_product_owned(
+            canonical,
+            root=self.root,
+            platform=self.platform,
+        ):
+            selected = canonical
+        # If a user owns the canonical name, keep using an already receipt-owned
+        # shortcut rather than creating a duplicate.
         if receipt is not None:
             candidate = Path(receipt["entry_path"])
-            if _entry_matches_receipt(candidate, receipt):
+            if selected is None and _entry_matches_receipt(candidate, receipt):
                 selected = candidate
         if selected is None:
             for name in names:
@@ -818,7 +836,7 @@ class BootstrapCompanionInstaller:
                     break
         if selected is None:
             raise BootstrapCompanionError(
-                "all safe EcoreX desktop entry names are occupied"
+                "all safe e-Mate desktop entry names are occupied"
             )
         selected = _require_desktop_entry_path(
             selected,
@@ -2106,22 +2124,14 @@ def _entry_is_product_owned(path: Path, *, root: Path, platform: str) -> bool:
         target = Path(projection["target"])
         arguments = projection["arguments"]
         current = (
-            projection["description"] == "EcoreX"
+            projection["description"] in {"e-Mate", "EcoreX"}
             and arguments == f'--launch-installed --install-root "{root}"'
             and _is_relative_to(target, root / "bootstrap" / "versions")
             and target.name.casefold() == "ecorex-bootstrap.exe"
         )
         if current:
             return True
-        # A strict v0.3.0 ``EcoreX WebUI.lnk`` is recognised separately for
-        # transactional cleanup, but it is never a candidate for the v1
-        # canonical desktop entry. Treating it as product-owned here made a
-        # fresh v1 install overwrite that old name whenever ``EcoreX.lnk``
-        # was available but belonged to another installed v1 root. The new
-        # install must instead select a vacant canonical/Agent name and then
-        # remove the verified legacy entry only after its own activation
-        # commits.
-        return False
+        return _is_legacy_windows_entry(path, projection)
     if _is_link_or_reparse(path):
         return False
     marker = path / "Contents" / "Resources" / "ecorex-entry.json"
@@ -2186,7 +2196,7 @@ def _write_windows_shortcut(path: Path, root: Path, launcher: Path) -> None:
             "$link.TargetPath=$env:ECOREX_SHORTCUT_TARGET",
             "$link.Arguments=$env:ECOREX_SHORTCUT_ARGUMENTS",
             "$link.WorkingDirectory=$env:ECOREX_SHORTCUT_WORKDIR",
-            "$link.Description='EcoreX'",
+            "$link.Description='e-Mate'",
             "$link.IconLocation=$env:ECOREX_SHORTCUT_TARGET+',0'",
             "$link.WindowStyle=7",
             "$link.Save()",
@@ -2240,18 +2250,34 @@ def _is_legacy_windows_entry(
     path: Path,
     projection: Mapping[str, str],
 ) -> bool:
-    """Recognize only the released v0.3.0 desktop shortcut.
+    """Recognize only released desktop shortcuts that e-Mate supersedes.
 
     The shortcut name alone is not ownership.  Its target, arguments,
     working directory and description must all bind to the known per-user
     legacy install root before v1 is allowed to replace it.
     """
 
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        return False
+    if path.name == "e-Mate.lnk":
+        legacy_root = Path(os.path.abspath(local_app_data)) / "Programs" / "e-Mate"
+        try:
+            return (
+                Path(projection["target"]).resolve(strict=False)
+                == (legacy_root / "e-Mate.exe").resolve(strict=False)
+                and Path(projection["working_directory"]).resolve(strict=False)
+                == legacy_root.resolve(strict=False)
+                and projection.get("arguments") == ""
+                and projection.get("description")
+                == "亦芯开发的全能办公/创意 Agent"
+            )
+        except (KeyError, OSError, ValueError):
+            return False
     if path.name != "EcoreX WebUI.lnk":
         return False
-    local_app_data = os.environ.get("LOCALAPPDATA")
     system_root = os.environ.get("SYSTEMROOT") or os.environ.get("SystemRoot")
-    if not local_app_data or not system_root:
+    if not system_root:
         return False
     legacy_root = Path(os.path.abspath(local_app_data)) / "EcoreX WebUI"
     launcher_script = legacy_root / "Launch EcoreX WebUI.ps1"
@@ -2370,7 +2396,7 @@ def _write_mac_app(path: Path, root: Path, launcher: Path) -> None:
             """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleDisplayName</key><string>EcoreX</string>
+<key>CFBundleDisplayName</key><string>e-Mate</string>
 <key>CFBundleExecutable</key><string>EcoreX</string>
 <key>CFBundleIdentifier</key><string>net.ecoremedia.ecorex.launcher</string>
 <key>CFBundlePackageType</key><string>APPL</string>

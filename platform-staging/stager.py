@@ -100,6 +100,18 @@ _DEPENDENCY_PACK_ADAPTERS = {
     "ocr": "python-rapidocr-runtime-v1",
     "office": "python-office-formats-v1",
 }
+_NON_RUNTIME_PARTS = frozenset(
+    {
+        "test",
+        "tests",
+        "testing",
+        "test-examples",
+        "example",
+        "examples",
+        "benchmark",
+        "benchmarks",
+    }
+)
 _BROWSER_SMOKE_PUBLIC_ERROR_CODES = frozenset(
     {
         "browser_operation_failed",
@@ -795,12 +807,10 @@ def _build_python_closure(
             source_canary=executable,
         )
     else:
-        result = _run(
+        result = _run_macos_pack_probe_process(
             probe,
             cwd=core,
-            environment=_runtime_environment(),
-            timeout=60,
-            code="pack_python_probe_failed",
+            code_prefix="pack_python_probe",
         )
     if result.stdout.strip() != __version__.encode("ascii"):
         raise StageError("pack_python_probe_output_invalid")
@@ -2344,6 +2354,7 @@ _PACK_PROBE_FAILURE_PHASES = {
     83: "asgi_imports",
     84: "resources",
     85: "tzdata",
+    86: "image_codec",
 }
 _PACK_PROBE_FAILURE_MARKERS = {
     b"__ECOREX_PACK_PROBE_BOOTSTRAP_FAILED__": "bootstrap",
@@ -2351,6 +2362,7 @@ _PACK_PROBE_FAILURE_MARKERS = {
     b"__ECOREX_PACK_PROBE_ASGI_IMPORTS_FAILED__": "asgi_imports",
     b"__ECOREX_PACK_PROBE_RESOURCES_FAILED__": "resources",
     b"__ECOREX_PACK_PROBE_TZDATA_FAILED__": "tzdata",
+    b"__ECOREX_PACK_PROBE_IMAGE_CODEC_FAILED__": "image_codec",
 }
 
 
@@ -2581,6 +2593,8 @@ def _pack_python_probe_command(interpreter: Path) -> tuple[str, ...]:
         "-c",
         """try:
  import ecorex
+ from ecorex.permission_bridge import verified_runtime_full_access
+ assert verified_runtime_full_access() is False
 except BaseException:
  print('__ECOREX_PACK_PROBE_BOOTSTRAP_FAILED__')
  raise SystemExit(81)
@@ -2605,7 +2619,7 @@ try:
  image=Image.new('RGB',(2,2),'white')
  output=BytesIO()
  image.save(output,format='JPEG')
- assert output.getvalue().startswith(b'\xff\xd8')
+ assert output.getvalue().startswith(b'\\xff\\xd8')
 except BaseException:
  print('__ECOREX_PACK_PROBE_IMAGE_CODEC_FAILED__')
  raise SystemExit(86)
@@ -4089,6 +4103,7 @@ def _copy_distribution_closure(
                 relative is None
                 or source.name == "__pycache__"
                 or source.suffix in {".pyc", ".pyo"}
+                or any(part.casefold() in _NON_RUNTIME_PARTS for part in relative.parts)
             ):
                 continue
             if resolved.is_file():

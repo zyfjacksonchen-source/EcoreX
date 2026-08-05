@@ -3,6 +3,7 @@ from __future__ import annotations
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
+import os
 from pathlib import Path
 import socket
 import sys
@@ -276,6 +277,27 @@ def test_user_selected_legacy_source_is_only_read_and_snapshotted(
     copied = Path(snapshot["source"]) / "nested" / "user-state.json"
     copied.write_text('{"retained":false}\n', encoding="utf-8", newline="\n")
     assert original.read_text(encoding="utf-8") == '{"retained":true}\n'
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended path contract")
+def test_user_selected_snapshot_supports_paths_beyond_max_path(tmp_path: Path) -> None:
+    drill = _drill_module()
+    source = tmp_path / "source"
+    relative = Path("nested") / ("x" * 110 + ".json")
+    original = source / relative
+    original.parent.mkdir(parents=True)
+    original.write_text('{"retained":true}\n', encoding="utf-8")
+    destination = tmp_path / ("snapshot-" + "y" * 100)
+    assert len(str(destination / relative)) >= 260
+
+    snapshot = drill._snapshot_legacy_source(
+        source,
+        destination,
+        source_version="0.2.9.2",
+        deadline=drill.Deadline.after(30),
+    )
+
+    assert (Path(snapshot["source"]) / relative).read_bytes() == original.read_bytes()
 
 
 def test_deleted_cache_gate_uses_the_product_database_candidate_order(

@@ -3336,7 +3336,7 @@ def test_macos_bootstrap_diagnostic_separates_direct_snapshot_execution(
         (83, "asgi_imports_failed"),
         (84, "resources_failed"),
         (85, "tzdata_failed"),
-        (86, "execution_failed"),
+        (86, "image_codec_failed"),
     ),
 )
 def test_macos_pack_probe_maps_only_fixed_failure_phases(
@@ -3500,6 +3500,8 @@ def test_platform_stager_bundles_and_forces_signed_iana_timezone_data() -> None:
     assert stager["_runtime_environment"]()["PYTHONTZPATH"] == ""
     probe = stager["_pack_python_probe_command"](Path("pack-python"))
     assert probe[:4] == ("pack-python", "-I", "-B", "-c")
+    compile(probe[4], "<pack-python-probe>", "exec")
+    assert "from ecorex.permission_bridge import verified_runtime_full_access" in probe[4]
     assert "import cryptography" in probe[4]
     assert "import fastapi,httpx,pydantic,uvicorn,websockets" in probe[4]
     assert "from PIL import Image" in probe[4]
@@ -3963,13 +3965,25 @@ def test_platform_stager_copies_locked_distribution_from_user_site(
     package = distribution_root / "example_runtime" / "__init__.py"
     package.parent.mkdir(parents=True)
     package.write_text("VALUE = 1\n", encoding="utf-8")
+    test_module = distribution_root / "example_runtime" / "tests" / "test_runtime.py"
+    test_module.parent.mkdir()
+    test_module.write_text("raise AssertionError\n", encoding="utf-8")
+    test_example = (
+        distribution_root / "example_runtime" / "test-examples" / "sample.txt"
+    )
+    test_example.parent.mkdir()
+    test_example.write_text("test-only\n", encoding="utf-8")
     metadata = Message()
     metadata["Name"] = "example-runtime"
     metadata["License-Expression"] = "MIT"
 
     class Distribution:
         version = "1.0.0"
-        files = (Path("example_runtime/__init__.py"),)
+        files = (
+            Path("example_runtime/__init__.py"),
+            Path("example_runtime/tests/test_runtime.py"),
+            Path("example_runtime/test-examples/sample.txt"),
+        )
         requires: tuple[str, ...] = ()
 
         @property
@@ -3996,6 +4010,8 @@ def test_platform_stager_copies_locked_distribution_from_user_site(
     assert (destination / "example_runtime" / "__init__.py").read_text(
         encoding="utf-8"
     ) == "VALUE = 1\n"
+    assert not (destination / "example_runtime" / "tests").exists()
+    assert not (destination / "example_runtime" / "test-examples").exists()
 
 
 def test_dependency_inventory_is_deterministic_and_binds_pack_payload(

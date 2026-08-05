@@ -40,4 +40,12 @@ Intentional product-preserving differences:
 2. Corrected logo dimensions/position and removed the extra visible version label.
 3. Found that Creative Center unmounted Composer and invalidated the draft guard; moved draft ownership to the main workspace and verified both empty/existing draft paths in the browser.
 
+## Download page QA
+
+- Reference: `codex-clipboard-50ab6b4d-c5b6-4eec-a84c-8312bc4fbf59.png` (latest five-robot e-Mate home visual).
+- Evidence: `docs/v0.3.0/artifacts/download-page-robot-dark.png` and `docs/v0.3.0/artifacts/download-page-robot-mobile-light.png`.
+- Desktop dark uses the exact five-robot asset without clipping; the source logo treatment keeps the orange mark and renders the wordmark white for contrast.
+- Mobile light at 390 px has no horizontal overflow; the robots, brand, actions and release summary remain readable.
+- Theme toggle and install/guide anchors remain operable. P0/P1/P2 findings: none.
+
 final result: passed

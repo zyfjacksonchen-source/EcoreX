@@ -20,6 +20,11 @@ from typing import Any, Callable, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 from common.log import logger
+from ecorex.permission_bridge import (
+    sync_verified_runtime_permission,
+    verified_runtime_full_access,
+    verified_runtime_permission,
+)
 
 
 Decision = Dict[str, Any]
@@ -57,23 +62,6 @@ _DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
 _TENCENT_DOCS_MCP_ENDPOINT = "https://docs.qq.com/openapi/mcp"
 _ACCESS_RANK = {"deny": 0, "read": 1, "write": 2}
 _ACCESS_TIEBREAK = {"deny": 3, "write": 2, "read": 1}
-_VERIFIED_RUNTIME_FULL_ACCESS: bool | None = None
-_VERIFIED_RUNTIME_PERMISSION_LOCK = threading.Lock()
-
-
-def sync_verified_runtime_permission(*, full_access: bool) -> None:
-    """Project the verified Runtime authority into legacy tool entry points."""
-
-    global _VERIFIED_RUNTIME_FULL_ACCESS
-    with _VERIFIED_RUNTIME_PERMISSION_LOCK:
-        _VERIFIED_RUNTIME_FULL_ACCESS = bool(full_access)
-
-
-def verified_runtime_full_access() -> bool:
-    with _VERIFIED_RUNTIME_PERMISSION_LOCK:
-        return _VERIFIED_RUNTIME_FULL_ACCESS is True
-
-
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -1502,8 +1490,7 @@ class ToolPermissionBroker:
     def _load_settings(self) -> Dict[str, Any]:
         data = _read_json(self._settings_path(), {})
         data["mode"] = self._normalize_mode(data.get("mode"))
-        with _VERIFIED_RUNTIME_PERMISSION_LOCK:
-            runtime_full_access = _VERIFIED_RUNTIME_FULL_ACCESS
+        runtime_full_access = verified_runtime_permission()
         if runtime_full_access is not None:
             data["mode"] = "full-access" if runtime_full_access else "smart-ask"
         always_allow = data.get("alwaysAllow")
