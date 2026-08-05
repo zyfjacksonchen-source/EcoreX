@@ -32,7 +32,7 @@ Date: 2026-08-05 (Asia/Shanghai)
 
 ## External release gates still open
 
-1. Restore GitHub Actions hosted-job admission. Ordinary CI run `30931164996` fails before Job creation even though its workflow bytes match the last successful source, every Action is GitHub-owned/SHA-pinned and actionlint reports no structural error.
+1. Resolve the GitHub account billing lock. The main repository was changed from private to public on 2026-08-05 as authorized, and run `30978342014` then progressed from workflow startup into four concrete hosted jobs; every job was rejected before runner assignment with GitHub's exact annotation `The job was not started because your account is locked due to a billing issue.` Public visibility therefore removed the private-minute ambiguity but cannot bypass the account lock.
 2. Provide the existing trusted signer variables, Apple Developer ID/notary credentials, missing Windows/macOS/live-acceptance execution authority and scoped `EcoreX-installers` publication token. GitHub environments and the production self-hosted Runner currently contain none of these authorities.
 3. Run staging/Candidate and the fixed Windows/macOS WebUI producers; execute Developer ID/notarization and real Windows x64 and macOS arm64/x64 upgrades from 0.2.9.2, including rollback.
 4. Publish the signed 0.3.0 release so the live Runtime adopts the already verified `gpt-5.6-luna` high default; repeat digest-bound acceptance, management/download-page smoke and exact package hash/size readback.
