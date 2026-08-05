@@ -37,7 +37,7 @@ environment and the report contains configuration names, never Secret values.
 ```powershell
 $env:ECOREX_GITHUB_ADMIN_TOKEN = gh auth token
 python scripts/manage-v1-github-release-repository.py audit `
-  --repository zhangyifanjackson-dotcom/EcoreX `
+  --repository zyfjacksonchen-source/EcoreX `
   --output C:\ecorex-admin\github-release-readiness.json
 Remove-Item Env:\ECOREX_GITHUB_ADMIN_TOKEN
 ```
@@ -67,10 +67,10 @@ create reviewer-free release Environments as a workaround.
 $head = git rev-parse origin/main
 $env:ECOREX_GITHUB_ADMIN_TOKEN = gh auth token
 python scripts/manage-v1-github-release-repository.py bootstrap `
-  --repository zhangyifanjackson-dotcom/EcoreX `
-  --confirm-repository zhangyifanjackson-dotcom/EcoreX `
+  --repository zyfjacksonchen-source/EcoreX `
+  --confirm-repository zyfjacksonchen-source/EcoreX `
   --expected-head $head `
-  --reviewer-login zhangyifanjackson-dotcom `
+  --reviewer-login zyfjacksonchen-source `
   --output C:\ecorex-admin\github-release-bootstrap.json
 Remove-Item Env:\ECOREX_GITHUB_ADMIN_TOKEN
 ```

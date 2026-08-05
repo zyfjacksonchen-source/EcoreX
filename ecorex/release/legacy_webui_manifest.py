@@ -99,7 +99,7 @@ def build_legacy_webui_manifest(receipt_path: Path) -> dict[str, object]:
                 {
                     "id": f"ecorex-github-cn-mirror-v{version}",
                     "kind": "github-release-cn-mirror",
-                    "baseUrl": "https://gh-proxy.com/https://github.com/zhangyifanjackson-dotcom/EcoreX-installers/releases/download/"
+                    "baseUrl": "https://gh-proxy.com/https://github.com/zyfjacksonchen-source/EcoreX-installers/releases/download/"
                     f"v{version}",
                     "pathMode": "fileName",
                 },

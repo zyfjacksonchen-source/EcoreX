@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   notarized-universal:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'zhangyifanjackson-dotcom/EcoreX' && github.ref == 'refs/heads/main' && github.sha == vars.ECOREX_V030_RELEASE_COMMIT_SHA }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'zyfjacksonchen-source/EcoreX' && github.ref == 'refs/heads/main' && github.sha == vars.ECOREX_V030_RELEASE_COMMIT_SHA }}
     runs-on: macos-15
     timeout-minutes: 90
     environment:
@@ -148,7 +148,7 @@ jobs:
 
   publish-legacy-webui:
     name: Publish verified packages, then atomically switch the legacy manifest
-    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'zhangyifanjackson-dotcom/EcoreX' && github.ref == 'refs/heads/main' && github.sha == vars.ECOREX_V030_RELEASE_COMMIT_SHA }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'zyfjacksonchen-source/EcoreX' && github.ref == 'refs/heads/main' && github.sha == vars.ECOREX_V030_RELEASE_COMMIT_SHA }}
     needs: notarized-universal
     environment:
       name: ecorex-production-deployment-stable
@@ -207,7 +207,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN"
-          repository="zhangyifanjackson-dotcom/EcoreX-installers"
+          repository="zyfjacksonchen-source/EcoreX-installers"
           tag="v0.3.0"
           if ! gh release view "$tag" --repo "$repository" >/dev/null 2>&1; then
             gh release create "$tag" --repo "$repository" --draft --title "e-Mate v0.3.0" --notes "e-Mate v0.3.0 WebUI update from v0.2.9.2."

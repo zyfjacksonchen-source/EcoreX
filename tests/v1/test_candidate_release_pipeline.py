@@ -1076,6 +1076,7 @@ def test_candidate_and_publication_workflows_are_split_and_default_safe() -> Non
     ).read_text(encoding="utf-8")
 
     assert "github.sha != vars.ECOREX_V030_RELEASE_COMMIT_SHA" in platform_stage
+    assert "github.repository != 'zyfjacksonchen-source/EcoreX'" in platform_stage
     assert "github.ref_protected" not in platform_stage
 
     assert "pull_request:" not in candidate
@@ -1090,6 +1091,10 @@ def test_candidate_and_publication_workflows_are_split_and_default_safe() -> Non
     assert "contents: write" not in candidate
     assert "ECOREX_CONTROL_PLANE_TOKEN" not in candidate
     assert "ECOREX_GITHUB_RELEASE_REPOSITORY" in candidate
+    assert candidate.count(
+        "ECOREX_GITHUB_RELEASE_REPOSITORY: zyfjacksonchen-source/EcoreX-installers"
+    ) == 2
+    assert 'os.environ["REPOSITORY"] == "zyfjacksonchen-source/EcoreX"' in candidate
     assert '--repository "$ECOREX_GITHUB_RELEASE_REPOSITORY"' in candidate
     delta_download = candidate.split(
         "- name: Download optional prior signed Core set for delta derivation", 1
@@ -1127,6 +1132,9 @@ def test_candidate_and_publication_workflows_are_split_and_default_safe() -> Non
     assert "--expected-workflow-run-id ${{ inputs.candidate_run_id }}" in publication
     assert "--publish-github" in publication
     assert "ECOREX_GITHUB_RELEASE_TOKEN" in publication
+    assert 'os.environ["REPOSITORY"] == "zyfjacksonchen-source/EcoreX"' in publication
+    assert 'github.get("owner"), github.get("repository")' in publication
+    assert '("zyfjacksonchen-source", "EcoreX-installers")' in publication
     assert "ECOREX_GITHUB_RELEASE_READ_TOKEN" not in publication
     assert "ECOREX_MIRROR_TOKEN" not in publication
     assert "Publish GitHub origin and verify the configured release sources" in publication
@@ -1494,7 +1502,7 @@ def test_recipe_assembler_preserves_github_cn_proxy_namespace(tmp_path: Path) ->
     output = tmp_path / "proxy-recipe.json"
     proxy_root = (
         "https://ghproxy.net/https://github.com/"
-        "zhangyifanjackson-dotcom/EcoreX-installers/releases/download"
+        "zyfjacksonchen-source/EcoreX-installers/releases/download"
     )
     result = subprocess.run(
         [
@@ -1509,7 +1517,7 @@ def test_recipe_assembler_preserves_github_cn_proxy_namespace(tmp_path: Path) ->
             "--created-at",
             "2026-07-16T12:00:00+08:00",
             "--repository",
-            "zhangyifanjackson-dotcom/EcoreX-installers",
+            "zyfjacksonchen-source/EcoreX-installers",
         ],
         capture_output=True,
         check=False,

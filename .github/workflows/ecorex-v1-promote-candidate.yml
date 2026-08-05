@@ -73,7 +73,7 @@ jobs:
           import os, re
           ok = (
               os.environ["EVENT_NAME"] == "workflow_dispatch"
-              and os.environ["REPOSITORY"] == "zhangyifanjackson-dotcom/EcoreX"
+              and os.environ["REPOSITORY"] == "zyfjacksonchen-source/EcoreX"
               and os.environ["REF_NAME"] == "refs/heads/main"
               and re.fullmatch(r"[0-9a-f]{40}", os.environ["RELEASE_SHA"] or "")
               and os.environ["SOURCE_SHA"] == os.environ["RELEASE_SHA"]
@@ -275,6 +275,13 @@ jobs:
           PUBLIC_KEY: ${{ vars.ECOREX_RELEASE_SIGNER_PUBLIC_KEY }}
           PUBLICATION_CONFIG: ${{ vars.ECOREX_RELEASE_PUBLICATION_CONFIG }}
         run: |
+          python - "$PUBLICATION_CONFIG" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1], encoding="utf-8"))
+          github = value.get("github") if isinstance(value, dict) else None
+          if not isinstance(github, dict) or (github.get("owner"), github.get("repository")) != ("zyfjacksonchen-source", "EcoreX-installers"):
+              raise SystemExit("publication_repository_mismatch")
+          PY
           args=(
             publish-assets
             --release-dir .candidate/output/release

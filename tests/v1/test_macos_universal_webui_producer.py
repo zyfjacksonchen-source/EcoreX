@@ -202,6 +202,7 @@ def test_workflow_requires_protected_stages_notary_acceptance_before_upload():
 
     assert "github.sha == vars.ECOREX_V030_RELEASE_COMMIT_SHA" in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
+    assert "github.repository == 'zyfjacksonchen-source/EcoreX'" in workflow
     assert "github.ref_protected" not in workflow
     assert "ecorex-v1-candidate-stable" in workflow
     assert "name: emate-v030-windows-webui" in workflow

@@ -59,7 +59,7 @@ jobs:
           import os, re
           ok = (
               os.environ["EVENT_NAME"] == "workflow_dispatch"
-              and os.environ["REPOSITORY"] == "zhangyifanjackson-dotcom/EcoreX"
+              and os.environ["REPOSITORY"] == "zyfjacksonchen-source/EcoreX"
               and os.environ["REF_NAME"] == "refs/heads/main"
               and re.fullmatch(r"[0-9a-f]{40}", os.environ["RELEASE_SHA"] or "")
               and os.environ["SOURCE_SHA"] == os.environ["RELEASE_SHA"]
@@ -640,7 +640,7 @@ jobs:
         env:
           ECOREX_RELEASE_MIRROR_BASE_URL: ${{ vars.ECOREX_RELEASE_MIRROR_BASE_URL }}
           ECOREX_RELEASE_CDN_BASE_URL: ${{ vars.ECOREX_RELEASE_CDN_BASE_URL }}
-          ECOREX_GITHUB_RELEASE_REPOSITORY: ${{ vars.ECOREX_GITHUB_RELEASE_REPOSITORY }}
+          ECOREX_GITHUB_RELEASE_REPOSITORY: zyfjacksonchen-source/EcoreX-installers
         run: >-
           python scripts/assemble-v1-candidate-recipe.py
           --input-root .candidate/input
@@ -657,7 +657,7 @@ jobs:
           # read-only and separate from the publication writer token.
           GH_TOKEN: ${{ secrets.ECOREX_GITHUB_RELEASE_READ_TOKEN }}
           DELTA_BASE_TAG: ${{ inputs.delta_base_tag }}
-          ECOREX_GITHUB_RELEASE_REPOSITORY: ${{ vars.ECOREX_GITHUB_RELEASE_REPOSITORY }}
+          ECOREX_GITHUB_RELEASE_REPOSITORY: zyfjacksonchen-source/EcoreX-installers
         run: |
           mkdir -p .candidate/delta-base
           gh release download "$DELTA_BASE_TAG" \

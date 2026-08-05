@@ -24,7 +24,7 @@ jobs:
             label: Windows x64
             platform: windows
             architecture: x64
-            runs_on: '["self-hosted","windows","x64","ecorex-platform-windows"]'
+            runs_on: '"windows-2025"'
           - id: macos-arm64
             config_key: MACOS_ARM64
             label: macOS arm64
@@ -42,7 +42,7 @@ jobs:
 
     steps:
       - name: Refuse non-dispatch or unpinned release source
-        if: ${{ github.event_name != 'workflow_dispatch' || github.repository != 'zhangyifanjackson-dotcom/EcoreX' || github.ref != 'refs/heads/main' || github.sha != vars.ECOREX_V030_RELEASE_COMMIT_SHA }}
+        if: ${{ github.event_name != 'workflow_dispatch' || github.repository != 'zyfjacksonchen-source/EcoreX' || github.ref != 'refs/heads/main' || github.sha != vars.ECOREX_V030_RELEASE_COMMIT_SHA }}
         shell: bash
         run: exit 1
 

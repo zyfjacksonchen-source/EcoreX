@@ -174,8 +174,8 @@ def test_platform_signing_live_and_publication_roles_must_not_overlap() -> None:
             "self-hosted",
             "linux",
             "windows",
+            "arm64",
             "x64",
-            "ecorex-platform-windows",
             "ecorex-release-sign",
             "ecorex-live-acceptance",
             "ecorex-release-publish",
@@ -188,7 +188,6 @@ def test_platform_signing_live_and_publication_roles_must_not_overlap() -> None:
         for runner in snapshot["runners"]
         if runner["name"]
         not in {
-            "runner-platform-windows",
             "runner-release-sign",
             "runner-live-acceptance",
             "runner-release-publication",

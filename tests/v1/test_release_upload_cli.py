@@ -340,7 +340,7 @@ def test_publication_config_builds_read_through_mirror_without_credentials(
         {
           "schema_version": 1,
           "github": {
-            "owner": "zhangyifanjackson-dotcom",
+            "owner": "zyfjacksonchen-source",
             "repository": "EcoreX-installers",
             "token_env": "ECOREX_GITHUB_RELEASE_TOKEN"
           },

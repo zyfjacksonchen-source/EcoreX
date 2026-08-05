@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   package:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'zhangyifanjackson-dotcom/EcoreX' && github.ref == 'refs/heads/main' && github.sha == vars.ECOREX_V030_RELEASE_COMMIT_SHA }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'zyfjacksonchen-source/EcoreX' && github.ref == 'refs/heads/main' && github.sha == vars.ECOREX_V030_RELEASE_COMMIT_SHA }}
     runs-on: windows-2025
     timeout-minutes: 30
     environment:

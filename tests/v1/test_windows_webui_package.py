@@ -300,6 +300,7 @@ def test_windows_webui_workflow_is_pinned_and_emits_only_verified_handoff() -> N
 
     assert "github.sha == vars.ECOREX_V030_RELEASE_COMMIT_SHA" in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
+    assert "github.repository == 'zyfjacksonchen-source/EcoreX'" in workflow
     assert "github.ref_protected" not in workflow
     assert "candidate_commit_mismatch" in workflow
     assert "ecorex-v1-candidate-stable" in workflow

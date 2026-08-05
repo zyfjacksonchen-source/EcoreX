@@ -34,12 +34,11 @@ The July 8 GitHub `v0.3.0` assets are historical bytes from an older source stat
 
 ## CI And Credential Readiness
 
-- GitHub CLI is authenticated as `zhangyifanjackson-dotcom` with `repo` and `workflow` scopes. Five repository workflows are visible and active. This proves dispatch authority exists, not that a release can succeed.
-- The repository is private and the branch-protection API returns HTTP 403 with “Upgrade to GitHub Pro or make this repository public”. Candidate/platform workflows require `github.ref_protected == true`, so the protected-dispatch precondition is not currently provable.
-- `ecorex-release-stage` has the eight required runtime/public-index variables, but zero secrets.
-- `ecorex-release-signing-stable`, `ecorex-release-publication-stable`, and `ecorex-production-deployment-stable` each report zero secrets; signing-stable also reports zero variables. No Apple signing/notarization secret names are referenced anywhere in active workflows.
+- The active public source is `zyfjacksonchen-source/EcoreX`; publication assets target `zyfjacksonchen-source/EcoreX-installers`. The CLI/session used for release must have workflow access to the former and scoped release-write access to the latter; access to the now-private legacy account is not accepted as publication authority.
+- The new source repository is public. Active release workflows use exact repository, `refs/heads/main` and `ECOREX_V030_RELEASE_COMMIT_SHA == github.sha` admission; they no longer depend on the unavailable `github.ref_protected` signal. The same variables, environments and Runner bindings must still be configured and audited in the new repository before dispatch.
+- Environment/Secret observations collected from the legacy repository do not transfer authority to `zyfjacksonchen-source/EcoreX`. The new repository must independently prove the required stage, signing, publication, production and Apple notarization configuration.
 - The only registered self-hosted runner is online Linux ARM64 with release/cloud labels. There is no self-hosted Windows runner for the platform-stage or live-acceptance jobs. macOS jobs use GitHub-hosted arm64/Intel runners.
-- The latest observed platform-stage dispatch (`29890606170`, 2026-07-22) ended `startup_failure` with zero jobs and no log. No successful current platform-stage, Candidate or promotion run exists for commit `a202303...`.
+- Legacy-account workflow runs are retained only as historical diagnostics. No successful platform-stage, Candidate or promotion run in `zyfjacksonchen-source/EcoreX` is yet recorded by this audit.
 
 ## Current Online Readback
 

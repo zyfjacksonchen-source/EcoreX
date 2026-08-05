@@ -232,9 +232,8 @@ def test_workflows_isolate_exact_windows_stage_and_privileged_runners() -> None:
     )
     contract = default_release_repository_contract()
 
-    assert "ecorex-platform-windows" in stage
+    assert 'runs_on: \'"windows-2025"\'' in stage
     assert "fromJSON(matrix.runs_on)" in stage
-    assert "runs_on: windows-2025" not in stage
     assert "runs_on: windows-latest" not in stage
     assert "macos-15" in stage
     assert "macos-15-intel" in stage
@@ -247,7 +246,6 @@ def test_workflows_isolate_exact_windows_stage_and_privileged_runners() -> None:
         "cloud-build",
         "deployment-authorize",
         "live-acceptance",
-        "platform-windows",
         "production-deploy",
         "production-readback",
         "release-publication",

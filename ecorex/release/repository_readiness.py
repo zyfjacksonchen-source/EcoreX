@@ -265,12 +265,6 @@ def default_release_repository_contract() -> ReleaseRepositoryContract:
         ),
         runners=(
             RunnerContract(
-                "platform-windows",
-                frozenset(
-                    {"self-hosted", "windows", "x64", "ecorex-platform-windows"}
-                ),
-            ),
-            RunnerContract(
                 "release-sign",
                 frozenset({"self-hosted", "linux", "arm64", "ecorex-release-sign"}),
             ),
@@ -485,7 +479,6 @@ def evaluate_release_repository(
             )
 
     isolated = (
-        role_matches.get("platform-windows", set()),
         role_matches.get("release-sign", set()),
         role_matches.get("release-publication", set()),
         role_matches.get("live-acceptance", set()),

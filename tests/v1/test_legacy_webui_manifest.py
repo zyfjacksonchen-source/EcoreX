@@ -58,6 +58,10 @@ def test_legacy_manifest_is_last_atomic_step_and_uses_verified_bytes(tmp_path):
     manifest = json.loads(output.read_text(encoding="utf-8"))
     assert manifest["product"] == "e-Mate"
     assert manifest["version"] == "0.3.0"
+    assert manifest["download"]["mirrors"][0]["baseUrl"] == (
+        "https://gh-proxy.com/https://github.com/zyfjacksonchen-source/"
+        "EcoreX-installers/releases/download/v0.3.0"
+    )
     assert manifest["update"]["webui"]["artifactIds"] == [
         "webui-windows-x64",
         "webui-macos-universal",
@@ -227,7 +231,7 @@ def test_macos_workflow_hands_verified_bytes_to_production_publisher():
     )
 
     admission = (
-        "github.repository == 'zhangyifanjackson-dotcom/EcoreX'"
+        "github.repository == 'zyfjacksonchen-source/EcoreX'"
         " && github.ref == 'refs/heads/main'"
         " && github.sha == vars.ECOREX_V030_RELEASE_COMMIT_SHA"
     )
@@ -238,7 +242,7 @@ def test_macos_workflow_hands_verified_bytes_to_production_publisher():
     )
     assert '--expected-sha256 "$ARTIFACT_SHA256"' in workflow
     assert "secrets.ECOREX_GITHUB_RELEASE_TOKEN" in workflow
-    assert 'repository="zhangyifanjackson-dotcom/EcoreX-installers"' in workflow
+    assert 'repository="zyfjacksonchen-source/EcoreX-installers"' in workflow
     assert 'tag="v0.3.0"' in workflow
     assert "gh release upload" in workflow
     assert "python -m ecorex.release.legacy_webui_publication" in workflow
@@ -251,6 +255,6 @@ def test_macos_workflow_hands_verified_bytes_to_production_publisher():
         "Publish immutable bytes, read back both origins, and switch manifest last"
     )
     assert PACKAGE_ORIGINS[0] == (
-        "https://gh-proxy.com/https://github.com/zhangyifanjackson-dotcom/"
+        "https://gh-proxy.com/https://github.com/zyfjacksonchen-source/"
         "EcoreX-installers/releases/download/v0.3.0"
     )
