@@ -1,55 +1,26 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { ChevronDown, FileText, LoaderCircle, Plus, Send, ShieldCheck, Square } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { AtSign, ChevronDown, FileText, LoaderCircle, Plus, Send, ShieldCheck, Square, X } from "lucide-react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import type { SendDisposition } from "../state/useRuntimeSession.ts";
 import type {
-  ConnectorCatalogItem,
-  ConnectorInstanceProjection,
   ConversationUsageProjection,
+  CapabilityMentionProjection,
   InputAttachmentProjection,
   ModelDescriptor,
 } from "../api/contracts.ts";
-import type {
-  ConnectorCatalogLoadState,
-  ConnectorOperationState,
-} from "../state/connectors.ts";
 import { IconButton } from "./IconButton.tsx";
 import { InputAttachmentPreview, type InputAttachmentBlobLoader } from "./InputAttachmentPreview.tsx";
 
-const loadConnectorPopover = () => import("./ConnectorPopover.tsx");
 const loadComposerModelSelector = () => import("./ComposerModelSelector.tsx");
-const ConnectorPopover = lazy(async () => ({
-  default: (await loadConnectorPopover()).ConnectorPopover,
-}));
 const ComposerModelSelector = lazy(loadComposerModelSelector);
 
 interface ComposerProps {
   prefillRequest?: { key: string; text: string } | null;
+  onPrefillConsumed?: () => void;
   draft: string;
   onDraftChange: (draft: string) => void;
-  connectors: ConnectorCatalogItem[];
-  connectorLoadState: ConnectorCatalogLoadState;
-  connectorError: string | null;
-  connectorNotice: string | null;
-  connectorOperations: Record<string, ConnectorOperationState>;
-  onRefreshConnectors: () => Promise<unknown>;
-  onConnectConnector: (item: ConnectorCatalogItem) => Promise<boolean>;
-  onReconnectConnector: (
-    item: ConnectorCatalogItem,
-    instance: ConnectorInstanceProjection,
-  ) => Promise<boolean>;
-  onCheckConnector: (
-    item: ConnectorCatalogItem,
-    instance: ConnectorInstanceProjection,
-  ) => Promise<boolean>;
-  onDisconnectConnector: (
-    item: ConnectorCatalogItem,
-    instance: ConnectorInstanceProjection,
-  ) => Promise<boolean>;
-  onClearConnectorError: () => void;
-  onClearConnectorNotice: () => void;
   active: boolean;
   submitting: boolean;
   modelAvailable: boolean;
@@ -67,6 +38,8 @@ interface ComposerProps {
   usage: ConversationUsageProjection | null;
   permissionLabel: string;
   permissionDescription: string;
+  capabilityMentions: CapabilityMentionProjection[];
+  capabilityMentionState: "loading" | "ready" | "error";
   onChatModelChange: (modelId: string) => void;
   onImageModelChange: (modelId: string) => void;
   onOpenPermissionSettings: () => void;
@@ -74,7 +47,9 @@ interface ComposerProps {
     input: string,
     disposition: SendDisposition,
     attachments: readonly InputAttachmentProjection[],
+    explicitToolIds: readonly string[],
   ) => Promise<boolean>;
+  onRefreshCapabilityMentions: () => Promise<boolean>;
   onUploadAttachment: (file: File) => Promise<InputAttachmentProjection | null>;
   onLoadAttachment: InputAttachmentBlobLoader;
   onLoadAttachmentThumbnail: InputAttachmentBlobLoader;
@@ -89,20 +64,9 @@ const dispositionLabel: Record<SendDisposition, string> = {
 
 export function Composer({
   prefillRequest = null,
+  onPrefillConsumed,
   draft,
   onDraftChange,
-  connectors,
-  connectorLoadState,
-  connectorError,
-  connectorNotice,
-  connectorOperations,
-  onRefreshConnectors,
-  onConnectConnector,
-  onReconnectConnector,
-  onCheckConnector,
-  onDisconnectConnector,
-  onClearConnectorError,
-  onClearConnectorNotice,
   active,
   submitting,
   modelAvailable,
@@ -115,10 +79,13 @@ export function Composer({
   usage,
   permissionLabel,
   permissionDescription,
+  capabilityMentions,
+  capabilityMentionState,
   onChatModelChange,
   onImageModelChange,
   onOpenPermissionSettings,
   onSend,
+  onRefreshCapabilityMentions,
   onUploadAttachment,
   onLoadAttachment,
   onLoadAttachmentThumbnail,
@@ -134,6 +101,10 @@ export function Composer({
     imageUrl: string | null;
   }>>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [selectedMentions, setSelectedMentions] = useState<CapabilityMentionProjection[]>([]);
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionRange, setMentionRange] = useState<{ start: number; end: number } | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const consumedPrefillRef = useRef<string | null>(null);
@@ -159,21 +130,80 @@ export function Composer({
     : "仅此设备";
   const sendLabel = submitting ? "发送中" : sendFailed ? "重试发送" : "发送";
   const selectedChatModel = chatModels.find((model) => model.model_id === chatModel);
+  const mentionOptions = useMemo(() => {
+    if (mentionQuery === null) return [];
+    const needle = mentionQuery.trim().toLocaleLowerCase("zh-CN");
+    return capabilityMentions.filter((item) => (
+      !selectedMentions.some((selected) => selected.reference === item.reference)
+      && (!needle || [item.label, item.reference, item.description]
+        .join(" ").toLocaleLowerCase("zh-CN").includes(needle))
+    )).slice(0, 12);
+  }, [capabilityMentions, mentionQuery, selectedMentions]);
 
   useEffect(() => {
     if (!prefillRequest || consumedPrefillRef.current === prefillRequest.key) return;
     consumedPrefillRef.current = prefillRequest.key;
     if (!draft.trim()) onDraftChange(prefillRequest.text);
+    onPrefillConsumed?.();
     window.requestAnimationFrame(() => textareaRef.current?.focus());
-  }, [draft, onDraftChange, prefillRequest]);
+  }, [draft, onDraftChange, onPrefillConsumed, prefillRequest]);
+
+  useEffect(() => {
+    if (capabilityMentionState !== "ready") return;
+    const available = new Set(capabilityMentions.map((item) => item.reference));
+    setSelectedMentions((current) => current.filter((item) => available.has(item.reference)));
+  }, [capabilityMentionState, capabilityMentions]);
+
+  const updateMentionQuery = (value: string, caret: number | null) => {
+    if (caret === null) {
+      setMentionQuery(null);
+      setMentionRange(null);
+      return;
+    }
+    const match = /(^|\s)@([^\s@]*)$/u.exec(value.slice(0, caret));
+    if (!match) {
+      setMentionQuery(null);
+      setMentionRange(null);
+      return;
+    }
+    const query = match[2] ?? "";
+    setMentionQuery(query);
+    setMentionRange({ start: caret - query.length - 1, end: caret });
+    setMentionIndex(0);
+    if (mentionQuery === null && capabilityMentionState !== "loading") {
+      void onRefreshCapabilityMentions();
+    }
+  };
+
+  const selectMention = (item: CapabilityMentionProjection) => {
+    if (!mentionRange) return;
+    const nextDraft = `${draft.slice(0, mentionRange.start)}${draft.slice(mentionRange.end)}`;
+    const caret = mentionRange.start;
+    onDraftChange(nextDraft);
+    setSelectedMentions((current) => current.some((selected) => selected.reference === item.reference)
+      ? current
+      : [...current, item]);
+    setMentionQuery(null);
+    setMentionRange(null);
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(caret, caret);
+    });
+  };
 
   const submit = async () => {
-    if ((!draft.trim() && attachments.length === 0) || !modelAvailable) return;
-    const sent = await onSend(draft, active ? disposition : "steer", attachments);
+    if ((!draft.trim() && attachments.length === 0 && selectedMentions.length === 0) || !modelAvailable) return;
+    const sent = await onSend(
+      draft,
+      active ? disposition : "steer",
+      attachments,
+      selectedMentions.map((item) => item.reference),
+    );
     setSendFailed(!sent);
     if (sent) {
       onDraftChange("");
       setAttachments([]);
+      setSelectedMentions([]);
       setAttachmentError(null);
     }
   };
@@ -274,6 +304,25 @@ export function Composer({
             ))}
           </div>
         ) : null}
+        {selectedMentions.length ? (
+          <div className="ex-composer-mentions" role="group" aria-label="已提及能力">
+            {selectedMentions.map((item) => (
+              <span className="ex-composer-mention" key={item.reference}>
+                <AtSign aria-hidden="true" />
+                <span>{item.label}</span>
+                <button
+                  className="ex-icon-button ex-composer-mention-remove"
+                  type="button"
+                  aria-label={`移除能力 ${item.label}`}
+                  disabled={submitting}
+                  onClick={() => setSelectedMentions((current) => current.filter((selected) => selected.reference !== item.reference))}
+                >
+                  <X aria-hidden="true" />
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
         <textarea
           ref={textareaRef}
           id="ecorex-composer"
@@ -284,8 +333,32 @@ export function Composer({
           onChange={(event) => {
             onDraftChange(event.target.value);
             setSendFailed(false);
+            updateMentionQuery(event.target.value, event.target.selectionStart);
           }}
           onKeyDown={(event) => {
+            if (mentionQuery !== null) {
+              if (event.key === "ArrowDown" && mentionOptions.length) {
+                event.preventDefault();
+                setMentionIndex((current) => (current + 1) % mentionOptions.length);
+                return;
+              }
+              if (event.key === "ArrowUp" && mentionOptions.length) {
+                event.preventDefault();
+                setMentionIndex((current) => (current - 1 + mentionOptions.length) % mentionOptions.length);
+                return;
+              }
+              if (event.key === "Enter" && mentionOptions[mentionIndex]) {
+                event.preventDefault();
+                selectMention(mentionOptions[mentionIndex]);
+                return;
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setMentionQuery(null);
+                setMentionRange(null);
+                return;
+              }
+            }
             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
               void submit();
@@ -301,6 +374,31 @@ export function Composer({
             void addFiles(pastedFiles);
           }}
         />
+        {mentionQuery !== null ? (
+          <div className="ex-composer-mention-menu" role="listbox" aria-label="提及能力">
+            {capabilityMentionState === "loading" && !mentionOptions.length ? (
+              <span className="ex-composer-mention-empty" role="status">正在读取可用能力…</span>
+            ) : mentionOptions.length ? mentionOptions.map((item, index) => (
+              <button
+                className={`ex-button ex-composer-mention-option${index === mentionIndex ? " is-selected" : ""}`}
+                type="button"
+                role="option"
+                aria-selected={index === mentionIndex}
+                key={item.reference}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => selectMention(item)}
+              >
+                <AtSign aria-hidden="true" />
+                <span><strong>{item.label}</strong><small>{item.description}</small></span>
+                <em>{{ system: "系统", skill: "Skill", collaboration: "协作" }[item.kind]}</em>
+              </button>
+            )) : (
+              <span className="ex-composer-mention-empty">
+                {capabilityMentionState === "error" ? "能力目录暂不可用" : "没有匹配的可用能力"}
+              </span>
+            )}
+          </div>
+        ) : null}
         <div className="ex-composer-toolbar">
           <div className="ex-composer-tools">
             <input
@@ -322,26 +420,6 @@ export function Composer({
             >
               <Plus aria-hidden="true" />
             </button>
-            <Suspense fallback={(
-              <button className="ex-composer-tool" type="button" aria-label="正在准备连接器" disabled>
-                <span>连接器</span>
-              </button>
-            )}>
-              <ConnectorPopover
-                catalog={connectors}
-                loadState={connectorLoadState}
-                error={connectorError}
-                notice={connectorNotice}
-                operations={connectorOperations}
-                onRefresh={onRefreshConnectors}
-                onConnect={onConnectConnector}
-                onReconnect={onReconnectConnector}
-                onHealthCheck={onCheckConnector}
-                onDisconnect={onDisconnectConnector}
-                onClearError={onClearConnectorError}
-                onClearNotice={onClearConnectorNotice}
-              />
-            </Suspense>
             <Suspense fallback={(
                 <button
                   className="ex-composer-model-trigger"
@@ -404,7 +482,7 @@ export function Composer({
             <button
               className="ex-send-button"
               type="button"
-              disabled={(!draft.trim() && attachments.length === 0) || submitting || !modelAvailable}
+              disabled={(!draft.trim() && attachments.length === 0 && selectedMentions.length === 0) || submitting || !modelAvailable}
               aria-label={sendLabel}
               aria-busy={submitting}
               aria-describedby={!modelAvailable ? "ecorex-composer-note" : undefined}

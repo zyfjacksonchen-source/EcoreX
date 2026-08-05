@@ -494,7 +494,7 @@ async function modelScenarios(page, snapshot, timeoutMs) {
   check(snapshot.models?.snapshot_id && snapshot.models.chat.length > 0, "model_catalog_empty");
   const gpt = snapshot.models.chat.find((item) => item.model_policy?.upstream_model_id === "gpt-5.6-luna");
   check(gpt, "gpt_56_catalog_entry_missing");
-  check(gpt.model_policy.reasoning_effort === "high", "gpt_56_reasoning_invalid");
+  check(gpt.model_policy.reasoning_effort === "max", "gpt_56_reasoning_invalid");
   check(gpt.model_policy.context_management?.compact_threshold_tokens === 272000, "gpt_56_compaction_invalid");
   const results = [];
   check(snapshot.models.chat.length <= 16, "model_catalog_too_large_for_acceptance");

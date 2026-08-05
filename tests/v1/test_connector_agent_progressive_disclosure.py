@@ -200,6 +200,7 @@ def _runtime(
             connector_vault=vault or InMemoryCredentialVault(),
             full_access=full_access,
             admin_hard_denies=list(admin_hard_denies or []),
+            enforce_admin_tool_denies=bool(admin_hard_denies),
         )
     )
     return app, app.state.connector_composition.service

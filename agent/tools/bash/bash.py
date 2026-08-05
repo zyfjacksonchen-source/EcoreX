@@ -11,6 +11,7 @@ import tempfile
 from typing import Dict, Any
 
 from agent.tools.base_tool import BaseTool, ToolResult
+from agent.tools.bash import exit_codes
 from agent.tools.utils.truncate import truncate_tail, format_size, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES
 from common.log import logger
 from common.utils import expand_path
@@ -351,14 +352,17 @@ SAFETY:
                 else:
                     output_text += f"\n\n[Showing lines {start_line}-{end_line} of {truncation.total_lines} ({format_size(DEFAULT_MAX_BYTES)} limit). Full output: {temp_file_path}]"
 
-            # Check exit code
-            if result.returncode != 0:
+            # A few search/comparison commands use exit 1 as a useful result.
+            is_error, exit_note = exit_codes.interpret(command, result.returncode)
+            if is_error:
                 output_text += f"\n\nCommand exited with code {result.returncode}"
                 return ToolResult.fail({
                     "output": output_text,
                     "exit_code": result.returncode,
                     "details": details if details else None
                 })
+            if exit_note:
+                output_text += f"\n\n[Exit code {result.returncode}: {exit_note}]"
 
             return ToolResult.success({
                 "output": output_text,

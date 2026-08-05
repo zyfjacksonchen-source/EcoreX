@@ -1075,13 +1075,13 @@ def test_candidate_and_publication_workflows_are_split_and_default_safe() -> Non
         / "ecorex-v1-promote-candidate.yml"
     ).read_text(encoding="utf-8")
 
-    assert "github.sha != vars.ECOREX_V030_RELEASE_COMMIT_SHA" in platform_stage
+    assert "github.sha != vars.ECOREX_V031_RELEASE_COMMIT_SHA" in platform_stage
     assert "github.repository != 'zyfjacksonchen-source/EcoreX'" in platform_stage
     assert "github.ref_protected" not in platform_stage
 
     assert "pull_request:" not in candidate
     assert "workflow_dispatch:" in candidate
-    assert "vars.ECOREX_V030_RELEASE_COMMIT_SHA" in candidate
+    assert "vars.ECOREX_V031_RELEASE_COMMIT_SHA" in candidate
     assert "refs/heads/main" in candidate
     assert "github.ref_protected" not in candidate
     assert "cancel-in-progress: false" in candidate
@@ -1105,7 +1105,7 @@ def test_candidate_and_publication_workflows_are_split_and_default_safe() -> Non
 
     assert "pull_request:" not in publication
     assert "workflow_dispatch:" in publication
-    assert "vars.ECOREX_V030_RELEASE_COMMIT_SHA" in publication
+    assert "vars.ECOREX_V031_RELEASE_COMMIT_SHA" in publication
     assert "refs/heads/main" in publication
     assert "github.ref_protected" not in publication
     assert "default: verify-only" in publication

@@ -23,11 +23,16 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import tencentDocsIcon from "../../../public/assets/logos/tencent-docs.png";
+import {
+  ConnectorCatalogPanel,
+  type ConnectorCatalogPanelProps,
+} from "./ConnectorPopover.tsx";
 
 import type {
   ExtensionActionId,
   ExtensionCatalogSnapshot,
   ExtensionProjection,
+  MCPOAuthStatusProjection,
   SkillHubCardProjection,
   SkillHubDetailProjection,
 } from "../api/contracts.ts";
@@ -48,6 +53,7 @@ import {
 import { IconButton } from "./IconButton.tsx";
 
 interface SkillsWorkspaceProps {
+  connectorRuntime: ConnectorCatalogPanelProps;
   snapshot: ExtensionCatalogSnapshot | null;
   loadState: ExtensionLoadState;
   error: string | null;
@@ -57,7 +63,12 @@ interface SkillsWorkspaceProps {
   onRefresh: () => Promise<ExtensionCatalogSnapshot | null>;
   onAction: (extension: ExtensionProjection, actionId: ExtensionActionId) => Promise<boolean>;
   onConfigure: (extension: ExtensionProjection, values: Record<string, string>) => Promise<boolean>;
-  onInstallLocalSkill: (extensionId: string, file: File) => Promise<boolean>;
+  onInstallLocalSkill: (file: File) => Promise<boolean>;
+  mcpOAuthStatuses: Record<string, MCPOAuthStatusProjection>;
+  mcpOAuthBusy: string | null;
+  onRefreshMcpOAuth: () => Promise<Record<string, MCPOAuthStatusProjection>>;
+  onBeginMcpOAuth: (serviceId: string) => Promise<boolean>;
+  onClearMcpOAuth: (serviceId: string) => Promise<boolean>;
   hubItems: SkillHubCardProjection[];
   hubState: ExtensionLoadState;
   hubError: string | null;
@@ -169,6 +180,7 @@ function SkillSwitch({
 }
 
 export function SkillsWorkspace({
+  connectorRuntime,
   snapshot,
   loadState,
   error,
@@ -179,6 +191,11 @@ export function SkillsWorkspace({
   onAction,
   onConfigure,
   onInstallLocalSkill,
+  mcpOAuthStatuses,
+  mcpOAuthBusy,
+  onRefreshMcpOAuth,
+  onBeginMcpOAuth,
+  onClearMcpOAuth,
   hubItems,
   hubState,
   hubError,
@@ -203,7 +220,6 @@ export function SkillsWorkspace({
   const [hubSource, setHubSource] = useState("");
   const [pending, setPending] = useState<{ extension: ExtensionProjection; actionId: ExtensionActionId } | null>(null);
   const [configuration, setConfiguration] = useState<Record<string, string>>({});
-  const [localExtensionId, setLocalExtensionId] = useState("");
   const [localBundle, setLocalBundle] = useState<File | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
   const [hubUploadSlug, setHubUploadSlug] = useState("");
@@ -215,6 +231,7 @@ export function SkillsWorkspace({
   const operationBusy = Object.keys(operations).length > 0;
   const catalogReady = loadState === "ready";
   const selected = selectedId ? items.find((item) => item.extension_id === selectedId) ?? null : null;
+  const selectedMcpOAuth = selected ? mcpOAuthStatuses[selected.extension_id] ?? null : null;
   const protectedItems = items.filter(protectedExtension);
   const installedItems = items.filter((item) => !protectedExtension(item));
   const visibleItems = useMemo(() => {
@@ -228,7 +245,8 @@ export function SkillsWorkspace({
 
   useEffect(() => {
     void onRefresh();
-  }, [onRefresh]);
+    void onRefreshMcpOAuth();
+  }, [onRefresh, onRefreshMcpOAuth]);
 
   useEffect(() => {
     if (tab !== "discover") return;
@@ -359,6 +377,33 @@ export function SkillsWorkspace({
               </ul>
             ) : <p>没有其他扩展依赖。</p>}
           </section>
+          {selectedMcpOAuth ? (
+            <section className="ex-mcp-oauth" aria-live="polite">
+              <div>
+                <h2>远程服务授权</h2>
+                <p>{selectedMcpOAuth.state === "authorized"
+                  ? "已通过标准 OAuth 安全连接，令牌保存在系统凭据库。"
+                  : selectedMcpOAuth.state === "authorizing"
+                    ? "授权窗口已打开，完成登录后会自动同步。"
+                    : "此远程服务需要登录授权，不需要手动复制令牌。"}</p>
+                {selectedMcpOAuth.scope ? <small>授权范围：{selectedMcpOAuth.scope}</small> : null}
+              </div>
+              <div className="ex-mcp-oauth-actions">
+                <button className="ex-button" type="button" disabled={mcpOAuthBusy === selected.extension_id} onClick={() => void onRefreshMcpOAuth()}>
+                  <RefreshCw className={mcpOAuthBusy === selected.extension_id ? "ex-spin" : ""} aria-hidden="true" />刷新授权状态
+                </button>
+                {selectedMcpOAuth.state === "authorized" ? (
+                  <button className="ex-button is-danger" type="button" disabled={Boolean(mcpOAuthBusy)} onClick={() => void onClearMcpOAuth(selected.extension_id)}>
+                    {mcpOAuthBusy === selected.extension_id ? <LoaderCircle className="ex-spin" aria-hidden="true" /> : null}取消授权
+                  </button>
+                ) : (
+                  <button className="ex-button is-primary" type="button" disabled={Boolean(mcpOAuthBusy)} onClick={() => void onBeginMcpOAuth(selected.extension_id)}>
+                    {mcpOAuthBusy === selected.extension_id ? <LoaderCircle className="ex-spin" aria-hidden="true" /> : null}去授权
+                  </button>
+                )}
+              </div>
+            </section>
+          ) : null}
           {selected.readiness === "needs_configuration" ? (
             <section className="ex-skill-configuration">
               <h2>配置</h2>
@@ -409,7 +454,7 @@ export function SkillsWorkspace({
         <button type="button" role="tab" aria-selected={tab === "installed"} onClick={() => setTab("installed")}>
           已安装 <span>{items.length}</span>
         </button>
-        <button type="button" role="tab" aria-selected={tab === "custom"} onClick={() => setTab("custom")}>自建</button>
+        <button type="button" role="tab" aria-selected={tab === "custom"} onClick={() => setTab("custom")}>导入</button>
       </div>
 
       {error ? (
@@ -424,11 +469,20 @@ export function SkillsWorkspace({
             <label className="ex-skills-search">
               <Search aria-hidden="true" /><input type="search" value={query} placeholder="搜索已安装技能" onChange={(event) => setQuery(event.target.value)} />
             </label>
-            <select aria-label="技能分类" value={category} onChange={(event) => setCategory(event.target.value as SkillCategory | "all")}>
-              <option value="all">全部分类</option>
-              {CATEGORY_ORDER.map((item) => <option value={item} key={item}>{CATEGORY_LABEL[item]}</option>)}
-            </select>
           </div>
+          <div className="ex-skill-category-filter" role="group" aria-label="技能分类">
+            <button className="ex-button" type="button" aria-pressed={category === "all"} onClick={() => setCategory("all")}>
+              <Blocks aria-hidden="true" /><span>全部分类</span>
+            </button>
+            {CATEGORY_ORDER.map((item) => (
+              <button className="ex-button" type="button" key={item} aria-pressed={category === item} onClick={() => setCategory(item)}>
+                {categoryIcon(item)}<span>{CATEGORY_LABEL[item]}</span>
+              </button>
+            ))}
+          </div>
+          {category === "collaboration" ? (
+            <ConnectorCatalogPanel {...connectorRuntime} />
+          ) : null}
           {loadState === "loading" && !snapshot ? <p className="ex-skills-loading"><LoaderCircle className="ex-spin" aria-hidden="true" />正在读取技能目录…</p> : null}
           {visibleItems.length ? <div className="ex-skill-grid">{visibleItems.map(renderCard)}</div> : snapshot ? (
             <div className="ex-skills-empty"><PackageSearch aria-hidden="true" /><strong>没有匹配的技能</strong><p>清除搜索或切换分类后再查看。</p></div>
@@ -443,30 +497,20 @@ export function SkillsWorkspace({
         </div>
       ) : tab === "custom" ? (
         <div className="ex-skills-content ex-skill-market">
-          <div className="ex-skill-category-grid" aria-label="技能分类">
-            {CATEGORY_ORDER.map((item) => (
-              <button className={category === item ? "is-selected" : ""} type="button" key={item} onClick={() => setCategory(item)}>
-                <span>{categoryIcon(item)}</span><strong>{CATEGORY_LABEL[item]}</strong>
-                <small>{items.filter((extension) => extension.category === item).length} 个已安装</small>
-              </button>
-            ))}
-          </div>
           <section className="ex-local-skill-install" aria-label="安装本地技能包">
             <div>
               <FileArchive aria-hidden="true" />
-              <span><strong>安装本地技能包</strong><small>仅接受不超过 10 MB 的 ZIP；Runtime 会验证清单、内容和权限后再登记。</small></span>
+              <span><strong>导入本地 Skill</strong><small>选择不超过 10 MB 的 ZIP；e-Mate 会自动识别名称并完成安全检查。</small></span>
             </div>
-            <label><span>扩展 ID</span><input value={localExtensionId} placeholder="local.office-helper" disabled={installBusy || operationBusy} onChange={(event) => setLocalExtensionId(event.target.value)} /></label>
-            <label><span>选择安装包</span><input key={fileInputKey} type="file" accept=".zip,application/zip" disabled={installBusy || operationBusy} onChange={(event) => setLocalBundle(event.target.files?.[0] ?? null)} /></label>
+            <label><span>Skill 安装包</span><input key={fileInputKey} type="file" accept=".zip,application/zip" disabled={installBusy || operationBusy} onChange={(event) => setLocalBundle(event.target.files?.[0] ?? null)} /></label>
             <button
               className="ex-button is-primary"
               type="button"
-              disabled={!catalogReady || installBusy || operationBusy || !localExtensionId.trim() || !localBundle}
+              disabled={!catalogReady || installBusy || operationBusy || !localBundle}
               onClick={() => {
                 if (!localBundle) return;
-                void onInstallLocalSkill(localExtensionId, localBundle).then((installed) => {
+                void onInstallLocalSkill(localBundle).then((installed) => {
                   if (!installed) return;
-                  setLocalExtensionId("");
                   setLocalBundle(null);
                   setFileInputKey((value) => value + 1);
                   setTab("installed");
@@ -477,33 +521,36 @@ export function SkillsWorkspace({
               {installBusy ? "正在验证" : "验证并安装"}
             </button>
           </section>
-          <section className="ex-local-skill-install" aria-label="发布 Skill 到 e-Mate">
-            <div>
-              <Upload aria-hidden="true" />
-              <span><strong>发布到 e-Mate Skill Hub</strong><small>通过检查后自动公开；同一 slug 与版本不可覆盖。</small></span>
-            </div>
-            <label><span>Skill slug</span><input value={hubUploadSlug} placeholder="office-helper" disabled={hubUploadBusy} onChange={(event) => setHubUploadSlug(event.target.value)} /></label>
-            <label><span>市场分类</span><select value={hubUploadCategory} disabled={hubUploadBusy} onChange={(event) => setHubUploadCategory(event.target.value as SkillHubCardProjection["category"])}><option value="third_party">第三方</option><option value="content_creation">内容创作</option><option value="office_productivity">办公效率</option></select></label>
-            <label><span>选择发布包</span><input key={hubUploadFileKey} type="file" accept=".zip,application/zip" disabled={hubUploadBusy} onChange={(event) => setHubUploadBundle(event.target.files?.[0] ?? null)} /></label>
-            <button
-              className="ex-button is-primary"
-              type="button"
-              disabled={hubUploadBusy || !hubUploadSlug.trim() || !hubUploadBundle}
-              onClick={() => {
-                if (!hubUploadBundle) return;
-                void onPublishHub(hubUploadSlug, hubUploadCategory, hubUploadBundle).then((published) => {
-                  if (!published) return;
-                  setHubUploadSlug("");
-                  setHubUploadBundle(null);
-                  setHubUploadFileKey((value) => value + 1);
-                  setTab("discover");
-                });
-              }}
-            >
-              {hubUploadBusy ? <LoaderCircle className="ex-spin" aria-hidden="true" /> : <Upload aria-hidden="true" />}
-              {hubUploadBusy ? "正在发布" : "验证并发布"}
-            </button>
-          </section>
+          <details className="ex-skill-advanced">
+            <summary>高级操作</summary>
+            <section className="ex-local-skill-install" aria-label="发布 Skill 到 e-Mate">
+              <div>
+                <Upload aria-hidden="true" />
+                <span><strong>发布到 e-Mate Skill Hub</strong><small>通过检查后自动公开；同一 slug 与版本不可覆盖。</small></span>
+              </div>
+              <label><span>Skill slug</span><input value={hubUploadSlug} placeholder="office-helper" disabled={hubUploadBusy} onChange={(event) => setHubUploadSlug(event.target.value)} /></label>
+              <label><span>市场分类</span><select value={hubUploadCategory} disabled={hubUploadBusy} onChange={(event) => setHubUploadCategory(event.target.value as SkillHubCardProjection["category"])}><option value="third_party">第三方</option><option value="content_creation">内容创作</option><option value="office_productivity">办公效率</option></select></label>
+              <label><span>选择发布包</span><input key={hubUploadFileKey} type="file" accept=".zip,application/zip" disabled={hubUploadBusy} onChange={(event) => setHubUploadBundle(event.target.files?.[0] ?? null)} /></label>
+              <button
+                className="ex-button is-primary"
+                type="button"
+                disabled={hubUploadBusy || !hubUploadSlug.trim() || !hubUploadBundle}
+                onClick={() => {
+                  if (!hubUploadBundle) return;
+                  void onPublishHub(hubUploadSlug, hubUploadCategory, hubUploadBundle).then((published) => {
+                    if (!published) return;
+                    setHubUploadSlug("");
+                    setHubUploadBundle(null);
+                    setHubUploadFileKey((value) => value + 1);
+                    setTab("discover");
+                  });
+                }}
+              >
+                {hubUploadBusy ? <LoaderCircle className="ex-spin" aria-hidden="true" /> : <Upload aria-hidden="true" />}
+                {hubUploadBusy ? "正在发布" : "验证并发布"}
+              </button>
+            </section>
+          </details>
         </div>
       ) : (
         <div className="ex-skills-content">

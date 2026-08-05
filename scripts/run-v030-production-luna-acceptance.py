@@ -96,7 +96,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 payload = json.dumps({{
     "model": "gpt-5.6-luna",
     "input": "Reply with exactly: OK",
-    "reasoning": {{"effort": "high"}},
+    "reasoning": {{"effort": "max"}},
     "max_output_tokens": 32,
     "stream": False,
 }}, separators=(",", ":")).encode("utf-8")
@@ -132,7 +132,7 @@ report = {{
     "http_status": status_code,
     "requested_model": "gpt-5.6-luna",
     "reported_model": reported_model,
-    "reasoning_effort": "high",
+    "reasoning_effort": "max",
     "usage": {{
         "input_tokens": usage.get("input_tokens"),
         "output_tokens": usage.get("output_tokens"),

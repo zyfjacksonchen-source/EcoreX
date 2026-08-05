@@ -112,6 +112,30 @@ _NON_RUNTIME_PARTS = frozenset(
         "benchmarks",
     }
 )
+_NON_RUNTIME_SUFFIXES = frozenset(
+    {
+        ".a",
+        ".c",
+        ".cc",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".lib",
+        ".map",
+        ".pxd",
+        ".pxi",
+        ".pyi",
+        ".pyx",
+    }
+)
+_NON_RUNTIME_NAMES = frozenset(
+    {"_ctypes_test.pyd", "_tkinter.pyd", "tcl86t.dll", "tk86t.dll"}
+)
+_STAGE_SIZE_LIMITS = {
+    ("windows", "x64"): (460 * 1024 * 1024, 452 * 1024 * 1024),
+    ("macos", "arm64"): (510 * 1024 * 1024, 503 * 1024 * 1024),
+    ("macos", "x64"): (488 * 1024 * 1024, 481 * 1024 * 1024),
+}
 _BROWSER_SMOKE_PUBLIC_ERROR_CODES = frozenset(
     {
         "browser_operation_failed",
@@ -383,6 +407,12 @@ def _stage(request: Mapping[str, Any]) -> None:
             request["publication_public_keys"]
         ),
         evidence=evidence / "bootstrap",
+    )
+    _stage_size_gate(
+        stages,
+        platform=platform,
+        architecture=architecture,
+        evidence=evidence / "core",
     )
 
 
@@ -801,6 +831,7 @@ def _build_python_closure(
         site_packages / "ecorex",
         excluded=frozenset({"__pycache__"}),
     )
+    _prune_runtime_tree(destination)
     if platform == "macos":
         _reject_macos_build_objects(destination)
     _compact_python_import_closure(
@@ -3175,6 +3206,7 @@ def _vendor_dependency_runtime(
 ) -> tuple[dict[str, str], ...]:
     python_root = pack / "runtime" / "python"
     inventory = _copy_distribution_closure(distributions, python_root)
+    _prune_runtime_tree(python_root)
     return _write_dependency_inventory(
         pack,
         pack_id=pack_id,
@@ -3304,6 +3336,7 @@ def _vendor_browser_runtime(
         _normalize_playwright_driver_mode(python_root, platform=platform)
         target_browser = runtime / "browser" / browser_root.name
         _copy_tree(browser_root, target_browser, excluded=frozenset({"__pycache__"}))
+        _prune_runtime_tree(runtime)
         relative_executable = (
             PurePosixPath("browser")
             / browser_root.name
@@ -4132,6 +4165,7 @@ def _copy_distribution_closure(
                 relative is None
                 or source.name == "__pycache__"
                 or source.suffix in {".pyc", ".pyo"}
+                or _non_runtime_file(source)
                 or any(part.casefold() in _NON_RUNTIME_PARTS for part in relative.parts)
             ):
                 continue
@@ -4157,6 +4191,33 @@ def _copy_distribution_closure(
         pending.sort(key=canonicalize_name)
     inventory.sort(key=lambda item: canonicalize_name(item["name"]))
     return tuple(inventory)
+
+
+def _non_runtime_file(path: Path) -> bool:
+    name = path.name.casefold()
+    suffix = path.suffix.casefold()
+    return (
+        suffix in _NON_RUNTIME_SUFFIXES
+        or name.endswith(".d.ts")
+        or name in _NON_RUNTIME_NAMES
+        or (name.startswith("_test") and suffix in _IMPORT_ARCHIVE_NATIVE_SUFFIXES)
+    )
+
+
+def _prune_runtime_tree(root: Path) -> tuple[int, int]:
+    removed_count = 0
+    removed_bytes = 0
+    for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        if path.is_file() and _non_runtime_file(path):
+            removed_bytes += path.stat().st_size
+            path.unlink()
+            removed_count += 1
+        elif path.is_dir():
+            try:
+                path.rmdir()
+            except OSError:
+                pass
+    return removed_count, removed_bytes
 
 
 def _distribution_license(metadata: Message) -> str:
@@ -4361,6 +4422,64 @@ def _active_lock_versions(path: Path) -> dict[str, str]:
             raise StageError("python_dependency_lock_invalid")
         versions[name] = specifiers[0].version
     return versions
+
+
+def _stage_size_gate(
+    root: Path,
+    *,
+    platform: str,
+    architecture: str,
+    evidence: Path,
+) -> None:
+    try:
+        total_limit, runtime_limit = _STAGE_SIZE_LIMITS[(platform, architecture)]
+    except KeyError:
+        raise StageError("stage_size_target_invalid") from None
+    files: list[tuple[int, str]] = []
+    components: dict[str, int] = {}
+    runtime_bytes = 0
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root)
+        relative_posix = relative.as_posix()
+        size = path.stat().st_size
+        files.append((size, relative_posix))
+        component = (
+            f"packs/{relative.parts[1]}"
+            if len(relative.parts) > 1 and relative.parts[0] == "packs"
+            else relative.parts[0]
+        )
+        components[component] = components.get(component, 0) + size
+        is_runtime = relative_posix.startswith("core/bin/pack-python/") or any(
+            "runtime" in part.casefold() for part in relative.parts
+        )
+        if is_runtime:
+            runtime_bytes += size
+            if _non_runtime_file(path):
+                raise StageError("stage_runtime_development_file_present")
+    total_bytes = sum(size for size, _relative in files)
+    if not files or total_bytes > total_limit or runtime_bytes > runtime_limit:
+        raise StageError("stage_size_limit")
+    _gate(
+        evidence,
+        "package-size",
+        {
+            "target": f"{platform}-{architecture}",
+            "file_count": len(files),
+            "expanded_bytes": total_bytes,
+            "expanded_limit_bytes": total_limit,
+            "runtime_bytes": runtime_bytes,
+            "runtime_limit_bytes": runtime_limit,
+            "components": dict(sorted(components.items())),
+            "top_files": [
+                {"path": relative, "size_bytes": size}
+                for size, relative in sorted(
+                    files, key=lambda item: (-item[0], item[1])
+                )[:20]
+            ],
+        },
+    )
 
 
 def _gate(root: Path, gate: str, details: Mapping[str, Any]) -> None:

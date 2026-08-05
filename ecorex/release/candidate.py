@@ -71,7 +71,13 @@ PACK_REQUIRED_FILES: Mapping[str, tuple[str, ...]] = {
 }
 STAGE_GATES: Mapping[str, frozenset[str]] = {
     "core": frozenset(
-        {"runtime-launch", "loopback-health", "dependency-closure", "supply-chain"}
+        {
+            "runtime-launch",
+            "loopback-health",
+            "dependency-closure",
+            "package-size",
+            "supply-chain",
+        }
     ),
     "bootstrap": frozenset({"bootstrap-launch", "toolchain", "supply-chain"}),
     "browser": frozenset(

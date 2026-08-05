@@ -275,7 +275,7 @@ def test_runtime_health_api_counts_sse_without_exposing_metrics_by_default(tmp_p
 
         public_health = client.get("/api/v1/system/health", headers=auth)
         assert public_health.status_code == 200
-        assert public_health.json()["summary"].startswith("EcoreX")
+        assert public_health.json()["summary"].startswith("e-Mate")
         assert "metrics" not in public_health.json()
 
         technical = client.get(

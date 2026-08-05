@@ -5,7 +5,9 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import stat
 from types import SimpleNamespace
+import zipfile
 
 import pytest
 
@@ -40,7 +42,7 @@ def test_non_macos_fixture_fails_closed_before_creating_release_bytes(
         windows_package=tmp_path / "windows.zip",
         windows_receipt=tmp_path / "windows-receipt.json",
         output=tmp_path / "output",
-        version="0.3.0",
+        version="0.3.1",
         commit_sha="a" * 40,
         identity="",
         notary_profile="",
@@ -63,7 +65,7 @@ def test_missing_distribution_authority_never_falls_back_to_ad_hoc_signing(
         windows_package=tmp_path / "windows.zip",
         windows_receipt=tmp_path / "windows-receipt.json",
         output=tmp_path / "output",
-        version="0.3.0",
+        version="0.3.1",
         commit_sha="a" * 40,
         identity="",
         notary_profile="",
@@ -79,14 +81,14 @@ def test_missing_distribution_authority_never_falls_back_to_ad_hoc_signing(
 
 def test_verified_receipt_binds_exact_windows_and_notarized_macos_bytes(tmp_path):
     module = _module()
-    windows = tmp_path / "EcoreX_0.3.0-webui-windows-x64.zip"
-    macos = tmp_path / "EcoreX_0.3.0-webui-macos-universal.zip"
+    windows = tmp_path / "EcoreX_0.3.1-webui-windows-x64.zip"
+    macos = tmp_path / "EcoreX_0.3.1-webui-macos-universal.zip"
     windows.write_bytes(b"verified-windows")
     macos.write_bytes(b"accepted-notarized-macos-webui-zip")
 
     receipt = module._write_legacy_receipt(
         tmp_path,
-        version="0.3.0",
+        version="0.3.1",
         windows=windows,
         macos=macos,
         generated_at="2026-08-04T12:00:00Z",
@@ -102,7 +104,7 @@ def test_verified_receipt_binds_exact_windows_and_notarized_macos_bytes(tmp_path
         value["artifacts"][1]["sha256"]
         == hashlib.sha256(macos.read_bytes()).hexdigest()
     )
-    assert build_legacy_webui_manifest(receipt)["version"] == "0.3.0"
+    assert build_legacy_webui_manifest(receipt)["version"] == "0.3.1"
 
 
 def test_distribution_receipt_rejects_missing_accepted_notarization(tmp_path):
@@ -144,9 +146,36 @@ def test_distribution_receipt_rejects_missing_accepted_notarization(tmp_path):
     ] == "terminal-command"
 
 
+def test_portable_terminal_zip_keeps_one_root_and_executable_installer(tmp_path):
+    module = _module()
+    root = tmp_path / "e-Mate WebUI"
+    root.mkdir()
+    installer = root / "Install e-Mate WebUI.command"
+    installer.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    payload = root / "signed" / "release.json"
+    payload.parent.mkdir()
+    payload.write_text("{}\n", encoding="utf-8")
+
+    package = tmp_path / "package.zip"
+    module._write_portable_zip(root, package)
+
+    with zipfile.ZipFile(package) as archive:
+        assert archive.testzip() is None
+        assert set(archive.namelist()) == {
+            "e-Mate WebUI/",
+            "e-Mate WebUI/Install e-Mate WebUI.command",
+            "e-Mate WebUI/signed/",
+            "e-Mate WebUI/signed/release.json",
+        }
+        mode = archive.getinfo(
+            "e-Mate WebUI/Install e-Mate WebUI.command"
+        ).external_attr >> 16
+        assert stat.S_ISREG(mode) and mode & 0o111 == 0o111
+
+
 def test_windows_partial_receipt_must_bind_exact_package_and_candidate(tmp_path):
     module = _module()
-    package = tmp_path / "EcoreX_0.3.0-webui-windows-x64.zip"
+    package = tmp_path / "EcoreX_0.3.1-webui-windows-x64.zip"
     package.write_bytes(b"windows")
     manifest_path = tmp_path / "release-manifest.json"
     manifest_path.write_bytes(b"manifest")
@@ -216,11 +245,11 @@ def test_workflow_builds_and_runs_both_terminal_macos_architectures():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     producer = SCRIPT.read_text(encoding="utf-8")
 
-    assert "github.sha == vars.ECOREX_V030_RELEASE_COMMIT_SHA" in workflow
+    assert "github.sha == vars.ECOREX_V031_RELEASE_COMMIT_SHA" in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
     assert "github.repository == 'zyfjacksonchen-source/EcoreX'" in workflow
     assert "github.ref_protected" not in workflow
-    assert "EcoreX_0.3.0-direct-candidate.zip" in workflow
+    assert "EcoreX_0.3.1-direct-candidate.zip" in workflow
     assert "candidate_bundle_sha256" in workflow
     assert "candidate_commit_sha" in workflow
     assert "APPLE_NOTARY_KEY_BASE64" not in workflow
@@ -237,8 +266,8 @@ def test_workflow_builds_and_runs_both_terminal_macos_architectures():
         < workflow.index("Upload package handoff and arm64 user evidence")
     )
     assert workflow.count("include-hidden-files: true") == 3
-    assert "emate-v030-verified-webui-packages" not in workflow
-    assert "emate-v030-arm64-qualified-webui-packages" in workflow
+    assert "emate-v031-verified-webui-packages" not in workflow
+    assert "emate-v031-arm64-qualified-webui-packages" in workflow
     assert "--web-dist .producer/source/desktop/dist" in workflow
     assert "--candidate-root .producer/candidate" in workflow
     assert "--windows-receipt" in workflow

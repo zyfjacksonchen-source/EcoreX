@@ -29,7 +29,7 @@ class ManagedChatModelPolicy:
     upstream_model_id: str
     display_name: str
     aliases: tuple[str, ...]
-    reasoning_effort: Literal["medium", "high"]
+    reasoning_effort: Literal["medium", "high", "max"]
     context_management_type: Literal["compaction"]
     compact_threshold_tokens: int
 
@@ -46,7 +46,7 @@ class ManagedChatModelPolicy:
             or len(self.aliases) > 32
             or any(_SAFE_ID.fullmatch(alias) is None for alias in self.aliases)
             or len(set(alias.casefold() for alias in self.aliases)) != len(self.aliases)
-            or self.reasoning_effort not in {"medium", "high"}
+            or self.reasoning_effort not in {"medium", "high", "max"}
             or self.context_management_type != "compaction"
             or isinstance(self.compact_threshold_tokens, bool)
             or not 1_000 <= self.compact_threshold_tokens <= 2_000_000
@@ -71,14 +71,14 @@ class ManagedChatModelPolicy:
 ECOREX_CHAT_MODEL_POLICY = ManagedChatModelPolicy(
     schema_version=1,
     policy_id="ecorex-chat-gpt-5.6-luna",
-    policy_version="1.1.0",
+    policy_version="1.2.0",
     # Keep this public identity stable so v0.3.0 data and existing clients do
     # not need a model-ID rewrite when the managed provider model changes.
     local_model_id="ecorex-chat",
     upstream_model_id="gpt-5.6-luna",
-    display_name="GPT-5.6 Luna · 高推理",
+    display_name="GPT-5.6 Luna · 最大推理",
     aliases=("chat", "default", "gpt-5.6-luna", "gpt5.6-luna"),
-    reasoning_effort="high",
+    reasoning_effort="max",
     context_management_type="compaction",
     compact_threshold_tokens=272_000,
 )
@@ -98,13 +98,15 @@ ECOREX_SOL_MODEL_POLICY = ManagedChatModelPolicy(
 
 ECOREX_DEEPSEEK_MODEL_POLICY = ManagedChatModelPolicy(
     schema_version=1,
-    policy_id="ecorex-deepseek-v4-pro",
-    policy_version="1.0.0",
+    policy_id="ecorex-deepseek-v4-flash",
+    policy_version="2.0.0",
+    # Retain the v0.3.0 public slot while updating the administrator-controlled
+    # upstream route and presentation.
     local_model_id="ecorex-deepseek-v4-pro",
-    upstream_model_id="deepseek-v4-pro",
-    display_name="DeepSeek V4 Pro",
-    aliases=("deepseek", "deepseek-v4-pro"),
-    reasoning_effort="medium",
+    upstream_model_id="deepseek-v4-flash",
+    display_name="DeepSeek V4 Flash · 最大推理",
+    aliases=("deepseek", "deepseek-v4-pro", "deepseek-v4-flash"),
+    reasoning_effort="max",
     context_management_type="compaction",
     compact_threshold_tokens=900_000,
 )

@@ -7,7 +7,8 @@ interface NewConversationProjectSelectorProps {
   projects: ProjectProjection[];
   selectedProject: ProjectProjection | null;
   pickerBusy: boolean;
-  onSelect: (project: ProjectProjection) => void;
+  compact?: boolean;
+  onSelect: (project: ProjectProjection | null) => void;
   onPick: () => Promise<ProjectProjection | null>;
 }
 
@@ -15,6 +16,7 @@ export default function NewConversationProjectSelector({
   projects,
   selectedProject,
   pickerBusy,
+  compact = false,
   onSelect,
   onPick,
 }: NewConversationProjectSelectorProps) {
@@ -28,30 +30,45 @@ export default function NewConversationProjectSelector({
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
         <button
-          className={`ex-new-project-trigger${selectedProject ? " is-selected" : ""}`}
+          className={`ex-new-project-trigger${compact ? " is-compact" : ""}${selectedProject ? " is-selected" : ""}`}
           type="button"
           aria-label="选择项目会话"
           aria-pressed={Boolean(selectedProject)}
         >
           <FolderOpen aria-hidden="true" />
-          <span>
-            <strong>{selectedProject?.name || "项目会话"}</strong>
-            <small>{description}</small>
-          </span>
+          {compact ? (
+            <span>{selectedProject?.name || "在项目中工作"}</span>
+          ) : (
+            <span>
+              <strong>{selectedProject?.name || "项目会话"}</strong>
+              <small>{description}</small>
+            </span>
+          )}
           <ChevronDown className="ex-new-project-chevron" aria-hidden="true" />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content className="ex-menu ex-project-menu" side="bottom" align="start" sideOffset={8}>
           <DropdownMenu.Label className="ex-model-menu-label">已有项目</DropdownMenu.Label>
-          {projects.length ? (
-            <DropdownMenu.RadioGroup
-              value={selectedProject?.project_id || ""}
-              onValueChange={(projectId) => {
-                const project = projects.find((candidate) => candidate.project_id === projectId);
-                if (project) onSelect(project);
-              }}
-            >
+          <DropdownMenu.RadioGroup
+            value={selectedProject?.project_id || ""}
+            onValueChange={(projectId) => {
+              if (!projectId) {
+                onSelect(null);
+                return;
+              }
+              const project = projects.find((candidate) => candidate.project_id === projectId);
+              if (project) onSelect(project);
+            }}
+          >
+            <DropdownMenu.RadioItem className="ex-menu-item ex-project-menu-item" value="">
+              <DropdownMenu.ItemIndicator className="ex-model-menu-check">
+                <Check aria-hidden="true" />
+              </DropdownMenu.ItemIndicator>
+              <span>不绑定项目</span>
+            </DropdownMenu.RadioItem>
+            {projects.length ? (
+              <>
               {projects.map((project) => (
                 <DropdownMenu.RadioItem
                   className="ex-menu-item ex-project-menu-item"
@@ -65,10 +82,12 @@ export default function NewConversationProjectSelector({
                   <span>{project.name}</span>
                 </DropdownMenu.RadioItem>
               ))}
-            </DropdownMenu.RadioGroup>
-          ) : (
+              </>
+            ) : null}
+          </DropdownMenu.RadioGroup>
+          {!projects.length ? (
             <DropdownMenu.Label className="ex-menu-note">还没有已添加的项目。</DropdownMenu.Label>
-          )}
+          ) : null}
           <DropdownMenu.Separator className="ex-menu-separator" />
           <DropdownMenu.Item
             className="ex-menu-item"

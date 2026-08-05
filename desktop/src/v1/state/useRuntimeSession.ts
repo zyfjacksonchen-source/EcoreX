@@ -10,6 +10,8 @@ import {
 import type {
   ArtifactProjection,
   BootstrapResponse,
+  CapabilityMentionCatalog,
+  CapabilityMentionProjection,
   ConversationUsageProjection,
   EventEnvelope,
   InteractionResponse,
@@ -209,6 +211,8 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const [systemHealthError, setSystemHealthError] = useState<string | null>(null);
   const [conversationUsage, setConversationUsage] = useState<ConversationUsageProjection | null>(null);
   const [accountUsage, setAccountUsage] = useState<ConversationUsageProjection | null>(null);
+  const [capabilityMentions, setCapabilityMentions] = useState<CapabilityMentionProjection[]>([]);
+  const [capabilityMentionState, setCapabilityMentionState] = useState<LoadState>("loading");
   const [chatModel, setChatModel] = useState("");
   const [imageModel, setImageModel] = useState("");
   const [threads, setThreads] = useState<ThreadProjection[]>([]);
@@ -331,6 +335,21 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     applyBootstrap(bootstrap);
     return bootstrap;
   }, [applyBootstrap, client]);
+
+  const refreshCapabilityMentions = useCallback(async (signal?: AbortSignal) => {
+    setCapabilityMentionState("loading");
+    try {
+      const catalog: CapabilityMentionCatalog = await client.capabilityMentions(signal);
+      if (signal?.aborted) return false;
+      setCapabilityMentions(catalog.items);
+      setCapabilityMentionState("ready");
+      return true;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return false;
+      setCapabilityMentionState("error");
+      return false;
+    }
+  }, [client]);
 
   const refreshMemory = useCallback(async (signal?: AbortSignal) => {
     setMemoryLoadState("loading");
@@ -497,13 +516,19 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
         // stays quiet so a scheduled process restart does not surface a false
         // product error immediately before the page reloads.
       }
+      try {
+        await refreshBootstrapQuietly(controller.signal);
+      } catch {
+        // Keep the last validated model catalog during a transient refresh
+        // failure; the Runtime still fences each new turn against its snapshot.
+      }
     };
     const timer = window.setInterval(() => void poll(), 5_000);
     return () => {
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [applyUpdateSnapshot, bootstrapped, client]);
+  }, [applyUpdateSnapshot, bootstrapped, client, refreshBootstrapQuietly]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -517,6 +542,21 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     void refreshThreads(controller.signal);
     return () => controller.abort();
   }, [bootstrapped, refreshThreads]);
+
+  useEffect(() => {
+    if (!bootstrapped) return;
+    const controller = new AbortController();
+    const refresh = () => {
+      void refreshCapabilityMentions(controller.signal);
+      void refreshBootstrapQuietly(controller.signal).catch(() => undefined);
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => {
+      controller.abort();
+      window.removeEventListener("focus", refresh);
+    };
+  }, [bootstrapped, refreshBootstrapQuietly, refreshCapabilityMentions]);
 
   useEffect(() => {
     if (!bootstrapped || !threads.some((thread) => thread.active_turn_status !== null)) return;
@@ -725,6 +765,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
         || event.event_type === "thread.renamed"
         || event.event_type === "thread.archived"
         || event.event_type === "thread.restored"
+        || event.event_type === "thread.deleted"
         || event.event_type === "turn.accepted"
         || event.event_type === "turn.queued"
       ))) {
@@ -977,6 +1018,43 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     }
   }, [client, pendingThreadRequestId, refreshProjection, refreshThreads]);
 
+  const deleteThread = useCallback(async (targetThreadId: string) => {
+    const key = `delete:${targetThreadId}`;
+    const clientRequestId = pendingThreadRequestId(key, "delete");
+    setThreadMutationKey(key);
+    setThreadCatalogError(null);
+    try {
+      const projection = await client.deleteThread(targetThreadId, clientRequestId);
+      if (projection.status !== "deleted") {
+        throw new RuntimeApiError("Runtime 未确认任务删除。", 502);
+      }
+      pendingThreadMutations.current.delete(key);
+      if (selectedThreadId.current === targetThreadId) {
+        ++threadSwitchGeneration.current;
+        threadSwitchAbort.current?.abort();
+        threadSwitchAbort.current = null;
+        threadSwitchInProgress.current = false;
+        selectedThreadId.current = null;
+        setSwitchingThreadId(null);
+        clearArtifactView();
+        clearThreadProjection();
+      }
+      await refreshThreads();
+      return true;
+    } catch (error) {
+      setThreadCatalogError(errorMessage(error));
+      return false;
+    } finally {
+      setThreadMutationKey((current) => current === key ? null : current);
+    }
+  }, [
+    clearArtifactView,
+    clearThreadProjection,
+    client,
+    pendingThreadRequestId,
+    refreshThreads,
+  ]);
+
   const listShares = useCallback((targetThreadId: string, signal?: AbortSignal) => (
     client.listShares(targetThreadId, signal)
   ), [client]);
@@ -1143,10 +1221,16 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     rawInput: string,
     disposition: SendDisposition = "steer",
     attachments: readonly InputAttachmentProjection[] = [],
+    explicitToolIds: readonly string[] = [],
   ) => {
-    const input = rawInput.trim() || (attachments.length > 0
+    const uniqueToolIds = [...new Set(explicitToolIds)];
+    const skillHints = uniqueToolIds
+      .filter((reference) => reference.startsWith("skill:"))
+      .map((reference) => `@${reference.slice("skill:".length)}`);
+    const userInput = rawInput.trim() || (attachments.length > 0
       ? "请查看并处理随消息发送的附件。"
       : "");
+    const input = [...skillHints, userInput].filter(Boolean).join(" ");
     if (!input || submittingRef.current || threadSwitchInProgress.current) return false;
     submittingRef.current = true;
     setSubmitting(true);
@@ -1176,11 +1260,13 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
         input,
         currentThreadId,
         attachments,
+        uniqueToolIds,
       )) {
         throw new Error("上一条消息待确认，请保留内容后重试。");
       }
       const operation = pendingRecord?.operation ?? support.module.createClientOperation({
             input,
+            explicitToolIds: uniqueToolIds,
             attachments,
             threadId: currentThreadId,
             threadMetadata: currentThreadId ? undefined : pendingNewThreadMetadata.current,
@@ -1789,6 +1875,9 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     accountUsage,
     refreshAccountUsage: () => refreshAccountUsage(),
     conversationUsage,
+    capabilityMentions,
+    capabilityMentionState,
+    refreshCapabilityMentions,
     refreshConversationUsage: () => {
       const activeThreadId = stateRef.current.thread?.thread_id;
       return activeThreadId ? refreshConversationUsage(activeThreadId) : Promise.resolve(false);
@@ -1818,6 +1907,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     unpinThread: (targetThreadId: string) => setThreadPinned(targetThreadId, false),
     archiveThread: (targetThreadId: string) => setThreadArchived(targetThreadId, true),
     restoreThread: (targetThreadId: string) => setThreadArchived(targetThreadId, false),
+    deleteThread,
     listShares,
     createShare,
     getShare,

@@ -1043,17 +1043,17 @@ function bootstrap(state) {
       snapshot_id: authenticated ? "models-ga" : null,
       chat: authenticated ? [{
         model_id: "ecorex-chat",
-        display_name: "GPT-5.6 Luna · 高推理",
+        display_name: "GPT-5.6 Luna · 最大推理",
         capabilities: ["chat", "tools", "reasoning"],
         aliases: ["chat", "default", "gpt-5.6-luna", "gpt5.6-luna"],
         is_default: true,
         model_policy: {
           schema_version: 1,
           policy_id: "ecorex-chat-gpt-5.6-luna",
-          policy_version: "1.1.0",
+          policy_version: "1.2.0",
           local_model_id: "ecorex-chat",
           upstream_model_id: "gpt-5.6-luna",
-          reasoning_effort: "high",
+          reasoning_effort: "max",
           context_management: {
             type: "compaction",
             compact_threshold_tokens: 272_000,
@@ -1079,17 +1079,17 @@ function bootstrap(state) {
         },
       }, {
         model_id: "ecorex-deepseek-v4-pro",
-        display_name: "DeepSeek V4 Pro",
+        display_name: "DeepSeek V4 Flash · 最大推理",
         capabilities: ["chat", "tools", "reasoning"],
-        aliases: ["deepseek", "deepseek-v4-pro"],
+        aliases: ["deepseek", "deepseek-v4-pro", "deepseek-v4-flash"],
         is_default: false,
         model_policy: {
           schema_version: 1,
-          policy_id: "ecorex-deepseek-v4-pro",
-          policy_version: "1.0.0",
+          policy_id: "ecorex-deepseek-v4-flash",
+          policy_version: "2.0.0",
           local_model_id: "ecorex-deepseek-v4-pro",
-          upstream_model_id: "deepseek-v4-pro",
-          reasoning_effort: "medium",
+          upstream_model_id: "deepseek-v4-flash",
+          reasoning_effort: "max",
           context_management: { type: "compaction", compact_threshold_tokens: 900_000 },
         },
       }, {
@@ -1166,7 +1166,7 @@ function bootstrap(state) {
     connectors: [],
     extensions: extensionCatalog(state),
     update: {
-      current_version: "0.3.0",
+      current_version: "0.3.1",
       state: "idle",
       target_version: null,
       release_id: null,
@@ -1182,23 +1182,42 @@ function bootstrap(state) {
 }
 
 function connectorCatalog() {
-  const definition = (connectorId, displayName) => ({
+  const definition = (connectorId, displayName, tier = "stable") => ({
     connector_id: connectorId,
     contract_version: "1.0",
     display_name: displayName,
-    description: `连接并使用${displayName}中的办公文档。`,
-    tier: "stable",
-    auth_kinds: ["oauth2"],
+    description: tier === "stable" ? `连接并使用${displayName}中的办公内容。` : `${displayName}消息渠道（Beta）`,
+    tier,
+    auth_kinds: tier === "stable" ? ["oauth2"] : ["app_credentials"],
     config_schema: {},
     actions: [],
     events: [],
-    icon_key: "link",
+    icon_key: connectorId,
   });
+  const betaChannels = [
+    ["dingtalk", "钉钉"],
+    ["wecom_bot", "企业微信智能机器人"],
+    ["wechatcom_app", "企业微信自建应用"],
+    ["wechat_kf", "微信客服"],
+    ["wechatmp", "微信公众号"],
+    ["wechatmp_service", "公众号客服"],
+    ["weixin", "微信"],
+    ["qq", "QQ"],
+    ["telegram", "Telegram"],
+    ["slack", "Slack"],
+    ["discord", "Discord"],
+  ];
   return {
     contract_version: "1.0",
     items: [
       { definition: definition("feishu", "飞书"), adapter_available: true, instances: [], unavailable_reason: null },
       { definition: definition("tencent-docs", "腾讯文档"), adapter_available: true, instances: [], unavailable_reason: null },
+      ...betaChannels.map(([connectorId, displayName]) => ({
+        definition: definition(connectorId, displayName, "beta"),
+        adapter_available: true,
+        instances: [],
+        unavailable_reason: null,
+      })),
     ],
   };
 }
@@ -1532,6 +1551,7 @@ function retouchChangeSummary(workspace) {
 }
 
 function projectionResponse(state, threadId) {
+  if (state.threads.find((candidate) => candidate.thread_id === threadId)?.status === "deleted") return null;
   return state.projections.get(threadId) ?? (
     state.projection?.thread.thread_id === threadId ? state.projection : null
   );
@@ -1956,6 +1976,26 @@ async function handleApi(holder, req, res, url) {
   }
   if (path === "/api/v1/update" && req.method === "GET") return json(res, 200, { update: bootstrap(state).update });
   if (path === "/api/v1/update/check" && req.method === "POST") return json(res, 200, { update: bootstrap(state).update });
+  if (path === "/api/v1/capability-mentions" && req.method === "GET") {
+    return json(res, 200, {
+      schema_version: 1,
+      snapshot_id: `mention_${"a".repeat(64)}`,
+      items: [
+        {
+          reference: "skill:office-documents",
+          label: "文档处理",
+          description: "精准调用文档读取、编辑与导出能力",
+          kind: "skill",
+        },
+        {
+          reference: "collaboration:feishu",
+          label: "飞书协作",
+          description: "精准调用飞书消息与协作能力",
+          kind: "collaboration",
+        },
+      ],
+    });
+  }
 
   if (path === "/api/v1/settings/permissions" && req.method === "PUT") {
     if (!state.authenticated) return apiError(res, 401, "managed_session_unavailable", "Managed login is required");
@@ -1972,8 +2012,14 @@ async function handleApi(holder, req, res, url) {
   }
 
   if (path === "/api/v1/threads" && req.method === "GET") {
+    const status = url.searchParams.get("status") || "active";
+    if (!["active", "archived", "all"].includes(status)) {
+      return apiError(res, 422, "invalid_thread_status", "Unknown thread status");
+    }
     return json(res, 200, {
-      items: state.threads.map((source) => threadCatalogItem(state, source)),
+      items: state.threads
+        .filter((source) => source.status !== "deleted" && (status === "all" || source.status === status))
+        .map((source) => threadCatalogItem(state, source)),
       next_cursor: null,
     });
   }
@@ -2017,6 +2063,33 @@ async function handleApi(holder, req, res, url) {
     selected.metadata = { ...selected.metadata, pinned: selected.pinned };
     const projection = projectionResponse(state, threadId);
     if (projection) projection.thread = selected;
+    return json(res, 200, threadCatalogItem(state, selected));
+  }
+
+  const archiveThreadMatch = path.match(/^\/api\/v1\/threads\/([^/]+)\/(archive|restore)$/);
+  if (archiveThreadMatch && req.method === "POST") {
+    const threadId = decodeURIComponent(archiveThreadMatch[1]);
+    const selected = state.threads.find((candidate) => candidate.thread_id === threadId);
+    if (!selected || selected.status === "deleted") {
+      return apiError(res, 404, "thread_not_found", "Thread not found");
+    }
+    selected.status = archiveThreadMatch[2] === "archive" ? "archived" : "active";
+    selected.updated_at = new Date().toISOString();
+    return json(res, 200, threadCatalogItem(state, selected));
+  }
+
+  const deleteThreadMatch = path.match(/^\/api\/v1\/threads\/([^/]+)$/);
+  if (deleteThreadMatch && req.method === "DELETE") {
+    const threadId = decodeURIComponent(deleteThreadMatch[1]);
+    const selected = state.threads.find((candidate) => candidate.thread_id === threadId);
+    if (!selected || selected.status === "deleted") {
+      return apiError(res, 404, "thread_not_found", "Thread not found");
+    }
+    if (selected.status !== "archived") {
+      return apiError(res, 409, "thread_not_archived", "Archive the thread before deleting it");
+    }
+    selected.status = "deleted";
+    selected.updated_at = new Date().toISOString();
     return json(res, 200, threadCatalogItem(state, selected));
   }
 

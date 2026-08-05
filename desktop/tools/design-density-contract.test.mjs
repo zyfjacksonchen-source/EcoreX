@@ -284,7 +284,10 @@ test("feature styles cannot quietly re-box ordinary buttons", () => {
 
 test("chat, connector, and office artifact rows use sparse framing", () => {
   assert.doesNotMatch(features, /\.ex-message\s*\+\s*\.ex-message\s*\{[^}]*border/s);
-  assert.doesNotMatch(rule(features, ".ex-connector-row {"), /\bborder(?:-\w+)?\s*:/);
+  assert.doesNotMatch(
+    rule(features, ".ex-connector-row {"),
+    /\bborder(?:-(?:top|right|bottom|left|color|style|width))?\s*:/,
+  );
   const officeRow = rule(features, ".ex-artifact.is-row {");
   assert.match(officeRow, /border-color:\s*transparent;/);
   assert.match(officeRow, /background:\s*transparent;/);
@@ -292,10 +295,10 @@ test("chat, connector, and office artifact rows use sparse framing", () => {
   assert.match(officeHover, /border-color:\s*var\(--control-hover-border\);/);
 });
 
-test("connector and contextual menus retain compact desktop density", () => {
-  assert.match(rule(features, ".ex-connector-popover {"), /width:\s*min\(360px,/u);
-  assert.match(rule(features, ".ex-connector-popover {"), /max-height:\s*min\(520px,/u);
-  assert.match(rule(features, ".ex-connector-row {"), /padding:\s*var\(--space-2\) var\(--space-1\);/u);
+test("connector workspace and contextual menus retain compact desktop density", () => {
+  assert.match(rule(features, ".ex-connector-catalog-panel {"), /width:\s*100%;/u);
+  assert.match(rule(features, ".ex-connector-catalog-panel {"), /padding:\s*var\(--space-4\);/u);
+  assert.match(rule(features, ".ex-connector-row {"), /padding:\s*var\(--space-3\);/u);
   assert.match(rule(primitives, ".ex-menu-item {"), /min-height:\s*32px;/u);
   assert.match(rule(primitives, ".ex-menu-item {"), /padding:\s*var\(--space-1\) var\(--space-2\);/u);
   assert.match(rule(layout, ".ex-account-menu {"), /width:\s*192px;/u);

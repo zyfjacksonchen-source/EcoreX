@@ -628,6 +628,38 @@ class ChatChannel(Channel):
                         semaphore.release()
             time.sleep(0.2)
 
+    def cancel_message(self, session_id: str, message_id: str):
+        """Cancel one channel message without disturbing later queued work."""
+        removed = 0
+        with self.lock:
+            session = self.sessions.get(session_id)
+            if session is not None:
+                context_queue = session[0]
+                kept = []
+                for _ in range(context_queue.qsize()):
+                    context = context_queue.get_nowait()
+                    context_queue.task_done()
+                    message = context.get("msg") if context is not None else None
+                    if getattr(message, "msg_id", None) == message_id:
+                        removed += 1
+                        self._release_context_dedupe_key(context)
+                    else:
+                        kept.append(context)
+                for context in kept:
+                    context_queue.put(context)
+
+        from agent.protocol import get_cancel_registry
+
+        active = get_cancel_registry().cancel_request(message_id)
+        logger.info(
+            "[chat_channel] message recall: session_hash=%s, message_hash=%s, queued=%s, active=%s",
+            _summary_hash(session_id),
+            _summary_hash(message_id),
+            removed,
+            active,
+        )
+        return removed, active
+
     # 取消session_id对应的所有任务，只能取消排队的消息和已提交线程池但未执行的任务
     def cancel_session(self, session_id):
         with self.lock:

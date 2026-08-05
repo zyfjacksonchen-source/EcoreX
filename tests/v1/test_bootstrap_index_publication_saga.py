@@ -33,6 +33,7 @@ from ecorex.control_plane.repository import (
 from ecorex.control_plane.schema import migrate_control_plane_database
 from ecorex.release.public_index import (
     public_bootstrap_authority_signing_bytes,
+    stable_pointer_sequence,
 )
 
 
@@ -133,8 +134,9 @@ def _index_bytes(
         "version": "1.0.0",
         "build_digest": build_digest,
     }
+    sequence = stable_pointer_sequence("1.0.0")
     authority_payload = public_bootstrap_authority_signing_bytes(
-        sequence=1,
+        sequence=sequence,
         revision=release_id,
         target=target,
     )
@@ -176,7 +178,7 @@ def _index_bytes(
         "trust": "untrusted-discovery-hint",
         "status": "published",
         "authority": {
-            "sequence": 1,
+            "sequence": sequence,
             "revision": release_id,
             "target": target,
             "signature": release_signature,
@@ -500,7 +502,7 @@ def test_same_sequence_refresh_requires_newer_window_and_never_signals_rollout(
         actor=actor,
         client_request_id="activate-refresh",
     )
-    assert refresh_active["active_sequence"] == active["active_sequence"] == 1
+    assert refresh_active["active_sequence"] == active["active_sequence"] == stable_pointer_sequence("1.0.0")
     assert (
         refresh_active["active_activation_record_id"]
         != active["active_activation_record_id"]
@@ -583,7 +585,7 @@ def test_freshness_refresher_renews_near_expiry_without_rollout_signal(
         "release-stable-" + "a" * 24,
         now=now,
     )
-    assert proof["sequence"] == original["active_sequence"] == 1
+    assert proof["sequence"] == original["active_sequence"] == stable_pointer_sequence("1.0.0")
     assert proof["target"] == original["active_target"]
     assert proof["expires_at"] == (now + timedelta(hours=24)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"

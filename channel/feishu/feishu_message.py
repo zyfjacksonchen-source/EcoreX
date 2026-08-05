@@ -37,6 +37,7 @@ class FeishuMessage(ChatMessage):
         self.msg_id = msg.get("message_id")
         self.create_time = msg.get("create_time")
         self.is_group = is_group
+        self.quoted_content = ""
         msg_type = msg.get("message_type")
 
         if msg_type == "text":
@@ -272,6 +273,9 @@ class FeishuMessage(ChatMessage):
         else:
             raise NotImplementedError("Unsupported message type: Type:{} ".format(msg_type))
 
+        if self.ctype == ContextType.TEXT:
+            self.quoted_content = self._fetch_quoted_content(msg.get("parent_id"))
+
         self.from_user_id = sender.get("sender_id").get("open_id")
         self.to_user_id = event.get("app_id")
         if is_group:
@@ -284,3 +288,91 @@ class FeishuMessage(ChatMessage):
             # 私聊
             self.other_user_id = self.from_user_id
             self.actual_user_id = self.from_user_id
+
+    def content_with_quote(self) -> str:
+        if not self.quoted_content:
+            return self.content
+        return "[Quoted message]\n{}\n[/Quoted message]\n\n{}".format(
+            self.quoted_content,
+            self.content,
+        )
+
+    def _fetch_quoted_content(self, parent_id: str) -> str:
+        if not parent_id or not self.access_token:
+            return ""
+        url = "https://open.feishu.cn/open-apis/im/v1/messages/{}".format(parent_id)
+        headers = {"Authorization": "Bearer " + self.access_token}
+        try:
+            response = requests.get(
+                url=url,
+                headers=headers,
+                params={"card_msg_content_type": "raw_card_content"},
+                timeout=(5, 10),
+            )
+            if response.status_code != 200:
+                logger.warning(
+                    "[FeiShu] quote fetch failed, parent_ref=%s, status=%s",
+                    _feishu_msg_log_ref(parent_id),
+                    response.status_code,
+                )
+                return ""
+            body = response.json()
+            items = (body.get("data") or {}).get("items") or []
+            if body.get("code") != 0 or not items:
+                return ""
+            return self._extract_quoted_text(items[0])[:12000]
+        except Exception as exc:
+            logger.warning(
+                "[FeiShu] quote fetch error, parent_ref=%s, error_type=%s",
+                _feishu_msg_log_ref(parent_id),
+                type(exc).__name__,
+            )
+            return ""
+
+    @staticmethod
+    def _extract_quoted_text(item: dict) -> str:
+        msg_type = item.get("msg_type")
+        raw_content = (item.get("body") or {}).get("content") or ""
+        try:
+            content = json.loads(raw_content)
+        except (TypeError, ValueError):
+            return ""
+        if msg_type == "text":
+            return str(content.get("text") or "").strip()
+        if msg_type == "post":
+            if "content" not in content:
+                localized = next(
+                    (value for value in content.values() if isinstance(value, dict)),
+                    None,
+                )
+                if localized:
+                    content = localized
+            parts = []
+            title = str(content.get("title") or "").strip()
+            if title:
+                parts.append(title)
+            for block in content.get("content") or []:
+                if not isinstance(block, list):
+                    continue
+                for element in block:
+                    if not isinstance(element, dict):
+                        continue
+                    tag = element.get("tag")
+                    text = str(element.get("text") or "").strip()
+                    if tag == "text" and text:
+                        parts.append(text)
+                    elif tag == "a" and text:
+                        href = str(element.get("href") or "").strip()
+                        parts.append("{} ({})".format(text, href) if href else text)
+                    elif tag == "img":
+                        parts.append("[图片]")
+            return "\n".join(parts).strip()
+        if msg_type == "image":
+            return "[图片]"
+        if msg_type == "file":
+            return "[文件: {}]".format(content.get("file_name") or "file")
+        if msg_type == "audio":
+            return "[语音]"
+        if msg_type == "media":
+            return "[视频: {}]".format(content.get("file_name") or "video")
+        return ""

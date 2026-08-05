@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     from ecorex.artifacts import ArtifactService
     from ecorex.extensions.service import ExtensionService
     from ecorex.extensions.mcp import MCPRuntimeBinding
+    from ecorex.extensions.mcp_oauth import MCPOAuthService
 
 from .snapshots import RuntimeSnapshotRepository, TurnSnapshotContext
 from .connector_execution import (
@@ -312,6 +313,7 @@ class RuntimeComposition:
         controlled_skill_runner: Any | None = None,
         extension_governance_enabled: bool | None = None,
         mcp_runtime_bindings: tuple["MCPRuntimeBinding", ...] = (),
+        mcp_oauth_service: "MCPOAuthService | None" = None,
         tenant_id: str = "local-user",
         enforce_admin_tool_denies: bool = False,
         persist_startup_snapshots: bool = True,
@@ -419,6 +421,7 @@ class RuntimeComposition:
                 effective_mcp_bindings,
                 snapshot_resolver=self._extension_snapshot_for_turn,
                 tenant_resolver=lambda _context: mcp_tenant_id,
+                oauth_service=mcp_oauth_service,
             )
             if effective_mcp_bindings
             else None
@@ -1237,6 +1240,20 @@ class RuntimeComposition:
     ) -> tuple[str, ...]:
         explicit: list[str] = []
         for reference in structured:
+            if reference.startswith("skill:"):
+                extension_id = reference.removeprefix("skill:")
+                if (
+                    contribution_snapshot is None
+                    or not any(
+                        skill.extension_id == extension_id
+                        for skill in contribution_snapshot.skills
+                    )
+                ):
+                    raise CapabilityIntentError(
+                        f"explicit Skill selection is unavailable: {extension_id!r}"
+                    )
+                explicit.append("skill_search")
+                continue
             try:
                 self.capability_registry.resolve(reference)
             except UnknownCapabilityError:

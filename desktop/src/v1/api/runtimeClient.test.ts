@@ -290,6 +290,7 @@ function messageOperation(input: {
   clientMessageId?: string;
   now?: Date;
   ttlMilliseconds?: number;
+  explicitToolIds?: string[];
 }) {
   return createClientOperation({
     input: input.text ?? "hello",
@@ -304,6 +305,7 @@ function messageOperation(input: {
     clientMessageId: input.clientMessageId,
     now: input.now,
     ttlMilliseconds: input.ttlMilliseconds,
+    explicitToolIds: input.explicitToolIds,
   });
 }
 
@@ -391,6 +393,26 @@ test("bootstrap rejects an unknown extension enum before it reaches feature stat
         && error.contract === "BootstrapResponse"
         && error.path === "extensions.items[0].health",
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("capability mention catalog admits only the typed backend projection", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({
+    schema_version: 1,
+    snapshot_id: `mention_${"a".repeat(64)}`,
+    items: [{
+      reference: "skill:local.review",
+      label: "材料复核",
+      description: "核对材料内容",
+      kind: "skill",
+    }],
+  });
+  try {
+    const catalog = await new RuntimeClient({ apiBase: "http://127.0.0.1:8765" }).capabilityMentions();
+    assert.equal(catalog.items[0]?.reference, "skill:local.review");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -796,9 +818,7 @@ test("extension catalog and actions use backend projections, revision fencing, a
       "extension-stable-retry",
     );
     const installed = await client.installLocalSkill(
-      "local.office-helper",
       "UEsDBA==",
-      0,
       "extension-local-install",
     );
     const configured = await client.configureSkill(
@@ -829,9 +849,7 @@ test("extension catalog and actions use backend projections, revision fencing, a
     );
     assert.equal(requests[2].headers.get("x-ecorex-csrf"), bootstrap.csrf_token);
     assert.deepEqual(JSON.parse(await requests[2].text()), {
-      extension_id: "local.office-helper",
       bundle_base64: "UEsDBA==",
-      expected_revision: 0,
       client_request_id: "extension-local-install",
     });
     assert.equal(
@@ -1422,7 +1440,10 @@ test("turn mutations always send separate Agent and image model identities", asy
   };
   try {
     const client = new RuntimeClient({ apiBase: "http://127.0.0.1:8765" });
-    await client.createTurn("thread-one", messageOperation({ text: "create" }));
+    await client.createTurn("thread-one", messageOperation({
+      text: "create",
+      explicitToolIds: ["vision", "skill:local.review"],
+    }));
     await client.steerTurn(messageOperation({
       text: "steer",
       activeTurnId: "turn-one",
@@ -1440,11 +1461,12 @@ test("turn mutations always send separate Agent and image model identities", asy
     }));
 
     assert.equal(requests.length, 4);
-    for (const request of requests) {
+    for (const [index, request] of requests.entries()) {
       const body = JSON.parse(await request.clone().text());
       assert.equal(body.agent_model_id, "ecorex-chat");
       assert.equal(body.image_model_id, "gpt-image-2");
       assert.equal(body.model, undefined);
+      assert.deepEqual(body.explicit_tool_ids, index === 0 ? ["vision", "skill:local.review"] : []);
     }
   } finally {
     globalThis.fetch = originalFetch;
@@ -1472,6 +1494,7 @@ test("client operations freeze the active Turn, models, and request identity", (
       thumbnail_url: null,
       created_at: "2026-07-11T00:00:00.000Z",
     }],
+    explicitToolIds: ["vision", "skill:local.review"],
     operationId: "operation_frozen",
     clientMessageId: "message_frozen",
     now: new Date("2026-07-11T00:00:00Z"),
@@ -1486,6 +1509,7 @@ test("client operations freeze the active Turn, models, and request identity", (
   assert.equal(operation.client_message_id, "message_frozen");
   assert.equal(operation.observed_after_seq, 19);
   assert.equal(operation.attachments[0]?.attachment_id, "attachment_frozen");
+  assert.deepEqual(operation.explicit_tool_ids, ["vision", "skill:local.review"]);
   assert.equal(Object.isFrozen(operation), true);
   assert.equal(Object.isFrozen(operation.models), true);
   assert.equal(Object.isFrozen(operation.turn), true);
@@ -1897,6 +1921,53 @@ test("connector catalog and lifecycle mutations use strict authenticated routes"
   }
 });
 
+test("remote MCP OAuth uses authenticated status, begin, and clear routes", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Request[] = [];
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    if (request.method === "GET") {
+      return Response.json({
+        items: [{
+          service_id: "remote.mcp",
+          state: "authorization_required",
+          expires_at: null,
+          scope: "mcp.read",
+        }],
+      });
+    }
+    if (request.method === "POST") {
+      return Response.json({
+        service_id: "remote.mcp",
+        state: "authorizing",
+        authorization_url: "https://auth.example.test/authorize?state=opaque",
+        expires_at: 1_800_000_000,
+      });
+    }
+    return new Response(null, { status: 204 });
+  };
+  try {
+    const client = new RuntimeClient({
+      apiBase: "http://127.0.0.1:8765",
+      bearerToken: "mcp-runtime-token",
+      csrfToken: "mcp-csrf-token",
+    });
+    const statuses = await client.mcpOAuthStatuses();
+    const challenge = await client.beginMcpOAuth("remote/mcp");
+    await client.clearMcpOAuth("remote/mcp");
+
+    assert.equal(statuses.items[0]?.scope, "mcp.read");
+    assert.equal(challenge.state, "authorizing");
+    assert.match(requests[1]?.url ?? "", /mcp\/oauth\/remote%2Fmcp\/begin$/u);
+    assert.equal(requests[1]?.headers.get("x-ecorex-csrf"), "mcp-csrf-token");
+    assert.equal(requests[2]?.method, "DELETE");
+    assert.equal(requests[2]?.headers.get("x-ecorex-csrf"), "mcp-csrf-token");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("connector view helpers preserve tier, OAuth, health, and URL authority", () => {
   const sections = connectorSections(connectorCatalog.items);
   assert.deepEqual(sections.map((section) => section.tier), ["stable", "beta"]);
@@ -1968,7 +2039,9 @@ test("thread catalog mutations preserve backend order and authenticated idempote
     }
     return Response.json({
       ...thread,
-      status: request.url.endsWith("/archive") ? "archived" : "active",
+      status: request.method === "DELETE"
+        ? "deleted"
+        : request.url.endsWith("/archive") ? "archived" : "active",
     });
   };
   try {
@@ -1981,6 +2054,7 @@ test("thread catalog mutations preserve backend order and authenticated idempote
     await client.renameThread(thread.thread_id, "新名称", "rename-stable");
     await client.setThreadArchived(thread.thread_id, true, "archive-stable");
     await client.setThreadArchived(thread.thread_id, false, "restore-stable");
+    await client.deleteThread(thread.thread_id, "delete-stable");
 
     assert.deepEqual(listed.items, [thread]);
     assert.equal(listed.next_cursor, "cursor-signed");
@@ -1995,12 +2069,17 @@ test("thread catalog mutations preserve backend order and authenticated idempote
     });
     assert.match(requests[2]!.url, /threads\/thr%20%2F%20one\/archive$/);
     assert.match(requests[3]!.url, /threads\/thr%20%2F%20one\/restore$/);
+    assert.match(requests[4]!.url, /threads\/thr%20%2F%20one$/);
+    assert.equal(requests[4]!.method, "DELETE");
     const preferencePayload = JSON.parse(await requests[2]!.text());
     assert.deepEqual(preferencePayload, {
       client_request_id: "archive-stable",
     });
     assert.deepEqual(JSON.parse(await requests[3]!.text()), {
       client_request_id: "restore-stable",
+    });
+    assert.deepEqual(JSON.parse(await requests[4]!.text()), {
+      client_request_id: "delete-stable",
     });
     for (const request of requests.slice(1)) {
       assert.equal(request.headers.get("x-ecorex-csrf"), bootstrap.csrf_token);

@@ -1,9 +1,9 @@
 param(
-    [string]$PackagePath = "release-artifacts/EcoreX_0.3.0-webui-windows-x64.zip",
-    [string]$OutputPath = "docs/v0.3.0/artifacts/webui-release-cdp-smoke.json",
-    [string]$ScreenshotPath = "docs/v0.3.0/artifacts/webui-release-cdp-smoke.png",
+    [string]$PackagePath = "release-artifacts/EcoreX_0.3.1-webui-windows-x64.zip",
+    [string]$OutputPath = "docs/v0.3.1/artifacts/webui-release-cdp-smoke.json",
+    [string]$ScreenshotPath = "docs/v0.3.1/artifacts/webui-release-cdp-smoke.png",
     [string]$SmokeRoot = "tmp/v030-webui-release-cdp-smoke",
-    [string]$ExpectedVersion = "0.3.0",
+    [string]$ExpectedVersion = "0.3.1",
     [int]$Port = 9949,
     [int]$TimeoutSeconds = 120
 )
@@ -162,7 +162,7 @@ $stderrLogPath = Join-Path $runtimeDir "run.stderr.log"
 $nodeRawOutputPath = Join-Path $smokeRootResolved "cdp-raw.json"
 $process = $null
 $result = [ordered]@{
-    schema = "ecorex.v0.3.0.release-package-cdp-smoke.v1"
+    schema = "ecorex.v0.3.1.release-package-cdp-smoke.v1"
     version = $ExpectedVersion
     status = "FAIL"
     generatedAt = (Get-Date).ToUniversalTime().ToString("o")

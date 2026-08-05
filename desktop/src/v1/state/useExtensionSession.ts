@@ -5,9 +5,11 @@ import type {
   ExtensionActionId,
   ExtensionCatalogSnapshot,
   ExtensionProjection,
+  MCPOAuthStatusProjection,
   SkillHubCardProjection,
   SkillHubDetailProjection,
 } from "../api/contracts.ts";
+import { safeConnectorAuthorizationUrl } from "./connectors.ts";
 import {
   createClientRequestId,
   RuntimeApiError,
@@ -65,6 +67,8 @@ export function useExtensionSession({
   );
   const [extensionError, setExtensionError] = useState<string | null>(null);
   const [extensionInstallBusy, setExtensionInstallBusy] = useState(false);
+  const [mcpOAuthStatuses, setMcpOAuthStatuses] = useState<Record<string, MCPOAuthStatusProjection>>({});
+  const [mcpOAuthBusy, setMcpOAuthBusy] = useState<string | null>(null);
   const [skillHubItems, setSkillHubItems] = useState<SkillHubCardProjection[]>([]);
   const [skillHubState, setSkillHubState] = useState<ExtensionLoadState>("idle");
   const [skillHubError, setSkillHubError] = useState<string | null>(null);
@@ -243,14 +247,8 @@ export function useExtensionSession({
   }, [acceptCatalog, client, formatError, transitionCatalogState]);
 
   const installLocalSkill = useCallback(async (
-    extensionId: string,
     file: File,
   ): Promise<boolean> => {
-    const normalizedId = extensionId.trim();
-    if (!/^[a-z][a-z0-9_.-]{1,127}$/.test(normalizedId)) {
-      setExtensionError("扩展 ID 需以小写字母开头，只能包含小写字母、数字及 ._-。");
-      return false;
-    }
     if (!file.name.toLocaleLowerCase("en-US").endsWith(".zip")) {
       setExtensionError("本地技能安装包必须是 .zip 文件。");
       return false;
@@ -263,13 +261,12 @@ export function useExtensionSession({
       setExtensionError("扩展目录尚未就绪或正在执行其他操作。");
       return false;
     }
-    const existing = extensionSnapshot?.items.find((item) => item.extension_id === normalizedId);
-    const expectedRevision = existing?.revision ?? 0;
-    const requestKey = `local-install:${normalizedId}:${expectedRevision}:${file.name}:${file.size}:${file.lastModified}`;
+    const operationId = "local-skill-install";
+    const requestKey = `local-install:${file.name}:${file.size}:${file.lastModified}`;
     const clientRequestId = requestIds.current.get(requestKey)
       ?? createClientRequestId("extension_install_local");
     requestIds.current.set(requestKey, clientRequestId);
-    operationLocks.current.add(normalizedId);
+    operationLocks.current.add(operationId);
     setExtensionInstallBusy(true);
     setExtensionError(null);
     catalogAuthority.current = "extensions";
@@ -277,14 +274,9 @@ export function useExtensionSession({
     try {
       const bundleBase64 = await readFileBase64(file);
       const response = await client.installLocalSkill(
-        normalizedId,
         bundleBase64,
-        expectedRevision,
         clientRequestId,
       );
-      if (response.extension.extension_id !== normalizedId) {
-        throw new RuntimeApiError("技能状态与当前安装操作不匹配。", 502, "extension_projection_mismatch");
-      }
       catalogGeneration.current += 1;
       acceptCatalog(response.extensions);
       requestIds.current.delete(requestKey);
@@ -297,10 +289,82 @@ export function useExtensionSession({
       setExtensionError(`本地技能安装失败：${formatError(error)} 未通过检查的内容不会被执行或启用。`);
       return false;
     } finally {
-      operationLocks.current.delete(normalizedId);
+      operationLocks.current.delete(operationId);
       setExtensionInstallBusy(false);
     }
-  }, [acceptCatalog, client, extensionSnapshot, formatError, refreshExtensions]);
+  }, [acceptCatalog, client, formatError, refreshExtensions]);
+
+  const refreshMcpOAuth = useCallback(async (
+    signal?: AbortSignal,
+  ): Promise<Record<string, MCPOAuthStatusProjection>> => {
+    try {
+      const response = await client.mcpOAuthStatuses(signal);
+      const next = Object.fromEntries(response.items.map((item) => [item.service_id, item]));
+      setMcpOAuthStatuses(next);
+      return next;
+    } catch (error) {
+      if (isAbortError(error)) return {};
+      if (error instanceof RuntimeApiError && error.status === 404) {
+        setMcpOAuthStatuses({});
+        return {};
+      }
+      setExtensionError(`扩展服务授权状态读取失败：${formatError(error)}`);
+      return {};
+    }
+  }, [client, formatError]);
+
+  const beginMcpOAuth = useCallback(async (serviceId: string): Promise<boolean> => {
+    if (mcpOAuthBusy) return false;
+    const popup = window.open("about:blank", "_blank", "popup,width=720,height=780");
+    if (!popup) {
+      setExtensionError("浏览器阻止了授权窗口，请允许弹窗后重试。");
+      return false;
+    }
+    setMcpOAuthBusy(serviceId);
+    setExtensionError(null);
+    try {
+      const challenge = await client.beginMcpOAuth(serviceId);
+      if (challenge.service_id !== serviceId || challenge.expires_at * 1000 <= Date.now()) {
+        throw new Error("扩展服务返回了无效或过期的授权会话。");
+      }
+      popup.location.href = safeConnectorAuthorizationUrl(challenge.authorization_url);
+      try {
+        popup.opener = null;
+        popup.focus();
+      } catch {
+        // The cross-origin authorization window is intentionally opaque.
+      }
+      for (let attempt = 0; attempt < 90; attempt += 1) {
+        await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 750));
+        const current = await refreshMcpOAuth();
+        if (current[serviceId]?.state === "authorized") return true;
+      }
+      setExtensionError("授权状态尚未同步。完成登录后可点击“刷新授权状态”。");
+      return false;
+    } catch (error) {
+      try { popup.close(); } catch { /* ignored */ }
+      setExtensionError(`扩展服务授权未完成：${formatError(error)}`);
+      return false;
+    } finally {
+      setMcpOAuthBusy(null);
+    }
+  }, [client, formatError, mcpOAuthBusy, refreshMcpOAuth]);
+
+  const clearMcpOAuth = useCallback(async (serviceId: string): Promise<boolean> => {
+    if (mcpOAuthBusy) return false;
+    setMcpOAuthBusy(serviceId);
+    setExtensionError(null);
+    try {
+      await client.clearMcpOAuth(serviceId);
+      await refreshMcpOAuth();
+      return true;
+    } catch (error) {
+      setExtensionError(`取消扩展服务授权失败：${formatError(error)}`);
+      return false;
+    } finally {
+      setMcpOAuthBusy(null);
+    }
+  }, [client, formatError, mcpOAuthBusy, refreshMcpOAuth]);
 
   const refreshSkillHub = useCallback(async (
     query = "",
@@ -416,6 +480,8 @@ export function useExtensionSession({
     extensionError,
     extensionOperations,
     extensionInstallBusy,
+    mcpOAuthStatuses,
+    mcpOAuthBusy,
     clearExtensionError: () => setExtensionError(null),
     refreshExtensions,
     mutateExtension,
@@ -423,6 +489,9 @@ export function useExtensionSession({
       mutateExtension(extension, "configure", values)
     ),
     installLocalSkill,
+    refreshMcpOAuth,
+    beginMcpOAuth,
+    clearMcpOAuth,
     skillHubItems,
     skillHubState,
     skillHubError,

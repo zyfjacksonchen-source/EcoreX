@@ -25,6 +25,7 @@ import sys
 import tempfile
 from typing import Any
 import uuid
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -105,6 +106,8 @@ def _directory(path: Path, code: str) -> Path:
 
 
 def _require_tools(*, terminal_distribution: bool) -> None:
+    if terminal_distribution and platform.system() != "Darwin":
+        return
     if platform.system() != "Darwin":
         _fail("macos_host_required")
     tools = [
@@ -117,6 +120,40 @@ def _require_tools(*, terminal_distribution: bool) -> None:
     for tool in tools:
         if not Path(tool).is_file():
             _fail("macos_distribution_toolchain_missing")
+
+
+def _write_portable_zip(root: Path, output: Path) -> None:
+    try:
+        entries = [root, *sorted(root.rglob("*"))]
+        with zipfile.ZipFile(
+            output,
+            "x",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=9,
+            allowZip64=True,
+        ) as archive:
+            for path in entries:
+                if path.is_symlink() or not (path.is_dir() or path.is_file()):
+                    _fail("macos_package_tree_invalid")
+                name = path.relative_to(root.parent).as_posix()
+                if path.is_dir():
+                    info = zipfile.ZipInfo(name + "/")
+                    info.create_system = 3
+                    info.external_attr = (0o040755 << 16) | 0x10
+                    archive.writestr(info, b"")
+                    continue
+                info = zipfile.ZipInfo.from_file(path, name)
+                info.create_system = 3
+                mode = 0o100755 if path.name.endswith(".command") else 0o100644
+                info.external_attr = mode << 16
+                info.compress_type = zipfile.ZIP_DEFLATED
+                with path.open("rb") as source, archive.open(info, "w") as target:
+                    shutil.copyfileobj(source, target, length=1024 * 1024)
+        with zipfile.ZipFile(output, "r") as archive:
+            if archive.testzip() is not None:
+                _fail("macos_package_zip_invalid")
+    except (OSError, zipfile.BadZipFile):
+        _fail("macos_package_zip_invalid")
 
 
 def _verify_signed_slice(
@@ -283,6 +320,7 @@ def _verify_windows_partial_receipt(
 
 def build(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     terminal_distribution = bool(getattr(args, "terminal_distribution", False))
+    portable_terminal = terminal_distribution and platform.system() != "Darwin"
     _require_tools(terminal_distribution=terminal_distribution)
     if (
         args.version != __version__
@@ -442,22 +480,37 @@ def build(args: argparse.Namespace) -> tuple[Path, Path, Path]:
         for arch, slice_name in (("arm64", "arm64"), ("x64", "x86_64")):
             for kind, binary in (("bootstrap", "ecorex-bootstrap"), ("core", "ecorex")):
                 artifact = manifest.artifact(f"{kind}-macos-{arch}")
-                target = inspection / f"{kind}-{arch}"
-                target.mkdir(parents=True)
-                _run(
-                    "/usr/bin/ditto",
-                    "-x",
-                    "-k",
-                    str(release / artifact.file_name),
-                    str(target),
-                )
-                signed_binaries[f"{arch}/{binary}"] = (
-                    _verify_terminal_slice(target / "bin" / binary, slice_name)
-                    if terminal_distribution
-                    else _verify_signed_slice(
-                        target / "bin" / binary, slice_name, args.identity
+                if portable_terminal:
+                    receipt_sha256 = candidate_value.get("stage_receipts", {}).get(
+                        f"{kind}-macos-{arch}"
                     )
-                )
+                    if not isinstance(receipt_sha256, str) or re.fullmatch(
+                        r"[0-9a-f]{64}", receipt_sha256
+                    ) is None:
+                        _fail("macos_stage_receipt_invalid")
+                    signed_binaries[f"{arch}/{binary}"] = {
+                        "architecture": slice_name,
+                        "signature": "adhoc",
+                        "verification": "signed-candidate-stage-receipt",
+                        "stage_receipt_sha256": receipt_sha256,
+                    }
+                else:
+                    target = inspection / f"{kind}-{arch}"
+                    target.mkdir(parents=True)
+                    _run(
+                        "/usr/bin/ditto",
+                        "-x",
+                        "-k",
+                        str(release / artifact.file_name),
+                        str(target),
+                    )
+                    signed_binaries[f"{arch}/{binary}"] = (
+                        _verify_terminal_slice(target / "bin" / binary, slice_name)
+                        if terminal_distribution
+                        else _verify_signed_slice(
+                            target / "bin" / binary, slice_name, args.identity
+                        )
+                    )
         installer = package_root / "Install e-Mate WebUI.command"
         installer.write_text(
             '#!/bin/sh\nset -eu\nBASE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\ncase "$(uname -m)" in arm64) TARGET=arm64 ;; x86_64) TARGET=x64 ;; *) echo "e-Mate 不支持当前架构" >&2; exit 78 ;; esac\nDEST="${TMPDIR:-/tmp}/emate-bootstrap-$TARGET-$$"\nmkdir -m 700 "$DEST"\ntrap \'rm -rf "$DEST"\' EXIT HUP INT TERM\nARCHIVE=$(find "$BASE_DIR/signed" -maxdepth 1 -type f -name "ecorex-bootstrap-macos-$TARGET-*.zip" -print)\ntest -n "$ARCHIVE" && test "$(printf "%s\\n" "$ARCHIVE" | wc -l | tr -d " ")" = 1\n/usr/bin/ditto -x -k "$ARCHIVE" "$DEST"\nexec "$DEST/bin/ecorex-bootstrap" --local-release "$BASE_DIR/signed" "$@"\n',
@@ -465,19 +518,27 @@ def build(args: argparse.Namespace) -> tuple[Path, Path, Path]:
         )
         installer.chmod(0o755)
         package = staging / f"EcoreX_{args.version}-webui-macos-universal.zip"
-        _run(
-            "/usr/bin/ditto",
-            "-c",
-            "-k",
-            "--keepParent",
-            str(package_root),
-            str(package),
-        )
+        if portable_terminal:
+            _write_portable_zip(package_root, package)
+        else:
+            _run(
+                "/usr/bin/ditto",
+                "-c",
+                "-k",
+                "--keepParent",
+                str(package_root),
+                str(package),
+            )
         if terminal_distribution:
             distribution_mode = "terminal-command"
             developer_id = {
                 "hardened_runtime": False,
                 "signature_mode": "candidate-ad-hoc",
+                "verification_mode": (
+                    "signed-candidate-stage-receipt"
+                    if portable_terminal
+                    else "native-codesign"
+                ),
                 "signed_candidate_binaries": signed_binaries,
             }
             notarization = {

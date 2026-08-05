@@ -2,6 +2,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   AlertCircle,
+  ArchiveRestore,
   Bell,
   Copy,
   Ellipsis,
@@ -21,7 +22,6 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import type { ArtifactProjection } from "./api/contracts.ts";
 
-import { Composer } from "./components/Composer.tsx";
 import { IconButton } from "./components/IconButton.tsx";
 import { LazyFeatureBoundary } from "./components/LazyFeatureBoundary.tsx";
 import { LoginPage } from "./components/LoginPage.tsx";
@@ -39,6 +39,7 @@ import "./styles/features.css";
 import "./styles/plain-language.css";
 
 const loadArtifactPreviewDialog = () => import("./components/ArtifactPreviewDialog.tsx");
+const loadComposer = () => import("./components/Composer.tsx");
 const loadHomeDashboard = () => import("./components/HomeDashboard.tsx");
 const loadSidebar = () => import("./components/Sidebar.tsx");
 const loadSkillsWorkspace = () => import("./components/SkillsWorkspace.tsx");
@@ -50,6 +51,9 @@ const loadShareDialog = () => import("./components/ShareDialog.tsx");
 
 const ArtifactPreviewDialog = lazy(async () => ({
   default: (await loadArtifactPreviewDialog()).ArtifactPreviewDialog,
+}));
+const Composer = lazy(async () => ({
+  default: (await loadComposer()).Composer,
 }));
 const HomeDashboard = lazy(async () => ({
   default: (await loadHomeDashboard()).HomeDashboard,
@@ -519,47 +523,41 @@ export function AppV1() {
   );
 
   const composer = (
-    <Composer
-      prefillRequest={composerPrefill}
-      draft={composerDraft}
-      onDraftChange={setComposerDraft}
-      connectors={runtime.connectorCatalog}
-      connectorLoadState={runtime.connectorCatalogState}
-      connectorError={runtime.connectorError}
-      connectorNotice={runtime.connectorNotice}
-      connectorOperations={runtime.connectorOperations}
-      onRefreshConnectors={runtime.refreshConnectors}
-      onConnectConnector={runtime.connectConnector}
-      onReconnectConnector={runtime.reconnectConnector}
-      onCheckConnector={runtime.refreshConnectorHealth}
-      onDisconnectConnector={runtime.disconnectConnector}
-      onClearConnectorError={runtime.clearConnectorError}
-      onClearConnectorNotice={runtime.clearConnectorNotice}
-      active={runtime.activeTurn !== null}
-      submitting={runtime.submitting || Boolean(runtime.switchingThreadId)}
-      modelAvailable={modelAvailable}
-      sendUnavailableReason={modelAvailable ? null : modelUnavailable}
-      chatModels={bootstrap?.models.chat || []}
-      imageModels={bootstrap?.models.image || []}
-      chatModel={runtime.chatModel}
-      imageModel={runtime.imageModel}
-      quota={bootstrap?.quota || null}
-      usage={runtime.conversationUsage}
-      permissionLabel={accessLabel}
-      permissionDescription={accessDescription}
-      onChatModelChange={runtime.setChatModel}
-      onImageModelChange={runtime.setImageModel}
-      onOpenPermissionSettings={() => {
-        captureFeatureTrigger(settingsReturnFocusRef);
-        warmFeature(loadSettingsDialog);
-        setSettingsOpen(true);
-      }}
-      onSend={runtime.sendMessage}
-      onUploadAttachment={runtime.uploadInputAttachment}
-      onLoadAttachment={runtime.loadInputAttachment}
-      onLoadAttachmentThumbnail={runtime.loadInputAttachmentThumbnail}
-      onInterrupt={() => void runtime.interrupt()}
-    />
+    <Suspense fallback={<section className="ex-home-loading" role="status">正在准备输入框…</section>}>
+      <Composer
+        prefillRequest={composerPrefill}
+        onPrefillConsumed={() => setComposerPrefill(null)}
+        draft={composerDraft}
+        onDraftChange={setComposerDraft}
+        active={runtime.activeTurn !== null}
+        submitting={runtime.submitting || Boolean(runtime.switchingThreadId)}
+        modelAvailable={modelAvailable}
+        sendUnavailableReason={modelAvailable ? null : modelUnavailable}
+        chatModels={bootstrap?.models.chat || []}
+        imageModels={bootstrap?.models.image || []}
+        chatModel={runtime.chatModel}
+        imageModel={runtime.imageModel}
+        quota={bootstrap?.quota || null}
+        usage={runtime.conversationUsage}
+        permissionLabel={accessLabel}
+        permissionDescription={accessDescription}
+        capabilityMentions={runtime.capabilityMentions}
+        capabilityMentionState={runtime.capabilityMentionState}
+        onChatModelChange={runtime.setChatModel}
+        onImageModelChange={runtime.setImageModel}
+        onOpenPermissionSettings={() => {
+          captureFeatureTrigger(settingsReturnFocusRef);
+          warmFeature(loadSettingsDialog);
+          setSettingsOpen(true);
+        }}
+        onSend={runtime.sendMessage}
+        onRefreshCapabilityMentions={() => runtime.refreshCapabilityMentions()}
+        onUploadAttachment={runtime.uploadInputAttachment}
+        onLoadAttachment={runtime.loadInputAttachment}
+        onLoadAttachmentThumbnail={runtime.loadInputAttachmentThumbnail}
+        onInterrupt={() => void runtime.interrupt()}
+      />
+    </Suspense>
   );
 
   return (
@@ -621,6 +619,7 @@ export function AppV1() {
           onUnpinThread={runtime.unpinThread}
           onArchiveThread={runtime.archiveThread}
           onRestoreThread={runtime.restoreThread}
+          onDeleteThread={runtime.deleteThread}
           onRefreshThreads={runtime.refreshThreads}
           onClearCatalogError={runtime.clearThreadCatalogError}
           onOpenSettings={() => {
@@ -648,6 +647,20 @@ export function AppV1() {
           {skillsOpen ? (
             <Suspense fallback={<section className="ex-skills-loading" role="status">正在打开技能…</section>}>
               <SkillsWorkspace
+                connectorRuntime={{
+                  catalog: runtime.connectorCatalog,
+                  loadState: runtime.connectorCatalogState,
+                  error: runtime.connectorError,
+                  notice: runtime.connectorNotice,
+                  operations: runtime.connectorOperations,
+                  onRefresh: runtime.refreshConnectors,
+                  onConnect: runtime.connectConnector,
+                  onReconnect: runtime.reconnectConnector,
+                  onHealthCheck: runtime.refreshConnectorHealth,
+                  onDisconnect: runtime.disconnectConnector,
+                  onClearError: runtime.clearConnectorError,
+                  onClearNotice: runtime.clearConnectorNotice,
+                }}
                 snapshot={runtime.extensionSnapshot}
                 loadState={runtime.extensionCatalogState}
                 error={runtime.extensionError}
@@ -658,6 +671,11 @@ export function AppV1() {
                 onAction={runtime.mutateExtension}
                 onConfigure={runtime.configureSkill}
                 onInstallLocalSkill={runtime.installLocalSkill}
+                mcpOAuthStatuses={runtime.mcpOAuthStatuses}
+                mcpOAuthBusy={runtime.mcpOAuthBusy}
+                onRefreshMcpOAuth={runtime.refreshMcpOAuth}
+                onBeginMcpOAuth={runtime.beginMcpOAuth}
+                onClearMcpOAuth={runtime.clearMcpOAuth}
                 hubItems={runtime.skillHubItems}
                 hubState={runtime.skillHubState}
                 hubError={runtime.skillHubError}
@@ -814,7 +832,15 @@ export function AppV1() {
                   projectPickerBusy={runtime.projectPickerBusy}
                   usage={runtime.accountUsage}
                   onSelectProject={runtime.newTask}
-                  onPickProject={() => void runtime.pickProject()}
+                  onPickProject={runtime.pickProject}
+                  onOpenThread={(threadId) => {
+                    void runtime.openThread(threadId).then((opened) => {
+                      if (!opened) return;
+                      setSkillsOpen(false);
+                      setCreativeOpen(false);
+                      setSidebarOpen(false);
+                    });
+                  }}
                   onTemplate={(text) => {
                     setComposerPrefill({ key: crypto.randomUUID(), text });
                     setCreativeOpen(false);
@@ -867,7 +893,19 @@ export function AppV1() {
                   />
                 </Suspense>
               ) : null}
-              {composer}
+              {runtime.state.thread?.status === "archived" ? (
+                <section className="ex-archived-readonly" role="status">
+                  <span>此任务已归档，仅可查看。</span>
+                  <button
+                    className="ex-button"
+                    type="button"
+                    disabled={runtime.threadMutationKey === `restore:${currentThreadId}`}
+                    onClick={() => currentThreadId && void runtime.restoreThread(currentThreadId)}
+                  >
+                    <ArchiveRestore aria-hidden="true" />恢复后继续
+                  </button>
+                </section>
+              ) : composer}
             </div>
           ) : null}
           </>

@@ -108,7 +108,7 @@
     "gates": {
       "type": "object",
       "minProperties": 3,
-      "maxProperties": 4,
+      "maxProperties": 5,
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,

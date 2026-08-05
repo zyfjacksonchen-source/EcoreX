@@ -647,6 +647,11 @@ class ToolManager:
         if agent is None or not hasattr(agent, "tools"):
             return ([], [])
 
+        if getattr(agent, "_evolution_restricted", False) or getattr(
+            getattr(agent, "agent", None), "_evolution_restricted", False
+        ):
+            return ([], [])
+
         from agent.tools.mcp.mcp_tool import McpTool
         current = self._mcp_tool_instances
         registry_names = set(current.keys())

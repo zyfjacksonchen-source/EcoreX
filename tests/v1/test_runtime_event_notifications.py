@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from types import SimpleNamespace
 
 import pytest
 
 from ecorex.runtime import EventStore, RuntimeKernel, RuntimeSettings
 from ecorex.runtime.api import _stream_events
+from ecorex.observability import RuntimeSignalRegistry
 
 
 def _append_fact(store: EventStore, thread_id: str, suffix: str) -> None:
@@ -202,6 +204,32 @@ def test_sse_clients_wait_on_commit_notifications_instead_of_fast_polling(
         await asyncio.gather(*(stream.aclose() for stream in streams))
 
     asyncio.run(scenario())
+
+
+def test_sse_generator_close_releases_runtime_connection_counter(tmp_path) -> None:
+    kernel = RuntimeKernel(tmp_path / "runtime.db")
+    thread = kernel.create_thread()
+    settings = RuntimeSettings(database_path=tmp_path / "runtime.db")
+    registry = RuntimeSignalRegistry()
+
+    class ConnectedRequest:
+        app = SimpleNamespace(state=SimpleNamespace(runtime_signal_registry=registry))
+
+        async def is_disconnected(self) -> bool:
+            return False
+
+    async def scenario() -> None:
+        stream = _stream_events(
+            ConnectedRequest(), kernel, settings, thread.thread_id, 0, True
+        )
+        await anext(stream)
+        assert registry.snapshot().sse_connections == 1
+        await stream.aclose()
+
+    asyncio.run(scenario())
+    snapshot = registry.snapshot()
+    assert snapshot.sse_connections == 0
+    assert snapshot.sse_disconnects == 1
 
 
 def test_sse_page_to_wait_boundary_cannot_lose_a_committed_event(tmp_path) -> None:

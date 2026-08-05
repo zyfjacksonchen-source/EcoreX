@@ -190,7 +190,7 @@ _OPENAI_BASE_SENSITIVE_PROVIDERS = {
 }
 _OFFICIAL_GEMINI_API_BASE = "https://generativelanguage.googleapis.com"
 
-_OPENAI_REASONING_EFFORT_VALUES = ("minimal", "low", "medium", "high")
+_OPENAI_REASONING_EFFORT_VALUES = ("minimal", "low", "medium", "high", "max")
 _DEEPSEEK_REASONING_EFFORT_VALUES = ("high", "max")
 _CAPABILITY_MATRIX_SCHEMA_VERSION = "ecorex.model-capabilities.v1"
 _OFFICIAL_OPENAI_SURFACES = (

@@ -30,7 +30,7 @@ def revision(number: int = 7) -> ChatModelRevision:
         config_id="model-deepseek",
         revision=number,
         local_model_id=MODEL_ID,
-        upstream_model_id="deepseek-v4-pro",
+        upstream_model_id="deepseek-v4-flash",
         provider_protocol="openai_compatible_chat",
         provider_origin_preset="deepseek_chat",
     )

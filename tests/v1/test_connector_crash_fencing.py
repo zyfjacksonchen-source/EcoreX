@@ -187,7 +187,18 @@ class _ScriptedGateway:
         self.scripts = list(scripts)
 
     async def stream(self, _request):
-        for payload in self.scripts.pop(0):
+        script = self.scripts.pop(0)
+        if len(script) == 1 and script[0]["event_type"] == "response.completed":
+            yield GatewayEvent.model_validate(
+                {
+                    "seq": 1,
+                    "event_type": "output_text.delta",
+                    "response_id": script[0]["response_id"],
+                    "delta": "done",
+                }
+            )
+            script = [{**script[0], "seq": 2}]
+        for payload in script:
             yield GatewayEvent.model_validate(payload)
 
 

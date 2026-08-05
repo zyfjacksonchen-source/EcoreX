@@ -8,8 +8,8 @@ import { BundleBudgetError, inspectV1Bundle } from "./check-v1-bundle.mjs";
 
 const FEATURES = [
   "ArtifactPreviewDialog",
+  "Composer",
   "ComposerModelSelector",
-  "ConnectorPopover",
   "SkillsWorkspace",
   "InteractionStack",
   "NewConversationProjectSelector",
@@ -25,12 +25,16 @@ async function fixture({
   preloadFeature = false,
   entryBytes = null,
   invalidFeatureSyntax = false,
+  nestedFeature = false,
 } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "ecorex-bundle-test-"));
   const assets = path.join(root, "assets");
   await mkdir(assets);
   const featureFiles = FEATURES.map((stem) => `${stem}.1234567890abcdef.js`);
-  const imports = featureFiles.map((name) => `import("./${name}")`).join(";\n");
+  const [nested, ...directFeatures] = featureFiles;
+  const imports = (nestedFeature ? directFeatures : featureFiles)
+    .map((name) => `import("./${name}")`)
+    .join(";\n");
   const entry = entryBytes === null
     ? Buffer.from(imports)
     : Buffer.concat([Buffer.from(imports), Buffer.alloc(entryBytes, 32)]);
@@ -39,7 +43,11 @@ async function fixture({
   for (const [index, name] of featureFiles.entries()) {
     await writeFile(
       path.join(assets, name),
-      invalidFeatureSyntax && index === 0 ? "const = ;" : "export default true",
+      invalidFeatureSyntax && index === 0
+        ? "const = ;"
+        : nestedFeature && index === 1
+          ? `import("./${nested}"); export default true`
+          : "export default true",
     );
   }
   const optionalPreload = preloadFeature
@@ -60,6 +68,13 @@ test("accepts a bounded entry with every declared deferred UI chunk", async (t) 
   const result = await inspectV1Bundle(root);
   assert.equal(result.featureChunks.length, FEATURES.length);
   assert.equal(result.initial.length, 2);
+});
+
+test("accepts a deferred feature referenced by another deferred chunk", async (t) => {
+  const root = await fixture({ nestedFeature: true });
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const result = await inspectV1Bundle(root);
+  assert.equal(result.featureChunks.length, FEATURES.length);
 });
 
 test("rejects a feature chunk that leaks into initial modulepreload", async (t) => {

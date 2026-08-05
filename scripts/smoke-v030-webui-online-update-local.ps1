@@ -1,8 +1,8 @@
 param(
-    [string]$PackagePath = "release-artifacts/EcoreX_0.3.0-webui-windows-x64.zip",
-    [string]$OutputPath = "docs/v0.3.0/artifacts/user-online-update-local-smoke.json",
+    [string]$PackagePath = "release-artifacts/EcoreX_0.3.1-webui-windows-x64.zip",
+    [string]$OutputPath = "docs/v0.3.1/artifacts/user-online-update-local-smoke.json",
     [string]$SmokeRoot = "tmp/v030-webui-online-update-smoke",
-    [string]$Version = "0.3.0",
+    [string]$Version = "0.3.1",
     [int]$SourcePort = 9979,
     [int]$RuntimePort = 9939,
     [int]$TimeoutSeconds = 120,
@@ -18,7 +18,6 @@ function Resolve-FullPath {
     }
     return [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $Path))
 }
-
 function Assert-PathInside {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -312,8 +311,8 @@ $manifestPayload = [ordered]@{
     version = $Version
     channel = "local-smoke"
     updatedAt = (Get-Date).ToUniversalTime().ToString("o")
-    releaseName = "EcoreX 0.3.0 local WebUI update smoke"
-    notes = "Local user-path online update smoke manifest for v0.3.0."
+    releaseName = "EcoreX 0.3.1 local WebUI update smoke"
+    notes = "Local user-path online update smoke manifest for v0.3.1."
     releaseIndex = "release-index.json"
     download = [ordered]@{
         mode = "local-smoke"
@@ -367,7 +366,7 @@ $oldWebNoBrowser = $env:ECOREX_WEB_NO_BROWSER
 $oldDownloadDisableParallel = $env:ECOREX_DOWNLOAD_DISABLE_PARALLEL
 $checks = [System.Collections.ArrayList]::new()
 $report = [ordered]@{
-    schema = "ecorex.v0.3.0.user-online-update-local-smoke.v1"
+    schema = "ecorex.v0.3.1.user-online-update-local-smoke.v1"
     status = "FAIL"
     version = $Version
     generatedAt = (Get-Date).ToUniversalTime().ToString("o")
@@ -446,7 +445,7 @@ try {
     Write-StepTrace "checking version $versionUrl"
     $versionPayload = Wait-HttpJson -Url $versionUrl -TimeoutSeconds $TimeoutSeconds
     Write-StepTrace "version ok $($versionPayload.version)"
-    Add-Check -Checks $checks -Name "installed runtime responds with v0.3.0" -Ok ([string]$versionPayload.version -eq $Version) -Detail @{
+    Add-Check -Checks $checks -Name "installed runtime responds with v0.3.1" -Ok ([string]$versionPayload.version -eq $Version) -Detail @{
         version = $versionPayload.version
         url = $versionUrl
         runtimeLeaf = if ($runtimeDir) { Split-Path -Leaf $runtimeDir } else { "" }
@@ -472,7 +471,7 @@ try {
     $updatePayload = Wait-HttpJson -Url $updateCheckUrl -TimeoutSeconds 90 -RequestTimeoutSeconds 30
     Write-StepTrace "update endpoint ok latest=$($updatePayload.latestVersion)"
     $connectorPolicy = $updatePayload.update.webui.connectorHealthCheck
-    Add-Check -Checks $checks -Name "runtime update-check sees local v0.3.0 manifest" -Ok ([string]$updatePayload.status -eq "success" -and [string]$updatePayload.latestVersion -eq $Version -and [string]$updatePayload.artifact.id -eq "webui-windows-x64") -Detail @{
+    Add-Check -Checks $checks -Name "runtime update-check sees local v0.3.1 manifest" -Ok ([string]$updatePayload.status -eq "success" -and [string]$updatePayload.latestVersion -eq $Version -and [string]$updatePayload.artifact.id -eq "webui-windows-x64") -Detail @{
         status = $updatePayload.status
         currentVersion = $updatePayload.currentVersion
         latestVersion = $updatePayload.latestVersion

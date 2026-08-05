@@ -6,9 +6,7 @@ DeepSeek Bot — fully OpenAI-compatible, uses its own API key / base config.
 Supported models:
 - deepseek-chat       (V3, no thinking)
 - deepseek-reasoner   (R1, built-in reasoning, no `thinking` switch)
-- deepseek-v4-flash   (V4, supports thinking mode + tool calls)
-- deepseek-v4-flash   (V4 Flash, default; thinking mode + tool calls)
-- deepseek-v4-pro     (V4 Pro, stronger on complex tasks)
+- deepseek-v4-flash   (V4 Flash default; maximum-effort reasoning + tool calls)
 
 Thinking mode notes (for V4 models):
 - Toggle: ``{"thinking": {"type": "enabled" | "disabled"}}`` (default: enabled)
@@ -276,8 +274,7 @@ class DeepSeekBot(Bot, OpenAICompatibleBot):
                 request_body["thinking"] = thinking_param
                 thinking_active = thinking_param.get("type") == "enabled"
                 if thinking_active:
-                    # Default to "high"; allow caller override (e.g. "max" for heavy agent loops).
-                    request_body["reasoning_effort"] = reasoning_effort or "high"
+                    request_body["reasoning_effort"] = reasoning_effort or "max"
             elif self._is_reasoner_model(model):
                 # R1 thinks unconditionally — no `thinking` field, but reasoning_content still flows.
                 thinking_active = True
@@ -311,9 +308,10 @@ class DeepSeekBot(Bot, OpenAICompatibleBot):
             logger.error(f"[DEEPSEEK] call_with_tools error: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            error_message = str(e)
 
             def error_generator():
-                yield {"error": True, "message": str(e), "status_code": 500}
+                yield {"error": True, "message": error_message, "status_code": 500}
             return error_generator()
 
     # -------------------- streaming --------------------

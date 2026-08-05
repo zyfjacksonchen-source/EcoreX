@@ -27,6 +27,7 @@ import requests
 from agent.tools.base_tool import BaseTool, ToolResult
 from common import const
 from common.log import logger
+from common.utils import expand_path
 from common.tool_execution_environment import ToolExecutionEnvironment
 from config import conf
 from models.model_telemetry import ModelCallSpan
@@ -197,6 +198,12 @@ class Vision(BaseTool):
     def __init__(self, config: dict = None):
         self.config = config or {}
         self.cwd = self.config.get("cwd", os.getcwd())
+
+    def _resolve_path(self, path: str) -> str:
+        expanded = expand_path(path)
+        if not os.path.isabs(expanded):
+            expanded = os.path.join(self.cwd, expanded)
+        return os.path.realpath(expanded)
 
     @staticmethod
     def is_available() -> bool:
@@ -729,8 +736,7 @@ class Vision(BaseTool):
         if image.startswith(("http://", "https://")):
             return self._download_to_data_url(image)
 
-        image_path = image if os.path.isabs(image) else os.path.join(self.cwd, image)
-        image_path = os.path.realpath(image_path)
+        image_path = self._resolve_path(image)
         try:
             from common.ecorex_tool_permissions import get_tool_permission_broker
 
@@ -751,7 +757,8 @@ class Vision(BaseTool):
             ) from exc
 
         if not os.path.isfile(image_path):
-            raise FileNotFoundError(f"Image file not found: {image}")
+            resolved_note = f" (resolved to {image_path})" if image_path != image else ""
+            raise FileNotFoundError(f"Image file not found: {image}{resolved_note}")
 
         ext = image_path.rsplit(".", 1)[-1].lower() if "." in image_path else ""
         mime_type = SUPPORTED_EXTENSIONS.get(ext)

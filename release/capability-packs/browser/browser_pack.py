@@ -390,7 +390,12 @@ def _perform_page_operation(
             20_000,
             code="browser_evaluate_invalid",
         )
-        value = page.evaluate(expression)
+        try:
+            value = page.evaluate(expression)
+        except Exception as error:
+            if "Illegal return statement" not in str(error):
+                raise
+            value = page.evaluate("(() => {\n%s\n})()" % expression)
         try:
             encoded = json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
         except (TypeError, ValueError, RecursionError):

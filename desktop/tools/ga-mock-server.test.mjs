@@ -169,7 +169,7 @@ test("GA harness exposes managed bootstrap, strict CSRF, state reset, and unique
   assert.deepEqual(authenticated.login.roles, ["member"]);
   assert.equal(authenticated.models.chat[0].model_id, "ecorex-chat");
   assert.equal(authenticated.models.chat[0].model_policy.upstream_model_id, "gpt-5.6-luna");
-  assert.equal(authenticated.models.chat[0].model_policy.reasoning_effort, "high");
+  assert.equal(authenticated.models.chat[0].model_policy.reasoning_effort, "max");
   assert.equal(
     authenticated.models.chat[0].model_policy.context_management.compact_threshold_tokens,
     272_000,
@@ -178,6 +178,19 @@ test("GA harness exposes managed bootstrap, strict CSRF, state reset, and unique
   assert.equal(authenticated.models.image[0].model_policy, null);
   assert.equal(authenticated.extensions.contract_version, "1.0");
   assert.equal(authenticated.extensions.items.length, 3);
+  const mentions = await fetch(`${harness.url}/api/v1/capability-mentions`).then((response) => response.json());
+  assert.deepEqual(mentions.items.map((item) => item.reference), [
+    "skill:office-documents",
+    "collaboration:feishu",
+  ]);
+  const connectors = await fetch(`${harness.url}/api/v1/connectors`).then((response) => response.json());
+  assert.deepEqual(connectors.items.slice(0, 4).map((item) => item.definition.connector_id), [
+    "feishu",
+    "tencent-docs",
+    "dingtalk",
+    "wecom_bot",
+  ]);
+  assert.equal(connectors.items.find((item) => item.definition.connector_id === "telegram").definition.tier, "beta");
 
   const hub = await fetch(`${harness.url}/api/v1/skill-hub/skills?category=office_productivity`)
     .then((response) => response.json());
@@ -339,6 +352,24 @@ test("GA frame reload preserves one browser session while a fresh session resets
   assert.equal(freshSession.status, 200);
   const reset = await fetch(`${harness.url}/api/v1/threads`).then((response) => response.json());
   assert.equal(reset.items[0].pinned, false);
+});
+
+test("GA task catalog supports archive, restore, and logical delete", async (context) => {
+  const harness = await createGaMockServer({ scenario: "artifact" });
+  context.after(() => harness.close());
+  const mutate = (suffix, method = "POST") => fetch(`${harness.url}/api/v1/threads/thread-ga${suffix}`, {
+    method,
+    headers: MUTATION_HEADERS,
+    body: JSON.stringify({ client_request_id: `ga-${method}-${suffix}` }),
+  });
+
+  assert.equal((await mutate("/archive")).status, 200);
+  assert.equal((await fetch(`${harness.url}/api/v1/threads?status=archived`).then((response) => response.json())).items.length, 1);
+  assert.equal((await mutate("/restore").then((response) => response.json())).status, "active");
+  assert.equal((await mutate("/archive")).status, 200);
+  assert.equal((await mutate("", "DELETE").then((response) => response.json())).status, "deleted");
+  assert.equal((await fetch(`${harness.url}/api/v1/threads?status=all`).then((response) => response.json())).items.length, 0);
+  assert.equal((await fetch(`${harness.url}/api/v1/threads/thread-ga/projection`)).status, 404);
 });
 
 test("GA-created turns use live acceptance and terminal timestamps", async (context) => {

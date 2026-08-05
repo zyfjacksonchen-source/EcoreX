@@ -402,7 +402,7 @@ class AgentLLMModel(LLMModel):
             )
         if thinking_enabled and capabilities.supports_reasoning_effort:
             effort = normalize_reasoning_effort(
-                conf().get("reasoning_effort", "high"),
+                conf().get("reasoning_effort", "max"),
                 capabilities,
             )
             if effort:
@@ -691,7 +691,7 @@ class AgentBridge:
                 try:
                     tool = tool_manager.create_tool(tool_name)
                     if tool:
-                        if workspace_dir and hasattr(tool, 'cwd'):
+                        if workspace_dir:
                             tool.cwd = workspace_dir
                         tools.append(tool)
                 except Exception as e:

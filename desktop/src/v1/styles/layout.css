@@ -90,7 +90,7 @@ textarea {
   max-height: calc(100dvh - 16px);
   margin: 8px 8px 8px 0;
   border: 1px solid var(--color-rule);
-  border-radius: 16px;
+  border-radius: var(--radius-panel);
   background: var(--color-workspace-surface);
   overflow: clip;
   display: grid;
@@ -391,6 +391,8 @@ textarea {
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
@@ -431,6 +433,13 @@ textarea {
 .ex-task-list {
   display: grid;
   gap: var(--space-1);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.ex-task-compact-icon {
+  display: none;
 }
 
 .ex-show-more-sessions {
@@ -703,7 +712,7 @@ textarea {
   width: 8px;
   height: 8px;
   margin-right: var(--space-2);
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   background: var(--color-ink-subtle);
 }
 
@@ -980,6 +989,10 @@ textarea {
     display: none;
   }
 
+  .ex-task-compact-icon {
+    display: block;
+  }
+
   .ex-task-entry {
     display: grid;
     grid-template-columns: var(--target-desktop) var(--target-desktop);
@@ -1115,6 +1128,10 @@ textarea {
 
   .ex-sidebar.is-open .ex-account-chevron {
     display: initial;
+  }
+
+  .ex-sidebar.is-open .ex-task-compact-icon {
+    display: none;
   }
 
   .ex-sidebar.is-open .ex-task-entry {

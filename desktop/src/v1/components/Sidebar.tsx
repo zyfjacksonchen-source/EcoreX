@@ -19,6 +19,7 @@ import {
   Search,
   Settings2,
   Sparkles,
+  Trash2,
   UserRound,
   X,
 } from "lucide-react";
@@ -61,6 +62,7 @@ interface SidebarProps {
   onUnpinThread: (threadId: string) => Promise<boolean>;
   onArchiveThread: (threadId: string) => Promise<boolean>;
   onRestoreThread: (threadId: string) => Promise<boolean>;
+  onDeleteThread: (threadId: string) => Promise<boolean>;
   onRefreshThreads: () => void;
   onClearCatalogError: () => void;
   onOpenSettings: () => void;
@@ -103,6 +105,7 @@ export function Sidebar({
   onUnpinThread,
   onArchiveThread,
   onRestoreThread,
+  onDeleteThread,
   onRefreshThreads,
   onClearCatalogError,
   onOpenSettings,
@@ -123,6 +126,7 @@ export function Sidebar({
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
   const [allGeneralSessionsVisible, setAllGeneralSessionsVisible] = useState(false);
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ThreadProjection | null>(null);
   const [logoutComplete, setLogoutComplete] = useState<string | null>(null);
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({});
   const [expandedProjectSessions, setExpandedProjectSessions] = useState<Record<string, boolean>>({});
@@ -283,7 +287,7 @@ export function Sidebar({
             ? <LoaderCircle className="ex-spin" aria-hidden="true" />
             : thread.pinned
               ? <Pin className="ex-task-pin" aria-hidden="true" />
-              : <MessageSquare aria-hidden="true" />}
+              : <MessageSquare className="ex-task-compact-icon" aria-hidden="true" />}
           <span>{label}</span>
           {running ? (
             <LoaderCircle
@@ -546,23 +550,44 @@ export function Sidebar({
                 {archivedThreads.map((thread) => {
                   const label = thread.title || "未命名任务";
                   const restoring = mutationKey === `restore:${thread.thread_id}`;
+                  const deleting = mutationKey === `delete:${thread.thread_id}`;
                   return (
                     <div className="ex-task-entry is-archived" key={thread.thread_id}>
-                      <div className="ex-task-row" title={label}>
+                      <button
+                        className="ex-task-row"
+                        type="button"
+                        title={label}
+                        aria-label={`查看已归档任务：${label}`}
+                        disabled={Boolean(switchingThreadId) || restoring || deleting}
+                        onClick={() => void onOpenThread(thread.thread_id)}
+                      >
                         <Archive aria-hidden="true" />
                         <span>{label}</span>
-                      </div>
-                      <IconButton
-                        className="ex-task-more"
-                        label={`恢复任务：${label}`}
-                        disabled={Boolean(switchingThreadId) || restoring}
-                        tooltipSide="right"
-                        onClick={() => void onRestoreThread(thread.thread_id)}
-                      >
-                        {restoring
-                          ? <LoaderCircle className="ex-spin" aria-hidden="true" />
-                          : <ArchiveRestore aria-hidden="true" />}
-                      </IconButton>
+                      </button>
+                      <DropdownMenu.Root>
+                        <DropdownMenu.Trigger asChild>
+                          <IconButton
+                            className="ex-task-more"
+                            label={`管理已归档任务：${label}`}
+                            disabled={Boolean(switchingThreadId) || restoring || deleting}
+                            tooltipSide="right"
+                          >
+                            {restoring || deleting
+                              ? <LoaderCircle className="ex-spin" aria-hidden="true" />
+                              : <MoreHorizontal aria-hidden="true" />}
+                          </IconButton>
+                        </DropdownMenu.Trigger>
+                        <DropdownMenu.Portal>
+                          <DropdownMenu.Content className="ex-menu" side="right" align="start" sideOffset={8} collisionPadding={12}>
+                            <DropdownMenu.Item className="ex-menu-item" onSelect={() => void onRestoreThread(thread.thread_id)}>
+                              <ArchiveRestore aria-hidden="true" />恢复任务
+                            </DropdownMenu.Item>
+                            <DropdownMenu.Item className="ex-menu-item is-danger" onSelect={() => setDeleteTarget(thread)}>
+                              <Trash2 aria-hidden="true" />删除任务
+                            </DropdownMenu.Item>
+                          </DropdownMenu.Content>
+                        </DropdownMenu.Portal>
+                      </DropdownMenu.Root>
                     </div>
                   );
                 })}
@@ -625,6 +650,38 @@ export function Sidebar({
           </DropdownMenu.Root>
         </div>
       </aside>
+
+      <Dialog.Root
+        open={deleteTarget !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && !mutationKey?.startsWith("delete:")) setDeleteTarget(null);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="ex-dialog-overlay" />
+          <Dialog.Content className="ex-dialog ex-confirm-dialog" aria-describedby="ex-delete-thread-description">
+            <Dialog.Title>删除已归档任务？</Dialog.Title>
+            <Dialog.Description id="ex-delete-thread-description">
+              “{deleteTarget?.title || "未命名任务"}”将从任务列表移除且无法恢复，审计记录仍会保留。
+            </Dialog.Description>
+            <div className="ex-dialog-actions">
+              <Dialog.Close className="ex-button" type="button" disabled={Boolean(mutationKey?.startsWith("delete:"))}>取消</Dialog.Close>
+              <button
+                className="ex-button is-danger"
+                type="button"
+                disabled={Boolean(mutationKey?.startsWith("delete:"))}
+                onClick={async () => {
+                  if (!deleteTarget) return;
+                  if (await onDeleteThread(deleteTarget.thread_id)) setDeleteTarget(null);
+                }}
+              >
+                {mutationKey?.startsWith("delete:") ? <LoaderCircle className="ex-spin" aria-hidden="true" /> : <Trash2 aria-hidden="true" />}
+                {mutationKey?.startsWith("delete:") ? "正在删除" : "确认删除"}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
       <Dialog.Root
         open={logoutConfirmOpen}

@@ -39,6 +39,54 @@ _CONTRACT_KEYS = {
     "stderr_limit_bytes",
     "contract_id",
 }
+_SOFT_EXIT_1 = {
+    "grep": "No matches found",
+    "egrep": "No matches found",
+    "fgrep": "No matches found",
+    "rg": "No matches found",
+    "ag": "No matches found",
+    "find": "Some directories were inaccessible",
+    "diff": "Files differ",
+    "cmp": "Files differ",
+    "test": "Condition is false",
+    "[": "Condition is false",
+}
+_COMMAND_SEPARATORS = (";", "&&", "||", "|", "\n")
+
+
+def _interpret_exit(command: str, exit_code: int) -> tuple[bool, str | None]:
+    if exit_code == 0:
+        return False, None
+    segment_start = 0
+    quote = ""
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote:
+            if char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char in ("'", '"'):
+            quote = char
+            index += 1
+            continue
+        for separator in _COMMAND_SEPARATORS:
+            if command.startswith(separator, index):
+                segment_start = index + len(separator)
+                index += len(separator)
+                break
+        else:
+            index += 1
+    for token in command[segment_start:].strip().lstrip("({ \t").split():
+        if "=" in token and not token.startswith("="):
+            continue
+        base_command = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        break
+    else:
+        base_command = ""
+    note = _SOFT_EXIT_1.get(base_command) if exit_code == 1 else None
+    return (note is None, note)
 
 
 def handle(request: Request) -> Mapping[str, Any]:
@@ -63,8 +111,11 @@ def handle(request: Request) -> Mapping[str, Any]:
         environment=_child_environment(),
         timeout_seconds=timeout,
     )
+    exit_is_error, exit_note = _interpret_exit(command, completed.returncode)
     return {
         "exit_code": int(completed.returncode),
+        "exit_status": "error" if exit_is_error else "success",
+        "exit_note": exit_note,
         "stdout": completed.stdout.decode("utf-8", errors="replace"),
         "stderr": completed.stderr.decode("utf-8", errors="replace"),
         "sandbox_backend_id": contract["backend_id"],

@@ -35,13 +35,16 @@ from ecorex.artifacts import (
 from ecorex.artifacts.api import create_artifact_router
 from ecorex.capabilities import (
     CapabilityIntentError,
+    Exposure,
     ManagedModelCatalog,
     ManagedModelSpec,
     ModelCatalogError,
     ModelModality,
     RuntimeAvailability,
+    ToolProviderKind,
     builtin_model_catalog,
 )
+from ecorex.capabilities.planner import availability_reasons
 from ecorex.connectors import (
     ConnectorAuthKind,
     ConnectorComposition,
@@ -57,6 +60,7 @@ from ecorex.gateway import (
 )
 from ecorex.ids import is_id
 from ecorex.extensions.api import register_extension_routes
+from ecorex.extensions.mcp_oauth import MCPOAuthService, register_mcp_oauth_routes
 from ecorex.extensions.local_bundle import LocalSkillBundleStore
 from ecorex.extensions.repository import SQLiteExtensionRepository
 from ecorex.extensions.service import ExtensionService
@@ -497,10 +501,18 @@ def _managed_catalog_from_cloud(
             if policy is not None:
                 if not isinstance(upstream_model_id, str) or not upstream_model_id:
                     raise ModelCatalogError("managed gateway upstream model is invalid")
+                reasoning_effort = item.get(
+                    "reasoning_effort", policy.reasoning_effort
+                )
+                if reasoning_effort not in {"medium", "high", "max"}:
+                    raise ModelCatalogError(
+                        "managed gateway reasoning effort is invalid"
+                    )
                 policy = replace(
                     policy,
                     upstream_model_id=upstream_model_id,
                     display_name=display_name,
+                    reasoning_effort=reasoning_effort,
                 )
             projected.append(
                 replace(
@@ -1525,6 +1537,23 @@ def create_app(
         initialize=startup_convergence_allowed,
         execution_gate=runtime_execution_gate,
     )
+    mcp_oauth_registrations = tuple(
+        binding.oauth_registration
+        for binding in settings.mcp_runtime_bindings
+        if getattr(binding, "oauth_registration", None) is not None
+    )
+    mcp_oauth_service = (
+        MCPOAuthService(
+            mcp_oauth_registrations,
+            redirect_uri=(
+                oauth_return_uri.rsplit("/api/v1/", 1)[0]
+                + "/api/v1/mcp/oauth/callback"
+            ),
+            vault=connector_vault,
+        )
+        if mcp_oauth_registrations
+        else None
+    )
     connector_registry = connector_composition.service.registry
     connector_catalog = connector_composition.service.catalog()
     extension_governance_enabled = settings.extension_service is not None
@@ -1817,6 +1846,7 @@ def create_app(
         extension_service=extension_service,
         extension_governance_enabled=extension_governance_enabled,
         mcp_runtime_bindings=tuple(settings.mcp_runtime_bindings),
+        mcp_oauth_service=mcp_oauth_service,
         tenant_id=settings.account_id,
         enforce_admin_tool_denies=settings.enforce_admin_tool_denies,
         persist_startup_snapshots=startup_convergence_allowed,
@@ -1828,6 +1858,7 @@ def create_app(
     app.state.csrf_token = settings.csrf_token
     app.state.runtime_composition = composition
     app.state.mcp_client_supervisor = composition.mcp_supervisor
+    app.state.mcp_oauth_service = mcp_oauth_service
     app.state.permission_authority = permission_authority
     app.state.extension_service = extension_service
     app.state.managed_session_service = managed_session
@@ -1844,6 +1875,64 @@ def create_app(
     app.state.migration_quarantine_service = migration_quarantine_service
     app.include_router(create_migration_quarantine_router(migration_quarantine_service))
     register_extension_routes(app, extension_service)
+    if mcp_oauth_service is not None:
+        register_mcp_oauth_routes(
+            app,
+            mcp_oauth_service,
+            tenant_id=(
+                "tenant_"
+                + hashlib.sha256(settings.account_id.encode("utf-8")).hexdigest()
+            ),
+        )
+
+    @app.get("/api/v1/capability-mentions")
+    def capability_mentions() -> dict[str, object]:
+        availability = composition.current_invocation_availability()
+        items: list[dict[str, str]] = []
+        for spec in composition.capability_registry.all():
+            if (
+                spec.default_exposure is Exposure.HIDDEN
+                or availability_reasons(spec, availability)
+            ):
+                continue
+            collaboration = (
+                spec.provider.kind is ToolProviderKind.MCP
+                or bool(spec.required_connectors)
+            )
+            items.append(
+                {
+                    "reference": spec.tool_id,
+                    "label": spec.display_name,
+                    "description": spec.description,
+                    "kind": "collaboration" if collaboration else "system",
+                }
+            )
+        for extension in extension_service.snapshot().items:
+            if (
+                extension.kind != "skill"
+                or extension.status != "enabled"
+                or extension.readiness != "ready"
+                or not any(export.kind.value == "skill" for export in extension.exports)
+            ):
+                continue
+            items.append(
+                {
+                    "reference": f"skill:{extension.extension_id}",
+                    "label": extension.display_name,
+                    "description": extension.description,
+                    "kind": "skill",
+                }
+            )
+        items.sort(key=lambda item: (item["kind"], item["label"], item["reference"]))
+        digest = hashlib.sha256(
+            json.dumps(items, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        return {
+            "schema_version": 1,
+            "snapshot_id": f"mention_{digest}",
+            "items": items,
+        }
+
     if settings.skill_hub_client is not None:
         register_skill_hub_runtime_routes(
             app,
@@ -2529,6 +2618,7 @@ def create_app(
         (3, "runtime_invariant", invariant_supervisor),
         (1, "agent_worker", worker_supervisor),
         (1, "mcp", composition.mcp_supervisor),
+        (1, "mcp_oauth", mcp_oauth_service),
         (4, "model_gateway", gateway_lifecycle),
         (4, "image_gateway", image_client_lifecycle),
         (1, "retouch_worker", retouch_supervisor),
@@ -2698,7 +2788,11 @@ def create_app(
             )
             oauth_callback = (
                 request.method == "GET"
-                and request.url.path == "/api/v1/connectors/oauth/callback"
+                and request.url.path
+                in {
+                    "/api/v1/connectors/oauth/callback",
+                    "/api/v1/mcp/oauth/callback",
+                }
             )
             if not oauth_callback:
                 authorization = request.headers.get("authorization", "")
@@ -3577,6 +3671,8 @@ def create_app(
     ) -> ThreadListResponse:
         if status == "all":
             status_value = None
+        elif status not in {"active", "archived"}:
+            raise HTTPException(status_code=422, detail="thread status filter is invalid")
         else:
             try:
                 status_value = ThreadStatus(status)
@@ -3649,6 +3745,17 @@ def create_app(
         thread_id: str, request: ThreadStatusRequest
     ) -> ThreadProjection:
         return kernel.restore_thread(
+            thread_id, client_request_id=request.client_request_id
+        )
+
+    @app.delete(
+        "/api/v1/threads/{thread_id}",
+        response_model=ThreadProjection,
+    )
+    def delete_thread(
+        thread_id: str, request: ThreadStatusRequest
+    ) -> ThreadProjection:
+        return kernel.delete_thread(
             thread_id, client_request_id=request.client_request_id
         )
 

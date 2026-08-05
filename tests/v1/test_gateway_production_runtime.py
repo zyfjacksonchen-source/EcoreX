@@ -107,7 +107,7 @@ def _environment(tmp_path: Path, keyring: str) -> dict[str, str]:
         "ECOREX_GATEWAY_DATABASE_PATH": str((tmp_path / "gateway.sqlite3").resolve()),
         "ECOREX_GATEWAY_STORAGE_ENCRYPTION_AT_REST": "true",
         "ECOREX_GATEWAY_MODEL_MAPPING_JSON": json.dumps(
-            {"ecorex-chat": "unsupported-upstream-model"}
+            {"ecorex-chat": "gpt-5.6-luna"}
         ),
         "ECOREX_GATEWAY_PROVIDER_ORIGIN": "https://provider.ecorex.invalid",
         "ECOREX_GATEWAY_PROVIDER_ALLOWED_ORIGINS_JSON": json.dumps(
@@ -179,10 +179,10 @@ def test_gateway_request_carries_the_authoritative_chat_model_policy() -> None:
     assert request.model_policy.model_dump(mode="json") == {
         "schema_version": 1,
         "policy_id": "ecorex-chat-gpt-5.6-luna",
-        "policy_version": "1.1.0",
+        "policy_version": "1.2.0",
         "local_model_id": "ecorex-chat",
         "upstream_model_id": "gpt-5.6-luna",
-        "reasoning_effort": "high",
+        "reasoning_effort": "max",
         "context_management": {
             "type": "compaction",
             "compact_threshold_tokens": 272_000,
@@ -329,7 +329,7 @@ def test_fixed_https_responses_adapter_translates_real_sse_contract() -> None:
             assert request.headers["idempotency-key"] == "request-1"
             submitted = json.loads(request.content)
             assert submitted["model"] == "gpt-5.6-luna"
-            assert submitted["reasoning"] == {"effort": "high"}
+            assert submitted["reasoning"] == {"effort": "max"}
             assert submitted["context_management"] == [
                 {"type": "compaction", "compact_threshold": 272_000}
             ]
@@ -1204,7 +1204,7 @@ def test_production_configuration_fails_closed_without_schema_or_secrets(
         GatewayProductionConfig.from_environment(missing_backend)
     wrong_upstream = dict(environment)
     wrong_upstream["ECOREX_GATEWAY_MODEL_MAPPING_JSON"] = json.dumps(
-        {"ecorex-chat": "gpt-5.6-luna"}
+        {"ecorex-chat": "gpt-5.6-sol"}
     )
     with pytest.raises(
         GatewayProductionConfigurationError,

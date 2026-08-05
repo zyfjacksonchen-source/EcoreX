@@ -75,7 +75,8 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
     ],
     "threadStatuses": [
       "active",
-      "archived"
+      "archived",
+      "deleted"
     ],
     "turnStatuses": [
       "accepted",
@@ -95,7 +96,7 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
       "superseded"
     ]
   },
-  "schemaSha256": "5fa103fc0e57972d6e12aaf0c917ccf1f9b552ff4cb7cc87f882a985dc5cb183",
+  "schemaSha256": "febbad3c0a41905e1b0006359a5dfc6194f023b27fd224f604fca9f98b6aa80c",
   "schemaVersion": 1,
   "wireFields": {
     "ConnectorLoginBeginResponse": {

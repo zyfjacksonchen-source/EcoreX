@@ -296,6 +296,41 @@ def test_authenticated_checkpoint_resumes_after_partial_origin_failure(
     assert not checkpoint.exists()
 
 
+def test_remote_protocol_disconnect_is_retried(tmp_path: Path) -> None:
+    built, verifier, files = _release(tmp_path)
+    origin = _Origin(built, files)
+    disconnected = False
+
+    def flaky(request: httpx.Request) -> httpx.Response:
+        nonlocal disconnected
+        if request.url.host == "ghproxy.net" and not disconnected:
+            disconnected = True
+            raise httpx.RemoteProtocolError("peer disconnected")
+        return origin(request)
+
+    with OnlinePublicationVerifier(
+        verifier=verifier,
+        client=httpx.Client(
+            transport=httpx.MockTransport(flaky), follow_redirects=False
+        ),
+        limits=OnlineVerificationLimits(
+            attempts=2,
+            maximum_total_bytes=64 * 1024 * 1024,
+            total_timeout_seconds=60,
+        ),
+        checkpoint_key=CHECKPOINT_KEY,
+        sleep=lambda _seconds: None,
+    ) as online:
+        receipt = online.verify(
+            release_dir=built.output_dir,
+            output=tmp_path / "receipt.json",
+            checkpoint=tmp_path / "checkpoint.json",
+        )
+
+    assert disconnected is True
+    assert receipt["publication_policy"] == "stable-primary-only"
+
+
 def test_existing_receipt_and_checkpoint_tamper_fail_before_false_success(
     tmp_path: Path,
 ) -> None:

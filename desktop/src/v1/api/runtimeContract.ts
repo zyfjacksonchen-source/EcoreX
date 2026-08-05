@@ -186,8 +186,8 @@ function assertModelDescriptor(
     if (value.model_policy.local_model_id !== value.model_id) {
       reject(contract, policyPath, "a policy matching model_id");
     }
-    if (!["medium", "high"].includes(value.model_policy.reasoning_effort as string)) {
-      reject(contract, `${policyPath}.reasoning_effort`, 'literal "medium" or "high"');
+    if (!["medium", "high", "max"].includes(value.model_policy.reasoning_effort as string)) {
+      reject(contract, `${policyPath}.reasoning_effort`, 'literal "medium", "high" or "max"');
     }
     assertRecord(
       value.model_policy.context_management,

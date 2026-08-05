@@ -61,14 +61,14 @@ def test_bootstrap_and_turns_are_generated_from_backend_catalogs(tmp_path) -> No
 
     assert bootstrap["models"]["snapshot_id"].startswith("models_")
     assert bootstrap["models"]["chat"][0]["model_id"] == "ecorex-chat"
-    assert bootstrap["models"]["chat"][0]["display_name"] == ("GPT-5.6 Luna · 高推理")
+    assert bootstrap["models"]["chat"][0]["display_name"] == ("GPT-5.6 Luna · 最大推理")
     assert bootstrap["models"]["chat"][0]["model_policy"] == {
         "schema_version": 1,
         "policy_id": "ecorex-chat-gpt-5.6-luna",
-        "policy_version": "1.1.0",
+        "policy_version": "1.2.0",
         "local_model_id": "ecorex-chat",
         "upstream_model_id": "gpt-5.6-luna",
-        "reasoning_effort": "high",
+        "reasoning_effort": "max",
         "context_management": {
             "type": "compaction",
             "compact_threshold_tokens": 272_000,

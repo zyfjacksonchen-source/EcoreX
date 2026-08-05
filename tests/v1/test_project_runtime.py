@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import subprocess
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 from ecorex.capabilities import ToolExecutionScope
 from ecorex.capabilities.handlers import WorkspaceReadError, WorkspaceReadHandler
 from ecorex.projects import ProjectWorkspaceAuthority
+from ecorex.projects import picker as picker_module
 from ecorex.integration.pack_process import ProcessCapabilityPackAdapter
 from ecorex.runtime import RuntimeSettings, create_app
 
@@ -15,6 +17,27 @@ from ecorex.runtime import RuntimeSettings, create_app
 TOKEN = "p" * 32
 CSRF = "q" * 32
 ORIGIN = "http://testserver"
+
+
+def test_native_picker_process_is_hidden_and_never_uses_a_shell(monkeypatch) -> None:
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, stdout="C:\\workspace\n".encode())
+
+    monkeypatch.setattr(picker_module.subprocess, "run", run)
+    monkeypatch.setattr(picker_module.os, "name", "nt")
+
+    assert picker_module._run_picker(("picker.exe",)) == picker_module.Path(
+        "C:\\workspace"
+    )
+    assert calls[0][1]["creationflags"] == getattr(
+        subprocess, "CREATE_NO_WINDOW", 0
+    )
+    assert calls[0][1]["stdin"] is subprocess.DEVNULL
+    assert calls[0][1]["stderr"] is subprocess.DEVNULL
+    assert calls[0][1]["shell"] is False
 
 
 def _headers(*, mutation: bool = False) -> dict[str, str]:

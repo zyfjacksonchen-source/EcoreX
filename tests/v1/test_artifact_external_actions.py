@@ -343,6 +343,7 @@ def test_system_launcher_uses_fixed_argv_without_shell_and_unknown_platform_fail
     assert opened == ["/safe/Quarterly report.pdf"]
     assert commands[0][0] == ["explorer.exe", "/select,", "/safe/Quarterly report.pdf"]
     assert commands[0][1]["shell"] is False
+    assert commands[0][1]["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
     unknown = SystemArtifactLauncher(platform="linux", command_runner=run)
     with pytest.raises(Exception) as error:

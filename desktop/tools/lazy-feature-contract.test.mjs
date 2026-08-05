@@ -32,6 +32,10 @@ const composer = await readFile(
   new URL("../src/v1/components/Composer.tsx", import.meta.url),
   "utf-8",
 );
+const skillsWorkspace = await readFile(
+  new URL("../src/v1/components/SkillsWorkspace.tsx", import.meta.url),
+  "utf-8",
+);
 
 const FEATURES = [
   "ArtifactPreviewDialog",
@@ -80,13 +84,12 @@ test("the account gate is immediate while HITL stays deferred with an accessible
   assert.doesNotMatch(app, /DeviceLoginCard|loadDeviceLoginCard/u);
 });
 
-test("connector management is deferred with a visible composer fallback", () => {
-  assert.doesNotMatch(composer, /import\s*\{\s*ConnectorPopover\s*\}\s*from/u);
-  assert.match(composer, /loadConnectorPopover = \(\) => import\("\.\/ConnectorPopover\.tsx"\)/u);
-  assert.match(composer, /default:\s*\(await loadConnectorPopover\(\)\)\.ConnectorPopover/u);
+test("connector management lives in the deferred capability workspace, not Composer", () => {
+  assert.doesNotMatch(composer, /ConnectorPopover|ConnectorCatalogPanel|管理连接器|连接器/u);
   assert.match(composer, /ComposerModelSelector = lazy\(loadComposerModelSelector\)/u);
-  assert.match(composer, /aria-label="正在准备连接器"/u);
-  assert.match(composer, /<Suspense fallback=/u);
+  assert.match(skillsWorkspace, /ConnectorCatalogPanel/u);
+  assert.match(skillsWorkspace, /category === "collaboration"/u);
+  assert.match(skillsWorkspace, /<ConnectorCatalogPanel \{\.\.\.connectorRuntime\} \/>/u);
 });
 
 test("lazy loading and error surfaces use the shared modal accessibility primitive", () => {

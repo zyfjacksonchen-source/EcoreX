@@ -23,6 +23,7 @@ from ecorex.release import (
     build_unsigned_gate_bundle,
     sign_gate_bundle,
 )
+from ecorex.release.public_index import stable_pointer_sequence
 from ecorex.release.signing import sign_envelope
 from ecorex.update import (
     ReleaseArtifact,
@@ -160,7 +161,7 @@ class FakeClient:
             release_id=release_id,
             version="1.0.0",
             build_digest=self.build_digest,
-            sequence=1,
+            sequence=stable_pointer_sequence("1.0.0"),
             revision=release_id,
             issued_at="2026-07-12T00:00:00Z",
             expires_at="2026-07-12T01:00:00Z",
@@ -338,7 +339,7 @@ def bootstrap_index_receipt(tmp_path, release: ReleaseManifest, publication_path
         "public_url": "https://download.example/stable/public-bootstrap-index.json",
         "staged_revision_id": "bstage_" + "1" * 32,
         "active_activation_record_id": "bactive_" + "2" * 32,
-        "active_sequence": 1,
+        "active_sequence": stable_pointer_sequence(release.version),
         "active_authority_revision_id": release.release_id,
         "active_target": {
             "manifest_sha256": manifest_sha256,

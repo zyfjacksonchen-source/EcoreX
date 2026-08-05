@@ -178,6 +178,39 @@ for (const viewport of viewports) {
   }
 }
 
+for (const viewport of [
+  { width: 641, height: 249 },
+  { width: 1366, height: 768 },
+  { width: 1920, height: 1080 },
+] as const) {
+  test(`${viewport.width}x${viewport.height} home hero and Composer remain reachable without clipping`, async ({ browser }) => {
+    await withGuardedContext(browser, { viewport }, async (page) => {
+      await page.goto("/__ga/frame-app?scenario=many-threads&theme=dark", {
+        waitUntil: "domcontentloaded",
+      });
+      await expect(page.getByRole("img", { name: "e-Mate 五位办公助手" })).toBeVisible();
+      const controls = [
+        page.locator(".ex-home-hero-stage"),
+        page.getByRole("heading", { name: "和小芯一起开始工作吧" }),
+        page.locator(".ex-home-composer .ex-composer"),
+      ];
+      for (const control of controls) {
+        await control.scrollIntoViewIfNeeded();
+        await expect(control).toBeVisible();
+        const bounds = await control.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.y).toBeGreaterThanOrEqual(-1);
+        expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height + 1);
+      }
+      const overflow = await page.evaluate(() => (
+        Math.max(document.documentElement.scrollWidth, document.body.scrollWidth)
+        - window.innerWidth
+      ));
+      expect(overflow).toBeLessThanOrEqual(1);
+    });
+  });
+}
+
 test("ordinary controls keep Codex density and reveal a light frame only while interacting", async ({ guardedPage }) => {
   await guardedPage.goto("/__ga/frame-app?scenario=artifact&theme=light", {
     waitUntil: "domcontentloaded",

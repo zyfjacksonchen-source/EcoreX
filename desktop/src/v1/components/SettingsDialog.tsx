@@ -301,7 +301,7 @@ export function SettingsDialog({
             </p>
             {authenticated ? (
               <form className="ex-password-form" onSubmit={(event) => { event.preventDefault(); void changePassword(); }}>
-                <label className="ex-field"><span>当前密码</span><input type="password" autoComplete="current-password" value={currentPassword} disabled={passwordBusy} minLength={8} maxLength={256} onChange={(event) => setCurrentPassword(event.target.value)} /></label>
+                <label className="ex-field ex-password-current"><span>当前密码</span><input type="password" autoComplete="current-password" value={currentPassword} disabled={passwordBusy} minLength={8} maxLength={256} onChange={(event) => setCurrentPassword(event.target.value)} /></label>
                 <label className="ex-field"><span>新密码</span><input type="password" autoComplete="new-password" value={newPassword} disabled={passwordBusy} minLength={10} maxLength={256} onChange={(event) => setNewPassword(event.target.value)} /></label>
                 <label className="ex-field"><span>确认新密码</span><input type="password" autoComplete="new-password" value={confirmPassword} disabled={passwordBusy} minLength={10} maxLength={256} onChange={(event) => setConfirmPassword(event.target.value)} /></label>
                 <div className="ex-password-form-actions">
@@ -695,10 +695,14 @@ export function SettingsDialog({
                 </p>
               </div>
               <button
-                className="ex-button ex-permission-change"
+                className="ex-skill-switch ex-permission-switch"
                 type="button"
+                role="switch"
+                aria-checked={fullAccess}
+                aria-label={fullAccess ? "关闭完全访问" : "开启完全访问"}
                 disabled={!bootstrap || !authenticated || permissionUpdating}
                 aria-busy={permissionUpdating}
+                title={fullAccess ? "切换为默认权限" : "切换为完全访问"}
                 onClick={() => {
                   if (fullAccess) {
                     void applyPermission("default");
@@ -706,13 +710,7 @@ export function SettingsDialog({
                     setConfirmElevation(true);
                   }
                 }}
-              >
-                {permissionUpdating
-                  ? "正在应用"
-                  : fullAccess
-                    ? "恢复默认权限"
-                    : "启用完全访问"}
-              </button>
+              ><span /></button>
             </div>
             <p className="ex-settings-note" aria-live="polite">
               {fullAccess

@@ -92,6 +92,14 @@ test("WebUI Skill Hub exposes real detail, download, upload, and Runtime install
   assert.doesNotMatch(component, /emate:\/\//);
 });
 
+test("local Skill import derives identity and keeps Hub publishing advanced", () => {
+  assert.match(component, /e-Mate 会自动识别名称/u);
+  assert.doesNotMatch(component, /localExtensionId|<span>扩展 ID<\/span>/u);
+  assert.match(component, /<details className="ex-skill-advanced">/u);
+  assert.match(component, /<summary>高级操作<\/summary>/u);
+  assert.match(session, /client\.installLocalSkill\(\s*bundleBase64,\s*clientRequestId/u);
+});
+
 test("extension feature CSS stays inside the locked EcoreX token system", () => {
   assert.notEqual(extensionCss.length, 0);
   assert.doesNotMatch(extensionCss, /#[0-9a-f]{3,8}\b/i);

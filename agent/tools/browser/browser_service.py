@@ -1132,6 +1132,11 @@ class BrowserService:
             result = page.evaluate(script)
             return {"result": result}
         except Exception as e:
+            if "Illegal return statement" in str(e):
+                try:
+                    return {"result": page.evaluate("(() => {\n%s\n})()" % script)}
+                except Exception as retry_error:
+                    e = retry_error
             return {"error": f"Evaluate failed: {e}"}
 
     def press(self, key: str, cancel_event=None) -> Dict[str, Any]:

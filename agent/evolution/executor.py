@@ -494,6 +494,7 @@ def run_evolution_for_session(
             enable_skills=True,
             runtime_info=getattr(agent, "runtime_info", None),
         )
+        review_agent._evolution_restricted = True
         # Reuse the live model so it follows the user's configured model.
         review_agent.model = agent.model
         # Inject the evolution task brief AFTER the full system prompt: the agent

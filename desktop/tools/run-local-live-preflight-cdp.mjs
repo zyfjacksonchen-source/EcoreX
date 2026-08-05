@@ -432,11 +432,15 @@ async function runPreflight() {
         check(await page.getByRole("group", { name: "任务类型" }).count() === 0, "office_mode_split_present");
       },
       "connector-catalog": async () => {
-        await openThread("artifact");
-        await page.getByRole("button", { name: /^管理连接器/ }).click();
-        const popover = page.locator(".ex-connector-popover");
-        await checkedVisible(popover, "connector_catalog_missing");
-        const text = await popover.textContent();
+        await gotoApp("artifact");
+        await page.getByRole("button", { name: "技能", exact: true }).click();
+        const workspace = page.locator(".ex-skills-workspace");
+        await checkedVisible(workspace, "skills_workspace_missing");
+        await workspace.getByRole("tab", { name: /已安装/u }).click();
+        await workspace.getByRole("button", { name: "协作连接", exact: true }).click();
+        const panel = workspace.locator(".ex-connector-catalog-panel");
+        await checkedVisible(panel, "connector_catalog_missing");
+        const text = await panel.textContent();
         check(text?.includes("飞书") === true, "feishu_connector_missing");
         check(text?.includes("腾讯文档") === true, "tencent_docs_connector_missing");
       },

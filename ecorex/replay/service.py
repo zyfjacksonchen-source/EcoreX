@@ -101,6 +101,7 @@ class ReplayService:
     def mock_replay(
         self, thread_id: str, *, through_seq: int | None = None
     ) -> MockReplayResponse:
+        self.kernel.get_thread(thread_id)
         with self.kernel.database.reader() as connection:
             reduced, stream = self._reduce_thread(
                 connection,
@@ -164,6 +165,7 @@ class ReplayService:
     ) -> LiveReplayResponse:
         if self.composition is None:
             raise RuntimeError("live replay requires Runtime composition")
+        self.kernel.get_thread(thread_id)
         client_message_id = self._live_replay_client_message_id(
             request.client_request_id
         )
@@ -801,6 +803,11 @@ class ReplayService:
         if event.event_type == "thread.restored":
             state.thread = state.thread.model_copy(
                 update={"status": ThreadStatus.ACTIVE}
+            )
+            return
+        if event.event_type == "thread.deleted":
+            state.thread = state.thread.model_copy(
+                update={"status": ThreadStatus.DELETED}
             )
             return
         if event.event_type in {"thread.renamed", "thread.title_generated"}:

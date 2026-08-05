@@ -3636,9 +3636,14 @@ class AgentTurnWorker:
                 # the acknowledgement boundary independently of ToolSpec;
                 # treating that transport flag as sufficient trapped failed
                 # read-only fetches in a misleading conflict-resolution HITL.
-                uncertain = (
+                connector_invocation_id = getattr(error, "invocation_id", None)
+                uncertain = bool(getattr(error, "side_effect_uncertain", True)) and (
                     spec.idempotency is IdempotencyClass.NON_IDEMPOTENT
-                    and bool(getattr(error, "side_effect_uncertain", True))
+                    or (
+                        spec.tool_id == "connector_write"
+                        and isinstance(connector_invocation_id, str)
+                        and bool(connector_invocation_id)
+                    )
                 )
                 if not uncertain:
                     error_code = self._safe_error_code(error)
@@ -3663,7 +3668,6 @@ class AgentTurnWorker:
                     "approved": approved,
                     "uncertain_error_code": self._safe_error_code(error),
                 }
-                connector_invocation_id = getattr(error, "invocation_id", None)
                 if isinstance(connector_invocation_id, str) and connector_invocation_id:
                     checkpoint["connector_invocation_id"] = connector_invocation_id
                     prompt = (

@@ -1,11 +1,12 @@
-import * as Popover from "@radix-ui/react-popover";
 import {
   AlertTriangle,
   Ban,
   CheckCircle2,
   CircleAlert,
+  FileText,
   Link2,
   LoaderCircle,
+  MessageCircle,
   RefreshCw,
   RotateCw,
   Unplug,
@@ -30,7 +31,7 @@ import { serviceReasonMessage } from "../state/userLanguage.ts";
 import { IconButton } from "./IconButton.tsx";
 import { TechnicalDetails } from "./TechnicalDetails.tsx";
 
-interface ConnectorPopoverProps {
+export interface ConnectorCatalogPanelProps {
   catalog: ConnectorCatalogItem[];
   loadState: ConnectorCatalogLoadState;
   error: string | null;
@@ -79,13 +80,19 @@ function ConnectorStatus({ health }: { health: ConnectorHealth }) {
   );
 }
 
+function ConnectorIcon({ item }: { item: ConnectorCatalogItem }) {
+  if (item.definition.icon_key === "tencent-docs") return <FileText aria-hidden="true" />;
+  if (item.definition.icon_key === "feishu") return <Link2 aria-hidden="true" />;
+  return <MessageCircle aria-hidden="true" />;
+}
+
 interface InstanceRowProps {
   item: ConnectorCatalogItem;
   instance: ConnectorInstanceProjection;
   operation: ConnectorOperationState | null;
   confirmDisconnectId: string | null;
-  onReconnect: ConnectorPopoverProps["onReconnect"];
-  onHealthCheck: ConnectorPopoverProps["onHealthCheck"];
+  onReconnect: ConnectorCatalogPanelProps["onReconnect"];
+  onHealthCheck: ConnectorCatalogPanelProps["onHealthCheck"];
   onRequestDisconnect: (
     item: ConnectorCatalogItem,
     instance: ConnectorInstanceProjection,
@@ -163,7 +170,7 @@ function InstanceRow({
   );
 }
 
-export function ConnectorPopover({
+export function ConnectorCatalogPanel({
   catalog,
   loadState,
   error,
@@ -176,17 +183,10 @@ export function ConnectorPopover({
   onDisconnect,
   onClearError,
   onClearNotice,
-}: ConnectorPopoverProps) {
-  const [open, setOpen] = useState(false);
+}: ConnectorCatalogPanelProps) {
   const [confirmDisconnectId, setConfirmDisconnectId] = useState<string | null>(null);
   const confirmTimer = useRef<number | null>(null);
   const sections = useMemo(() => connectorSections(catalog), [catalog]);
-  const connectedCount = catalog.reduce(
-    (count, item) => count + item.instances.filter(
-      (instance) => instance.health === "connected",
-    ).length,
-    0,
-  );
 
   const clearDisconnectConfirmation = () => {
     if (confirmTimer.current !== null) window.clearTimeout(confirmTimer.current);
@@ -194,9 +194,12 @@ export function ConnectorPopover({
     setConfirmDisconnectId(null);
   };
 
-  useEffect(() => () => {
-    if (confirmTimer.current !== null) window.clearTimeout(confirmTimer.current);
-  }, []);
+  useEffect(() => {
+    void onRefresh();
+    return () => {
+      if (confirmTimer.current !== null) window.clearTimeout(confirmTimer.current);
+    };
+  }, [onRefresh]);
 
   const requestDisconnect = (
     item: ConnectorCatalogItem,
@@ -213,57 +216,22 @@ export function ConnectorPopover({
   };
 
   return (
-    <Popover.Root
-      open={open}
-      onOpenChange={(nextOpen) => {
-        setOpen(nextOpen);
-        if (nextOpen) void onRefresh();
-        else clearDisconnectConfirmation();
-      }}
-    >
-      <Popover.Trigger asChild>
-        <button
-          className="ex-composer-tool"
-          type="button"
-          aria-label={connectedCount ? `管理连接器，${connectedCount} 个账号已连接` : "管理连接器"}
-        >
-          <Link2 aria-hidden="true" />
-          <span>连接器</span>
-          {connectedCount ? (
-            <span className="ex-connector-trigger-count" aria-hidden="true">
-              {connectedCount}
-            </span>
-          ) : null}
-        </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          className="ex-popover ex-connector-popover"
-          side="top"
-          align="start"
-          sideOffset={10}
-          collisionPadding={12}
-          aria-busy={loadState === "loading"}
-        >
+    <section className="ex-connector-catalog-panel" aria-label="协作连接" aria-busy={loadState === "loading"}>
+        <div className="ex-connector-catalog">
           <div className="ex-popover-heading">
             <div>
-              <strong>连接应用</strong>
-              <span>在这里连接常用办公应用，并随时检查或撤销授权</span>
+              <strong>协作连接</strong>
+              <span>统一连接飞书、腾讯文档和外部消息渠道，并随时检查或撤销授权</span>
             </div>
             <div className="ex-connector-heading-actions">
               <IconButton
-                label="刷新连接器状态"
+                label="刷新协作连接状态"
                 tooltipSide="bottom"
                 disabled={loadState === "loading"}
                 onClick={() => void onRefresh()}
               >
                 <RefreshCw aria-hidden="true" />
               </IconButton>
-              <Popover.Close asChild>
-                <IconButton label="关闭连接器列表" tooltipSide="bottom">
-                  <X aria-hidden="true" />
-                </IconButton>
-              </Popover.Close>
             </div>
           </div>
 
@@ -274,7 +242,7 @@ export function ConnectorPopover({
               <button className="ex-button" type="button" onClick={() => void onRefresh()}>
                 重新加载
               </button>
-              <IconButton label="关闭连接器错误" tooltipSide="bottom" onClick={onClearError}>
+              <IconButton label="关闭协作连接错误" tooltipSide="bottom" onClick={onClearError}>
                 <X aria-hidden="true" />
               </IconButton>
             </div>
@@ -310,7 +278,7 @@ export function ConnectorPopover({
                   return (
                     <article className="ex-connector-row" key={connectorId} data-health={overallHealth}>
                       <span className="ex-connector-icon" aria-hidden="true">
-                        <Link2 />
+                        <ConnectorIcon item={item} />
                       </span>
                       <div className="ex-connector-body">
                         <div className="ex-connector-title">
@@ -380,7 +348,7 @@ export function ConnectorPopover({
             {loadState !== "loading" && !catalog.length ? (
               <div className="ex-popover-empty">
                 <Unplug aria-hidden="true" />
-                <strong>连接器目录为空</strong>
+                <strong>协作连接目录为空</strong>
                 <span>当前安装中没有可用连接。刷新后仍为空时，请检查是否已安装完整组件。</span>
                 <button className="ex-button" type="button" onClick={() => void onRefresh()}>
                   刷新目录
@@ -388,8 +356,7 @@ export function ConnectorPopover({
               </div>
             ) : null}
           </div>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+        </div>
+    </section>
   );
 }

@@ -50,6 +50,7 @@ class FrozenProtocolModel(ProtocolModel):
 class ThreadStatus(str, Enum):
     ACTIVE = "active"
     ARCHIVED = "archived"
+    DELETED = "deleted"
 
 
 class TurnStatus(str, Enum):
@@ -1514,7 +1515,7 @@ class ModelPolicyDescriptor(FrozenProtocolModel):
     policy_version: str
     local_model_id: str
     upstream_model_id: str
-    reasoning_effort: Literal["medium", "high"]
+    reasoning_effort: Literal["medium", "high", "max"]
     context_management: ModelContextManagementDescriptor
 
 

@@ -31,6 +31,16 @@ class _ScriptedGateway:
 
     async def stream(self, _request):
         script = self.scripts.pop(0)
+        if len(script) == 1 and script[0]["event_type"] == "response.completed":
+            yield GatewayEvent.model_validate(
+                {
+                    "seq": 1,
+                    "event_type": "output_text.delta",
+                    "response_id": script[0]["response_id"],
+                    "delta": "done",
+                }
+            )
+            script = [{**script[0], "seq": 2}]
         for event in script:
             yield GatewayEvent.model_validate(event)
 
@@ -371,7 +381,7 @@ def test_shell_preflight_failure_does_not_create_false_uncertain_hitl(
     execution_id = AgentTurnWorker._execution_id(created.turn.turn_id, "shell-call")
     execution = ToolExecutionRepository(kernel.database).get(execution_id)
     assert execution.status == "failed"
-    assert execution.error_code == "capabilitypackprocesserror"
+    assert execution.error_code == "workspace_sandbox_unavailable"
     assert not any(
         interaction.kind.value == "conflict_resolution"
         for interaction in kernel.list_interactions(thread.thread_id).interactions

@@ -76,5 +76,12 @@ from .mcp import (
     MCPTransportSession,
     ManagedHTTPMCPTransport,
 )
+from .mcp_oauth import (
+    MCPOAuthError,
+    MCPOAuthRegistration,
+    MCPOAuthService,
+    MCPOAuthStatus,
+    register_mcp_oauth_routes,
+)
 
 __all__ = [name for name in globals() if not name.startswith("_")]

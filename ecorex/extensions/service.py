@@ -15,6 +15,7 @@ import sqlite3
 import sys
 import threading
 from typing import Any
+import unicodedata
 import uuid
 
 from ecorex.capabilities import RuntimeAvailability
@@ -69,6 +70,14 @@ from .taxonomy import extension_category, extension_icon_key
 _CLIENT_REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$")
 _ERROR_CODE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _local_skill_extension_id(name: str) -> str:
+    normalized = " ".join(unicodedata.normalize("NFKC", name).casefold().split())
+    ascii_name = unicodedata.normalize("NFKD", normalized).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_name).strip("-")[:48] or "skill"
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
+    return f"local.{slug}-{digest}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,16 +374,17 @@ class ExtensionService:
         self,
         payload: bytes,
         *,
-        extension_id: str,
-        expected_revision: int,
+        extension_id: str | None = None,
+        expected_revision: int | None = None,
         client_request_id: str,
     ) -> ExtensionProjection:
         if self.local_bundle_store is None:
             raise ExtensionActionUnavailable("local Skill bundle storage is unavailable")
         bundle = self.local_bundle_store.ingest_zip(payload)
+        resolved_id = extension_id or _local_skill_extension_id(bundle.metadata.name)
         return self._install_local_bundle(
             bundle,
-            extension_id=extension_id,
+            extension_id=resolved_id,
             expected_revision=expected_revision,
             client_request_id=client_request_id,
         )
@@ -447,7 +457,7 @@ class ExtensionService:
         bundle: LocalSkillBundle,
         *,
         extension_id: str,
-        expected_revision: int,
+        expected_revision: int | None,
         client_request_id: str,
     ) -> ExtensionProjection:
         manifest = self._local_bundle_manifest(
@@ -465,11 +475,44 @@ class ExtensionService:
             platform=self.platform,
             architecture=self.architecture,
         )
+        if expected_revision is None:
+            expected_revision = self._auto_install_expected_revision(
+                manifest,
+                client_request_id,
+            )
         return self.install_verified(
             verified,
             expected_revision=expected_revision,
             client_request_id=client_request_id,
         )
+
+    def _auto_install_expected_revision(
+        self,
+        manifest: ExtensionManifest,
+        client_request_id: str,
+    ) -> int:
+        record = self.repository.request(client_request_id)
+        if record is not None:
+            response_revision = record.response.get("revision")
+            if isinstance(response_revision, int) and not isinstance(response_revision, bool):
+                extra = {
+                    "revision_id": manifest.revision_id,
+                    "manifest_sha256": manifest.manifest_sha256,
+                }
+                for candidate in {response_revision, max(0, response_revision - 1)}:
+                    if (
+                        record.operation == "extension.install"
+                        and record.request_sha256
+                        == self._fingerprint(
+                            "extension.install",
+                            manifest.extension_id,
+                            candidate,
+                            extra,
+                        )
+                    ):
+                        return candidate
+        state = self.repository.state(manifest.extension_id)
+        return state.revision if state else 0
 
     def _local_bundle_manifest(
         self,

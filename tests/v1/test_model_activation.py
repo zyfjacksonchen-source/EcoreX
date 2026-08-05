@@ -106,7 +106,7 @@ def test_responses_probe_freezes_endpoint_model_and_no_storage() -> None:
             ],
             "max_output_tokens": 512,
             "store": False,
-            "reasoning": {"effort": "high"},
+            "reasoning": {"effort": "max"},
             "context_management": [
                 {"type": "compaction", "compact_threshold": 272_000}
             ],

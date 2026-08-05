@@ -342,6 +342,40 @@ def test_windows_fallback_entry_is_preserved_and_update_rollback_is_exact(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows e-Mate shortcut migration")
+def test_windows_shortcut_read_retries_one_transient_com_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = tmp_path / "e-Mate.lnk"
+    entry.write_bytes(b"shortcut")
+    responses = iter(
+        (
+            b"not-json",
+            json.dumps(
+                {
+                    "target": "C:/e-Mate/ecorex-bootstrap.exe",
+                    "arguments": "",
+                    "description": "e-Mate",
+                    "working_directory": "C:/e-Mate",
+                }
+            ).encode(),
+        )
+    )
+    monkeypatch.setattr(
+        companion_module,
+        "_run_powershell",
+        lambda _script, _environment: next(responses),
+    )
+
+    assert companion_module._read_windows_shortcut(entry) == {
+        "target": "C:/e-Mate/ecorex-bootstrap.exe",
+        "arguments": "",
+        "description": "e-Mate",
+        "working_directory": "C:/e-Mate",
+    }
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows e-Mate shortcut migration")
 def test_windows_replaces_exact_legacy_emate_shortcut_in_place(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

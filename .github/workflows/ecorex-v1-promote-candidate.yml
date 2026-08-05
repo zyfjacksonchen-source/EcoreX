@@ -63,7 +63,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           REF_NAME: ${{ github.ref }}
           SOURCE_SHA: ${{ github.sha }}
-          RELEASE_SHA: ${{ vars.ECOREX_V030_RELEASE_COMMIT_SHA }}
+          RELEASE_SHA: ${{ vars.ECOREX_V031_RELEASE_COMMIT_SHA }}
           CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
           CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
           CANDIDATE_ARTIFACT_ID: ${{ inputs.candidate_artifact_id }}

@@ -1,4 +1,4 @@
-"""Publish verified v0.3.0 WebUI packages, then switch the legacy pointer."""
+"""Publish verified v0.3.1 WebUI packages, then switch the legacy pointer."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ PUBLIC_ORIGINS = (
     "https://dl.ecoremedia.net/ecorex-agent",
 )
 PACKAGE_ORIGINS = (
-    "https://gh-proxy.com/https://github.com/zyfjacksonchen-source/EcoreX-installers/releases/download/v0.3.0",
+    "https://gh-proxy.com/https://github.com/zyfjacksonchen-source/EcoreX-installers/releases/download/v0.3.1",
     *(f"{origin}/downloads" for origin in PUBLIC_ORIGINS),
 )
 PRODUCTION_DOWNLOADS = Path("/srv/ecorex-agent-download/current/downloads")
@@ -180,7 +180,7 @@ def _valid_origin(value: str) -> bool:
         ("dl.ecoremedia.net", "/ecorex-agent/downloads"),
         (
             "gh-proxy.com",
-            "/https://github.com/zyfjacksonchen-source/EcoreX-installers/releases/download/v0.3.0",
+            "/https://github.com/zyfjacksonchen-source/EcoreX-installers/releases/download/v0.3.1",
         ),
     }
 
@@ -206,7 +206,7 @@ def _validate_pointer(path: Path, *, enforce_owner: bool) -> None:
         raise LegacyPublicationError("legacy_pointer_permissions_invalid")
     if not isinstance(value, dict) or value.get("version") not in {
         BASELINE_VERSION,
-        "0.3.0",
+        "0.3.1",
     }:
         raise LegacyPublicationError("legacy_pointer_version_invalid")
 

@@ -47,6 +47,12 @@ class ProviderSerializingGateway:
         self.provider_payloads.append(payload)
         yield GatewayEvent(
             seq=1,
+            event_type="output_text.delta",
+            response_id="response_multimodal_integration",
+            delta="done",
+        )
+        yield GatewayEvent(
+            seq=2,
             event_type="response.completed",
             response_id="response_multimodal_integration",
         )

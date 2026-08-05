@@ -22,3 +22,9 @@ def test_http_provider_authorization_is_auditable() -> None:
     program = _module()["_program"]("run", "A" * 16, True)
     assert "ALLOW_HTTP_PROVIDER = True" in program
     assert '"provider_transport_authorization": "explicit-http"' in program
+
+
+def test_production_probe_requests_and_reports_max_reasoning() -> None:
+    program = _module()["_program"]("run", "A" * 16, False)
+    assert '"reasoning": {"effort": "max"}' in program
+    assert '"reasoning_effort": "max"' in program

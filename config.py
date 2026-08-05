@@ -86,7 +86,7 @@ available_setting = {
     "custom_api_base": "",  # custom OpenAI-compatible provider api base (used when bot_type is "custom")
     "proxy": "",  # proxy used by openai
     # chatgpt model; when use_azure_chatgpt is true, this is the Azure model deployment name
-    "model": "gpt-3.5-turbo",  # options: gpt-4o, gpt-4o-mini, gpt-4-turbo, claude-3-sonnet, wenxin, moonshot, qwen-turbo, xunfei, glm-4, minimax, gemini, etc. See common/const.py for the full list
+    "model": "gpt-5.6-luna",  # e-Mate default; administrator catalog remains authoritative in managed WebUI
     "model_fallbacks": [],  # optional agent model fallback chain; entries can be model names or {"model": "...", "bot_type": "..."} objects. Fallback is only attempted for retryable failures before stream output starts.
     "bot_type": "",  # optional; for OpenAI-compatible third-party services set "openai" or "custom" (in custom mode switching model won't auto-switch bot_type). See common/const.py for bot names; inferred from model name if left empty
     "use_azure_chatgpt": False,  # whether to use Azure chatgpt
@@ -317,8 +317,8 @@ available_setting = {
     "agent_context_budget_warn_ratio": 0.85,  # emit near-limit context-budget evidence above this fraction of the effective input limit
     "agent_context_budget_clamp_to_window": True,  # clamp configured context budget to the model window minus response reserve
     "agent_context_budget_response_reserve_tokens": 0,  # 0 means use the model-derived reserve; set a positive number to override
-    "enable_thinking": False,  # Enable deep-thinking mode for thinking-capable models
-    "reasoning_effort": "high",  # Reasoning depth under thinking mode: "high" or "max"
+    "enable_thinking": True,  # GPT-5.6 Luna and DeepSeek V4 Flash default to thinking mode
+    "reasoning_effort": "max",  # Reasoning depth: "medium", "high", or "max"
     "knowledge": True,  # whether to enable the knowledge base feature
     # Self-evolution: review idle conversations to learn memory/skills. Flat keys.
     "self_evolution_enabled": True,         # switch to enable/disable self-evolution

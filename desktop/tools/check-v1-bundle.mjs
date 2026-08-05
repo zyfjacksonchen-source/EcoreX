@@ -10,8 +10,8 @@ const MAX_INITIAL_GZIP_BYTES = 150 * 1024;
 const MAX_CHUNK_BYTES = 500 * 1024;
 const FEATURE_STEMS = [
   "ArtifactPreviewDialog",
+  "Composer",
   "ComposerModelSelector",
-  "ConnectorPopover",
   "SkillsWorkspace",
   "InteractionStack",
   "NewConversationProjectSelector",
@@ -123,14 +123,16 @@ export async function inspectV1Bundle(distDirectory) {
     fail(`initial gzip JS ${formatKiB(initialGzipBytes)} exceeds ${formatKiB(MAX_INITIAL_GZIP_BYTES)}`);
   }
 
-  const entrySource = entryRecord.content.toString("utf-8");
   const featureChunks = [];
   for (const stem of FEATURE_STEMS) {
     const matches = names.filter((name) => name.startsWith(`${stem}.`));
     if (matches.length !== 1) fail(`expected one deferred ${stem} chunk, found ${matches.length}`);
     const relative = `assets/${matches[0]}`;
     if (preloads.has(relative)) fail(`${stem} must not be fetched during initial workspace load`);
-    if (!entrySource.includes(matches[0])) fail(`entry does not reference deferred ${stem} chunk`);
+    const referenced = [...records.entries()].some(
+      ([source, record]) => source !== relative && record.content.includes(matches[0]),
+    );
+    if (!referenced) fail(`no production chunk references deferred ${stem} chunk`);
     featureChunks.push(relative);
   }
 

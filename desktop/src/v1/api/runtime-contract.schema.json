@@ -1883,7 +1883,8 @@
             "reasoning_effort": {
               "enum": [
                 "medium",
-                "high"
+                "high",
+                "max"
               ],
               "title": "Reasoning Effort",
               "type": "string"
@@ -9869,7 +9870,8 @@
         "ThreadStatus": {
           "enum": [
             "active",
-            "archived"
+            "archived",
+            "deleted"
           ],
           "title": "ThreadStatus",
           "type": "string"
@@ -9929,7 +9931,8 @@
         "ThreadStatus": {
           "enum": [
             "active",
-            "archived"
+            "archived",
+            "deleted"
           ],
           "title": "ThreadStatus",
           "type": "string"
@@ -10837,7 +10840,8 @@
         "ThreadStatus": {
           "enum": [
             "active",
-            "archived"
+            "archived",
+            "deleted"
           ],
           "title": "ThreadStatus",
           "type": "string"

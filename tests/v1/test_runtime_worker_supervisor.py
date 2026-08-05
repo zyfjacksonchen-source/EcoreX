@@ -31,6 +31,14 @@ class CompletingGateway:
         yield GatewayEvent.model_validate(
             {
                 "seq": 1,
+                "event_type": "output_text.delta",
+                "response_id": f"response_{len(self.requests)}",
+                "delta": "done",
+            }
+        )
+        yield GatewayEvent.model_validate(
+            {
+                "seq": 2,
                 "event_type": "response.completed",
                 "response_id": f"response_{len(self.requests)}",
             }

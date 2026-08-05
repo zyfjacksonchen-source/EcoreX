@@ -771,10 +771,16 @@ test("thread title and status events remain projection-driven", () => {
 
   state = runtimeReducer(state, {
     type: "event.received",
-    event: event(8, "thread.renamed", { title: "已确认的客户访谈" }, { turn_id: null }),
+    event: event(8, "thread.deleted", {}, { turn_id: null }),
+  });
+  assert.equal(state.thread?.status, "deleted");
+
+  state = runtimeReducer(state, {
+    type: "event.received",
+    event: event(9, "thread.renamed", { title: "已确认的客户访谈" }, { turn_id: null }),
   });
   assert.equal(state.thread?.title, "已确认的客户访谈");
-  assert.equal(state.watermark, 8);
+  assert.equal(state.watermark, 9);
 });
 
 test("switching tasks accepts the target projection even with a lower independent watermark", () => {

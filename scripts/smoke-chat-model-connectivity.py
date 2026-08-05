@@ -254,7 +254,7 @@ def run_smoke(config: Dict[str, Any], key_text: str, timeout: int, include_diagn
             **_post_openai_compatible("openai", "gpt-5.6-luna", keys["openai_key"], keys["openai_base"], timeout, max_tokens_field="max_completion_tokens"),
             "credentialSource": openai_credential_source,
         },
-        lambda: _post_openai_compatible("deepseek", "deepseek-v4-pro", keys["deepseek_key"], keys["deepseek_base"], timeout),
+        lambda: _post_openai_compatible("deepseek", "deepseek-v4-flash", keys["deepseek_key"], keys["deepseek_base"], timeout),
         lambda: _post_gemini("gemini-3.1-pro-preview", keys["gemini_key"], keys["gemini_base"], timeout),
         lambda: _post_openai_compatible("doubao", "doubao-seed-2-0-pro-260215", keys["ark_key"], keys["ark_base"], timeout),
     ]

@@ -28,6 +28,7 @@ def _run_picker(command: tuple[str, ...]) -> Path:
             stderr=subprocess.DEVNULL,
             timeout=300,
             creationflags=creationflags,
+            shell=False,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise RuntimeError("project_folder_picker_unavailable") from error

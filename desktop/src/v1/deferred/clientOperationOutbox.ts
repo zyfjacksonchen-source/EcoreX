@@ -80,6 +80,10 @@ function assertOperation(operation: ClientOperation): void {
     )
     || (operation.turn !== null && !ID_PATTERN.test(operation.turn.turn_id))
     || !Array.isArray(operation.attachments)
+    || !Array.isArray(operation.explicit_tool_ids)
+    || operation.explicit_tool_ids.length > 64
+    || operation.explicit_tool_ids.some((reference) => !ID_PATTERN.test(reference))
+    || new Set(operation.explicit_tool_ids).size !== operation.explicit_tool_ids.length
     || (!operation.input.trim() && operation.attachments.length === 0)
     || operation.attachments.length > 20
     || operation.attachments.some((attachment) => !isInputAttachment(attachment))
@@ -123,6 +127,7 @@ function fingerprintPayload(operation: Omit<ClientOperation, "fingerprint">): st
     disposition: operation.disposition,
     models: operation.models,
     input: operation.input,
+    explicit_tool_ids: operation.explicit_tool_ids,
     attachments: operation.attachments,
     observed_after_seq: operation.observed_after_seq,
   });
@@ -138,6 +143,21 @@ function legacyFingerprintPayload(operation: Omit<ClientOperation, "fingerprint"
     disposition: operation.disposition,
     models: operation.models,
     input: operation.input,
+    observed_after_seq: operation.observed_after_seq,
+  });
+}
+
+function preMentionFingerprintPayload(operation: Omit<ClientOperation, "fingerprint">): string {
+  return JSON.stringify({
+    schema_version: operation.schema_version,
+    operation_id: operation.operation_id,
+    client_message_id: operation.client_message_id,
+    thread: operation.thread,
+    turn: operation.turn,
+    disposition: operation.disposition,
+    models: operation.models,
+    input: operation.input,
+    attachments: operation.attachments,
     observed_after_seq: operation.observed_after_seq,
   });
 }
@@ -200,6 +220,7 @@ export function createClientOperation(input: CreateClientOperationInput): Client
       imageModelId: input.models.imageModelId,
     },
     input: input.input.trim(),
+    explicit_tool_ids: [...new Set(input.explicitToolIds ?? [])],
     attachments: [...(input.attachments ?? [])].map((attachment) => ({ ...attachment })),
     observed_after_seq: input.observedAfterSeq,
     created_at: now.toISOString(),
@@ -243,6 +264,14 @@ function parseOperation(value: unknown): ClientOperation | null {
   const attachments = Array.isArray(rawAttachments) && rawAttachments.every(isInputAttachment)
     ? rawAttachments
     : null;
+  const rawExplicitToolIds = value.explicit_tool_ids;
+  const hadExplicitToolIds = Array.isArray(rawExplicitToolIds);
+  const explicitToolIds = hadExplicitToolIds
+    && rawExplicitToolIds.every((reference: unknown) => typeof reference === "string")
+    ? rawExplicitToolIds as string[]
+    : hadExplicitToolIds
+      ? null
+      : [];
   if (
     !thread
     || turn === undefined
@@ -257,6 +286,7 @@ function parseOperation(value: unknown): ClientOperation | null {
     || (value.models.imageModelId !== null && typeof value.models.imageModelId !== "string")
     || !["create", "steer", "queue", "replace"].includes(String(value.disposition))
     || (hadAttachments && attachments === null)
+    || explicitToolIds === null
   ) return null;
   const operation = freezeDeep({
     schema_version: value.schema_version,
@@ -271,6 +301,7 @@ function parseOperation(value: unknown): ClientOperation | null {
       imageModelId: value.models.imageModelId,
     },
     input: value.input,
+    explicit_tool_ids: explicitToolIds ? [...new Set(explicitToolIds)] : [],
     attachments: attachments ? attachments.map((attachment) => ({ ...attachment })) : [],
     observed_after_seq: value.observed_after_seq,
     created_at: value.created_at,
@@ -280,8 +311,17 @@ function parseOperation(value: unknown): ClientOperation | null {
     validateFingerprint(operation);
     return operation;
   } catch {
-    if (hadAttachments) return null;
     const { fingerprint: _stored, ...legacyPayload } = operation;
+    if (
+      !hadExplicitToolIds
+      && value.fingerprint === fingerprint(preMentionFingerprintPayload(legacyPayload))
+    ) {
+      return freezeDeep({
+        ...operation,
+        fingerprint: fingerprint(fingerprintPayload(legacyPayload)),
+      }) as ClientOperation;
+    }
+    if (hadAttachments) return null;
     if (value.fingerprint !== fingerprint(legacyFingerprintPayload(legacyPayload))) return null;
     return freezeDeep({
       ...operation,
@@ -480,6 +520,7 @@ export function operationMatchesRetry(
   input: string,
   currentThreadId: string | null,
   attachments: readonly InputAttachmentProjection[] = [],
+  explicitToolIds: readonly string[] = [],
 ): boolean {
   const operation = record.operation;
   const resolvedThreadId = resolvedOperationThreadId(record);
@@ -490,6 +531,8 @@ export function operationMatchesRetry(
       attachment.attachment_id !== attachments[index]?.attachment_id
       || attachment.revision_id !== attachments[index]?.revision_id
     ))
+    || operation.explicit_tool_ids.length !== explicitToolIds.length
+    || operation.explicit_tool_ids.some((reference, index) => reference !== explicitToolIds[index])
     || (
       currentThreadId !== null
       && currentThreadId !== resolvedThreadId

@@ -185,12 +185,17 @@ class RuntimeKernel:
 
     @staticmethod
     def _require_thread(
-        connection: sqlite3.Connection, thread_id: str
+        connection: sqlite3.Connection,
+        thread_id: str,
+        *,
+        include_deleted: bool = False,
     ) -> sqlite3.Row:
         row = connection.execute(
             "SELECT * FROM threads WHERE thread_id = ?", (thread_id,)
         ).fetchone()
-        if row is None:
+        if row is None or (
+            not include_deleted and row["status"] == ThreadStatus.DELETED.value
+        ):
             raise NotFoundError(f"thread {thread_id!r} does not exist")
         return row
 
@@ -320,9 +325,9 @@ class RuntimeKernel:
                       WHERE turns.thread_id = threads.thread_id
                       ORDER BY turns.created_at DESC, turns.turn_id DESC LIMIT 1
                     ) AS last_turn_status
-                FROM threads WHERE threads.thread_id = ?
+                FROM threads WHERE threads.thread_id = ? AND threads.status != ?
                 """,
-                (thread_id,),
+                (thread_id, ThreadStatus.DELETED.value),
             ).fetchone()
             if row is None:
                 raise NotFoundError(f"thread {thread_id!r} does not exist")
@@ -346,6 +351,9 @@ class RuntimeKernel:
             if status is not None:
                 conditions.append("threads.status = ?")
                 parameters.append(status.value)
+            else:
+                conditions.append("threads.status != ?")
+                parameters.append(ThreadStatus.DELETED.value)
             if before_updated_at is not None and before_thread_id is not None:
                 encoded_time = _store_time(before_updated_at)
                 conditions.append(
@@ -427,6 +435,45 @@ class RuntimeKernel:
             thread_id, ThreadStatus.ACTIVE, client_request_id=client_request_id
         )
 
+    def delete_thread(
+        self, thread_id: str, *, client_request_id: str
+    ) -> ThreadProjection:
+        with self.jobs.control_transaction(
+            scope="thread_delete",
+            subject=client_request_id,
+        ) as connection:
+            row = self._require_thread(connection, thread_id, include_deleted=True)
+            status = ThreadStatus(row["status"])
+            if status is ThreadStatus.DELETED:
+                return self._thread_from_row(row)
+            if status is not ThreadStatus.ARCHIVED:
+                raise ConflictError("only an archived thread can be deleted")
+            event = self.events.append_in_transaction(
+                connection,
+                thread_id=thread_id,
+                event_type="thread.deleted",
+                payload={},
+                correlation_id=client_request_id,
+                idempotency_key=f"thread:delete:{client_request_id}",
+            )
+            latest = connection.execute(
+                "SELECT MAX(seq) AS seq FROM events WHERE thread_id=? "
+                "AND event_type IN ('thread.archived','thread.restored','thread.deleted')",
+                (thread_id,),
+            ).fetchone()["seq"]
+            if event.seq == latest:
+                connection.execute(
+                    "UPDATE threads SET status = ?, updated_at = ? WHERE thread_id = ?",
+                    (
+                        ThreadStatus.DELETED.value,
+                        _store_time(event.created_at),
+                        thread_id,
+                    ),
+                )
+            return self._thread_from_row(
+                self._require_thread(connection, thread_id, include_deleted=True)
+            )
+
     def set_thread_pinned(
         self,
         thread_id: str,
@@ -495,7 +542,7 @@ class RuntimeKernel:
             )
             latest = connection.execute(
                 "SELECT MAX(seq) AS seq FROM events WHERE thread_id=? "
-                "AND event_type IN ('thread.archived','thread.restored')",
+                "AND event_type IN ('thread.archived','thread.restored','thread.deleted')",
                 (thread_id,),
             ).fetchone()["seq"]
             if event.seq == latest:
@@ -2707,7 +2754,7 @@ class RuntimeKernel:
         if thread_id in seen:
             raise ConflictError("fork lineage contains a cycle")
         seen.add(thread_id)
-        thread_row = self._require_thread(connection, thread_id)
+        thread_row = self._require_thread(connection, thread_id, include_deleted=True)
         inherited_turns: list[TurnProjection] = []
         inherited_items: list[ItemProjection] = []
         if thread_row["forked_from_thread_id"] is not None:

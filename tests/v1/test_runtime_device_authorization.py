@@ -183,6 +183,7 @@ def _create_product_runtime(
             version="1.0.0",
             build_digest="d" * 64,
         ),
+        files={},
     )
     # Cryptographic bundle verification has its own product tests.  Patching
     # only that loader keeps this test focused on Product -> Runtime wiring.

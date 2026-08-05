@@ -2220,30 +2220,30 @@ def _read_windows_shortcut(path: Path) -> dict[str, str] | None:
     script = ";".join(
         (
             "$ErrorActionPreference='Stop'",
+            "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)",
             "$shell=New-Object -ComObject WScript.Shell",
             "$link=$shell.CreateShortcut($env:ECOREX_SHORTCUT_PATH)",
             "$record=[ordered]@{target=$link.TargetPath;arguments=$link.Arguments;description=$link.Description;working_directory=$link.WorkingDirectory}",
             "[Console]::Out.Write(($record|ConvertTo-Json -Compress))",
         )
     )
-    try:
-        payload = _run_powershell(
-            script,
-            _shortcut_environment(ECOREX_SHORTCUT_PATH=str(path)),
-        )
-        raw = json.loads(payload)
-    except (BootstrapCompanionError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(raw, dict) or set(raw) != {
-        "target",
-        "arguments",
-        "description",
-        "working_directory",
-    }:
-        return None
-    if not all(isinstance(value, str) for value in raw.values()):
-        return None
-    return raw
+    for _ in range(2):
+        try:
+            payload = _run_powershell(
+                script,
+                _shortcut_environment(ECOREX_SHORTCUT_PATH=str(path)),
+            )
+            raw = json.loads(payload.decode("utf-8-sig"))
+        except (BootstrapCompanionError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if isinstance(raw, dict) and set(raw) == {
+            "target",
+            "arguments",
+            "description",
+            "working_directory",
+        } and all(isinstance(value, str) for value in raw.values()):
+            return raw
+    return None
 
 
 def _is_legacy_windows_entry(

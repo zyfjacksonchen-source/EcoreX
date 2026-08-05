@@ -649,7 +649,7 @@ def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> No
     assert result.outcome is WorkerOutcome.COMPLETED
     assert gateway.requests[0].model_id == "ecorex-chat"
     assert gateway.requests[0].model_policy.upstream_model_id == "gpt-5.6-luna"
-    assert gateway.requests[0].model_policy.reasoning_effort == "high"
+    assert gateway.requests[0].model_policy.reasoning_effort == "max"
     assert (
         gateway.requests[0].model_policy.context_management.compact_threshold_tokens
         == 272_000
@@ -675,7 +675,7 @@ def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> No
         event for event in turn_events if event.event_type == "model.requested"
     )
     assert requested.payload["model_policy"]["upstream_model_id"] == "gpt-5.6-luna"
-    assert requested.payload["model_policy"]["reasoning_effort"] == "high"
+    assert requested.payload["model_policy"]["reasoning_effort"] == "max"
     assert requested.payload["model_policy"]["context_management"] == {
         "type": "compaction",
         "compact_threshold_tokens": 272_000,

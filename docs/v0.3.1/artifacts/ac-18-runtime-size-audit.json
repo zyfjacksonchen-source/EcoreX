@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-08-05",
+  "baseline": {
+    "windows_package_bytes": 278657484,
+    "windows_expanded_stage_mib": 462.98,
+    "macos_universal_package_bytes": 548924606,
+    "macos_arm64_expanded_stage_mib": 512.58,
+    "macos_x64_expanded_stage_mib": 491.06
+  },
+  "windows_runtime_components": [
+    {
+      "component": "core",
+      "before_bytes": 61399497,
+      "after_bytes": 56709647,
+      "reduced_bytes": 4689850
+    },
+    {
+      "component": "ocr",
+      "before_bytes": 250400682,
+      "after_bytes": 247796571,
+      "reduced_bytes": 2604111
+    },
+    {
+      "component": "office",
+      "before_bytes": 35082034,
+      "after_bytes": 33366968,
+      "reduced_bytes": 1715066
+    },
+    {
+      "component": "browser",
+      "before_bytes": 131008538,
+      "after_bytes": 130587233,
+      "reduced_bytes": 421305
+    }
+  ],
+  "windows_runtime_reduced_bytes": 9430332,
+  "windows_python_closure": {
+    "files": 477,
+    "bytes": 56709306,
+    "sha256": "f990524edbd5109bc9fa96b6b8cb8ec75382bbc5c7d578baa107486278ed09f4",
+    "forbidden_entries": []
+  },
+  "macos_static_prune_projection": {
+    "arm64_minimum_reduced_mib": 5.53,
+    "x64_minimum_reduced_mib": 5.55,
+    "status": "awaiting_current_workflow_artifacts"
+  },
+  "windows_smoke": {
+    "runtime_self_check": "passed",
+    "ocr_inference": "passed",
+    "office_roundtrip": "passed",
+    "browser": "passed",
+    "system_python_or_node_required": false
+  }
+}

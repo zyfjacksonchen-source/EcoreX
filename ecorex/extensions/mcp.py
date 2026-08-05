@@ -57,6 +57,7 @@ from .models import (
     VerifiedExtensionManifest,
     canonical_digest,
 )
+from .mcp_oauth import MCPOAuthRegistration, MCPOAuthService
 from .service import ExtensionService
 
 
@@ -207,6 +208,12 @@ class MCPTransportSession(Protocol):
     async def close(self) -> None: ...
 
 
+class MCPBearerTokenProvider(Protocol):
+    async def access_token(self) -> str | None: ...
+
+    async def refresh_after_unauthorized(self) -> str | None: ...
+
+
 SessionFactory = Callable[[str], MCPTransportSession | Awaitable[MCPTransportSession]]
 
 
@@ -352,6 +359,7 @@ class MCPRuntimeBinding:
     verified_manifest: VerifiedExtensionManifest = field(repr=False, compare=False)
     session_factory: SessionFactory = field(repr=False, compare=False)
     request_timeout_seconds: float = 60.0
+    oauth_registration: MCPOAuthRegistration | None = None
 
     def __post_init__(self) -> None:
         if self.transport not in {ExtensionTransport.STDIO, ExtensionTransport.STREAMABLE_HTTP}:
@@ -371,6 +379,11 @@ class MCPRuntimeBinding:
             raise ValueError("MCP binding artifact digest is invalid")
         if not isinstance(self.verified_manifest, VerifiedExtensionManifest):
             raise ValueError("MCP binding requires a verified Extension manifest")
+        if self.oauth_registration is not None and (
+            self.transport is not ExtensionTransport.STREAMABLE_HTTP
+            or self.oauth_registration.service_id != self.extension_id
+        ):
+            raise ValueError("MCP OAuth registration disagrees with its Runtime binding")
         manifest = self.verified_manifest.manifest
         if (
             manifest.extension_id != self.extension_id
@@ -416,6 +429,7 @@ class MCPClientSupervisor:
         circuit_seconds: int = 30,
         snapshot_resolver: Callable[[str], str] | None = None,
         tenant_resolver: Callable[[ToolInvocationContext], str] | None = None,
+        oauth_service: MCPOAuthService | None = None,
     ) -> None:
         if not 1 <= failure_threshold <= 20 or not 1 <= circuit_seconds <= 3600:
             raise ValueError("MCP circuit policy is invalid")
@@ -428,6 +442,7 @@ class MCPClientSupervisor:
         self.circuit_seconds = circuit_seconds
         self.snapshot_resolver = snapshot_resolver
         self.tenant_resolver = tenant_resolver or (lambda _context: "local-user")
+        self.oauth_service = oauth_service
         self._sessions: dict[tuple[str, str], _LiveSession] = {}
         self._circuits: dict[tuple[str, str], _Circuit] = {}
         self._locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -697,6 +712,14 @@ class MCPClientSupervisor:
             raise MCPTransportError("mcp_session_factory_invalid")
         if getattr(transport, "transport_kind", None) is not binding.transport:
             raise MCPTransportError("mcp_transport_binding_mismatch")
+        if binding.oauth_registration is not None:
+            if self.oauth_service is None or not isinstance(
+                transport, ManagedHTTPMCPTransport
+            ):
+                raise MCPTransportError("mcp_oauth_binding_unavailable")
+            transport.bind_oauth(
+                self.oauth_service.provider(key[0], binding.oauth_registration.service_id)
+            )
         if any(existing.transport is transport for existing in self._sessions.values()):
             raise MCPTransportError("mcp_tenant_session_reuse_forbidden")
         live = _LiveSession(
@@ -1151,6 +1174,12 @@ class ManagedHTTPMCPTransport:
         )
         self._owns_client = client is None
         self._session_id: str | None = None
+        self._oauth_provider: MCPBearerTokenProvider | None = None
+
+    def bind_oauth(self, provider: MCPBearerTokenProvider) -> None:
+        if self._oauth_provider is not None and self._oauth_provider is not provider:
+            raise ValueError("MCP OAuth provider is already bound")
+        self._oauth_provider = provider
 
     async def exchange(
         self,
@@ -1186,6 +1215,7 @@ class ManagedHTTPMCPTransport:
         timeout_seconds: float,
         max_response_bytes: int,
         expect_body: bool,
+        _oauth_retried: bool = False,
     ) -> Mapping[str, Any]:
         headers = {
             "Accept": "application/json, text/event-stream",
@@ -1194,6 +1224,10 @@ class ManagedHTTPMCPTransport:
         }
         if self._session_id is not None:
             headers["MCP-Session-Id"] = self._session_id
+        if self._oauth_provider is not None:
+            token = await self._oauth_provider.access_token()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
         try:
             async with self.client.stream(
                 "POST",
@@ -1217,6 +1251,21 @@ class ManagedHTTPMCPTransport:
             raise MCPTransportError("mcp_http_transport_failed", retryable=True) from None
         if status_code in {301, 302, 303, 307, 308}:
             raise MCPProtocolError("mcp_http_redirect_forbidden")
+        if status_code == 401 and self._oauth_provider is not None:
+            token = (
+                await self._oauth_provider.refresh_after_unauthorized()
+                if not _oauth_retried
+                else None
+            )
+            if token:
+                return await self._post(
+                    message,
+                    timeout_seconds=timeout_seconds,
+                    max_response_bytes=max_response_bytes,
+                    expect_body=expect_body,
+                    _oauth_retried=True,
+                )
+            raise MCPTransportError("mcp_oauth_authorization_required")
         if status_code == 404 and self._session_id is not None:
             self._session_id = None
             raise MCPTransportError("mcp_http_session_expired", retryable=True)
@@ -1246,12 +1295,17 @@ class ManagedHTTPMCPTransport:
     async def close(self) -> None:
         if self._session_id is not None:
             try:
+                headers = {
+                    "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+                    "MCP-Session-Id": self._session_id,
+                }
+                if self._oauth_provider is not None:
+                    token = await self._oauth_provider.access_token()
+                    if token:
+                        headers["Authorization"] = f"Bearer {token}"
                 await self.client.delete(
                     self.endpoint,
-                    headers={
-                        "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
-                        "MCP-Session-Id": self._session_id,
-                    },
+                    headers=headers,
                     timeout=2,
                 )
             except (httpx.TimeoutException, httpx.TransportError):

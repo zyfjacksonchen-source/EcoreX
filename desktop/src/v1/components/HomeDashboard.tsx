@@ -1,4 +1,4 @@
-import { FolderOpen, Sparkles, X } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import type { ReactNode } from "react";
 
 import type {
@@ -7,6 +7,7 @@ import type {
   ThreadProjection,
 } from "../api/contracts.ts";
 import { homeTaskActivity } from "../state/homeTaskActivity.ts";
+import NewConversationProjectSelector from "./NewConversationProjectSelector.tsx";
 
 const TEMPLATES = [
   ["图片创作", "把想法变成可直接使用的视觉素材", "帮我创作一张图片："],
@@ -26,7 +27,8 @@ interface HomeDashboardProps {
   projectPickerBusy: boolean;
   usage: ConversationUsageProjection | null;
   onSelectProject: (project: ProjectProjection | null) => void;
-  onPickProject: () => void;
+  onPickProject: () => Promise<ProjectProjection | null>;
+  onOpenThread: (threadId: string) => void;
   onTemplate: (prompt: string) => void;
 }
 
@@ -40,6 +42,7 @@ export function HomeDashboard({
   usage,
   onSelectProject,
   onPickProject,
+  onOpenThread,
   onTemplate,
 }: HomeDashboardProps) {
   const taskActivity = homeTaskActivity(usage?.task_activity ?? {
@@ -85,29 +88,14 @@ export function HomeDashboard({
       <section className="ex-home-composer" aria-label="开始新任务">
         {composer}
         <div className="ex-home-project">
-          <FolderOpen aria-hidden="true" />
-          <label className="ex-visually-hidden" htmlFor="emate-home-project">在项目中工作</label>
-          <select
-            id="emate-home-project"
-            value={selectedProject?.project_id ?? ""}
-            onChange={(event) => {
-              const project = projects.find((item) => item.project_id === event.target.value);
-              onSelectProject(project ?? null);
-            }}
-          >
-            <option value="">在项目中工作</option>
-            {projects.map((project) => (
-              <option key={project.project_id} value={project.project_id}>{project.name}</option>
-            ))}
-          </select>
-          {selectedProject ? (
-            <button className="ex-button ex-home-project-clear" type="button" aria-label="退出当前项目" onClick={() => onSelectProject(null)}>
-              <X aria-hidden="true" />
-            </button>
-          ) : null}
-          <button className="ex-button ex-home-project-button" type="button" disabled={projectPickerBusy} onClick={onPickProject}>
-            {projectPickerBusy ? "正在选择" : "打开项目"}
-          </button>
+          <NewConversationProjectSelector
+            compact
+            projects={[...projects]}
+            selectedProject={selectedProject}
+            pickerBusy={projectPickerBusy}
+            onSelect={onSelectProject}
+            onPick={onPickProject}
+          />
         </div>
       </section>
 
@@ -125,7 +113,7 @@ export function HomeDashboard({
         <div className="ex-home-report">
           <section>
             <h3>任务趋势（近 7 天）</h3>
-            <div className="ex-home-trend" aria-label="近七日任务趋势">
+            <div className="ex-home-trend" role="img" aria-label="近七日任务趋势">
               {trend.map((item) => (
                 <span key={item.date}>
                   <i style={{ height: `${Math.max(4, (item.terminal / trendMaximum) * 100)}%` }} />
@@ -140,8 +128,10 @@ export function HomeDashboard({
               <ol className="ex-home-recent">
                 {recent.map((thread) => (
                   <li key={thread.thread_id}>
-                    <span>{thread.title || "未命名任务"}</span>
-                    <small>{thread.active_turn_status ? "进行中" : "已结束"}</small>
+                    <button className="ex-button" type="button" onClick={() => onOpenThread(thread.thread_id)}>
+                      <span>{thread.title || "未命名任务"}</span>
+                      <small>{thread.active_turn_status ? "进行中" : "已结束"}</small>
+                    </button>
                   </li>
                 ))}
               </ol>

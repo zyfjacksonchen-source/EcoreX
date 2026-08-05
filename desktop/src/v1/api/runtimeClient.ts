@@ -4,6 +4,7 @@ import type {
   ArtifactExternalActionProjection,
   ArtifactProjection,
   BootstrapResponse,
+  CapabilityMentionCatalog,
   ConversationUsageProjection,
   ConnectorAuthChallenge,
   ConnectorAuthKind,
@@ -26,6 +27,8 @@ import type {
   PasswordSessionChangeResponse,
   MemoryMutationResponse,
   MemorySnapshot,
+  MCPOAuthChallengeProjection,
+  MCPOAuthStatusResponse,
   MigrationQuarantineProjection,
   MockReplayResponse,
   OutputLocationAlias,
@@ -115,6 +118,7 @@ export interface ClientOperation {
   readonly disposition: ClientOperationDisposition;
   readonly models: Readonly<TurnModelSelection>;
   readonly input: string;
+  readonly explicit_tool_ids: readonly string[];
   readonly attachments: readonly InputAttachmentProjection[];
   readonly observed_after_seq: number;
   readonly created_at: string;
@@ -123,6 +127,7 @@ export interface ClientOperation {
 
 export interface CreateClientOperationInput {
   input: string;
+  explicitToolIds?: readonly string[];
   attachments?: readonly InputAttachmentProjection[];
   threadId: string | null;
   threadMetadata?: JsonObject;
@@ -219,6 +224,39 @@ function parseError(payload: unknown, fallback: string): { message: string; code
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function validateCapabilityMentionCatalog(value: unknown): CapabilityMentionCatalog {
+  if (
+    !isRecord(value)
+    || value.schema_version !== 1
+    || typeof value.snapshot_id !== "string"
+    || !/^mention_[0-9a-f]{64}$/u.test(value.snapshot_id)
+    || !Array.isArray(value.items)
+    || value.items.length > 2_048
+  ) throw new RuntimeApiError("能力目录返回无效。", 502, "capability_mention_contract_invalid");
+  const items = value.items.map((item) => {
+    if (
+      !isRecord(item)
+      || typeof item.reference !== "string"
+      || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(item.reference)
+      || typeof item.label !== "string"
+      || !item.label.trim()
+      || typeof item.description !== "string"
+      || !item.description.trim()
+      || !["system", "skill", "collaboration"].includes(String(item.kind))
+    ) throw new RuntimeApiError("能力目录返回无效。", 502, "capability_mention_contract_invalid");
+    return {
+      reference: item.reference,
+      label: item.label,
+      description: item.description,
+      kind: item.kind as "system" | "skill" | "collaboration",
+    };
+  });
+  if (new Set(items.map((item) => item.reference)).size !== items.length) {
+    throw new RuntimeApiError("能力目录包含重复项目。", 502, "capability_mention_contract_invalid");
+  }
+  return { schema_version: 1, snapshot_id: value.snapshot_id, items };
 }
 
 function validateLogoutSessionResponse(value: unknown): LogoutSessionResponse {
@@ -434,6 +472,15 @@ export class RuntimeClient {
       { signal },
       false,
       validateBootstrapResponse,
+    );
+  }
+
+  capabilityMentions(signal?: AbortSignal): Promise<CapabilityMentionCatalog> {
+    return this.json(
+      "/api/v1/capability-mentions",
+      { signal },
+      false,
+      validateCapabilityMentionCatalog,
     );
   }
 
@@ -875,9 +922,7 @@ export class RuntimeClient {
   }
 
   installLocalSkill(
-    extensionId: string,
     bundleBase64: string,
-    expectedRevision: number,
     clientRequestId = createClientRequestId("extension_install_local"),
   ): Promise<ExtensionMutationResponse> {
     return this.json(
@@ -885,9 +930,7 @@ export class RuntimeClient {
       {
         method: "POST",
         body: JSON.stringify({
-          extension_id: extensionId,
           bundle_base64: bundleBase64,
-          expected_revision: expectedRevision,
           client_request_id: clientRequestId,
         }),
       },
@@ -938,6 +981,26 @@ export class RuntimeClient {
           client_request_id: clientRequestId,
         }),
       },
+      true,
+    );
+  }
+
+  mcpOAuthStatuses(signal?: AbortSignal): Promise<MCPOAuthStatusResponse> {
+    return this.json("/api/v1/mcp/oauth", { signal });
+  }
+
+  beginMcpOAuth(serviceId: string): Promise<MCPOAuthChallengeProjection> {
+    return this.json(
+      `/api/v1/mcp/oauth/${encodeURIComponent(serviceId)}/begin`,
+      { method: "POST" },
+      true,
+    );
+  }
+
+  async clearMcpOAuth(serviceId: string): Promise<void> {
+    await this.json<unknown>(
+      `/api/v1/mcp/oauth/${encodeURIComponent(serviceId)}`,
+      { method: "DELETE" },
       true,
     );
   }
@@ -1129,6 +1192,21 @@ export class RuntimeClient {
     );
   }
 
+  deleteThread(
+    threadId: string,
+    clientRequestId = createClientRequestId("delete_thread"),
+  ): Promise<ThreadProjection> {
+    return this.json(
+      `/api/v1/threads/${encodeURIComponent(threadId)}`,
+      {
+        method: "DELETE",
+        body: JSON.stringify({ client_request_id: clientRequestId }),
+      },
+      true,
+      validateThreadProjectionBoundary,
+    );
+  }
+
   setThreadPinned(
     threadId: string,
     pinned: boolean,
@@ -1234,6 +1312,7 @@ export class RuntimeClient {
         method: "POST",
         body: JSON.stringify({
           input: operation.input,
+          explicit_tool_ids: operation.explicit_tool_ids,
           agent_model_id: operation.models.agentModelId,
           image_model_id: operation.models.imageModelId,
           attachment_ids: operation.attachments.map((attachment) => attachment.attachment_id),
@@ -1255,6 +1334,7 @@ export class RuntimeClient {
         method: "POST",
         body: JSON.stringify({
           input: operation.input,
+          explicit_tool_ids: operation.explicit_tool_ids,
           agent_model_id: operation.models.agentModelId,
           image_model_id: operation.models.imageModelId,
           attachment_ids: operation.attachments.map((attachment) => attachment.attachment_id),
@@ -1278,6 +1358,7 @@ export class RuntimeClient {
         method: "POST",
         body: JSON.stringify({
           input: operation.input,
+          explicit_tool_ids: operation.explicit_tool_ids,
           agent_model_id: operation.models.agentModelId,
           image_model_id: operation.models.imageModelId,
           attachment_ids: operation.attachments.map((attachment) => attachment.attachment_id),
@@ -1299,6 +1380,7 @@ export class RuntimeClient {
         method: "POST",
         body: JSON.stringify({
           input: operation.input,
+          explicit_tool_ids: operation.explicit_tool_ids,
           agent_model_id: operation.models.agentModelId,
           image_model_id: operation.models.imageModelId,
           attachment_ids: operation.attachments.map((attachment) => attachment.attachment_id),

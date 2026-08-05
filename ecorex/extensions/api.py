@@ -8,7 +8,7 @@ import binascii
 from typing import Literal
 
 from fastapi import APIRouter, FastAPI, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ecorex.protocol import (
     ExtensionCatalogSnapshot,
@@ -43,17 +43,26 @@ class ExtensionMutationRequest(BaseModel):
 class LocalSkillInstallRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    extension_id: str = Field(pattern=r"^[a-z][a-z0-9_.-]{1,127}$")
+    extension_id: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_.-]{1,127}$",
+    )
     bundle_base64: str = Field(
         min_length=4,
         max_length=((MAX_LOCAL_BUNDLE_BYTES + 2) // 3) * 4,
     )
-    expected_revision: int = Field(ge=0, strict=True)
+    expected_revision: int | None = Field(default=None, ge=0, strict=True)
     client_request_id: str = Field(
         min_length=1,
         max_length=192,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$",
     )
+
+    @model_validator(mode="after")
+    def validate_legacy_identity_pair(self) -> "LocalSkillInstallRequest":
+        if (self.extension_id is None) != (self.expected_revision is None):
+            raise ValueError("extension_id and expected_revision must be supplied together")
+        return self
 
 
 class SkillConfigurationRequest(ExtensionMutationRequest):

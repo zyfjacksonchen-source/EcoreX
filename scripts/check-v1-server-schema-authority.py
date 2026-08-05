@@ -31,6 +31,7 @@ SCHEMA_AUTHORITIES = frozenset(
         "ecorex/control_plane/schema.py",
         "ecorex/control_plane/share_media_migration.py",
         "ecorex/control_plane/share_schema.py",
+        "ecorex/control_plane/skill_hub.py",
         "ecorex/gateway/schema.py",
         "ecorex/image_orchestrator/postgres_schema.py",
         "ecorex/image_orchestrator/sqlite_schema.py",

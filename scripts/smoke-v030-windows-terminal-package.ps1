@@ -36,11 +36,13 @@ try {
             $version = Invoke-RestMethod -Uri "http://127.0.0.1:8765/api/version" -TimeoutSec 3
             break
         } catch {
-            if ($install.HasExited) { throw "windows_user_installer_exited_early" }
             Start-Sleep -Seconds 1
         }
     }
-    if ($null -eq $version -or $version.product -ne "e-Mate" -or $version.version -ne "0.3.0") {
+    if ($install.HasExited -and $install.ExitCode -ne 0) {
+        throw "windows_user_installer_failed"
+    }
+    if ($null -eq $version -or $version.product -ne "e-Mate" -or $version.version -ne "0.3.1") {
         throw "windows_user_runtime_version_invalid"
     }
 
@@ -62,7 +64,7 @@ try {
         throw "windows_user_shortcut_launch_timeout"
     }
     $after = Invoke-RestMethod -Uri "http://127.0.0.1:8765/api/version" -TimeoutSec 5
-    if ($after.product -ne "e-Mate" -or $after.version -ne "0.3.0") {
+    if ($after.product -ne "e-Mate" -or $after.version -ne "0.3.1") {
         throw "windows_user_shortcut_launch_invalid"
     }
 
@@ -70,7 +72,7 @@ try {
         schema_version = 1
         status = "passed"
         product = "e-Mate"
-        version = "0.3.0"
+        version = "0.3.1"
         architecture = "x64"
         package_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $package).Hash.ToLowerInvariant()
         installed_runtime_api = $true

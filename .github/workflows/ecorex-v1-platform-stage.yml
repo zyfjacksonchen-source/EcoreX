@@ -42,7 +42,7 @@ jobs:
 
     steps:
       - name: Refuse non-dispatch or unpinned release source
-        if: ${{ github.event_name != 'workflow_dispatch' || github.repository != 'zyfjacksonchen-source/EcoreX' || github.ref != 'refs/heads/main' || github.sha != vars.ECOREX_V030_RELEASE_COMMIT_SHA }}
+        if: ${{ github.event_name != 'workflow_dispatch' || github.repository != 'zyfjacksonchen-source/EcoreX' || github.ref != 'refs/heads/main' || github.sha != vars.ECOREX_V031_RELEASE_COMMIT_SHA }}
         shell: bash
         run: exit 1
 

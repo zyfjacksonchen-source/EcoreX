@@ -192,6 +192,13 @@ function reduceKnownEvent(state: RuntimeViewState, event: EventEnvelope): Runtim
             thread: { ...state.thread, status: "active", updated_at: event.created_at },
           }
         : state;
+    case "thread.deleted":
+      return state.thread
+        ? {
+            ...state,
+            thread: { ...state.thread, status: "deleted", updated_at: event.created_at },
+          }
+        : state;
     case "thread.pin_changed":
       return state.thread
         ? {

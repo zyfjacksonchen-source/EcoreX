@@ -24,13 +24,13 @@ from ecorex.gateway.server import GatewayPrincipal
 def test_stream_chat_completion_maps_text_reasoning_usage() -> None:
     parser = _ChatCompletionParser(
         "request-chat-stream",
-        expected_model_id="deepseek-v4-pro",
+        expected_model_id="deepseek-v4-flash",
         tool_names={},
     )
     first = parser.feed_stream(
         {
             "id": "chatcmpl_1",
-            "model": "deepseek-v4-pro",
+            "model": "deepseek-v4-flash",
             "choices": [
                 {
                     "index": 0,
@@ -53,7 +53,7 @@ def test_stream_chat_completion_maps_text_reasoning_usage() -> None:
     terminal = parser.feed_stream(
         {
             "id": "chatcmpl_1",
-            "model": "deepseek-v4-pro",
+            "model": "deepseek-v4-flash",
             "choices": [
                 {
                     "index": 0,
@@ -185,7 +185,7 @@ def test_provider_stages_handoff_before_exposing_tool_terminal() -> None:
             headers={"Content-Type": "application/json"},
             json={
                 "id": "chatcmpl_provider_tool",
-                "model": "deepseek-v4-pro",
+                "model": "deepseek-v4-flash",
                 "choices": [
                     {
                         "index": 0,
@@ -268,7 +268,7 @@ def test_provider_stages_handoff_before_exposing_tool_terminal() -> None:
     provider = ManagedHTTPSChatCompletionsProvider(
         origin="https://deepseek.ecorex.invalid",
         allowed_origins=frozenset({"https://deepseek.ecorex.invalid"}),
-        model_mapping={"ecorex-deepseek-v4-pro": "deepseek-v4-pro"},
+        model_mapping={"ecorex-deepseek-v4-pro": "deepseek-v4-flash"},
         model_policies={
             "ecorex-deepseek-v4-pro": ecorex_chat_gateway_policy(
                 "ecorex-deepseek-v4-pro"
@@ -280,7 +280,7 @@ def test_provider_stages_handoff_before_exposing_tool_terminal() -> None:
             config_id="model-deepseek",
             revision=7,
             local_model_id="ecorex-deepseek-v4-pro",
-            upstream_model_id="deepseek-v4-pro",
+            upstream_model_id="deepseek-v4-flash",
             provider_protocol="openai_compatible_chat",
             provider_origin_preset="deepseek_chat",
         ),

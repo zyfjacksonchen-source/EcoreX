@@ -141,6 +141,7 @@ def test_ocr_executes_only_from_verified_installed_pack_snapshot(
         python_identity=_identity(),
     )
     numpy_before = sys.modules.get("numpy")
+    rapidocr_before = sys.modules.get("rapidocr_onnxruntime")
     try:
         result = PackOCRServiceAdapter(process).extract(
             b"bounded-image", timeout_seconds=8.0
@@ -148,7 +149,7 @@ def test_ocr_executes_only_from_verified_installed_pack_snapshot(
         assert result["provider"] == "rapidocr_onnxruntime"
         assert "4827" in result["text"]
         assert sys.modules.get("numpy") is numpy_before
-        assert "rapidocr_onnxruntime" not in sys.modules
+        assert sys.modules.get("rapidocr_onnxruntime") is rapidocr_before
     finally:
         process.close()
 

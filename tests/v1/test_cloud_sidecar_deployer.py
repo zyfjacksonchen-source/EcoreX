@@ -314,13 +314,13 @@ def test_transition_release_uses_its_signed_source_commit_not_target_spec(
     assert verified == release
 
 
-def test_v102_transition_recovery_accepts_signed_v100_release_identity(
+def test_v031_transition_recovery_accepts_signed_v030_release_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     historical_lock = "c" * 64
     spec, source = _signed_artifact(
         tmp_path,
-        version="1.0.0",
+        version="0.3.0",
         dependency_lock_manifest_sha256=historical_lock,
     )
     release_root = tmp_path / "releases"
@@ -822,7 +822,7 @@ def test_slot_environment_assigns_distinct_image_api_and_worker_ports(
     assert symlinks == [(release, tmp_path / "slots" / "blue" / "current")]
 
 
-def test_v102_release_replica_storage_accepts_legacy_base_version_and_stages_target(
+def test_v031_release_replica_storage_accepts_legacy_base_version_and_stages_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config_root = tmp_path / "config-root"
@@ -837,8 +837,8 @@ def test_v102_release_replica_storage_accepts_legacy_base_version_and_stages_tar
                 "ECOREX_CP_RELEASE_REPLICA_ENABLED=true",
                 f"ECOREX_CP_RELEASE_REPLICA_STORAGE_ROOT={replica_root}",
                 f"ECOREX_CP_RELEASE_REPLICA_PUBLIC_ROOT={public_root}",
-                "ECOREX_CP_RELEASE_REPLICA_NAMESPACE=v1.0.0",
-                "ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION=1.0.0",
+                "ECOREX_CP_RELEASE_REPLICA_NAMESPACE=v0.3.0",
+                "ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION=0.3.0",
                 "",
             )
         ),

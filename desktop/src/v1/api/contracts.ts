@@ -405,7 +405,7 @@ export interface ModelPolicyDescriptor {
   policy_version: string;
   local_model_id: string;
   upstream_model_id: string;
-  reasoning_effort: "medium" | "high";
+  reasoning_effort: "medium" | "high" | "max";
   context_management: {
     type: "compaction";
     compact_threshold_tokens: number;
@@ -614,6 +614,37 @@ export interface ExtensionCatalogSnapshot {
 export interface ExtensionMutationResponse {
   extension: ExtensionProjection;
   extensions: ExtensionCatalogSnapshot;
+}
+
+export interface MCPOAuthStatusProjection {
+  service_id: string;
+  state: "authorization_required" | "authorizing" | "authorized" | "reauthorization_required";
+  expires_at: number | null;
+  scope: string;
+}
+
+export interface MCPOAuthStatusResponse {
+  items: MCPOAuthStatusProjection[];
+}
+
+export interface MCPOAuthChallengeProjection {
+  service_id: string;
+  state: "authorizing";
+  authorization_url: string;
+  expires_at: number;
+}
+
+export interface CapabilityMentionProjection {
+  reference: string;
+  label: string;
+  description: string;
+  kind: "system" | "skill" | "collaboration";
+}
+
+export interface CapabilityMentionCatalog {
+  schema_version: 1;
+  snapshot_id: string;
+  items: CapabilityMentionProjection[];
 }
 
 export interface SkillHubCardProjection {

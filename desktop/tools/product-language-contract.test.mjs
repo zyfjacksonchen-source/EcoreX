@@ -105,26 +105,28 @@ test("Creative Center returns to the preserved Composer and only fills an empty 
   assert.match(app, /onTemplate=\{\(text\) => \{[\s\S]*?setComposerPrefill\([\s\S]*?setCreativeOpen\(false\);/u);
   assert.match(app, /draft=\{composerDraft\}[\s\S]*?onDraftChange=\{setComposerDraft\}/u);
   assert.match(composer, /if \(!draft\.trim\(\)\) onDraftChange\(prefillRequest\.text\);/u);
+  assert.match(composer, /onPrefillConsumed\?\.\(\);/u);
+  assert.match(app, /onPrefillConsumed=\{\(\) => setComposerPrefill\(null\)\}/u);
 });
 
 test("e-Mate 2.1.47 theme values and brand actions are separate semantic tokens", () => {
-  assert.match(tokens, /--color-canvas:\s*#f4f4f1;/u);
-  assert.match(tokens, /--color-workspace-surface:\s*#fafaf8;/u);
-  assert.match(tokens, /--color-surface:\s*#f4f4f1;/u);
+  assert.match(tokens, /--color-canvas:\s*oklch\(0\.966318 0\.003973 106\.474\);/u);
+  assert.match(tokens, /--color-workspace-surface:\s*oklch\(0\.984548 0\.002637 106\.448\);/u);
+  assert.match(tokens, /--color-surface:\s*oklch\(0\.966318 0\.003973 106\.474\);/u);
   assert.match(tokens, /--color-composer-surface:\s*var\(--color-workspace-surface\);/u);
   assert.match(tokens, /--color-session-emphasis:\s*oklch\(0\.94007 0 0\);/u);
   assert.match(tokens, /--scrollbar-thumb:\s*oklch\(0\.921906 0 0\);/u);
-  assert.match(tokens, /--color-ink:\s*#2d2d2b;/u);
+  assert.match(tokens, /--color-ink:\s*oklch\(0\.296426 0\.00355 106\.614\);/u);
   assert.match(tokens, /--color-accent:\s*oklch\(0\.682034 0\.173444 251\.11\);/u);
-  assert.match(tokens, /--color-canvas:\s*#2d2d2b;/u);
-  assert.match(tokens, /--color-workspace-surface:\s*#111111;/u);
-  assert.match(tokens, /--color-surface:\s*#202020;/u);
-  assert.match(tokens, /--color-session-emphasis:\s*#262626;/u);
+  assert.match(tokens, /--color-canvas:\s*oklch\(0\.296426 0\.00355 106\.614\);/u);
+  assert.match(tokens, /--color-workspace-surface:\s*oklch\(0\.177638 0 0\);/u);
+  assert.match(tokens, /--color-surface:\s*oklch\(0\.243535 0 0\);/u);
+  assert.match(tokens, /--color-session-emphasis:\s*oklch\(0\.268618 0 0\);/u);
   assert.match(tokens, /--color-composer-surface:\s*var\(--color-session-emphasis\);/u);
   assert.match(tokens, /--scrollbar-thumb:\s*var\(--color-session-emphasis\);/u);
-  assert.match(tokens, /--color-ink:\s*#f9f9f7;/u);
+  assert.match(tokens, /--color-ink:\s*oklch\(0\.981562 0\.002639 106\.448\);/u);
   assert.match(tokens, /--color-accent:\s*oklch\(0\.528649 0\.173447 254\.975\);/u);
-  assert.match(tokens, /--color-brand:\s*#e5601c;/u);
+  assert.match(tokens, /--color-brand:\s*oklch\(0\.649203 0\.180912 42\.881\);/u);
 });
 
 test("all user-visible workspace brand copy and lockups use e-Mate", () => {

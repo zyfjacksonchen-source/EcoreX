@@ -284,6 +284,7 @@ def test_model_key_is_encrypted_and_only_tested_revision_activates(tmp_path: Pat
     active = repository.active_model(modality="chat")
     assert active.revision == 1
     assert active.api_key == "sk-production-secret-123456"
+    assert repository.active_public_catalog()[0]["reasoning_effort"] == "max"
 
     staged = repository.stage_model_configuration(
         created.config_id,

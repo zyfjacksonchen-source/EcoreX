@@ -161,6 +161,77 @@ def test_thread_rename_archive_restore_are_idempotent_without_stale_rollback(tmp
     )
 
 
+def test_archived_thread_can_be_viewed_then_logically_deleted_with_audit(
+    tmp_path,
+) -> None:
+    http, app = client(tmp_path)
+    thread_id = create_task(http, 6)
+
+    active_delete = http.request(
+        "DELETE",
+        f"/api/v1/threads/{thread_id}",
+        headers=headers(mutate=True),
+        json={"client_request_id": "delete-active"},
+    )
+    assert active_delete.status_code == 409
+    assert http.post(
+        f"/api/v1/threads/{thread_id}/archive",
+        headers=headers(mutate=True),
+        json={"client_request_id": "archive-before-delete"},
+    ).status_code == 200
+    assert http.get(
+        f"/api/v1/threads/{thread_id}/projection", headers=headers()
+    ).status_code == 200
+
+    deleted = http.request(
+        "DELETE",
+        f"/api/v1/threads/{thread_id}",
+        headers=headers(mutate=True),
+        json={"client_request_id": "delete-archived"},
+    )
+    duplicate = http.request(
+        "DELETE",
+        f"/api/v1/threads/{thread_id}",
+        headers=headers(mutate=True),
+        json={"client_request_id": "delete-archived"},
+    )
+    assert deleted.status_code == duplicate.status_code == 200
+    assert deleted.json()["status"] == duplicate.json()["status"] == "deleted"
+    for status in ("active", "archived", "all"):
+        listed = http.get(
+            "/api/v1/threads", params={"status": status}, headers=headers()
+        ).json()["items"]
+        assert all(item["thread_id"] != thread_id for item in listed)
+    assert http.get(
+        "/api/v1/threads", params={"status": "deleted"}, headers=headers()
+    ).status_code == 422
+    assert http.get(
+        f"/api/v1/threads/{thread_id}/projection", headers=headers()
+    ).status_code == 404
+    assert http.get(
+        f"/api/v1/threads/{thread_id}/replay", headers=headers()
+    ).status_code == 404
+    assert http.post(
+        f"/api/v1/threads/{thread_id}/restore",
+        headers=headers(mutate=True),
+        json={"client_request_id": "restore-deleted"},
+    ).status_code == 404
+
+    with app.state.runtime.database.reader() as connection:
+        row = connection.execute(
+            "SELECT status FROM threads WHERE thread_id = ?", (thread_id,)
+        ).fetchone()
+        events = connection.execute(
+            "SELECT event_type, correlation_id FROM events "
+            "WHERE thread_id = ? AND event_type = 'thread.deleted'",
+            (thread_id,),
+        ).fetchall()
+    assert row["status"] == "deleted"
+    assert [(event["event_type"], event["correlation_id"]) for event in events] == [
+        ("thread.deleted", "delete-archived")
+    ]
+
+
 def test_thread_mutations_require_csrf_and_title_validation(tmp_path) -> None:
     http, _app = client(tmp_path)
     thread_id = create_task(http, 2)

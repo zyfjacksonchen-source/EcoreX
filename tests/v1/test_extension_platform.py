@@ -711,17 +711,25 @@ def test_extension_api_is_thin_and_never_accepts_a_host_path(tmp_path: Path) -> 
     installed = client.post(
         "/api/v1/extensions/local-skills",
         json={
-            "extension_id": "local.api-skill",
             "bundle_base64": base64.b64encode(payload).decode(),
-            "expected_revision": 0,
             "client_request_id": "install:api:1",
         },
     )
     assert installed.status_code == 201
     body = installed.json()
+    assert body["extension"]["extension_id"].startswith("local.office-helper-")
     assert body["extension"]["source"] == "local_bundle"
     assert body["extensions"]["snapshot_id"].startswith("ext_")
     assert client.get("/api/v1/extensions").json() == body["extensions"]
+    retried = client.post(
+        "/api/v1/extensions/local-skills",
+        json={
+            "bundle_base64": base64.b64encode(payload).decode(),
+            "client_request_id": "install:api:1",
+        },
+    )
+    assert retried.status_code == 201
+    assert retried.json()["extension"]["extension_id"] == body["extension"]["extension_id"]
     rejected = client.post(
         "/api/v1/extensions/local-skills",
         json={

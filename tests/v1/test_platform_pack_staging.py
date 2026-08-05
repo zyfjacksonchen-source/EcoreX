@@ -537,6 +537,41 @@ def test_browser_batch_keeps_one_page_for_evaluate_and_snapshot(
     assert result["results"][1]["text"] == "after"
 
 
+def test_browser_pack_retries_function_body_and_sandbox_classifies_soft_exits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(PACKS / "common"))
+    browser = runpy.run_path(str(PACKS / "browser" / "browser_pack.py"))
+    sandbox = runpy.run_path(str(PACKS / "sandbox" / "sandbox_pack.py"))
+
+    class Page:
+        url = "https://example.com/"
+
+        def __init__(self) -> None:
+            self.calls = []
+
+        def evaluate(self, expression):
+            self.calls.append(expression)
+            if len(self.calls) == 1:
+                raise RuntimeError("Illegal return statement")
+            return "ok"
+
+    page = Page()
+    result = browser["_perform_page_operation"](
+        page,
+        "evaluate",
+        {"expression": "return 'ok'"},
+        full_access=True,
+    )
+    assert result["value"] == "ok"
+    assert page.calls[-1] == "(() => {\nreturn 'ok'\n})()"
+    assert sandbox["_interpret_exit"]("rg absent .", 1) == (
+        False,
+        "No matches found",
+    )
+    assert sandbox["_interpret_exit"]("python broken.py", 1) == (True, None)
+
+
 def test_browser_stage_selects_revision_matched_relocatable_headless_shell(
     tmp_path: Path,
 ) -> None:
@@ -3988,6 +4023,11 @@ def test_platform_stager_copies_locked_distribution_from_user_site(
     )
     test_example.parent.mkdir()
     test_example.write_text("test-only\n", encoding="utf-8")
+    typing_stub = distribution_root / "example_runtime" / "api.pyi"
+    typing_stub.write_text("VALUE: int\n", encoding="utf-8")
+    build_header = distribution_root / "example_runtime" / "include" / "runtime.h"
+    build_header.parent.mkdir()
+    build_header.write_text("#define BUILD_ONLY 1\n", encoding="utf-8")
     metadata = Message()
     metadata["Name"] = "example-runtime"
     metadata["License-Expression"] = "MIT"
@@ -3998,6 +4038,8 @@ def test_platform_stager_copies_locked_distribution_from_user_site(
             Path("example_runtime/__init__.py"),
             Path("example_runtime/tests/test_runtime.py"),
             Path("example_runtime/test-examples/sample.txt"),
+            Path("example_runtime/api.pyi"),
+            Path("example_runtime/include/runtime.h"),
         )
         requires: tuple[str, ...] = ()
 
@@ -4027,6 +4069,45 @@ def test_platform_stager_copies_locked_distribution_from_user_site(
     ) == "VALUE = 1\n"
     assert not (destination / "example_runtime" / "tests").exists()
     assert not (destination / "example_runtime" / "test-examples").exists()
+    assert not (destination / "example_runtime" / "api.pyi").exists()
+    assert not (destination / "example_runtime" / "include" / "runtime.h").exists()
+
+
+def test_platform_stage_size_gate_records_top_files_and_rejects_build_payload(
+    tmp_path: Path,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    stage = tmp_path / "stage"
+    runtime = stage / "core" / "bin" / "pack-python"
+    runtime.mkdir(parents=True)
+    (runtime / "python.exe").write_bytes(b"runtime")
+    (stage / "packs" / "channels").mkdir(parents=True)
+    (stage / "packs" / "channels" / "contracts.json").write_bytes(b"{}")
+    evidence = tmp_path / "evidence"
+
+    stager["_stage_size_gate"](
+        stage,
+        platform="windows",
+        architecture="x64",
+        evidence=evidence,
+    )
+
+    value = json.loads((evidence / "package-size.json").read_text(encoding="utf-8"))
+    assert value["details"]["runtime_bytes"] == len(b"runtime")
+    assert value["details"]["top_files"][0]["path"] == (
+        "core/bin/pack-python/python.exe"
+    )
+
+    (runtime / "debug.pyi").write_text("BUILD_ONLY: bool\n", encoding="utf-8")
+    with pytest.raises(
+        stager["StageError"], match="stage_runtime_development_file_present"
+    ):
+        stager["_stage_size_gate"](
+            stage,
+            platform="windows",
+            architecture="x64",
+            evidence=evidence,
+        )
 
 
 def test_dependency_inventory_is_deterministic_and_binds_pack_payload(

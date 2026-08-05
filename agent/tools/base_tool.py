@@ -38,6 +38,7 @@ class BaseTool:
     description: str = "Base tool"
     params: dict = {}  # Store JSON Schema
     model: Optional[Any] = None  # LLM model instance, type depends on bot implementation
+    cwd: Optional[str] = None  # Workspace directory injected per run.
 
     @classmethod
     def get_json_schema(cls) -> dict:

@@ -12,11 +12,13 @@ import zipfile
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 from ecorex.capabilities import (
     ApprovalRequirement,
     CapabilityDeniedError,
     CapabilityEffect,
+    CapabilitySnapshotRepository,
     Exposure,
     IdempotencyClass,
     SandboxLevel,
@@ -360,6 +362,41 @@ def _prepared_skill_runtime(tmp_path: Path):
         execution_batch_id=batch.batch_id,
     )
     return app, service, kernel, composition, thread, created, prepared, batch, scope
+
+
+def test_enabled_skills_are_mentionable_and_structured_selection_is_audited(
+    tmp_path: Path,
+) -> None:
+    app, _service_instance, _kernel, composition, *_rest = _prepared_skill_runtime(
+        tmp_path
+    )
+    response = TestClient(app).get(
+        "/api/v1/capability-mentions",
+        headers={"Authorization": f"Bearer {app.state.runtime_bearer_token}"},
+    )
+    assert response.status_code == 200, response.text
+    catalog = response.json()
+    alpha = next(
+        item
+        for item in catalog["items"]
+        if item["reference"] == "skill:local.alpha-workflow"
+    )
+
+    assert catalog["snapshot_id"].startswith("mention_")
+    assert alpha["kind"] == "skill"
+    prepared = composition.prepare_turn(
+        CreateTurnRequest(
+            input="@local.alpha-workflow 核对这份材料",
+            explicit_tool_ids=["skill:local.alpha-workflow"],
+            client_message_id="structured-skill-mention",
+        )
+    )
+    plan = CapabilitySnapshotRepository(tmp_path / "runtime.db").get(
+        prepared.snapshot_context.capability_snapshot_id
+    )
+
+    assert prepared.request.explicit_tool_ids == ["skill:local.alpha-workflow"]
+    assert "explicit_reference" in plan.decision("skill_search").reason_codes
 
 
 def _skill_context(prepared, scope, tool_id: str) -> ToolInvocationContext:

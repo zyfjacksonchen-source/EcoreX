@@ -9,6 +9,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
 class TestModelCapabilities(unittest.TestCase):
+    def test_deepseek_tool_error_generator_keeps_exception_message(self):
+        from models.deepseek.deepseek_bot import DeepSeekBot
+
+        bot = DeepSeekBot.__new__(DeepSeekBot)
+        bot.args = {"model": "deepseek-v4-flash"}
+        with patch.object(bot, "_convert_messages_to_openai_format", side_effect=ValueError("bad message")):
+            self.assertEqual(
+                list(bot.call_with_tools([])),
+                [{"error": True, "message": "bad message", "status_code": 500}],
+            )
+
     def test_infer_provider_from_model_prefixes(self):
         from common import const
         from models.model_capabilities import infer_provider_id
@@ -226,7 +237,7 @@ class TestModelCapabilities(unittest.TestCase):
         self.assertEqual(clean["max_completion_tokens"], 4096)
         self.assertEqual(clean["reasoning_effort"], "high")
         self.assertEqual(clean["verbosity"], "low")
-        self.assertEqual(normalize_reasoning_effort("max", capabilities), "high")
+        self.assertEqual(normalize_reasoning_effort("max", capabilities), "max")
         self.assertEqual(
             set(removed),
             {"temperature", "top_p", "frequency_penalty", "presence_penalty", "max_tokens"},
@@ -307,7 +318,7 @@ class TestModelCapabilities(unittest.TestCase):
         self.assertNotIn("presence_penalty", payload)
         self.assertNotIn("max_tokens", payload)
         self.assertEqual(payload["max_completion_tokens"], 4096)
-        self.assertEqual(payload["reasoning_effort"], "high")
+        self.assertEqual(payload["reasoning_effort"], "max")
         self.assertEqual(payload["verbosity"], "high")
         self.assertEqual(payload["stream_options"], {"include_usage": True})
 
@@ -532,7 +543,7 @@ class TestModelCapabilities(unittest.TestCase):
         )
 
         self.assertEqual(payload["max_output_tokens"], 1234)
-        self.assertEqual(payload["reasoning"], {"effort": "high"})
+        self.assertEqual(payload["reasoning"], {"effort": "max"})
         self.assertEqual(payload["text"], {"verbosity": "high"})
         self.assertNotIn("temperature", payload)
 
@@ -584,7 +595,7 @@ class TestModelCapabilities(unittest.TestCase):
         self.assertNotIn("verbosity", deepseek_kwargs)
 
         self.assertNotIn("thinking", openai_kwargs)
-        self.assertEqual(openai_kwargs["reasoning_effort"], "high")
+        self.assertEqual(openai_kwargs["reasoning_effort"], "max")
         self.assertEqual(openai_kwargs["verbosity"], "high")
 
     def test_chatgpt_bot_initial_args_use_capability_catalog(self):

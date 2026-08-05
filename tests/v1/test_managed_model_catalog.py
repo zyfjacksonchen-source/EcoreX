@@ -63,12 +63,12 @@ def test_builtin_catalog_publishes_one_canonical_image_2_alias() -> None:
     )
 
 
-def test_builtin_chat_catalog_publishes_versioned_gpt_56_luna_high_policy() -> None:
+def test_builtin_chat_catalog_publishes_versioned_gpt_56_luna_max_policy() -> None:
     catalog = builtin_model_catalog()
     model = catalog.for_modality(ModelModality.CHAT)[0]
 
     assert model.model_id == "ecorex-chat"
-    assert model.display_name == "GPT-5.6 Luna · 高推理"
+    assert model.display_name == "GPT-5.6 Luna · 最大推理"
     assert {"chat", "tools", "vision", "reasoning"} <= model.capabilities
     assert catalog.resolve(
         "gpt-5.6-luna", modality=ModelModality.CHAT
@@ -77,10 +77,10 @@ def test_builtin_chat_catalog_publishes_versioned_gpt_56_luna_high_policy() -> N
     assert model.model_policy.to_dict() == {
         "schema_version": 1,
         "policy_id": "ecorex-chat-gpt-5.6-luna",
-        "policy_version": "1.1.0",
+        "policy_version": "1.2.0",
         "local_model_id": "ecorex-chat",
         "upstream_model_id": "gpt-5.6-luna",
-        "reasoning_effort": "high",
+        "reasoning_effort": "max",
         "context_management": {
             "type": "compaction",
             "compact_threshold_tokens": 272_000,
@@ -105,6 +105,12 @@ def test_builtin_chat_catalog_restores_all_managed_v03_provider_choices() -> Non
     assert catalog.resolve("deepseek-v4-pro", modality=ModelModality.CHAT).canonical_model_id == (
         "ecorex-deepseek-v4-pro"
     )
+    assert catalog.resolve("deepseek-v4-flash", modality=ModelModality.CHAT).canonical_model_id == (
+        "ecorex-deepseek-v4-pro"
+    )
+    assert models["ecorex-deepseek-v4-pro"].display_name == "DeepSeek V4 Flash · 最大推理"
+    assert models["ecorex-deepseek-v4-pro"].model_policy.upstream_model_id == "deepseek-v4-flash"
+    assert models["ecorex-deepseek-v4-pro"].model_policy.reasoning_effort == "max"
     assert catalog.resolve("gpt-5.6-sol", modality=ModelModality.CHAT).canonical_model_id == (
         "ecorex-gpt-5.6-sol"
     )
@@ -268,6 +274,7 @@ def test_cloud_revision_is_the_same_executable_and_bootstrap_catalog_snapshot() 
                 "upstream_model_id": "gpt-5.6-sol-july",
                 "provider_preset": "openai_responses",
                 "is_default": True,
+                "reasoning_effort": "high",
             },
             {
                 "config_id": "config-image",
@@ -290,5 +297,6 @@ def test_cloud_revision_is_the_same_executable_and_bootstrap_catalog_snapshot() 
     assert bootstrap.chat[0].display_name == "EcoreX Main · July"
     assert chat.model_policy is not None
     assert chat.model_policy.upstream_model_id == "gpt-5.6-sol-july"
+    assert chat.model_policy.reasoning_effort == "high"
     assert chat.model_policy.compact_threshold_tokens == 272_000
     assert executable.snapshot_id != base.snapshot_id

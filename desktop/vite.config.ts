@@ -81,6 +81,7 @@ function productionChunk(
   }
   if (
     normalized.endsWith("/src/v1/components/IconButton.tsx")
+    || normalized.endsWith("/src/v1/components/InputAttachmentPreview.tsx")
     || normalized.endsWith("/src/v1/components/TechnicalDetails.tsx")
   ) {
     return "ecorex-ui-primitives";

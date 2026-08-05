@@ -429,7 +429,7 @@ class OnlinePublicationVerifier:
                     temporary_directory=temporary_directory,
                 )
                 return
-            except (httpx.TimeoutException, httpx.NetworkError):
+            except httpx.TransportError:
                 last_retryable = True
             except _RetryableResponse:
                 last_retryable = True

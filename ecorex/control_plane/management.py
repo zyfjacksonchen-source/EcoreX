@@ -16,6 +16,7 @@ import uuid
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from ecorex.managed_model_policy import MANAGED_CHAT_MODEL_POLICIES
 
 from .management_models import (
     ActiveModelConfiguration,
@@ -1847,6 +1848,15 @@ class AdminManagementRepository:
                     "upstream_model_id": str(row["upstream_model_id"]),
                     "provider_preset": str(row["provider_preset"]),
                     "is_default": bool(row["is_default"]),
+                    **(
+                        {
+                            "reasoning_effort": MANAGED_CHAT_MODEL_POLICIES[
+                                str(row["local_model_id"])
+                            ].reasoning_effort
+                        }
+                        if str(row["local_model_id"]) in MANAGED_CHAT_MODEL_POLICIES
+                        else {}
+                    ),
                 }
                 for row in rows
             ]

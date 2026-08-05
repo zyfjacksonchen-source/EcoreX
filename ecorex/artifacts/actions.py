@@ -115,6 +115,7 @@ class SystemArtifactLauncher:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     close_fds=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
                 return
             command = ["/usr/bin/open"]

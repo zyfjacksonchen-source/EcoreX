@@ -315,12 +315,12 @@ def test_windows_webui_workflow_is_pinned_and_emits_only_verified_handoff() -> N
         / "emate-v030-macos-universal.yml"
     ).read_text(encoding="utf-8")
 
-    assert "github.sha == vars.ECOREX_V030_RELEASE_COMMIT_SHA" in workflow
+    assert "github.sha == vars.ECOREX_V031_RELEASE_COMMIT_SHA" in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
     assert "github.repository == 'zyfjacksonchen-source/EcoreX'" in workflow
     assert "github.ref_protected" not in workflow
     assert "candidate_commit_mismatch" in workflow
-    assert "EcoreX_0.3.0-direct-candidate.zip" in workflow
+    assert "EcoreX_0.3.1-direct-candidate.zip" in workflow
     assert "build-v030-windows-webui.py" in workflow
     assert "smoke-v030-windows-terminal-package.ps1" in workflow
     assert "runs-on: windows-2022" in workflow
@@ -328,4 +328,4 @@ def test_windows_webui_workflow_is_pinned_and_emits_only_verified_handoff() -> N
     assert workflow.index("build-v030-windows-webui.py") < workflow.index(
         "actions/upload-artifact"
     )
-    assert "emate-v030-windows-webui" in workflow
+    assert "emate-v031-windows-webui" in workflow
