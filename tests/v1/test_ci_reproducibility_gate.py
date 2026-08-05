@@ -121,7 +121,7 @@ def test_v1_ci_matrix_is_read_only_and_covers_supported_architectures() -> None:
     release_stage = (
         ROOT / ".github" / "workflows" / "ecorex-v1-platform-stage.yml"
     ).read_text(encoding="utf-8")
-    assert "ECOREX_GITHUB_HOSTED_WINDOWS_NATIVE_COMPATIBILITY" not in release_stage
+    assert "ECOREX_GITHUB_HOSTED_WINDOWS_NATIVE_COMPATIBILITY" in release_stage
     assert (
         '"ecorex-platform-stage-venv-${{ github.run_id }}-'
         '${{ github.run_attempt }}-${{ matrix.id }}"' in release_stage

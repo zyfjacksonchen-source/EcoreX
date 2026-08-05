@@ -486,6 +486,10 @@ def _build_native(platform: str, architecture: str, evidence: Path) -> Path:
                 "-ExpectedSourceSetSha256",
                 expected_source_set,
             )
+            if environment.get(
+                "ECOREX_GITHUB_HOSTED_WINDOWS_NATIVE_COMPATIBILITY"
+            ) == "1":
+                command += ("-GitHubHostedCompatibility",)
         else:
             shell = Path("/bin/sh")
             clang = Path("/usr/bin/clang")

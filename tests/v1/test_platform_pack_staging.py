@@ -1351,6 +1351,9 @@ def test_windows_helper_source_contains_real_appcontainer_and_job_boundaries() -
     assert "SpecialFolder]::ProgramFilesX86" in build
     assert "SpecialFolder]::Windows" in build
     assert "${env:ProgramFiles(x86)}" not in build
+    stager_source = (ROOT / "platform-staging/stager.py").read_text(encoding="utf-8")
+    assert "ECOREX_GITHUB_HOSTED_WINDOWS_NATIVE_COMPATIBILITY" in stager_source
+    assert 'command += ("-GitHubHostedCompatibility",)' in stager_source
 
 
 def test_staged_windows_helper_probe_is_behavioral_but_cannot_authorize_runtime(
