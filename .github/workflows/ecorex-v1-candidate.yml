@@ -443,7 +443,7 @@ jobs:
           CI_RUN_ATTEMPT: ${{ inputs.ci_run_attempt }}
         run: |
           mkdir -p .candidate/ci
-          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CI_RUN_ID}/attempts/${CI_RUN_ATTEMPT}" \
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CI_RUN_ID}" \
             > .candidate/ci/run.json
           gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CI_RUN_ID}/artifacts?per_page=100" \
             > .candidate/ci/artifacts.json

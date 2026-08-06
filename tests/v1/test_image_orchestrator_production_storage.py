@@ -240,7 +240,6 @@ def test_s3_cas_concurrent_conditional_puts_keep_every_reference() -> None:
     store = S3ImageContentStore(
         transport,
         bucket="ecorex-images",
-        metadata_attempts=32,
     )
     digest = hashlib.sha256(PNG).hexdigest()
 
@@ -253,14 +252,14 @@ def test_s3_cas_concurrent_conditional_puts_keep_every_reference() -> None:
         )
         return result.sha256
 
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        results = list(pool.map(put, range(32)))
+    with ThreadPoolExecutor(max_workers=48) as pool:
+        results = list(pool.map(put, range(256)))
 
     assert set(results) == {digest}
     metadata = store.describe(digest)
-    assert len(metadata.references) == 32
+    assert len(metadata.references) == 256
     assert {item.reference_id for item in metadata.references} == {
-        f"job-{index:04d}" for index in range(32)
+        f"job-{index:04d}" for index in range(256)
     }
     assert store.read(digest) == PNG
     blob_keys = [key for (_bucket, key) in transport.objects if "/blobs/" in key]

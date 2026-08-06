@@ -1,4 +1,4 @@
-name: EcoreX v1 macOS protected platform stage
+name: EcoreX v1 protected platform stage
 
 on:
   workflow_dispatch:
@@ -19,6 +19,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - id: windows-x64
+            config_key: WINDOWS_X64
+            label: Windows x64
+            platform: windows
+            architecture: x64
+            runs_on: '"windows-2025"'
           - id: macos-arm64
             config_key: MACOS_ARM64
             label: macOS arm64

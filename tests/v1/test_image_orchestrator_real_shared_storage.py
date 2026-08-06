@@ -139,7 +139,6 @@ def test_real_postgres_s3_concurrency_idempotency_recovery_and_gc() -> None:
             BotoS3ObjectTransport(s3),
             bucket=bucket,
             prefix=prefix,
-            metadata_attempts=32,
         )
 
         requests = tuple(

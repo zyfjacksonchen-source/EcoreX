@@ -16,6 +16,7 @@ import hashlib
 import json
 import re
 import secrets
+import time
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -526,7 +527,7 @@ class S3ImageContentStore:
         bucket: str,
         prefix: str = "ecorex/images/v1",
         max_bytes: int = 256 * 1024 * 1024,
-        metadata_attempts: int = 8,
+        metadata_attempts: int = 128,
     ) -> None:
         if not isinstance(transport, S3ObjectTransport):
             raise TypeError("S3 object transport is invalid")
@@ -542,7 +543,7 @@ class S3ImageContentStore:
             raise ValueError("S3 key prefix is invalid")
         if not 1 <= max_bytes <= 256 * 1024 * 1024:
             raise ValueError("image CAS size bound is invalid")
-        if not 1 <= metadata_attempts <= 32:
+        if not 1 <= metadata_attempts <= 128:
             raise ValueError("S3 metadata retry bound is invalid")
         self.transport = transport
         self.bucket = bucket
@@ -765,6 +766,7 @@ class S3ImageContentStore:
                         if_none_match=True,
                     )
                 except S3ObjectPreconditionFailed:
+                    self._wait_for_metadata_retry(_attempt)
                     continue
             self._match_reference_document(existing, result, content_etag)
             return existing
@@ -801,8 +803,14 @@ class S3ImageContentStore:
                     if_match=current.etag,
                 )
             except S3ObjectPreconditionFailed:
+                self._wait_for_metadata_retry(_attempt)
                 continue
         raise ImageResultRejected("CAS reference metadata is contended")
+
+    @staticmethod
+    def _wait_for_metadata_retry(attempt: int) -> None:
+        delay = min(0.001 * (2 ** min(attempt, 6)), 0.05)
+        time.sleep(delay * (0.5 + secrets.randbelow(1000) / 1000))
 
     def _load_reference_document(self, sha256: str) -> _ReferenceDocument:
         body = self.transport.get_object(

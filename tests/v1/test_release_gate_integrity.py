@@ -96,7 +96,8 @@ def test_candidate_workflow_executes_instead_of_auto_declaring_runtime_gates() -
     assert "ci_run_attempt:" in workflow
     assert "scripts/verify-v1-ci-provenance.py" in workflow
     assert "scripts/select-v1-ci-reproducibility-artifacts.py" in workflow
-    assert "/attempts/${CI_RUN_ATTEMPT}" in workflow
+    assert 'actions/runs/${CI_RUN_ID}"' in workflow
+    assert "/attempts/${CI_RUN_ATTEMPT}" not in workflow
     assert "run-id: ${{ inputs.ci_run_id }}" in workflow
     assert "artifact-ids: ${{ steps.ci-artifacts.outputs.artifact_ids }}" in workflow
     assert "--artifact-metadata .candidate/ci/artifacts.json" in workflow

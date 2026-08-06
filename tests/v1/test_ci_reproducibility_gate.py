@@ -123,7 +123,8 @@ def test_v1_ci_matrix_is_read_only_and_covers_supported_architectures() -> None:
     ).read_text(encoding="utf-8")
     assert "ECOREX_GITHUB_HOSTED_WINDOWS_NATIVE_COMPATIBILITY" not in release_stage
     assert "windows-2022" not in release_stage
-    assert "windows-x64" not in release_stage
+    assert "windows-x64" in release_stage
+    assert "windows-2025" in release_stage
     assert "macos-15" in release_stage
     assert "macos-15-intel" in release_stage
     assert "--break-system-packages" not in release_stage
