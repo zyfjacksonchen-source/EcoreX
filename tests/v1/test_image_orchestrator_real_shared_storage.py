@@ -186,7 +186,7 @@ def test_real_postgres_s3_concurrency_idempotency_recovery_and_gc() -> None:
             worker_barrier.wait(timeout=30)
             while True:
                 leased = store.lease_next(
-                    f"{node_id}/worker-{index:02d}", lease_seconds=30
+                    f"{node_id}-worker-{index:02d}", lease_seconds=30
                 )
                 if leased is None:
                     return
