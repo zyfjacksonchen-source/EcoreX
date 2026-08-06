@@ -433,6 +433,88 @@ function detectTarget() {
   return /win/.test(source) ? "bootstrap-windows-x64" : null;
 }
 
+export function wrappedCarouselIndex(index, itemCount) {
+  if (!Number.isInteger(index) || !Number.isInteger(itemCount) || itemCount < 1) return 0;
+  return ((index % itemCount) + itemCount) % itemCount;
+}
+
+function setupRobotCarousel() {
+  const carousel = document.querySelector("[data-robot-carousel]");
+  const viewport = carousel?.querySelector("[data-carousel-viewport]");
+  const choices = [...(carousel?.querySelectorAll("[data-robot-index]") || [])];
+  const copies = [...(carousel?.querySelectorAll("[data-robot-copy]") || [])];
+  const dots = [...(carousel?.querySelectorAll("[data-carousel-dots] button") || [])];
+  const previous = carousel?.querySelector("[data-carousel-prev]");
+  const next = carousel?.querySelector("[data-carousel-next]");
+  if (!viewport || choices.length !== 5 || copies.length !== choices.length || dots.length !== choices.length || !previous || !next) return;
+
+  let activeIndex = 2;
+  let drag = null;
+  let suppressClick = false;
+  const update = (index) => {
+    activeIndex = wrappedCarouselIndex(index, choices.length);
+    choices.forEach((choice, choiceIndex) => {
+      let position = wrappedCarouselIndex(choiceIndex - activeIndex, choices.length);
+      if (position > Math.floor(choices.length / 2)) position -= choices.length;
+      choice.dataset.position = String(position);
+      choice.setAttribute("aria-pressed", String(choiceIndex === activeIndex));
+    });
+    copies.forEach((copy, copyIndex) => {
+      const active = copyIndex === activeIndex;
+      copy.hidden = !active;
+      copy.toggleAttribute("inert", !active);
+    });
+    dots.forEach((dot, dotIndex) => {
+      if (dotIndex === activeIndex) dot.setAttribute("aria-current", "true");
+      else dot.removeAttribute("aria-current");
+    });
+  };
+
+  previous.addEventListener("click", () => update(activeIndex - 1));
+  next.addEventListener("click", () => update(activeIndex + 1));
+  dots.forEach((dot, dotIndex) => dot.addEventListener("click", () => update(dotIndex)));
+  choices.forEach((choice, choiceIndex) => choice.addEventListener("click", (event) => {
+    if (suppressClick) {
+      event.preventDefault();
+      return;
+    }
+    update(choiceIndex);
+  }));
+  viewport.addEventListener("keydown", (event) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      event.preventDefault();
+      update(activeIndex + (event.key === "ArrowLeft" ? -1 : 1));
+    } else if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      update(event.key === "Home" ? 0 : choices.length - 1);
+    }
+  });
+  viewport.addEventListener("pointerdown", (event) => {
+    if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
+    drag = { pointerId: event.pointerId, startX: event.clientX, moved: false };
+    viewport.setPointerCapture(event.pointerId);
+    viewport.classList.add("is-dragging");
+  });
+  viewport.addEventListener("pointermove", (event) => {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    if (Math.abs(event.clientX - drag.startX) > 8) drag.moved = true;
+  });
+  const finishDrag = (event) => {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const distance = event.clientX - drag.startX;
+    if (viewport.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
+    viewport.classList.remove("is-dragging");
+    suppressClick = drag.moved;
+    drag = null;
+    if (Math.abs(distance) >= 36) update(activeIndex + (distance < 0 ? 1 : -1));
+    setTimeout(() => { suppressClick = false; }, 0);
+  };
+  viewport.addEventListener("pointerup", finishDrag);
+  viewport.addEventListener("pointercancel", finishDrag);
+  update(activeIndex);
+}
+
 function cardCopy(artifact) {
   if (artifact.artifactId === "bootstrap-windows-x64") {
     return ["Win", "Windows x64", "适用于 Windows 10/11 的 64 位电脑。"];
@@ -653,6 +735,7 @@ if (typeof document !== "undefined") {
   document.querySelector("[data-theme-toggle]")?.addEventListener("click", () => {
     setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
   });
+  setupRobotCarousel();
   loadIndex()
     .then((index) => {
       // Discovery must remain usable when a release origin does not grant

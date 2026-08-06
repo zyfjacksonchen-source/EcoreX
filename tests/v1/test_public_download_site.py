@@ -42,7 +42,9 @@ def test_public_download_site_makes_one_click_terminal_install_primary() -> None
 
     assert "<title>e-Mate 下载与安装</title>" in html
     assert 'aria-label="e-Mate v0.3.1"' in html
-    assert "<small data-site-version>v0.3.1</small>" in html
+    assert 'class="brand-mark"' in html
+    assert 'class="brand-logo"' not in html
+    assert "data-site-version" not in html
     assert ">EcoreX<" not in html
     assert 'aria-label="EcoreX' not in html
     assert "<strong>选择系统</strong>" in html
@@ -61,6 +63,32 @@ def test_public_download_site_makes_one_click_terminal_install_primary() -> None
     assert "appendTerminalCommand(article, artifact);" in javascript
     assert 'createElement("a", "download-link", "下载 EcoreX")' not in javascript
     assert 'createElement("details", "download-help")' not in javascript
+
+
+def test_public_download_site_presents_five_accessible_work_partners() -> None:
+    site = ROOT / "deploy" / "ecorex-site"
+    html = (site / "index.html").read_text(encoding="utf-8")
+    javascript = next(site.glob("site.*.js")).read_text(encoding="utf-8")
+
+    assert html.count('class="robot-choice"') == 5
+    assert html.count('class="robot-slide-copy"') == 5
+    assert html.count('aria-pressed="true"') == 1
+    assert 'data-robot-index="2" data-position="0"' in html
+    assert 'class="robot-kicker"' not in html
+    assert '<figure class="robot-portrait robot-portrait-creative">' in html
+    assert 'style="--robot-' not in html
+    assert "手拿画笔和调色板的 e-Mate 机器人" in html
+    assert "把想法变成看得见的创意" in html
+    assert "让表格和数据更好懂" in html
+    assert "把多人协作推进到下一步" in html
+    assert "后台下载，用户确认后刷新激活。" not in html
+    assert "Update policy" not in html
+    assert "复制与你的电脑匹配的一键安装命令" not in html
+    assert '<p class="eyebrow">e-Mate</p>' not in html
+    assert "setupRobotCarousel();" in javascript
+    assert "wrappedCarouselIndex(choiceIndex - activeIndex" in javascript
+    assert 'event.key === "ArrowLeft"' in javascript
+    assert 'viewport.addEventListener("pointermove"' in javascript
 
 
 def test_public_release_routes_hide_channel_but_map_to_channel_storage() -> None:
@@ -171,6 +199,11 @@ const sourcePath = process.argv[1];
 const source = await readFile(sourcePath, "utf8");
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
 const contract = await import(moduleUrl);
+
+assert.equal(contract.wrappedCarouselIndex(0, 5), 0);
+assert.equal(contract.wrappedCarouselIndex(7, 5), 2);
+assert.equal(contract.wrappedCarouselIndex(-1, 5), 4);
+assert.equal(contract.wrappedCarouselIndex(5, 0), 0);
 
 const windowsCommand = contract.terminalCommand({
   platform: "windows",
