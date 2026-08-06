@@ -80,6 +80,33 @@ test ! -e "$HOME/Desktop/e-Mate.app"
 /usr/bin/ditto -x -k "$PACKAGE" "$ROOT/package"
 INSTALLER="$ROOT/package/e-Mate WebUI/Install e-Mate WebUI.command"
 test -x "$INSTALLER"
+CORE_ARCHIVE=$(find "$ROOT/package/e-Mate WebUI/signed" -maxdepth 1 -type f \
+  -name "ecorex-core-macos-$EXPECTED_ARCH-*.zip" -print)
+test -n "$CORE_ARCHIVE" && test "$(printf "%s\n" "$CORE_ARCHIVE" | wc -l | tr -d " ")" = 1
+/usr/bin/ditto -x -k "$CORE_ARCHIVE" "$ROOT/core-probe"
+KEYCHAIN_PROBE_REFERENCE="ecorex/ci-smoke/packaged-$(uuidgen)" \
+  "$ROOT/core-probe/bin/pack-python/bin/python3" -I - <<'PY'
+import os
+from ecorex.connectors.vault import _MacOSKeychainBackend
+
+backend = _MacOSKeychainBackend()
+reference = os.environ['KEYCHAIN_PROBE_REFERENCE']
+payload = b'ecorex-packaged-keychain-probe'
+try:
+    backend.put(reference, payload)
+    if backend.get(reference) != payload:
+        raise SystemExit('macos_packaged_keychain_backend_roundtrip_failed')
+except OSError as error:
+    raise SystemExit(
+        f'macos_packaged_keychain_backend_osstatus={error.args[0]}'
+    ) from None
+finally:
+    try:
+        backend.delete(reference)
+    except (KeyError, OSError):
+        pass
+print('macos_packaged_keychain_backend=passed')
+PY
 
 INSTALL_ROOT="$ROOT/install"
 "$INSTALLER" --install-root "$INSTALL_ROOT" \
