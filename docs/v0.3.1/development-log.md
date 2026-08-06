@@ -206,3 +206,5 @@
 - 一键命令改为 `npm exec --call`，实际压缩包 URL仍来自签名公开指针且国内 GitHub 镜像优先，下载后继续执行精确 SHA-256 校验再启动 Bootstrap。
 - 五机器人未换图、未减少数量，仅将桌面基准宽度从 330px 收敛到 285px，移动端从 176px 收敛到 152px；浏览器实测无横向溢出。
 - 定向回归：`tests/v1/test_public_download_site.py` 6/6 通过；浏览器实测版本、三平台卡片、npm 命令、轮播切换与控制台错误检查通过。
+- 生产下载站已原子切换到 `v0.3.1-hotfix-1fc67892c9e5`，原站点 `v0.3.1-emate-b0fe4c1a` 保留可回退；公网 HTML 与三个内容哈希资产读回一致。
+- 切换只替换静态站点链接并 reload Nginx，`ecorex-web.service` 全程保持 active 且 MainPID 未变；生产浏览器实测五机器人宽度为 138/189/256/189/138px，视口 1280px 时页面宽度 1265px。
