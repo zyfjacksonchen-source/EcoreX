@@ -27,12 +27,14 @@ class _ProductExtensionService(ExtensionService):
         startup_declarations,
         builtin_skill_root,
         legacy_skill_roots,
+        skill_runner_factory,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._startup_declarations = tuple(startup_declarations)
         self._builtin_skill_root = builtin_skill_root
         self._legacy_skill_roots = tuple(legacy_skill_roots)
+        self._skill_runner_factory = skill_runner_factory
         self._startup_lock = threading.Lock()
         self._startup_converged = False
 
@@ -47,6 +49,10 @@ class _ProductExtensionService(ExtensionService):
             self.repository.converge_startup()
             if self.local_bundle_store is not None:
                 self.local_bundle_store.converge_startup()
+                if self._skill_runner_factory is not None:
+                    self.bind_skill_runner(
+                        self._skill_runner_factory(self.local_bundle_store)
+                    )
             register_builtin_extensions(self, self._startup_declarations)
             migrated_names = migrate_skill_directories(
                 self,
@@ -97,7 +103,6 @@ def compose_extension_service(
         database.parent / "extension-cas",
         create=create_storage,
     )
-    skill_runner = skill_runner_factory(bundle_store) if skill_runner_factory else None
     service = _ProductExtensionService(
         SQLiteExtensionRepository(database, initialize=False),
         runtime_api_version=runtime_api_version,
@@ -112,10 +117,10 @@ def compose_extension_service(
         ),
         known_pack_ids=installed_pack_ids,
         local_bundle_store=bundle_store,
-        skill_runner=skill_runner,
         startup_declarations=declarations,
         builtin_skill_root=builtin_skill_root,
         legacy_skill_roots=legacy_skill_roots,
+        skill_runner_factory=skill_runner_factory,
     )
     if initialize:
         service.converge_startup()

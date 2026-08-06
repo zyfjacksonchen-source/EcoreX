@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from types import SimpleNamespace
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -45,6 +46,8 @@ def test_product_extension_projection_only_build_then_converges_once(tmp_path) -
     )
     before = _extension_rows(database)
     cas_root = tmp_path / "extension-cas"
+    runner = SimpleNamespace(supports=lambda _runtime: True, run=lambda *_a, **_k: None)
+    runner_bindings: list[bool] = []
 
     service = compose_extension_service(
         database_path=database,
@@ -57,6 +60,9 @@ def test_product_extension_projection_only_build_then_converges_once(tmp_path) -
         connector_registry=builtin_connector_registry(),
         installed_pack_ids=frozenset(),
         signature_verifier=Ed25519SignatureVerifier({"release": public}),
+        skill_runner_factory=lambda store: (
+            runner_bindings.append(store.root.is_dir()) or runner
+        ),
         initialize=False,
         create_storage=False,
     )
@@ -65,10 +71,14 @@ def test_product_extension_projection_only_build_then_converges_once(tmp_path) -
     assert service.project_snapshot().items == ()
     assert _extension_rows(database) == before
     assert not cas_root.exists()
+    assert service.skill_runner is None
+    assert runner_bindings == []
 
     service.converge_startup()
     assert service.startup_converged is True
     assert cas_root.is_dir()
+    assert service.skill_runner is runner
+    assert runner_bindings == [True]
     assert service.project_snapshot().items
     converged = _extension_rows(database)
     assert converged != before

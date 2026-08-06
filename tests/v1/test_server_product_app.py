@@ -388,10 +388,11 @@ def test_product_app_refuses_to_replace_core_connector_or_artifact_handler(
     )
 
     with pytest.raises(
-        ValueError,
-        match="a caller cannot replace a Core capability-discovery handler",
-    ):
+        ServerConfigurationError,
+        match="Runtime API could not be composed",
+    ) as failure:
         create_product_app(settings)
+    assert failure.value.stage_code == "runtime_registration"
 
 
 def test_product_app_disables_imagegen_when_managed_image_service_is_absent(
