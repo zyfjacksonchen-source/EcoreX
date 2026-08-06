@@ -53,6 +53,27 @@ KEYCHAIN_CREATED=true
 /usr/bin/security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 /usr/bin/security default-keychain -d user -s "$KEYCHAIN_PATH"
 /usr/bin/security list-keychains -d user -s "$KEYCHAIN_PATH"
+KEYCHAIN_PROBE_REFERENCE="ecorex/ci-smoke/$(uuidgen)" \
+  python - <<'PY'
+import os
+from ecorex.connectors.vault import _MacOSKeychainBackend
+
+backend = _MacOSKeychainBackend()
+reference = os.environ['KEYCHAIN_PROBE_REFERENCE']
+payload = b'ecorex-real-keychain-probe'
+try:
+    backend.put(reference, payload)
+    if backend.get(reference) != payload:
+        raise SystemExit('macos_keychain_backend_roundtrip_failed')
+except OSError as error:
+    raise SystemExit(f'macos_keychain_backend_osstatus={error.args[0]}') from None
+finally:
+    try:
+        backend.delete(reference)
+    except (KeyError, OSError):
+        pass
+print('macos_keychain_backend=passed')
+PY
 
 mkdir -p "$HOME/Desktop" "$ROOT/package"
 test ! -e "$HOME/Desktop/e-Mate.app"

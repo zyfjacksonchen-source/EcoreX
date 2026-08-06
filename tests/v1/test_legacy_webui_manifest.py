@@ -265,3 +265,6 @@ def test_macos_user_smoke_uses_and_restores_a_real_temporary_keychain():
     assert "ORIGINAL_DEFAULT_KEYCHAIN" in smoke
     assert "ORIGINAL_KEYCHAIN_LIST" in smoke
     assert '/usr/bin/security delete-keychain "$KEYCHAIN_PATH"' in smoke
+    assert "_MacOSKeychainBackend" in smoke
+    assert "macos_keychain_backend=passed" in smoke
+    assert "macos_keychain_backend_osstatus=" in smoke
