@@ -187,6 +187,9 @@ jobs:
         with:
           python-version: "3.11.9"
 
+      - name: Install exact package verification dependencies
+        run: python scripts/install-v1-python-profile.py --profile runtime
+
       - name: Install, launch, and verify as a real macOS x64 user
         run: >-
           bash scripts/smoke-v030-macos-terminal-package.sh

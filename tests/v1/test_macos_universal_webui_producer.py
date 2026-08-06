@@ -258,6 +258,9 @@ def test_workflow_builds_and_runs_both_terminal_macos_architectures():
     assert "runs-on: macos-15-intel" in workflow
     assert "runs-on: windows-2022" not in workflow
     assert "build-v030-windows-webui.py" not in workflow
+    assert workflow.count(
+        "python scripts/install-v1-python-profile.py --profile runtime"
+    ) == 2
     assert "Download authenticated manual Candidate and Windows handoffs" in workflow
     assert workflow.count("smoke-v030-macos-terminal-package.sh") == 2
     assert workflow.index("build-v030-macos-universal-webui.py") < workflow.index(
