@@ -554,6 +554,8 @@ def _build_native(platform: str, architecture: str, evidence: Path) -> Path:
                 source_root=authority_source,
                 github_hosted_compatibility=github_hosted_compatibility,
             )
+        else:
+            _adhoc_sign_macos_binary(output / "ecorex", cwd=output)
         return output
     finally:
         if authority_source is not None and authority_source.exists():
@@ -2842,6 +2844,7 @@ def _build_bootstrap(
         raise StageError("bootstrap_size_limit")
     if platform != "windows":
         binary.chmod(0o755)
+        _adhoc_sign_macos_binary(binary, cwd=destination)
     installer_name = (
         "EcoreX Installer.cmd"
         if platform == "windows"
@@ -4687,6 +4690,27 @@ def _run(
     if result.returncode != 0:
         raise StageError(code)
     return result
+
+
+def _adhoc_sign_macos_binary(binary: Path, *, cwd: Path) -> None:
+    for command in (
+        (
+            "/usr/bin/codesign",
+            "--force",
+            "--sign",
+            "-",
+            "--timestamp=none",
+            str(binary),
+        ),
+        ("/usr/bin/codesign", "--verify", "--strict", str(binary)),
+    ):
+        _run(
+            command,
+            cwd=cwd,
+            environment=_runtime_environment(),
+            timeout=30,
+            code="macos_native_signing_failed",
+        )
 
 
 def _run_bootstrap_tests(

@@ -856,6 +856,51 @@ def test_macos_browser_runtime_signs_every_expected_architecture_macho(
     ]
 
 
+def test_macos_stage_signs_and_verifies_native_launcher_and_bootstrap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    sign = stager["_adhoc_sign_macos_binary"]
+    commands: list[tuple[tuple[str, ...], dict[str, object]]] = []
+    monkeypatch.setitem(
+        sign.__globals__,
+        "_run",
+        lambda command, **kwargs: commands.append((tuple(command), kwargs)),
+    )
+    binary = tmp_path / "ecorex"
+
+    sign(binary, cwd=tmp_path)
+
+    assert [command for command, _kwargs in commands] == [
+        (
+            "/usr/bin/codesign",
+            "--force",
+            "--sign",
+            "-",
+            "--timestamp=none",
+            str(binary),
+        ),
+        ("/usr/bin/codesign", "--verify", "--strict", str(binary)),
+    ]
+    assert all(
+        kwargs["cwd"] == tmp_path
+        and kwargs["timeout"] == 30
+        and kwargs["code"] == "macos_native_signing_failed"
+        for _command, kwargs in commands
+    )
+    source = (ROOT / "platform-staging" / "stager.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    call_sites = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_adhoc_sign_macos_binary"
+    ]
+    assert len(call_sites) == 2
+
+
 def test_macos_browser_runtime_rejects_wrong_architecture_before_signing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
