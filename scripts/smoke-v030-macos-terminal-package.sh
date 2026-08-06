@@ -10,14 +10,49 @@ test -f "$PACKAGE"
 
 ROOT=$(mktemp -d "${RUNNER_TEMP:-/tmp}/emate-macos-user.XXXXXX")
 INSTALL_PID=
+KEYCHAIN_PATH="$ROOT/smoke.keychain-db"
+KEYCHAIN_PASSWORD="emate-smoke-$(uuidgen)"
+ORIGINAL_DEFAULT_KEYCHAIN=
+ORIGINAL_KEYCHAIN_LIST="$ROOT/original-keychains.txt"
+KEYCHAIN_CREATED=false
 cleanup() {
   if [ -n "$INSTALL_PID" ] && kill -0 "$INSTALL_PID" 2>/dev/null; then
     kill "$INSTALL_PID" 2>/dev/null || true
     wait "$INSTALL_PID" 2>/dev/null || true
   fi
+  if [ "$KEYCHAIN_CREATED" = true ]; then
+    ORIGINAL_KEYCHAIN_LIST="$ORIGINAL_KEYCHAIN_LIST" python - <<'PY' || true
+import os, shlex, subprocess
+from pathlib import Path
+paths = shlex.split(Path(os.environ['ORIGINAL_KEYCHAIN_LIST']).read_text())
+if paths:
+    subprocess.run(
+        ['/usr/bin/security', 'list-keychains', '-d', 'user', '-s', *paths],
+        check=False,
+    )
+PY
+    if [ -n "$ORIGINAL_DEFAULT_KEYCHAIN" ]; then
+      /usr/bin/security default-keychain -d user -s \
+        "$ORIGINAL_DEFAULT_KEYCHAIN" >/dev/null 2>&1 || true
+    fi
+    /usr/bin/security delete-keychain "$KEYCHAIN_PATH" >/dev/null 2>&1 || true
+  fi
   rm -rf "$ROOT"
 }
 trap cleanup EXIT HUP INT TERM
+
+ORIGINAL_DEFAULT_KEYCHAIN=$(
+  /usr/bin/security default-keychain -d user 2>/dev/null \
+    | sed 's/^[[:space:]]*"//; s/"[[:space:]]*$//' \
+    || true
+)
+/usr/bin/security list-keychains -d user >"$ORIGINAL_KEYCHAIN_LIST"
+/usr/bin/security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+KEYCHAIN_CREATED=true
+/usr/bin/security set-keychain-settings -lut 3600 "$KEYCHAIN_PATH"
+/usr/bin/security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+/usr/bin/security default-keychain -d user -s "$KEYCHAIN_PATH"
+/usr/bin/security list-keychains -d user -s "$KEYCHAIN_PATH"
 
 mkdir -p "$HOME/Desktop" "$ROOT/package"
 test ! -e "$HOME/Desktop/e-Mate.app"

@@ -251,3 +251,17 @@ def test_user_package_workflow_hands_verified_bytes_to_direct_publisher():
         "https://gh-proxy.com/https://github.com/zyfjacksonchen-source/"
         "EcoreX-installers/releases/download/v0.3.1"
     )
+
+
+def test_macos_user_smoke_uses_and_restores_a_real_temporary_keychain():
+    smoke = (ROOT / "scripts/smoke-v030-macos-terminal-package.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "/usr/bin/security create-keychain" in smoke
+    assert "/usr/bin/security unlock-keychain" in smoke
+    assert '/usr/bin/security default-keychain -d user -s "$KEYCHAIN_PATH"' in smoke
+    assert '/usr/bin/security list-keychains -d user -s "$KEYCHAIN_PATH"' in smoke
+    assert "ORIGINAL_DEFAULT_KEYCHAIN" in smoke
+    assert "ORIGINAL_KEYCHAIN_LIST" in smoke
+    assert '/usr/bin/security delete-keychain "$KEYCHAIN_PATH"' in smoke
