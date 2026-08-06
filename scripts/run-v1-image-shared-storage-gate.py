@@ -34,6 +34,28 @@ _PYTEST_NODE_IDS = (
     "tests/v1/test_image_orchestrator_production_storage.py::"
     "test_real_postgres_image_schema_migrate_validate_and_drift_gate",
 )
+_DIAGNOSTIC_LIMIT = 8 * 1024
+
+
+def _redacted_tail(
+    stdout: bytes,
+    stderr: bytes,
+    *,
+    environment: dict[str, str],
+) -> str:
+    text = (stdout + b"\n" + stderr).decode("utf-8", errors="replace")
+    secrets = {
+        environment.get(name, "")
+        for name in (
+            "ECOREX_TEST_POSTGRES_DSN",
+            "ECOREX_TEST_S3_ENDPOINT",
+            "ECOREX_TEST_S3_ACCESS_KEY",
+            "ECOREX_TEST_S3_SECRET_KEY",
+        )
+    }
+    for secret in sorted(secrets - {""}, key=len, reverse=True):
+        text = text.replace(secret, "[REDACTED]")
+    return text[-_DIAGNOSTIC_LIMIT:]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -109,6 +131,20 @@ def run(argv: list[str] | None = None) -> int:
                     check=False,
                 )
                 if result.returncode != 0:
+                    print(
+                        json.dumps(
+                            {
+                                "event": "image_gate_round_diagnostic",
+                                "returncode": result.returncode,
+                                "output_tail": _redacted_tail(
+                                    result.stdout,
+                                    result.stderr,
+                                    environment=environment,
+                                ),
+                            }
+                        ),
+                        file=sys.stderr,
+                    )
                     raise ValueError("image_gate_round_failed")
                 try:
                     payload = read_stable_regular_file(

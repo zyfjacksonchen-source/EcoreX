@@ -265,6 +265,16 @@ def test_run_metadata_accepts_only_canonical_or_main_qualified_workflow_path() -
             _validate(_metadata(path=path))
 
 
+def test_run_metadata_accepts_api_omitted_default_branch_only() -> None:
+    repository = dict(_metadata()["repository"])
+    repository["default_branch"] = None
+    assert _validate(_metadata(repository=repository))["protected_ref"] == "refs/heads/main"
+
+    repository["default_branch"] = "feature"
+    with pytest.raises(CiReproducibilityError, match="identity_untrusted"):
+        _validate(_metadata(repository=repository))
+
+
 def test_artifact_selection_binds_ids_to_the_current_attempt(tmp_path: Path) -> None:
     run_metadata = tmp_path / "run.json"
     run_metadata.write_bytes(canonical_json_bytes(_metadata()))

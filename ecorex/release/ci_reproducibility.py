@@ -283,7 +283,7 @@ def validate_run_metadata(
         or event not in ALLOWED_EVENTS
         or not isinstance(repository_value, dict)
         or repository_value.get("full_name") != repository
-        or repository_value.get("default_branch") != branch
+        or repository_value.get("default_branch") not in {None, branch}
         or repository_value.get("fork") is not False
         or isinstance(repository_id, bool)
         or not isinstance(repository_id, int)
