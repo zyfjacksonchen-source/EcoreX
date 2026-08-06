@@ -429,7 +429,7 @@ def _validate_workflows(repo: Path) -> dict[str, object]:
     approved_actions, action_lock = _load_action_lock(repo)
     workflow_profiles = {
         "ecorex-v1-ci.yml": {
-            "profiles": {"cloud": 1, "dev": 2},
+            "profiles": {"cloud": 1, "dev": 2, "platform-stage": 1},
             "npm_ci": 2,
             "node": True,
         },

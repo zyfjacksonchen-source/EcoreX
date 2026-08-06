@@ -47,6 +47,7 @@ jobs:
             requirements/locks/bootstrap.lock
             requirements/locks/cloud.lock
             requirements/locks/dev.lock
+            requirements/locks/platform-stage.lock
             requirements/locks/manifest.json
 
       - name: Set up Node 22
@@ -63,6 +64,9 @@ jobs:
         run: |
           python scripts/install-v1-python-profile.py --profile cloud
           python -c "import boto3, psycopg, psycopg_pool"
+
+      - name: Resolve Capability Pack test adapters from the reviewed lock
+        run: python scripts/install-v1-python-profile.py --profile platform-stage
 
       - name: Lint v1 Python
         run: python scripts/run-v1-lint.py --compile --output-format=github
