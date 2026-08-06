@@ -284,6 +284,7 @@ def test_workflow_builds_and_runs_both_terminal_macos_architectures():
     assert "macos-distribution-receipt.json" in workflow
     assert "x86_64) PACKAGE_ARCH=x64" in smoke
     assert 'ecorex-core-macos-$PACKAGE_ARCH-*.zip' in smoke
+    assert 'tail -n 20 "$INSTALL_ROOT/install-journal.ndjson"' in smoke
     assert "_verify_candidate_receipt(" in producer
     assert producer.index("verify_windows_webui_package(") < producer.index(
         "_verify_windows_partial_receipt(\n        windows_receipt"

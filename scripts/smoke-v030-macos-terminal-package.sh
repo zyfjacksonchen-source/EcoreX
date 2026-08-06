@@ -126,7 +126,11 @@ for _ in $(seq 1 300); do
     break
   fi
   kill -0 "$INSTALL_PID" 2>/dev/null || {
+    sed -n '1,160p' "$ROOT/install.stdout" >&2
     sed -n '1,160p' "$ROOT/install.stderr" >&2
+    if [ -f "$INSTALL_ROOT/install-journal.ndjson" ]; then
+      tail -n 20 "$INSTALL_ROOT/install-journal.ndjson" >&2
+    fi
     exit 1
   }
   sleep 1
