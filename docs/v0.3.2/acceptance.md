@@ -51,6 +51,15 @@
 
 ## 发布边界
 
+### Windows 兼容构建授权
+
+2026-08-06，用户在确认严格的自托管 Windows runner 不可用后，明确授权
+受保护 platform-stage 改用 GitHub `windows-2022` 兼容构建。该路径必须把
+`authority_mode` 记录为 `github-hosted-ci-compatibility`，并继续校验 GitHub
+Actions/Windows 2022 边界、MSVC 14.44 与 SDK 布局、Microsoft Authenticode、
+源码与工具链清单摘要、观测到的工具/库摘要和最终二进制摘要；不得表述为
+`caller-pinned` 严格工具链证据。
+
 生产晋级受以下既有门禁保护，不能用本地未提交工作树绕过：
 
 1. 精确 commit 的 CI 与 platform-stage 成功记录；

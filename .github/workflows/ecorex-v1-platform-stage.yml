@@ -24,7 +24,7 @@ jobs:
             label: Windows x64
             platform: windows
             architecture: x64
-            runs_on: '["self-hosted","windows","x64","ecorex-platform-windows"]'
+            runs_on: '"windows-2022"'
           - id: macos-arm64
             config_key: MACOS_ARM64
             label: macOS arm64
@@ -93,6 +93,7 @@ jobs:
 
       - name: Build real Core and six Packs with the source-pinned stager
         env:
+          ECOREX_GITHUB_HOSTED_WINDOWS_NATIVE_COMPATIBILITY: ${{ matrix.id == 'windows-x64' && '1' || '0' }}
           ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE: ${{ runner.temp }}/ecorex-runtime-config.json
           ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE_SHA256: ${{ vars[format('ECOREX_STAGE_RUNTIME_CONFIG_{0}_SHA256', matrix.config_key)] }}
           ECOREX_PUBLIC_BOOTSTRAP_INDEX_URL: ${{ vars.ECOREX_PUBLIC_BOOTSTRAP_INDEX_URL }}
