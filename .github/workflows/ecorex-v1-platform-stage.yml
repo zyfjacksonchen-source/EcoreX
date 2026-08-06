@@ -24,7 +24,7 @@ jobs:
             label: Windows x64
             platform: windows
             architecture: x64
-            runs_on: '"windows-2025"'
+            runs_on: '["self-hosted","windows","x64","ecorex-platform-windows"]'
           - id: macos-arm64
             config_key: MACOS_ARM64
             label: macOS arm64
