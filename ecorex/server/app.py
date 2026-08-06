@@ -576,7 +576,8 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         )
     except Exception as error:
         raise ServerConfigurationError(
-            "verified Extension authority could not be composed"
+            "verified Extension authority could not be composed",
+            stage_code="extension_authority",
         ) from error
 
     app = FastAPI(
@@ -661,7 +662,13 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         trace_max_request_bytes=settings.trace_max_request_bytes,
         trace_retention_days=settings.trace_retention_days,
     )
-    register_runtime(settings=runtime_settings, app=app)
+    try:
+        register_runtime(settings=runtime_settings, app=app)
+    except (ServerConfigurationError, RuntimeError, ValueError):
+        raise ServerConfigurationError(
+            "Runtime API could not be composed",
+            stage_code="runtime_registration",
+        ) from None
     app.state.web_bundle = bundle
     app.state.runtime_bearer_token = bearer_token
     skill_hub_pages = [

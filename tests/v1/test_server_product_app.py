@@ -17,6 +17,7 @@ from ecorex.integration import ImageGenerationToolHandler
 from ecorex.server import (
     BundleIntegrityError,
     ProductServerSettings,
+    ServerConfigurationError,
     WebBundleManifest,
     WebFileRecord,
     build_uvicorn_config,
@@ -327,6 +328,20 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
     assert asset.headers["cache-control"] == "public, max-age=31536000, immutable"
     assert asset.headers["x-content-type-options"] == "nosniff"
     assert asset.headers["etag"]
+
+
+def test_product_app_labels_runtime_registration_failure(tmp_path, monkeypatch):
+    signed = _write_signed_bundle(tmp_path)
+
+    def invalid_registration(**_kwargs):
+        raise RuntimeError("native-runtime-registration-secret")
+
+    monkeypatch.setattr("ecorex.server.app.register_runtime", invalid_registration)
+    with pytest.raises(ServerConfigurationError) as failure:
+        create_product_app(_settings(tmp_path, signed))
+
+    assert failure.value.stage_code == "runtime_registration"
+    assert "native-runtime-registration-secret" not in str(failure.value)
 
 
 def test_runtime_owner_endpoint_requires_exact_process_nonce(tmp_path):

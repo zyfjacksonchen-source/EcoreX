@@ -46,6 +46,7 @@ from ecorex.server import (
     ProductRuntimeConfig,
     ProductRuntimeConfigurationError,
     ProductRuntimeTrustError,
+    ServerConfigurationError,
     WebBundleManifest,
     WebFileRecord,
     create_product_app,
@@ -2344,6 +2345,31 @@ def test_product_server_normalizes_application_composition_and_closes_once(
 
     assert failure.value.stage_code == "application_composition"
     assert "native-application-composition-secret" not in str(failure.value)
+    assert composition.close_count == 1
+    assert composition.transfer_count == 0
+
+
+def test_product_server_preserves_fixed_application_substage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    composition = _StartupStageComposition()
+
+    def invalid_app(_settings):
+        raise ServerConfigurationError(
+            "native-runtime-registration-secret",
+            stage_code="runtime_registration",
+        )
+
+    monkeypatch.setattr("ecorex.server.cli.create_product_app", invalid_app)
+    with pytest.raises(ProductRuntimeConfigurationError) as failure:
+        build_product_runtime_server(
+            host="127.0.0.1",
+            port=8765,
+            runtime_loader=lambda **_kwargs: composition,
+        )
+
+    assert failure.value.stage_code == "runtime_registration"
+    assert "native-runtime-registration-secret" not in str(failure.value)
     assert composition.close_count == 1
     assert composition.transfer_count == 0
 
