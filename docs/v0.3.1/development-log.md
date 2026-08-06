@@ -198,3 +198,11 @@
 - 生产默认模型已更新为 `gpt-5.6-luna`，推理强度为 `max`。
 - Luna 验收仅执行非计费配置检查；现有供应地址为公网 IP 的明文 HTTP（供应主机哈希 `96177E418E56C951`），不符合 HTTPS 传输门禁，因此未发送计费请求，也未使用 `--allow-http-provider` 放宽安全策略。
 - 安全留痕：`.artifacts/v031-manual-release-1eb99e0/production/production-webui-deploy.json` 与 `luna-inspect-after-deploy.json`；凭据、令牌和供应地址原文均未写入文档。
+
+## 2026-08-06 下载不可用与版本显示热修复
+
+- 线上公开指针本身为已发布的 `0.3.1`，国内 `ghproxy.net` 源与三个 Bootstrap 资产完整；故障根因为下载页仍按旧 `1.x.x` 正则和旧序列公式校验，合法 `0.3.1` 被前端拒绝。
+- 下载页改为与 Python 发布合同一致的最终 SemVer 与单调序列公式；页眉显示纯 `v0.3.1`，下载区可渲染 Windows x64、macOS Apple Silicon、macOS Intel 三张卡。
+- 一键命令改为 `npm exec --call`，实际压缩包 URL仍来自签名公开指针且国内 GitHub 镜像优先，下载后继续执行精确 SHA-256 校验再启动 Bootstrap。
+- 五机器人未换图、未减少数量，仅将桌面基准宽度从 330px 收敛到 285px，移动端从 176px 收敛到 152px；浏览器实测无横向溢出。
+- 定向回归：`tests/v1/test_public_download_site.py` 6/6 通过；浏览器实测版本、三平台卡片、npm 命令、轮播切换与控制台错误检查通过。

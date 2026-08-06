@@ -40,3 +40,16 @@
 ## 最终结论
 
 `final result: passed`
+
+## 2026-08-06 下载页热修复视觉复验
+
+- 源视觉：`C:/Users/user/AppData/Local/Temp/codex-clipboard-7d969067-f77c-4c13-a411-c2e25a79b553.png`，1773×477 px。
+- 实现截图：`.artifacts/v031-hotfix-download/preview-1440x900.png`，1425×868 px；CSS 视口 1440×900、浏览器密度 1。移动端截图为 `.artifacts/v031-hotfix-download/preview-390x844.png`，CSS 视口 390×844。
+- 同输入对照：`.artifacts/v031-hotfix-download/compare-robots-source-implementation.png`。对照将源图与实现中的机器人区域归一到 1185×320 后上下排列；只比较机器人尺度、间距、裁切和画质，不把页眉/正文差异误判为偏差。
+- 字体与文案：标题层级未变；页眉只新增低强调纯版本号 `v0.3.1`，未恢复橙色品牌小字。
+- 间距与布局：桌面五机器人最大实测约 256px，移动端依次约 64/100/152/100/64px；五个始终同屏，页面无横向溢出。
+- 色彩与图片：沿用现有深色 token 和同一机器人源图，未新增占位图、CSS 图形或重采样资产；缩放后边缘清晰。
+- 交互：浏览器实测“下一位”将主位从创意伙伴切到协作伙伴；三张 v0.3.1 下载卡与 npm 命令均渲染，控制台无 error。
+- 对比结论：机器人相对用户截图进一步缩小且留白增加；无 P0/P1/P2，未发现需要继续修正的 P3。
+
+`final result: passed`

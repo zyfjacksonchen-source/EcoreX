@@ -44,14 +44,15 @@ def test_public_download_site_makes_one_click_terminal_install_primary() -> None
     assert 'aria-label="e-Mate v0.3.1"' in html
     assert 'class="brand-mark"' in html
     assert 'class="brand-logo"' not in html
-    assert "data-site-version" not in html
+    assert '<span class="brand-version" data-site-version>v0.3.1</span>' in html
     assert ">EcoreX<" not in html
     assert 'aria-label="EcoreX' not in html
     assert "<strong>选择系统</strong>" in html
-    assert "<strong>复制一键命令</strong>" in html
+    assert "<strong>复制 npm 命令</strong>" in html
     assert "<strong>粘贴并执行</strong>" in html
     assert "点击对应卡片中的“复制命令”。" in html
-    assert "安装完成后会自动打开 e-Mate 并创建桌面快捷方式。" in html
+    assert "npm 会从国内 GitHub 镜像下载" in html
+    assert "安装完成后自动打开 e-Mate 并创建桌面快捷方式。" in html
     assert all(
         technical_term not in html
         for technical_term in ("Bootstrap", "SHA-256", "Ed25519")
@@ -69,6 +70,7 @@ def test_public_download_site_presents_five_accessible_work_partners() -> None:
     site = ROOT / "deploy" / "ecorex-site"
     html = (site / "index.html").read_text(encoding="utf-8")
     javascript = next(site.glob("site.*.js")).read_text(encoding="utf-8")
+    stylesheet = next(site.glob("styles.*.css")).read_text(encoding="utf-8")
 
     assert html.count('class="robot-choice"') == 5
     assert html.count('class="robot-slide-copy"') == 5
@@ -89,6 +91,8 @@ def test_public_download_site_presents_five_accessible_work_partners() -> None:
     assert "wrappedCarouselIndex(choiceIndex - activeIndex" in javascript
     assert 'event.key === "ArrowLeft"' in javascript
     assert 'viewport.addEventListener("pointermove"' in javascript
+    assert "width: clamp(170px, 20vw, 285px);" in stylesheet
+    assert "width: 152px;" in stylesheet
 
 
 def test_public_release_routes_hide_channel_but_map_to_channel_storage() -> None:
@@ -204,6 +208,11 @@ assert.equal(contract.wrappedCarouselIndex(0, 5), 0);
 assert.equal(contract.wrappedCarouselIndex(7, 5), 2);
 assert.equal(contract.wrappedCarouselIndex(-1, 5), 4);
 assert.equal(contract.wrappedCarouselIndex(5, 0), 0);
+assert.equal(contract.releaseVersion("0.3.1"), "0.3.1");
+assert.equal(contract.releaseVersion("1.0.0"), "1.0.0");
+assert.throws(() => contract.releaseVersion("v0.3.1"));
+assert.equal(contract.stableReleaseSequence("0.3.1"), 30002);
+assert.equal(contract.stableReleaseSequence("1.0.17"), 100000018);
 
 const windowsCommand = contract.terminalCommand({
   platform: "windows",
@@ -213,6 +222,8 @@ const windowsCommand = contract.terminalCommand({
     { url: "https://github.example/EcoreX.zip" },
   ],
 });
+assert.match(windowsCommand, /^npm exec --call /);
+assert.match(windowsCommand, /powershell\.exe -NoProfile -NonInteractive/);
 assert.match(windowsCommand, /curl\.exe/);
 assert.match(windowsCommand, /Write-Host/);
 assert.match(windowsCommand, /速度和剩余时间/);
@@ -227,6 +238,7 @@ const macCommand = contract.terminalCommand({
     { url: "https://github.example/EcoreX.zip" },
   ],
 });
+assert.match(macCommand, /^npm exec --call /);
 assert.match(macCommand, /curl --fail --location/);
 assert.match(macCommand, /速度和剩余时间/);
 assert.match(macCommand, /shasum -a 256 -c/);

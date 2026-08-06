@@ -24,6 +24,7 @@ const MANIFEST_FETCH_TIMEOUT_MS = 12_000;
 const AUTHORITY_MAX_TTL_MS = 24 * 60 * 60 * 1000;
 const AUTHORITY_FUTURE_SKEW_MS = 5 * 60 * 1000;
 const AUTHORITY_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+const RELEASE_VERSION = /^(?:0|[1-9][0-9]{0,3})\.(?:0|[1-9][0-9]{0,3})\.(?:0|[1-9][0-9]{0,3})$/;
 const TARGETS = [
   ["bootstrap-windows-x64", "windows", "x64"],
   ["bootstrap-macos-arm64", "macos", "arm64"],
@@ -72,6 +73,15 @@ function signature(value, label) {
     algorithm: candidate.algorithm,
     keyId: candidate.key_id,
   });
+}
+
+export function releaseVersion(value) {
+  return text(value, "release.version", RELEASE_VERSION);
+}
+
+export function stableReleaseSequence(value) {
+  const [major, minor, patch] = releaseVersion(value).split(".").map(Number);
+  return major * 100_000_000 + minor * 10_000 + patch + 1;
 }
 
 export function sourceList(value, label, fileName) {
@@ -158,7 +168,7 @@ export function normalizePublicIndex(raw, now = new Date()) {
     "release",
   );
   text(release.release_id, "release.release_id", /^release-stable-[0-9a-f]{24}$/);
-  text(release.version, "release.version", /^1\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})$/);
+  releaseVersion(release.version);
   if (release.channel !== "stable") throw new Error("公开索引只能呈现 stable");
   text(release.created_at, "release.created_at", RFC3339);
   if (Number.isNaN(Date.parse(release.created_at))) throw new Error("release.created_at 格式无效");
@@ -182,8 +192,7 @@ export function normalizePublicIndex(raw, now = new Date()) {
     ["sequence", "revision", "target", "signature"],
     "authority",
   );
-  const versionParts = release.version.split(".").map((value) => Number(value));
-  const expectedSequence = versionParts[1] * 1_000_000 + versionParts[2] + 1;
+  const expectedSequence = stableReleaseSequence(release.version);
   if (
     !Number.isSafeInteger(authority.sequence)
     || authority.sequence !== expectedSequence
@@ -554,7 +563,7 @@ export function terminalCommand(artifact) {
   const sourceUrls = artifact.sources.map((source) => source.url);
   if (artifact.platform === "windows") {
     const urls = sourceUrls.map(powershellLiteral).join(",");
-    return [
+    const script = [
       "$ErrorActionPreference='Stop'",
       "$d=Join-Path $env:TEMP ('e-Mate-'+[guid]::NewGuid())",
       "New-Item -ItemType Directory -Path $d | Out-Null",
@@ -572,10 +581,11 @@ export function terminalCommand(artifact) {
       "Write-Host '[启动] 后续 e-Mate 组件会继续显示实时进度'",
       "& (Join-Path $d 'bin\\ecorex-bootstrap.exe')",
     ].join("; ");
+    return `npm exec --call ${powershellLiteral(`powershell.exe -NoProfile -NonInteractive -Command "${script}"`)}`;
   }
   const urls = sourceUrls.map(shellLiteral).join(" ");
   const digest = shellLiteral(artifact.sha256);
-  return [
+  const script = [
     'd="$(mktemp -d)"',
     'z="$d/e-Mate.zip"',
     `urls=(${urls})`,
@@ -591,6 +601,7 @@ export function terminalCommand(artifact) {
     "printf '[启动] 后续 e-Mate 组件会继续显示实时进度\\n'",
     '"$d/bin/ecorex-bootstrap"',
   ].join(" && ");
+  return `npm exec --call ${shellLiteral(script)}`;
 }
 
 function appendTerminalCommand(article, artifact) {
