@@ -46,7 +46,7 @@
 | S9 | 已完成（视觉总验待 S12） | AC-16；Python 53/53、前端 219/219 |
 | S10 | 已完成（飞书真实联调待 S12） | AC-17；36/36 定向回归 |
 | S11 | 已完成 | AC-10；Python 157/157、前端 219/219 |
-| S12 | 进行中 | AC-18 + 全量；WebUI 视觉验收已通过 |
+| S12 | 已完成 | AC-01—AC-20、双端实包、手动发布与生产读回通过 |
 
 ## 2026-08-05 S1
 
@@ -183,3 +183,18 @@
 - 平台 staging 手动 workflow 只保留 macOS arm64/x64，不再分配 Windows Runner；最终 macOS workflow 从手动候选 Release 读取已验证的 Windows 包与 partial receipt，用于生成双端一致的最终收据。
 - 首次 macOS-only staging `31054215210` 在创建 Job 前失败：GitHub workflow planner 不接受 matrix `exclude` 中的动态表达式。该 run 为零 Job、未占用 Runner、未产生产物；已改为字面量 macOS 双架构 matrix，消除计划阶段不确定性。
 - 手动/macOS 工作流合同回归 80/80 通过；精确依赖锁、源码树和 `git diff --check` 通过。
+
+## 2026-08-06 S12 macOS 构建与手动发布
+
+- GitHub 仅执行 macOS 构建；最终 run `31075715044` 的 arm64 构建/测试与 x64 安装/启动任务均为 `success`。
+- 手动 Release `v0.3.1` 已发布到 `zyfjacksonchen-source/EcoreX-installers`，标题为 `e-Mate 0.3.1`，非 draft、非 prerelease，共 48 个资产。
+- Windows WebUI 包 SHA-256 为 `3757e878329e31322f698c1bf7ca78296190a075be1bb6fd2c099bfafcf43591`；macOS Universal WebUI 包 SHA-256 为 `c9d3ab1f210559da358f7d7bad79ed80efeffeb14a84bc2b677ca1b9bde7728f`。
+- 发布收据 SHA-256 为 `53e07cccf1362446549d8921dbafb15cdbd456ab8e65da57c3895f9fb80c5947`；生产公开指针 SHA-256 为 `b0fe4c1aaf5396b56f47918a5259982c4b4cb94971009a9d8aaf01a175a4bd4a`。
+
+## 2026-08-06 S12 生产 WebUI 原子切换
+
+- 生产下载站原子切换到 `release-stable-701ceaabf26942482753f2fc`；页面、公开指针、发布公钥表和 Runtime 默认模型均先备份，失败路径自动回滚。
+- 公网独立读回返回 200：旧页眉橙色 `e-Mate` 小字、版本小字和旧 eyebrow 均不存在；图形标志与五机器人能力轮播存在。公开指针状态为 `published`、版本 `0.3.1`、release ID 一致。
+- 生产默认模型已更新为 `gpt-5.6-luna`，推理强度为 `max`。
+- Luna 验收仅执行非计费配置检查；现有供应地址为公网 IP 的明文 HTTP（供应主机哈希 `96177E418E56C951`），不符合 HTTPS 传输门禁，因此未发送计费请求，也未使用 `--allow-http-provider` 放宽安全策略。
+- 安全留痕：`.artifacts/v031-manual-release-1eb99e0/production/production-webui-deploy.json` 与 `luna-inspect-after-deploy.json`；凭据、令牌和供应地址原文均未写入文档。

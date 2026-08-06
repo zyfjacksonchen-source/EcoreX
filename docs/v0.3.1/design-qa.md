@@ -18,6 +18,7 @@
 | 最近任务 | `artifacts/visual/compare-recent-tasks.png` | 标题为可聚焦按钮，点击后进入对应任务 |
 | 能力分类 | `artifacts/visual/webui-capability-categories-1440x900.png` | 九个分类常显并使用现有 Lucide 图标；协作连接可筛选 |
 | 归档任务 | `artifacts/visual/webui-archived-view-1440x900.png` | 可查看只读时间线、恢复；逻辑删除确认明确保留审计记录 |
+| 下载页页眉与五机器人能力轮播 | `artifacts/visual/compare-download-topbar-source-implementation.png`、`download-page-carousel-1440x900-final.png`、`download-page-carousel-mobile-390x844-final.png` | 橙色 `e-Mate` 小字已删除；五个机器人保持同屏，首位机器人及能力说明可切换，桌面与移动端无横向溢出 |
 
 ## 真实交互复验
 
