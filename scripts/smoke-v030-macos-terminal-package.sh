@@ -6,6 +6,11 @@ EXPECTED_ARCH=${2:?architecture required}
 RECEIPT=${3:?receipt required}
 ACTUAL_ARCH=$(uname -m)
 test "$ACTUAL_ARCH" = "$EXPECTED_ARCH"
+case "$EXPECTED_ARCH" in
+  arm64) PACKAGE_ARCH=arm64 ;;
+  x86_64) PACKAGE_ARCH=x64 ;;
+  *) exit 1 ;;
+esac
 test -f "$PACKAGE"
 
 ROOT=$(mktemp -d "${RUNNER_TEMP:-/tmp}/emate-macos-user.XXXXXX")
@@ -81,7 +86,7 @@ test ! -e "$HOME/Desktop/e-Mate.app"
 INSTALLER="$ROOT/package/e-Mate WebUI/Install e-Mate WebUI.command"
 test -x "$INSTALLER"
 CORE_ARCHIVE=$(find "$ROOT/package/e-Mate WebUI/signed" -maxdepth 1 -type f \
-  -name "ecorex-core-macos-$EXPECTED_ARCH-*.zip" -print)
+  -name "ecorex-core-macos-$PACKAGE_ARCH-*.zip" -print)
 test -n "$CORE_ARCHIVE" && test "$(printf "%s\n" "$CORE_ARCHIVE" | wc -l | tr -d " ")" = 1
 /usr/bin/ditto -x -k "$CORE_ARCHIVE" "$ROOT/core-probe"
 KEYCHAIN_PROBE_REFERENCE="ecorex/ci-smoke/packaged-$(uuidgen)" \

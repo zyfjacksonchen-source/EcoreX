@@ -20,6 +20,7 @@ from ecorex.release.windows_webui import WINDOWS_RECEIPT_SCHEMA
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "build-v030-macos-universal-webui.py"
+SMOKE_SCRIPT = ROOT / "scripts" / "smoke-v030-macos-terminal-package.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "emate-v030-macos-universal.yml"
 
 
@@ -244,6 +245,7 @@ def test_windows_partial_receipt_must_bind_exact_package_and_candidate(tmp_path)
 def test_workflow_builds_and_runs_both_terminal_macos_architectures():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     producer = SCRIPT.read_text(encoding="utf-8")
+    smoke = SMOKE_SCRIPT.read_text(encoding="utf-8")
 
     assert "github.sha == vars.ECOREX_V031_RELEASE_COMMIT_SHA" in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
@@ -280,6 +282,8 @@ def test_workflow_builds_and_runs_both_terminal_macos_architectures():
     assert "--windows-package .producer/downloads/EcoreX_0.3.1-webui-windows-x64.zip" in workflow
     assert "--windows-receipt .producer/downloads/emate-webui-build-receipt.json" in workflow
     assert "macos-distribution-receipt.json" in workflow
+    assert "x86_64) PACKAGE_ARCH=x64" in smoke
+    assert 'ecorex-core-macos-$PACKAGE_ARCH-*.zip' in smoke
     assert "_verify_candidate_receipt(" in producer
     assert producer.index("verify_windows_webui_package(") < producer.index(
         "_verify_windows_partial_receipt(\n        windows_receipt"
