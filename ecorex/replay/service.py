@@ -25,6 +25,7 @@ from ecorex.protocol import (
     JobProjection,
     JobStatus,
     PublicToolActivity,
+    RuntimeTiming,
     ReasoningItemContent,
     ReasoningPresentation,
     LiveReplayRequest,
@@ -85,6 +86,48 @@ def _copy_item(item: ItemProjection) -> ItemProjection:
     return item.model_copy(update={"inherited": True})
 
 
+def _with_turn_timing(turn: TurnProjection) -> TurnProjection:
+    if turn.timing is not None:
+        return turn
+    terminal = turn.status in TERMINAL_TURN_STATUSES
+    return turn.model_copy(update={
+        "timing": RuntimeTiming(
+            started_at=turn.created_at,
+            finished_at=turn.updated_at if terminal else None,
+            duration_ms=(
+                max(0, int((turn.updated_at - turn.created_at).total_seconds() * 1000))
+                if terminal
+                else None
+            ),
+        )
+    })
+
+
+def _with_server_timing(item: ItemProjection) -> ItemProjection:
+    if item.kind is not ItemKind.TOOL_CALL:
+        return item
+    activity = PublicToolActivity.model_validate(item.content)
+    if activity.timing is not None:
+        return item
+    terminal = item.status in {
+        ItemStatus.COMPLETED,
+        ItemStatus.FAILED,
+        ItemStatus.CANCELLED,
+    }
+    activity = activity.model_copy(update={
+        "timing": RuntimeTiming(
+            started_at=item.created_at,
+            finished_at=item.updated_at if terminal else None,
+            duration_ms=(
+                max(0, int((item.updated_at - item.created_at).total_seconds() * 1000))
+                if terminal
+                else None
+            ),
+        )
+    })
+    return item.model_copy(update={"content": activity.model_dump(mode="json")})
+
+
 class ReplayService:
     """Replay one thread without running jobs, models, tools, or connectors."""
 
@@ -121,14 +164,10 @@ class ReplayService:
         ).hexdigest()
         projection = ThreadProjectionResponse(
             thread=reduced.thread,
-            turns=list(reduced.turns.values()),
-            items=list(reduced.items.values()),
+            turns=[_with_turn_timing(turn) for turn in reduced.turns.values()],
+            items=[_with_server_timing(item) for item in reduced.items.values()],
             jobs=list(reduced.jobs.values()),
-            interactions=[
-                interaction
-                for interaction in reduced.interactions.values()
-                if interaction.status is InteractionStatus.PENDING
-            ],
+            interactions=list(reduced.interactions.values()),
             watermark=stream.through_seq,
         )
         return MockReplayResponse(
@@ -976,6 +1015,7 @@ class ReplayService:
                 kind=kind,
                 status=status,
                 content=content,
+                created_seq=event.seq,
                 created_at=event.created_at,
                 updated_at=event.created_at,
             )
@@ -998,6 +1038,7 @@ class ReplayService:
                     "metadata": self._object(payload.get("metadata")),
                     "steer": True,
                 },
+                created_seq=event.seq,
                 created_at=event.created_at,
                 updated_at=event.created_at,
             )
@@ -1074,6 +1115,7 @@ class ReplayService:
                 kind=ItemKind.REASONING,
                 status=ItemStatus.IN_PROGRESS,
                 content=content.model_dump(mode="json"),
+                created_seq=event.seq,
                 created_at=event.created_at,
                 updated_at=event.created_at,
             )
@@ -1238,6 +1280,7 @@ class ReplayService:
                 turn_id=event.turn_id,
                 job_id=event.job_id,
                 expires_at=self._optional_string(payload.get("expires_at")),
+                created_seq=event.seq,
                 created_at=event.created_at,
                 updated_at=event.created_at,
             )

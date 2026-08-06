@@ -156,7 +156,7 @@ export const GENERATED_RUNTIME_CONTRACT = {
       "failed"
     ]
   },
-  "schemaSha256": "febbad3c0a41905e1b0006359a5dfc6194f023b27fd224f604fca9f98b6aa80c",
+  "schemaSha256": "a7dc813629b08a33a69f9582dd99746da198e53693ad4ced43a971d10ba50820",
   "schemaVersion": 1,
   "versions": {
     "api": "v1",

@@ -6,6 +6,7 @@ import type {
   InteractionResponse,
   ItemProjection,
   JobProjection,
+  RuntimeTiming,
   ThreadProjection,
   ThreadProjectionResponse,
   TurnProjection,
@@ -86,9 +87,23 @@ function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 }
 
+function operationTiming(
+  startedAt: string,
+  finishedAt: string | null,
+): RuntimeTiming {
+  return {
+    started_at: startedAt,
+    finished_at: finishedAt,
+    duration_ms: finishedAt === null
+      ? null
+      : Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
+  };
+}
+
 function transitionToolActivity(
   content: Record<string, unknown>,
   status: ItemProjection["status"],
+  updatedAt: string,
 ): Record<string, unknown> {
   const phase = ({
     created: "requested",
@@ -105,12 +120,53 @@ function transitionToolActivity(
     : status === "waiting_human"
     ? "等待你确认后继续"
     : null;
+  const currentTiming = objectValue(content.timing);
+  const startedAt = stringValue(currentTiming.started_at) ?? updatedAt;
+  const terminal = status === "completed" || status === "failed" || status === "cancelled";
   return {
     ...content,
     phase,
     status,
+    timing: operationTiming(startedAt, terminal ? updatedAt : null),
     ...(fixedSummary ? { result_summary: fixedSummary } : {}),
   };
+}
+
+interface FrameEventSpan {
+  event: EventEnvelope;
+  firstSeq: number;
+  lastSeq: number;
+}
+
+export function coalesceFrameEvents(
+  events: readonly EventEnvelope[],
+): FrameEventSpan[] {
+  const spans: FrameEventSpan[] = [];
+  for (const event of events) {
+    const previous = spans.at(-1);
+    const delta = stringValue(event.payload.delta);
+    if (
+      delta !== null
+      && (event.event_type === "item.delta" || event.event_type === "reasoning.delta")
+      && previous?.event.event_type === event.event_type
+      && previous.event.item_id === event.item_id
+      && event.seq === previous.lastSeq + 1
+    ) {
+      previous.event = {
+        ...previous.event,
+        created_at: event.created_at,
+        payload: {
+          ...previous.event.payload,
+          ...event.payload,
+          delta: `${stringValue(previous.event.payload.delta) ?? ""}${delta}`,
+        },
+      };
+      previous.lastSeq = event.seq;
+      continue;
+    }
+    spans.push({ event, firstSeq: event.seq, lastSeq: event.seq });
+  }
+  return spans;
 }
 
 function interactionContractValue(value: unknown): InteractionContract | null {
@@ -142,6 +198,8 @@ function replaceTurnStatus(
   if (!event.turn_id) return state;
   const existing = state.turns[event.turn_id];
   if (!existing) return state;
+  const terminal = TERMINAL_TURNS.has(status);
+  const startedAt = existing.timing?.started_at ?? existing.created_at;
   return {
     ...state,
     turns: {
@@ -152,6 +210,7 @@ function replaceTurnStatus(
         terminal_reason: TERMINAL_TURNS.has(status)
           ? stringValue(event.payload.reason)
           : null,
+        timing: operationTiming(startedAt, terminal ? event.created_at : null),
         updated_at: event.created_at,
       },
     },
@@ -239,6 +298,7 @@ function reduceKnownEvent(state: RuntimeViewState, event: EventEnvelope): Runtim
         client_message_id: event.client_message_id,
         metadata: objectValue(event.payload.metadata),
         terminal_reason: null,
+        timing: operationTiming(event.created_at, null),
         created_at: event.created_at,
         updated_at: event.created_at,
       };
@@ -261,6 +321,7 @@ function reduceKnownEvent(state: RuntimeViewState, event: EventEnvelope): Runtim
         status: (stringValue(event.payload.status) ?? "created") as ItemProjection["status"],
         content: objectValue(event.payload.content),
         inherited: false,
+        created_seq: event.seq,
         created_at: event.created_at,
         updated_at: event.created_at,
       };
@@ -301,6 +362,7 @@ function reduceKnownEvent(state: RuntimeViewState, event: EventEnvelope): Runtim
           steer: true,
         },
         inherited: false,
+        created_seq: event.seq,
         created_at: event.created_at,
         updated_at: event.created_at,
       };
@@ -343,6 +405,7 @@ function reduceKnownEvent(state: RuntimeViewState, event: EventEnvelope): Runtim
           archived_reason: null,
         },
         inherited: false,
+        created_seq: event.seq,
         created_at: event.created_at,
         updated_at: event.created_at,
       };
@@ -404,7 +467,7 @@ function reduceKnownEvent(state: RuntimeViewState, event: EventEnvelope): Runtim
             ...item,
             status,
             content: item.kind === "tool_call"
-              ? transitionToolActivity(item.content, status)
+              ? transitionToolActivity(item.content, status, event.created_at)
               : item.content,
             updated_at: event.created_at,
           },
@@ -420,13 +483,22 @@ function reduceKnownEvent(state: RuntimeViewState, event: EventEnvelope): Runtim
         || typeof activity.display_label !== "string"
       ) return state;
       const item = state.items[event.item_id];
+      const status = stringValue(activity.status) as ItemProjection["status"] | null;
+      if (!status) return state;
+      const currentTiming = objectValue(item.content.timing);
+      const startedAt = stringValue(currentTiming.started_at) ?? item.created_at;
+      const terminal = status === "completed" || status === "failed" || status === "cancelled";
       return {
         ...state,
         items: {
           ...state.items,
           [event.item_id]: {
             ...item,
-            content: activity,
+            status,
+            content: {
+              ...activity,
+              timing: operationTiming(startedAt, terminal ? event.created_at : null),
+            },
             updated_at: event.created_at,
           },
         },
@@ -471,6 +543,7 @@ function reduceKnownEvent(state: RuntimeViewState, event: EventEnvelope): Runtim
         turn_id: event.turn_id,
         job_id: event.job_id,
         expires_at: stringValue(event.payload.expires_at),
+        created_seq: event.seq,
         created_at: event.created_at,
         updated_at: event.created_at,
       };
@@ -513,6 +586,7 @@ function reduceKnownEvent(state: RuntimeViewState, event: EventEnvelope): Runtim
 function reduceEventEnvelope(
   state: RuntimeViewState,
   event: EventEnvelope,
+  lastSeq = event.seq,
 ): RuntimeViewState {
   if (state.resyncRequired) return state;
   if (state.thread && event.thread_id !== state.thread.thread_id) return state;
@@ -525,7 +599,7 @@ function reduceEventEnvelope(
     };
   }
   const reduced = reduceKnownEvent(state, event);
-  return { ...reduced, watermark: event.seq };
+  return { ...reduced, watermark: lastSeq };
 }
 
 export function runtimeReducer(
@@ -574,8 +648,9 @@ export function runtimeReducer(
     case "events.received": {
       if (action.events.length === 0) return state;
       let reduced = state;
-      for (const event of action.events) {
-        reduced = reduceEventEnvelope(reduced, event);
+      const unseen = action.events.filter((event) => event.seq > state.watermark);
+      for (const span of coalesceFrameEvents(unseen)) {
+        reduced = reduceEventEnvelope(reduced, span.event, span.lastSeq);
         if (reduced.resyncRequired) break;
       }
       return reduced;
@@ -622,4 +697,8 @@ export function selectPendingInteractions(
   return Object.values(state.interactions)
     .filter((interaction) => interaction.status === "pending")
     .sort((left, right) => left.created_at.localeCompare(right.created_at));
+}
+
+export function selectInteractions(state: RuntimeViewState): InteractionProjection[] {
+  return Object.values(state.interactions);
 }

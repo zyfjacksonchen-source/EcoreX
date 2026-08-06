@@ -18,6 +18,7 @@ const FEATURES = [
   "RetouchWorkspace",
   "SettingsDialog",
   "ShareDialog",
+  "Timeline",
   "TimelineActivity",
 ];
 

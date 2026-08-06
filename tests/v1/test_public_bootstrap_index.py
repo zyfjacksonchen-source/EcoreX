@@ -227,6 +227,7 @@ def test_pointer_sequence_is_deterministic_monotonic_and_signature_reproducible(
 ) -> None:
     assert stable_pointer_sequence("0.3.0") == 30_001
     assert stable_pointer_sequence("0.3.1") == 30_002
+    assert stable_pointer_sequence("0.3.2") == 30_003
     assert stable_pointer_sequence("1.0.0") == 100_000_001
     with pytest.raises(PublicBootstrapIndexError, match="final product SemVer"):
         stable_pointer_sequence("1.0.1-rc.1")

@@ -8,6 +8,7 @@ import type {
   TurnStatus,
 } from "../api/contracts.ts";
 import {
+  coalesceFrameEvents,
   initialRuntimeViewState,
   runtimeReducer,
   selectItems,
@@ -363,6 +364,20 @@ test("a frame batch appends streaming text in order with one reducer action", ()
   assert.equal(state.watermark, 7);
 });
 
+test("frame coalescing joins only contiguous deltas for the same block", () => {
+  const spans = coalesceFrameEvents([
+    event(1, "item.delta", { delta: "甲" }, { item_id: "assistant_1" }),
+    event(2, "item.delta", { delta: "乙" }, { item_id: "assistant_1" }),
+    event(3, "reasoning.delta", { delta: "边界" }, { item_id: "reasoning_1" }),
+    event(4, "item.delta", { delta: "丙" }, { item_id: "assistant_1" }),
+  ]);
+
+  assert.equal(spans.length, 3);
+  assert.equal(spans[0]?.event.payload.delta, "甲乙");
+  assert.deepEqual([spans[0]?.firstSeq, spans[0]?.lastSeq], [1, 2]);
+  assert.equal(spans[2]?.event.payload.delta, "丙");
+});
+
 test("tool facts render only the backend public activity and keep Artifact references", () => {
   const requested = {
     schema_version: 1,
@@ -379,6 +394,7 @@ test("tool facts render only the backend public activity and keep Artifact refer
     argument_sha256: "a".repeat(64),
     result_sha256: null,
     artifact_refs: [],
+    timing: null,
   };
   const completed = {
     ...requested,
@@ -421,7 +437,10 @@ test("tool facts render only the backend public activity and keep Artifact refer
     },
   );
 
-  assert.deepEqual(state.items.tool_item_1.content, completed);
+  assert.deepEqual(state.items.tool_item_1.content, {
+    ...completed,
+    timing: { started_at: now, finished_at: now, duration_ms: 0 },
+  });
   assert.equal(state.items.tool_item_1.status, "completed");
   assert.equal(JSON.stringify(state).includes("must-never-enter-the-view-state"), false);
 });

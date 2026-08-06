@@ -29,7 +29,7 @@ def test_legacy_manifest_is_last_atomic_step_and_uses_verified_bytes(tmp_path):
         ("webui-windows-x64", b"windows-package"),
         ("webui-macos-universal", b"macos-package"),
     ):
-        name = f"EcoreX_0.3.1-{artifact_id}.zip"
+        name = f"EcoreX_0.3.2-{artifact_id}.zip"
         (tmp_path / name).write_bytes(payload)
         artifacts.append(
             {
@@ -44,7 +44,7 @@ def test_legacy_manifest_is_last_atomic_step_and_uses_verified_bytes(tmp_path):
         json.dumps(
             {
                 "schema": RECEIPT_SCHEMA,
-                "version": "0.3.1",
+                "version": "0.3.2",
                 "status": "verified",
                 "generated_at": "2026-08-04T12:00:00Z",
                 "artifacts": artifacts,
@@ -57,10 +57,10 @@ def test_legacy_manifest_is_last_atomic_step_and_uses_verified_bytes(tmp_path):
 
     manifest = json.loads(output.read_text(encoding="utf-8"))
     assert manifest["product"] == "e-Mate"
-    assert manifest["version"] == "0.3.1"
+    assert manifest["version"] == "0.3.2"
     assert manifest["download"]["mirrors"][0]["baseUrl"] == (
         "https://gh-proxy.com/https://github.com/zyfjacksonchen-source/"
-        "EcoreX-installers/releases/download/v0.3.1"
+        "EcoreX-installers/releases/download/v0.3.2"
     )
     assert manifest["update"]["webui"]["artifactIds"] == [
         "webui-windows-x64",
@@ -78,7 +78,7 @@ def test_legacy_manifest_is_last_atomic_step_and_uses_verified_bytes(tmp_path):
     ]
 
     original = output.read_bytes()
-    (tmp_path / "EcoreX_0.3.1-webui-macos-universal.zip").write_bytes(b"changed")
+    (tmp_path / "EcoreX_0.3.2-webui-macos-universal.zip").write_bytes(b"changed")
     with pytest.raises(LegacyManifestError, match="changed"):
         write_legacy_webui_manifest(receipt, output)
     assert output.read_bytes() == original
@@ -125,7 +125,7 @@ def _publication_fixture(
         ("webui-windows-x64", b"windows-package"),
         ("webui-macos-universal", b"macos-package"),
     ):
-        name = f"EcoreX_0.3.1-{artifact_id}.zip"
+        name = f"EcoreX_0.3.2-{artifact_id}.zip"
         (tmp_path / name).write_bytes(payload)
         packages[name] = payload
         artifacts.append(
@@ -141,7 +141,7 @@ def _publication_fixture(
         json.dumps(
             {
                 "schema": RECEIPT_SCHEMA,
-                "version": "0.3.1",
+                "version": "0.3.2",
                 "status": "verified",
                 "generated_at": "2026-08-04T12:00:00Z",
                 "artifacts": artifacts,
@@ -193,7 +193,7 @@ def test_publication_reads_back_two_origins_before_switching_manifest(tmp_path):
     )
 
     assert result["status"] == "published"
-    assert json.loads(paths.pointer.read_text(encoding="utf-8"))["version"] == "0.3.1"
+    assert json.loads(paths.pointer.read_text(encoding="utf-8"))["version"] == "0.3.2"
     assert readback.calls[-2:] == [f"{origin}/manifest.json" for origin in origins]
 
 
@@ -232,11 +232,11 @@ def test_user_package_workflow_hands_verified_bytes_to_direct_publisher():
     admission = (
         "github.repository == 'zyfjacksonchen-source/EcoreX'"
         " && github.ref == 'refs/heads/main'"
-        " && github.sha == vars.ECOREX_V031_RELEASE_COMMIT_SHA"
+        " && github.sha == vars.ECOREX_V032_RELEASE_COMMIT_SHA"
     )
     assert workflow.count(admission) == 1
-    assert "EcoreX_0.3.1-webui-windows-x64.zip" in workflow
-    assert "EcoreX_0.3.1-webui-macos-universal.zip" in workflow
+    assert "EcoreX_0.3.2-webui-windows-x64.zip" in workflow
+    assert "EcoreX_0.3.2-webui-macos-universal.zip" in workflow
     assert "webui-build-receipt.json" in workflow
     assert "macos-arm64-user-smoke.json" in workflow
     assert "macos-x64-user-smoke.json" in workflow
@@ -249,7 +249,7 @@ def test_user_package_workflow_hands_verified_bytes_to_direct_publisher():
     )
     assert PACKAGE_ORIGINS[0] == (
         "https://gh-proxy.com/https://github.com/zyfjacksonchen-source/"
-        "EcoreX-installers/releases/download/v0.3.1"
+        "EcoreX-installers/releases/download/v0.3.2"
     )
 
 

@@ -20,6 +20,7 @@ const FEATURE_STEMS = [
   "RetouchWorkspace",
   "SettingsDialog",
   "ShareDialog",
+  "Timeline",
   "TimelineActivity",
 ];
 

@@ -79,6 +79,7 @@ const STRUCTURAL_BUTTON_EXCEPTIONS = [
   "ex-retouch-result-media",
   "ex-input-attachment-preview-trigger",
   "ex-timeline-jump-button",
+  "ex-process-toggle",
   // A semantic switch is a persistent state indicator, not an ordinary
   // command button. Shape Lock explicitly permits toggle tracks to be pills.
   "ex-skill-switch",

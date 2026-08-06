@@ -96,7 +96,7 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
       "superseded"
     ]
   },
-  "schemaSha256": "febbad3c0a41905e1b0006359a5dfc6194f023b27fd224f604fca9f98b6aa80c",
+  "schemaSha256": "a7dc813629b08a33a69f9582dd99746da198e53693ad4ced43a971d10ba50820",
   "schemaVersion": 1,
   "wireFields": {
     "ConnectorLoginBeginResponse": {
@@ -151,6 +151,7 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
         "turn_id",
         "job_id",
         "expires_at",
+        "created_seq",
         "created_at",
         "updated_at"
       ]
@@ -164,6 +165,7 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
         "status",
         "content",
         "inherited",
+        "created_seq",
         "created_at",
         "updated_at"
       ]
@@ -273,6 +275,7 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
         "turn_id",
         "job_id",
         "expires_at",
+        "created_seq",
         "created_at",
         "updated_at"
       ],
@@ -288,6 +291,7 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
         "status",
         "content",
         "inherited",
+        "created_seq",
         "created_at",
         "updated_at"
       ],
@@ -305,6 +309,11 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
         "reason_code",
         "created_at",
         "updated_at"
+      ],
+      "RuntimeTiming": [
+        "started_at",
+        "finished_at",
+        "duration_ms"
       ],
       "ThreadProjection": [
         "thread_id",
@@ -339,6 +348,7 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
         "metadata",
         "inherited",
         "terminal_reason",
+        "timing",
         "created_at",
         "updated_at"
       ]
@@ -362,6 +372,7 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
         "metadata",
         "inherited",
         "terminal_reason",
+        "timing",
         "created_at",
         "updated_at"
       ]

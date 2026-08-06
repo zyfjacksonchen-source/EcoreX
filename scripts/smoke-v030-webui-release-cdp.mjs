@@ -24,7 +24,7 @@ const imageSvgA = `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="9
   <rect x="120" y="410" width="210" height="260" fill="#ead8be"/>
   <rect x="360" y="410" width="210" height="260" fill="#5f3f2a"/>
   <circle cx="500" cy="736" r="48" fill="#e67818"/>
-  <text x="110" y="870" font-family="Arial, sans-serif" font-size="28" fill="#fff">v0.3.1 CDP 发布验收图 A</text>
+  <text x="110" y="870" font-family="Arial, sans-serif" font-size="28" fill="#fff">v0.3.2 CDP 发布验收图 A</text>
 </svg>`;
 const imageSvgB = `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
   <rect width="720" height="960" fill="#e8edf3"/>
@@ -33,7 +33,7 @@ const imageSvgB = `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="9
   <rect x="128" y="270" width="190" height="220" fill="#6a8faf"/>
   <rect x="352" y="270" width="190" height="220" fill="#90b77d"/>
   <rect x="128" y="550" width="414" height="110" fill="#f3c86b"/>
-  <text x="112" y="870" font-family="Arial, sans-serif" font-size="28" fill="#263547">v0.3.1 CDP 发布验收图 B</text>
+  <text x="112" y="870" font-family="Arial, sans-serif" font-size="28" fill="#263547">v0.3.2 CDP 发布验收图 B</text>
 </svg>`;
 const imageDataUrlA = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(imageSvgA)}`;
 const imageDataUrlB = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(imageSvgB)}`;
@@ -55,8 +55,8 @@ const bridgeSource = `
   var imagePathA = ${JSON.stringify(imagePathA)};
   var imagePathB = ${JSON.stringify(imagePathB)};
   var sessions = [
-    { session_id: "v030-retouch-release", title: "v0.3.1 精修发布验收", updatedAt: new Date().toISOString(), created_at: new Date(Date.now() - 3600000).toISOString(), last_active: new Date().toISOString() },
-    { session_id: "v030-active-turn", title: "v0.3.1 Active Turn Control", updatedAt: new Date(Date.now() - 1200000).toISOString(), created_at: new Date(Date.now() - 7200000).toISOString(), last_active: new Date(Date.now() - 1200000).toISOString() },
+    { session_id: "v032-retouch-release", title: "v0.3.2 精修发布验收", updatedAt: new Date().toISOString(), created_at: new Date(Date.now() - 3600000).toISOString(), last_active: new Date().toISOString() },
+    { session_id: "v032-active-turn", title: "v0.3.2 Active Turn Control", updatedAt: new Date(Date.now() - 1200000).toISOString(), created_at: new Date(Date.now() - 7200000).toISOString(), last_active: new Date(Date.now() - 1200000).toISOString() },
     { session_id: "v030-more-01", title: "会话更多 01", updatedAt: new Date(Date.now() - 2400000).toISOString(), created_at: new Date(Date.now() - 7400000).toISOString(), last_active: new Date(Date.now() - 2400000).toISOString() },
     { session_id: "v030-more-02", title: "会话更多 02", updatedAt: new Date(Date.now() - 2500000).toISOString(), created_at: new Date(Date.now() - 7500000).toISOString(), last_active: new Date(Date.now() - 2500000).toISOString() },
     { session_id: "v030-more-03", title: "会话更多 03", updatedAt: new Date(Date.now() - 2600000).toISOString(), created_at: new Date(Date.now() - 7600000).toISOString(), last_active: new Date(Date.now() - 2600000).toISOString() },
@@ -89,8 +89,8 @@ const bridgeSource = `
     var body = input && typeof input === "object" && input.body && typeof input.body === "object" ? input.body : {};
     var url = new URL(rawPath, "http://ecorex.local");
     var p = url.pathname;
-    if (p === "/api/version") return ok({ version: "0.3.1", updateState: { status: "installed", version: "0.3.1", mode: "background" } });
-    if (p === "/api/update-check") return ok({ currentVersion: "0.3.1", latestVersion: "0.3.1", hasUpdate: false, update: { webui: { connectorHealthCheck: { required: true, preserve: ["configured", "connected", "callable"] } } }, artifact: { id: "webui-windows-x64" } });
+    if (p === "/api/version") return ok({ version: "0.3.2", updateState: { status: "installed", version: "0.3.2", mode: "background" } });
+    if (p === "/api/update-check") return ok({ currentVersion: "0.3.2", latestVersion: "0.3.2", hasUpdate: false, update: { webui: { connectorHealthCheck: { required: true, preserve: ["configured", "connected", "callable"] } } }, artifact: { id: "webui-windows-x64" } });
     if (p === "/api/sessions") return ok({ sessions: sessions, total: sessions.length });
     if (p === "/api/history") {
       var sessionId = url.searchParams.get("session_id") || "v030-retouch-release";
@@ -178,7 +178,7 @@ const bridgeSource = `
   }
   var mockFns = {
     platform: "v030-release-cdp",
-    getEnterpriseSession: async function () { return { status: "authenticated", token: "release-cdp-token", clientKey: "ecorex-web-v0.3.1-cdp", user: { name: "发布验收", email: "release-cdp@example.com" }, quota: { allowed: true } }; },
+    getEnterpriseSession: async function () { return { status: "authenticated", token: "release-cdp-token", clientKey: "ecorex-web-v0.3.2-cdp", user: { name: "发布验收", email: "release-cdp@example.com" }, quota: { allowed: true } }; },
     enterpriseLogout: async function () { return ok({}); },
     enterpriseLogin: async function () { return this.getEnterpriseSession(); },
     checkEnterpriseQuota: async function () { return { ok: true, quota: { allowed: true } }; },
@@ -405,9 +405,9 @@ async function run() {
 
   let cdp;
   const result = {
-    schema: "ecorex.v0.3.1.release-cdp-smoke.v1",
+    schema: "ecorex.v0.3.2.release-cdp-smoke.v1",
     status: "FAIL",
-    version: "0.3.1",
+    version: "0.3.2",
     targetUrl,
     generatedAt: new Date().toISOString(),
     checks: {}
@@ -434,10 +434,10 @@ async function run() {
       }
     })()`, "mock bridge sessions", 30_000);
     result.checks.bridgeProbe = bridgeProbe;
-    await waitFor(cdp, `document.body && document.body.innerText.includes("v0.3.1 精修发布验收")`, "mock release session", 45_000);
+    await waitFor(cdp, `document.body && document.body.innerText.includes("v0.3.2 精修发布验收")`, "mock release session", 45_000);
     const landing = await evaluate(cdp, `(() => ({
-      hasRuntimeConnected: document.body.innerText.includes("发布验收") || document.body.innerText.includes("v0.3.1"),
-      hasRetouchSession: document.body.innerText.includes("v0.3.1 精修发布验收"),
+      hasRuntimeConnected: document.body.innerText.includes("发布验收") || document.body.innerText.includes("v0.3.2"),
+      hasRetouchSession: document.body.innerText.includes("v0.3.2 精修发布验收"),
       hasComposer: Boolean(document.querySelector(".composer textarea")),
       topbarText: document.querySelector(".app-topbar")?.innerText || ""
     }))()`);
@@ -461,7 +461,7 @@ async function run() {
     await waitFor(cdp, `document.querySelector(".session-list-more")?.innerText.includes("查看更多")`, "session list more restored");
     result.checks.sessionList = { before: sessionListBefore, expanded: sessionListExpanded };
 
-    await clickByText(cdp, "v0.3.1 精修发布验收");
+    await clickByText(cdp, "v0.3.2 精修发布验收");
     await waitFor(cdp, `document.body.innerText.includes("已生成两张图片产物")`, "retouch release history");
     await waitFor(cdp, `(() => {
       const previews = Array.from(document.querySelectorAll(".markdown-local-image-preview"));
@@ -490,7 +490,7 @@ async function run() {
       hasTextTool: Boolean(Array.from(document.querySelectorAll(".image-retouch-bottom-toolbar button")).find((button) => /文字修改/.test([button.title, button.getAttribute("aria-label"), button.innerText].filter(Boolean).join(" ")))),
       countText: document.querySelector(".image-retouch-count")?.innerText || ""
     }))()`);
-    assert(editorInitial.hasSidePanel && editorInitial.imagePickerCount >= 2 && editorInitial.hasRectTool && editorInitial.hasLassoTool && editorInitial.hasTextTool, "Retouch editor must expose real v0.3.1 tools.", editorInitial);
+    assert(editorInitial.hasSidePanel && editorInitial.imagePickerCount >= 2 && editorInitial.hasRectTool && editorInitial.hasLassoTool && editorInitial.hasTextTool, "Retouch editor must expose real v0.3.2 tools.", editorInitial);
     result.checks.editorInitial = editorInitial;
 
     await evaluate(cdp, `(() => {
@@ -541,7 +541,7 @@ async function run() {
     assert(draft.hasAttachment && draft.hasThumbnail && draft.draft.includes("本轮选中原图") && draft.draft.includes("文字修改约束") && draft.draft.includes("必须走 imagegen"), "Retouch submit should create pending composer draft with marker attachment and imagegen constraints.", draft);
     result.checks.draft = { ...draft, draft: draft.draft.slice(0, 800), redacted: true };
 
-    await clickByText(cdp, "v0.3.1 Active Turn Control");
+    await clickByText(cdp, "v0.3.2 Active Turn Control");
     await waitFor(cdp, `document.body.innerText.includes("Active turn control mock ready.")`, "active turn session history");
     await evaluate(cdp, `window.__ecorexV030SmokeState?.setActiveRunning(true)`);
     await waitFor(cdp, `Boolean(document.querySelector(".send-button.stop"))`, "active stop button");
@@ -560,7 +560,7 @@ async function run() {
 
     await evaluate(cdp, `window.__ecorexV030SmokeState?.setActiveRunning(true)`);
     const longComposerText = [
-      "这是 v0.3.1 发布包 active turn 验收长输入。",
+      "这是 v0.3.2 发布包 active turn 验收长输入。",
       "请用最新意图替换旧任务，并保持页面不跳动。",
       "这段内容用于触发 autosize，多行输入应该稳定在最大高度内。"
     ].join("\\n").repeat(24);

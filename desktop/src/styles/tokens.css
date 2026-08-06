@@ -68,6 +68,23 @@
 
   --target-desktop: 32px;
   --target-touch: 44px;
+  --chat-track-width: 820px;
+  --chat-body-width: 720px;
+  --chat-user-max-width: 620px;
+  --chat-track-pad-x: 20px;
+  --chat-track-pad-top: 24px;
+  --chat-track-pad-bottom: 40px;
+  --chat-turn-gap: 20px;
+  --chat-block-gap: 8px;
+  --chat-avatar-size: 24px;
+  --chat-tool-row-height: 32px;
+  --chat-jump-size: 32px;
+  --chat-follow-threshold: 72px;
+  --chat-reasoning-max-height: 200px;
+  --chat-motion-fast: 160ms;
+  --chat-motion-block: 180ms;
+  --chat-motion-fold: 280ms;
+  --chat-ease-fold: cubic-bezier(0.33, 1, 0.68, 1);
   --workspace-inset: 10px;
   --layout-sidebar-width: 248px;
   --artifact-action-rail-width: 132px;

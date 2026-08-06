@@ -982,7 +982,7 @@ class V030ToV1Migrator:
     def _make_staging(self, target: Path) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
         if self.options.dry_run:
             temporary = tempfile.TemporaryDirectory(prefix="ecorex-legacy-dry-run-")
-            staging = Path(temporary.name) / "target"
+            staging = Path(temporary.name).resolve(strict=True) / "target"
             staging.mkdir()
             return staging, temporary
         target.parent.mkdir(parents=True, exist_ok=True)

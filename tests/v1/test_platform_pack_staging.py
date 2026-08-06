@@ -2019,7 +2019,15 @@ def test_macos_pack_python_refuses_linked_framework_app_interpreter(
 
 
 @pytest.mark.skipif(
-    sys.platform != "darwin",
+    sys.platform != "darwin"
+    or not (
+        Path(sys.base_prefix)
+        / "Resources"
+        / "Python.app"
+        / "Contents"
+        / "MacOS"
+        / "Python"
+    ).is_file(),
     reason="requires the real python.org macOS Framework installation",
 )
 def test_macos_pack_python_real_framework_source_is_the_app_interpreter() -> None:

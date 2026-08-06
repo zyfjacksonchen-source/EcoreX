@@ -700,6 +700,10 @@ textarea {
   visibility: hidden;
 }
 
+.ex-workspace.is-home .ex-mobile-menu {
+  visibility: visible;
+}
+
 .ex-workspace.is-home .ex-header-actions {
   color: var(--color-brand-strong);
 }

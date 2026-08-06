@@ -41,7 +41,7 @@ def test_public_download_site_makes_one_click_terminal_install_primary() -> None
     javascript = next(site.glob("site.*.js")).read_text(encoding="utf-8")
 
     assert "<title>e-Mate 下载与安装</title>" in html
-    assert 'aria-label="e-Mate v0.3.1"' in html
+    assert 'aria-label="e-Mate v0.3.2"' in html
     assert 'class="brand-mark"' in html
     assert 'class="brand-logo"' not in html
     assert '<span class="brand-version" data-site-version>v0.3.1</span>' in html

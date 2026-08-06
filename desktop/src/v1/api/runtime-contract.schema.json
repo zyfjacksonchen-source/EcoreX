@@ -2717,6 +2717,19 @@
               "title": "Created At",
               "type": "string"
             },
+            "created_seq": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Created Seq"
+            },
             "expires_at": {
               "anyOf": [
                 {
@@ -2985,6 +2998,48 @@
           "title": "JobStatus",
           "type": "string"
         },
+        "RuntimeTiming": {
+          "additionalProperties": false,
+          "description": "Server-authored timing for one durable runtime operation.",
+          "properties": {
+            "duration_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Duration Ms"
+            },
+            "finished_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Finished At"
+            },
+            "started_at": {
+              "format": "date-time",
+              "title": "Started At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "started_at"
+          ],
+          "title": "RuntimeTiming",
+          "type": "object"
+        },
         "TurnProjection": {
           "additionalProperties": false,
           "properties": {
@@ -3053,6 +3108,17 @@
             "thread_id": {
               "title": "Thread Id",
               "type": "string"
+            },
+            "timing": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RuntimeTiming"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "turn_id": {
               "title": "Turn Id",
@@ -3483,6 +3549,19 @@
               "title": "Created At",
               "type": "string"
             },
+            "created_seq": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Created Seq"
+            },
             "expires_at": {
               "anyOf": [
                 {
@@ -3751,6 +3830,48 @@
           "title": "JobStatus",
           "type": "string"
         },
+        "RuntimeTiming": {
+          "additionalProperties": false,
+          "description": "Server-authored timing for one durable runtime operation.",
+          "properties": {
+            "duration_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Duration Ms"
+            },
+            "finished_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Finished At"
+            },
+            "started_at": {
+              "format": "date-time",
+              "title": "Started At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "started_at"
+          ],
+          "title": "RuntimeTiming",
+          "type": "object"
+        },
         "TurnProjection": {
           "additionalProperties": false,
           "properties": {
@@ -3819,6 +3940,17 @@
             "thread_id": {
               "title": "Thread Id",
               "type": "string"
+            },
+            "timing": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RuntimeTiming"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "turn_id": {
               "title": "Turn Id",
@@ -4877,6 +5009,19 @@
               "title": "Created At",
               "type": "string"
             },
+            "created_seq": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Created Seq"
+            },
             "expires_at": {
               "anyOf": [
                 {
@@ -5145,6 +5290,48 @@
           "title": "JobStatus",
           "type": "string"
         },
+        "RuntimeTiming": {
+          "additionalProperties": false,
+          "description": "Server-authored timing for one durable runtime operation.",
+          "properties": {
+            "duration_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Duration Ms"
+            },
+            "finished_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Finished At"
+            },
+            "started_at": {
+              "format": "date-time",
+              "title": "Started At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "started_at"
+          ],
+          "title": "RuntimeTiming",
+          "type": "object"
+        },
         "TurnProjection": {
           "additionalProperties": false,
           "properties": {
@@ -5213,6 +5400,17 @@
             "thread_id": {
               "title": "Thread Id",
               "type": "string"
+            },
+            "timing": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RuntimeTiming"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "turn_id": {
               "title": "Turn Id",
@@ -5649,6 +5847,19 @@
           "format": "date-time",
           "title": "Created At",
           "type": "string"
+        },
+        "created_seq": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Created Seq"
         },
         "expires_at": {
           "anyOf": [
@@ -6255,6 +6466,19 @@
           "format": "date-time",
           "title": "Created At",
           "type": "string"
+        },
+        "created_seq": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Created Seq"
         },
         "inherited": {
           "default": false,
@@ -7303,6 +7527,48 @@
           "title": "JobStatus",
           "type": "string"
         },
+        "RuntimeTiming": {
+          "additionalProperties": false,
+          "description": "Server-authored timing for one durable runtime operation.",
+          "properties": {
+            "duration_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Duration Ms"
+            },
+            "finished_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Finished At"
+            },
+            "started_at": {
+              "format": "date-time",
+              "title": "Started At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "started_at"
+          ],
+          "title": "RuntimeTiming",
+          "type": "object"
+        },
         "TurnProjection": {
           "additionalProperties": false,
           "properties": {
@@ -7371,6 +7637,17 @@
             "thread_id": {
               "title": "Thread Id",
               "type": "string"
+            },
+            "timing": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RuntimeTiming"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "turn_id": {
               "title": "Turn Id",
@@ -10380,6 +10657,19 @@
               "title": "Created At",
               "type": "string"
             },
+            "created_seq": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Created Seq"
+            },
             "expires_at": {
               "anyOf": [
                 {
@@ -10550,6 +10840,19 @@
               "format": "date-time",
               "title": "Created At",
               "type": "string"
+            },
+            "created_seq": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Created Seq"
             },
             "inherited": {
               "default": false,
@@ -10726,6 +11029,48 @@
           ],
           "title": "JobStatus",
           "type": "string"
+        },
+        "RuntimeTiming": {
+          "additionalProperties": false,
+          "description": "Server-authored timing for one durable runtime operation.",
+          "properties": {
+            "duration_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Duration Ms"
+            },
+            "finished_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Finished At"
+            },
+            "started_at": {
+              "format": "date-time",
+              "title": "Started At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "started_at"
+          ],
+          "title": "RuntimeTiming",
+          "type": "object"
         },
         "ThreadProjection": {
           "additionalProperties": false,
@@ -10914,6 +11259,17 @@
             "thread_id": {
               "title": "Thread Id",
               "type": "string"
+            },
+            "timing": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RuntimeTiming"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "turn_id": {
               "title": "Turn Id",
@@ -11133,6 +11489,48 @@
           "title": "JobStatus",
           "type": "string"
         },
+        "RuntimeTiming": {
+          "additionalProperties": false,
+          "description": "Server-authored timing for one durable runtime operation.",
+          "properties": {
+            "duration_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Duration Ms"
+            },
+            "finished_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Finished At"
+            },
+            "started_at": {
+              "format": "date-time",
+              "title": "Started At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "started_at"
+          ],
+          "title": "RuntimeTiming",
+          "type": "object"
+        },
         "TurnProjection": {
           "additionalProperties": false,
           "properties": {
@@ -11201,6 +11599,17 @@
             "thread_id": {
               "title": "Thread Id",
               "type": "string"
+            },
+            "timing": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RuntimeTiming"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "turn_id": {
               "title": "Turn Id",
@@ -11276,6 +11685,48 @@
     },
     "TurnProjection": {
       "$defs": {
+        "RuntimeTiming": {
+          "additionalProperties": false,
+          "description": "Server-authored timing for one durable runtime operation.",
+          "properties": {
+            "duration_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Duration Ms"
+            },
+            "finished_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Finished At"
+            },
+            "started_at": {
+              "format": "date-time",
+              "title": "Started At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "started_at"
+          ],
+          "title": "RuntimeTiming",
+          "type": "object"
+        },
         "TurnStatus": {
           "enum": [
             "accepted",
@@ -11365,6 +11816,17 @@
         "thread_id": {
           "title": "Thread Id",
           "type": "string"
+        },
+        "timing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeTiming"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "turn_id": {
           "title": "Turn Id",

@@ -30,6 +30,7 @@ from ecorex.protocol import (
     ItemStatus,
     JobStatus,
     PublicToolActivity,
+    RuntimeTiming,
     ReplaceTurnRequest,
     ReplaceTurnResponse,
     SteerTurnRequest,
@@ -145,18 +146,31 @@ class RuntimeKernel:
 
     @staticmethod
     def _turn_from_row(row: sqlite3.Row) -> TurnProjection:
+        status = TurnStatus(row["status"])
+        started_at = _read_time(row["created_at"])
+        updated_at = _read_time(row["updated_at"])
+        timing = RuntimeTiming(
+            started_at=started_at,
+            finished_at=updated_at if status in TERMINAL_TURN_STATUSES else None,
+            duration_ms=(
+                max(0, int((updated_at - started_at).total_seconds() * 1000))
+                if status in TERMINAL_TURN_STATUSES
+                else None
+            ),
+        )
         return TurnProjection(
             turn_id=row["turn_id"],
             thread_id=row["thread_id"],
-            status=TurnStatus(row["status"]),
+            status=status,
             input=row["input_text"],
             agent_model_id=row["agent_model_id"],
             image_model_id=row["image_model_id"],
             client_message_id=row["client_message_id"],
             metadata=json_loads(row["metadata_json"], {}),
             terminal_reason=row["terminal_reason"],
-            created_at=_read_time(row["created_at"]),
-            updated_at=_read_time(row["updated_at"]),
+            timing=timing,
+            created_at=started_at,
+            updated_at=updated_at,
         )
 
     @staticmethod
@@ -165,9 +179,27 @@ class RuntimeKernel:
         content = json_loads(row["content_json"], {})
         if kind is ItemKind.TOOL_CALL:
             try:
-                content = PublicToolActivity.model_validate(content).model_dump(
-                    mode="json"
-                )
+                activity = PublicToolActivity.model_validate(content)
+                started_at = _read_time(row["created_at"])
+                updated_at = _read_time(row["updated_at"])
+                terminal = ItemStatus(row["status"]) in {
+                    ItemStatus.COMPLETED,
+                    ItemStatus.FAILED,
+                    ItemStatus.CANCELLED,
+                }
+                if activity.timing is None:
+                    activity = activity.model_copy(update={
+                        "timing": RuntimeTiming(
+                            started_at=started_at,
+                            finished_at=updated_at if terminal else None,
+                            duration_ms=(
+                                max(0, int((updated_at - started_at).total_seconds() * 1000))
+                                if terminal
+                                else None
+                            ),
+                        )
+                    })
+                content = activity.model_dump(mode="json")
             except ValueError:
                 raise ConflictError(
                     "Tool Item public activity is invalid"
@@ -179,6 +211,11 @@ class RuntimeKernel:
             kind=kind,
             status=ItemStatus(row["status"]),
             content=content,
+            created_seq=(
+                int(row["created_seq"])
+                if "created_seq" in row.keys() and row["created_seq"] is not None
+                else None
+            ),
             created_at=_read_time(row["created_at"]),
             updated_at=_read_time(row["updated_at"]),
         )
@@ -2993,7 +3030,7 @@ class RuntimeKernel:
                 (thread_id, thread_id),
             ).fetchall()
             item_rows = connection.execute(
-                "SELECT items.* FROM items LEFT JOIN ("
+                "SELECT items.*, event_order.first_seq AS created_seq FROM items LEFT JOIN ("
                 "SELECT item_id, MIN(seq) AS first_seq FROM events "
                 "WHERE thread_id = ? AND item_id IS NOT NULL GROUP BY item_id"
                 ") AS event_order ON event_order.item_id = items.item_id "
@@ -3013,14 +3050,14 @@ class RuntimeKernel:
                 (thread_id, thread_id),
             ).fetchall()
             interaction_rows = connection.execute(
-                "SELECT interactions.* FROM interactions LEFT JOIN ("
+                "SELECT interactions.*, event_order.first_seq AS created_seq FROM interactions LEFT JOIN ("
                 "SELECT item_id, MIN(seq) AS first_seq FROM events "
                 "WHERE thread_id = ? AND item_id IS NOT NULL GROUP BY item_id"
                 ") AS event_order ON event_order.item_id = interactions.interaction_id "
-                "WHERE interactions.thread_id = ? AND interactions.status = ? "
+                "WHERE interactions.thread_id = ? "
                 "ORDER BY COALESCE(event_order.first_seq, 9223372036854775807), "
                 "interactions.created_at ASC, interactions.interaction_id ASC",
-                (thread_id, thread_id, InteractionStatus.PENDING.value),
+                (thread_id, thread_id),
             ).fetchall()
             watermark = self.events.watermark(thread_id, connection)
         return ThreadProjectionResponse(
@@ -3029,7 +3066,16 @@ class RuntimeKernel:
             items=inherited_items + [self._item_from_row(row) for row in item_rows],
             jobs=[self.jobs._from_row(row) for row in job_rows],
             interactions=[
-                self.interactions._from_row(row) for row in interaction_rows
+                InteractionProjection.model_validate(
+                    self.interactions._from_row(row)
+                ).model_copy(update={
+                    "created_seq": (
+                        int(row["created_seq"])
+                        if row["created_seq"] is not None
+                        else None
+                    )
+                })
+                for row in interaction_rows
             ],
             watermark=watermark,
         )

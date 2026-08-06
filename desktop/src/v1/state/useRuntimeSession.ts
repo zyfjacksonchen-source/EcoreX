@@ -57,6 +57,7 @@ import {
   runtimeReducer,
   selectActiveTurn,
   selectIsThinking,
+  selectInteractions,
   selectItems,
   selectPendingInteractions,
   selectVisibleReasoning,
@@ -177,6 +178,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const [state, dispatch] = useReducer(runtimeReducer, initialRuntimeViewState);
   const stateRef = useRef(state);
   const watermarkRef = useRef(0);
+  const serverClockOffsetMs = useRef(0);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [transportError, setTransportError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -308,6 +310,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   }, [previewCache]);
 
   const applyBootstrap = useCallback((bootstrap: BootstrapResponse) => {
+    serverClockOffsetMs.current = Date.parse(bootstrap.server_time) - Date.now();
     client.acceptBootstrap(bootstrap);
     const action = { type: "bootstrap.received" as const, bootstrap };
     stateRef.current = runtimeReducer(stateRef.current, action);
@@ -1835,6 +1838,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   return {
     client,
     state,
+    serverClockOffsetMs: serverClockOffsetMs.current,
     loadState,
     transportError,
     clearTransportError: () => setTransportError(null),
@@ -1918,6 +1922,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     ...extensionSession,
     turns: selectTurns(state),
     items: selectItems(state),
+    interactions: selectInteractions(state),
     activeTurn: selectActiveTurn(state),
     isThinking: selectIsThinking(state),
     visibleReasoning: selectVisibleReasoning(state),

@@ -94,7 +94,7 @@ async function openArtifactScenario(page: Page, theme: "light" | "dark" = "light
 
 async function openThreadScenario(
   page: Page,
-  scenario: "thinking" | "slow-reconnect" | "retry" | "hitl" | "connector-login" | "connector-device" | "connector-reauth" | "connector-restart" | "artifact" | "replay" | "thread-switch" | "many-threads",
+  scenario: "thinking" | "slow-reconnect" | "retry" | "hitl" | "connector-login" | "connector-device" | "connector-reauth" | "connector-restart" | "artifact" | "replay" | "thread-switch" | "many-threads" | "long-timeline",
   theme: "light" | "dark" = "light",
 ): Promise<void> {
   await page.goto(`/__ga/frame-app?scenario=${scenario}&theme=${theme}`, {
@@ -300,12 +300,12 @@ test("ordinary controls keep Codex density and reveal a light frame only while i
   await expect(modelMenu).toContainText("图片模型");
   await expect(modelMenu).toContainText("按意图自动调用");
   expect(await modelMenu.getByRole("menuitemradio").count()).toBeGreaterThanOrEqual(2);
-  await expect(modelMenu.locator(".ex-model-provider-icon")).toHaveCount(5);
+  await expect(modelMenu.locator(".ex-model-provider-icon")).toHaveCount(6);
 });
 
 test("Composer renders server-reported quota, token usage, and context window", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "artifact");
-  const summary = guardedPage.locator(".ex-usage-summary");
+  const summary = guardedPage.locator(".ex-workspace-bottom .ex-usage-summary");
   await expect(summary).toBeVisible();
   await expect(summary.locator(".ex-context-ring")).toBeVisible();
   await summary.hover();
@@ -334,7 +334,7 @@ test("model selection uses the managed provider route and keeps the vendor icon"
 test("terminal replies expose durable elapsed time and truthful quick copy feedback", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "artifact");
   const completion = guardedPage.locator(".ex-turn-completion").last();
-  await expect(completion).toContainText(/^耗时 /);
+  await expect(completion).toContainText(/^已完成 /);
   await completion.getByRole("button", { name: "复制本次回复" }).click();
   await expect(completion.getByText("已复制", { exact: true })).toBeVisible();
   await expect(completion.getByRole("button", { name: "回复已复制" })).toBeVisible();
@@ -351,7 +351,7 @@ test("conversation pinning persists through the backend catalog", async ({ guard
   await expect(guardedPage.getByRole("button", { name: "打开任务：季度资料整理" }).locator(".ex-task-pin")).toBeVisible();
 });
 
-test("Composer is centered only while choosing a new conversation and otherwise stays at the workspace bottom", async ({ guardedPage }) => {
+test("Composer stays at the workspace bottom and moves into the new-task home", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "artifact");
   const workspace = guardedPage.locator(".ex-workspace");
   const normalComposer = guardedPage.locator(".ex-workspace-bottom .ex-composer-region");
@@ -367,18 +367,18 @@ test("Composer is centered only while choosing a new conversation and otherwise 
   expect(Math.abs((workspaceBox?.y ?? 0) + (workspaceBox?.height ?? 0) - ((normalComposerBox?.y ?? 0) + (normalComposerBox?.height ?? 0)))).toBeLessThanOrEqual(2);
 
   await guardedPage.getByRole("button", { name: "新建任务" }).click();
-  const chooser = guardedPage.locator(".ex-new-conversation-start");
-  const newConversationComposer = chooser.locator(".ex-composer-region");
-  await expect(chooser).toBeVisible();
+  const home = guardedPage.locator(".ex-home-dashboard");
+  const newConversationComposer = home.locator(".ex-home-composer .ex-composer-region");
+  await expect(home).toBeVisible();
   await expect(newConversationComposer).toBeVisible();
-  await expect(chooser.locator(".ex-new-conversation-options > button")).toHaveCount(2);
-  expect(await chooser.locator("h1").evaluate((element) => getComputedStyle(element).fontSize)).toBe("20px");
+  await expect(home.getByRole("button", { name: "选择项目会话" })).toBeVisible();
+  expect(await home.locator("h1").evaluate((element) => getComputedStyle(element).fontSize)).toBe("32px");
   await expect(guardedPage.locator(".ex-workspace-bottom")).toHaveCount(0);
-  const [chooserBox, newComposerBox] = await Promise.all([chooser.boundingBox(), newConversationComposer.boundingBox()]);
-  expect(chooserBox).not.toBeNull();
+  const [homeBox, newComposerBox] = await Promise.all([home.boundingBox(), newConversationComposer.boundingBox()]);
+  expect(homeBox).not.toBeNull();
   expect(newComposerBox).not.toBeNull();
-  expect(newComposerBox?.y ?? 0).toBeGreaterThanOrEqual(chooserBox?.y ?? 0);
-  expect((newComposerBox?.y ?? 0) + (newComposerBox?.height ?? 0)).toBeLessThanOrEqual((chooserBox?.y ?? 0) + (chooserBox?.height ?? 0) + 1);
+  expect(newComposerBox?.y ?? 0).toBeGreaterThanOrEqual(homeBox?.y ?? 0);
+  expect((newComposerBox?.y ?? 0) + (newComposerBox?.height ?? 0)).toBeLessThanOrEqual((homeBox?.y ?? 0) + (homeBox?.height ?? 0) + 1);
 });
 
 test("short user messages retain their intrinsic bubble width", async ({ guardedPage }) => {
@@ -472,10 +472,10 @@ test("workspace title uses the v0.3 workbench geometry with a Codex-like inline 
   expect(geometry).toMatchObject({
     gap: "0px",
     padding: "0px",
-    sidebarRightBorder: "1px",
+    sidebarRightBorder: "0px",
     workspaceRadius: "16px",
   });
-  expect(geometry.columns.split(" ")[0]).toBe("252px");
+  expect(geometry.columns.split(" ")[0]).toBe("248px");
 });
 
 test("task ID continuation keeps the current task on 404 and restores a valid task from Enter", async ({ guardedPage }) => {
@@ -592,10 +592,12 @@ test("session summaries scroll independently while sidebar chrome stays fixed", 
 
 test("skills workspace uses backend categories and keeps required skills locked", async ({ guardedPage }) => {
   await openArtifactScenario(guardedPage);
-  await guardedPage.getByRole("button", { name: "技能", exact: true }).click();
+  await guardedPage.getByRole("button", { name: "能力中心", exact: true }).click();
 
-  const workspace = guardedPage.getByRole("region", { name: "技能" });
-  await expect(workspace.getByRole("tab", { name: /已安装 3/u })).toBeVisible();
+  const workspace = guardedPage.getByRole("region", { name: "能力中心" });
+  const installedTab = workspace.getByRole("tab", { name: /已安装 3/u });
+  await expect(installedTab).toBeVisible();
+  await installedTab.click();
   const protectedSkills = workspace.locator("details.ex-protected-skills");
   await expect(protectedSkills).not.toHaveAttribute("open", "");
   await protectedSkills.locator("summary").click();
@@ -608,10 +610,11 @@ test("skills workspace uses backend categories and keeps required skills locked"
   await expect(workspace.getByRole("switch", { name: "启用飞书 MCP" })).toBeVisible();
 
   await workspace.locator(".ex-skill-card-main").filter({ hasText: "旧版文档整理技能" }).click();
-  await expect(workspace.getByRole("heading", { name: "旧版文档整理技能" })).toBeVisible();
-  await workspace.getByRole("button", { name: "返回技能" }).click();
-  await workspace.getByRole("tab", { name: "技能市场" }).click();
-  await expect(workspace.getByRole("button", { name: /协作连接/u })).toContainText("1 个已安装");
+  const detail = guardedPage.getByRole("region", { name: "技能详情" });
+  await expect(detail.getByRole("heading", { name: "旧版文档整理技能" })).toBeVisible();
+  await detail.getByRole("button", { name: "返回技能" }).click();
+  await workspace.getByRole("tab", { name: "发现" }).click();
+  await expect(workspace.locator("article.ex-hub-card").filter({ hasText: "文档助手" })).toContainText("已启用");
 });
 
 test("mobile task drawer continues a task by ID and closes after recovery", async ({ browser }) => {
@@ -700,8 +703,7 @@ test("mobile session drawer remains inside the viewport and scrolls only its sum
 
 test("settings persist output location, memory reset undo, and full-access revocation", async ({ guardedPage }) => {
   await openArtifactScenario(guardedPage);
-  await guardedPage.getByRole("button", { name: /验收账号，打开账号菜单/u }).click();
-  await guardedPage.getByRole("menuitem", { name: "设置" }).click();
+  await guardedPage.getByRole("button", { name: "设置", exact: true }).click();
   const dialog = guardedPage.getByRole("dialog", { name: "设置" });
   await expect(dialog).toBeVisible();
 
@@ -720,10 +722,12 @@ test("settings persist output location, memory reset undo, and full-access revoc
   await expect(memorySection.getByText("2 项可重置的偏好和资料记忆", { exact: true })).toBeVisible();
 
   const permissionSection = dialog.getByRole("heading", { name: "权限", exact: true }).locator("..");
-  await permissionSection.getByRole("button", { name: "启用完全访问" }).click();
-  await permissionSection.getByRole("button", { name: "确认启用" }).click();
+  await permissionSection.getByRole("switch", { name: "关闭完全访问" }).click();
+  await expect(permissionSection.getByText("默认权限", { exact: true })).toBeVisible();
+  await permissionSection.getByRole("switch", { name: "开启完全访问" }).click();
+  await permissionSection.getByRole("group", { name: "确认启用完全访问" }).getByRole("button", { name: "确认启用" }).click();
   await expect(permissionSection.getByText("完全访问", { exact: true })).toBeVisible();
-  await permissionSection.getByRole("button", { name: "恢复默认权限" }).click();
+  await permissionSection.getByRole("switch", { name: "关闭完全访问" }).click();
   await expect(permissionSection.getByText("默认权限", { exact: true })).toBeVisible();
 
   const state = await guardedPage.evaluate(async () => fetch("/__ga/state").then((response) => response.json()));
@@ -736,8 +740,8 @@ test("settings persist output location, memory reset undo, and full-access revoc
 
 test("account menu exposes the user name and performs a real lease-bound logout", async ({ guardedPage }) => {
   await openArtifactScenario(guardedPage);
-  const account = guardedPage.getByRole("button", { name: /验收账号，打开账号菜单/u });
-  await expect(account).toContainText("验收账号");
+  const account = guardedPage.getByRole("button", { name: "用户中心，验收账号" });
+  await expect(account).toHaveAccessibleName("用户中心，验收账号");
   await account.click();
   await guardedPage.getByRole("menuitem", { name: "退出登录" }).click();
 
@@ -776,33 +780,31 @@ test("reasoning stays visible until replacement and terminal facts clear the fir
   await openThreadScenario(guardedPage, "thinking");
   const first = guardedPage.getByText("正在核对季度资料。", { exact: true });
   await expect(first).toBeVisible({ timeout: 1_000 });
-  await guardedPage.waitForTimeout(200);
-  await expect(first).toBeVisible();
 
   const next = guardedPage.getByText("资料已核对，正在整理结果。", { exact: true });
   await expect(next).toBeVisible({ timeout: 1_500 });
   await expect(first).toBeHidden();
-  await expect(guardedPage.locator(".ex-thinking")).toBeHidden({ timeout: 2_000 });
+  await expect(guardedPage.locator(".ex-thinking-state")).toBeHidden({ timeout: 2_000 });
   await expect(guardedPage.locator(".ex-message.is-assistant")).toHaveCount(0);
 });
 
 test("retry state stays actionable and can be interrupted without a stale thinking indicator", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "retry");
-  await expect(guardedPage.locator(".ex-thinking")).toContainText("等待重试");
+  await expect(guardedPage.locator(".ex-turn-running")).toContainText(/等待重试 \d+s/u);
   await guardedPage.getByRole("button", { name: "停止当前任务" }).click();
-  await expect(guardedPage.locator(".ex-thinking")).toBeHidden();
+  await expect(guardedPage.locator(".ex-thinking-state")).toBeHidden();
 });
 
 test("slow event stream reconnects from the durable cursor without duplicate output", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "slow-reconnect");
-  await expect(guardedPage.locator(".ex-thinking")).toContainText("正在读取季度资料");
+  await expect(guardedPage.locator(".ex-reasoning")).toContainText("已确认资料读取进度");
   const completed = guardedPage.getByText(
     "网络恢复后已从确认位置继续，季度资料清单完整生成且没有重复执行。",
     { exact: true },
   );
   await expect(completed).toBeVisible({ timeout: 5_000 });
   await expect(completed).toHaveCount(1);
-  await expect(guardedPage.locator(".ex-thinking")).toBeHidden();
+  await expect(guardedPage.locator(".ex-thinking-state")).toBeHidden();
   const streamEvidence = await guardedPage.evaluate(async () => {
     const response = await fetch("/__ga/state", { cache: "no-store" });
     return response.json() as Promise<{
@@ -1027,7 +1029,7 @@ test("320px touch Composer keeps the durable queue action reachable and single-l
       await expect(send).toBeInViewport();
       await send.click();
       await expect(page.getByText("下一轮整理附件", { exact: true })).toBeVisible();
-      await expect(page.locator(".ex-thinking")).toContainText("已排队");
+      await expect(page.getByText("已排队", { exact: true })).toBeVisible();
       expect(await page.evaluate(() => (
         Math.max(document.documentElement.scrollWidth, document.body.scrollWidth)
         - document.documentElement.clientWidth
@@ -1207,18 +1209,16 @@ test("touch artifact exposes one real more target and opens the bottom action sh
 });
 
 test("timeline exposes a persistent jump-to-latest control after scrolling away from the bottom", async ({ guardedPage }) => {
-  await openArtifactScenario(guardedPage);
-  await guardedPage.evaluate(() => {
-    const timeline = document.querySelector<HTMLElement>(".ex-timeline");
-    if (!timeline) throw new Error("timeline missing");
-    const filler = document.createElement("div");
-    filler.setAttribute("data-e2e-scroll-filler", "true");
-    filler.style.height = "1800px";
-    timeline.prepend(filler);
-    timeline.scrollTop = timeline.scrollHeight;
-    timeline.scrollTop = 0;
-    timeline.dispatchEvent(new Event("scroll"));
-  });
+  await openThreadScenario(guardedPage, "long-timeline");
+  const timeline = guardedPage.locator(".ex-timeline");
+  await expect.poll(() => timeline.evaluate((element) => (
+    Math.max(0, Math.round(element.scrollHeight - element.clientHeight - element.scrollTop))
+  ))).toBeLessThanOrEqual(4);
+  await timeline.hover();
+  await guardedPage.mouse.wheel(0, -5_000);
+  await expect.poll(() => timeline.evaluate((element) => (
+    Math.max(0, Math.round(element.scrollHeight - element.clientHeight - element.scrollTop))
+  ))).toBeGreaterThan(72);
 
   const jumpButton = guardedPage.getByRole("button", { name: "回到底部" });
   await expect(jumpButton).toBeVisible();

@@ -1,10 +1,10 @@
 # e-Mate
 
-e-Mate v0.3.1 is a WebUI-first office Agent. React is the only product UI and
+e-Mate v0.3.2 is a WebUI-first office Agent. React is the only product UI and
 maps backend projections; the local Python Runtime is the authority for Agent
 execution, tools, permissions, jobs, connectors, artifacts and updates.
 
-The v0.3.1 product distribution contains:
+The v0.3.2 product distribution contains:
 
 - a content-addressed React WebUI served on a stable loopback URL;
 - a Python 3.11+ FastAPI/ASGI Runtime;
@@ -13,7 +13,7 @@ The v0.3.1 product distribution contains:
 - managed model, release and observability control-plane contracts; and
 - a user-confirmed “更新并刷新” online-update flow.
 
-e-Mate v0.3.1 does **not** ship or develop an Electron/native desktop application,
+e-Mate v0.3.2 does **not** ship or develop an Electron/native desktop application,
 DMG application, desktop window shell or native-app signing/notarization chain.
 Windows x64 and macOS arm64/x64 are Runtime/WebUI host targets only. Release
 archives still require Ed25519 signatures and SHA-256 verification before the
@@ -21,7 +21,7 @@ local Runtime can install or activate them.
 
 ## Development
 
-The durable v0.3.1 engineering record is in `docs/v0.3.1/`. The React project remains
+The durable v0.3.2 engineering record is in `docs/v0.3.2/`. The React project remains
 under the historical `desktop/` directory name, but it builds a browser WebUI,
 not a desktop app.
 

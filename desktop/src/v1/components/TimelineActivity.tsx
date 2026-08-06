@@ -10,6 +10,7 @@ import {
   TerminalSquare,
   Wrench,
 } from "lucide-react";
+import type { ReactNode } from "react";
 
 import type { ItemProjection, PublicToolActivity } from "../api/contracts.ts";
 
@@ -24,7 +25,7 @@ function statusLabel(status: string): string {
   } satisfies Record<string, string>)[status] ?? "进行中";
 }
 
-export default function TimelineActivity({ item }: { item: ItemProjection }) {
+export default function TimelineActivity({ item, elapsed }: { item: ItemProjection; elapsed: ReactNode }) {
   if (item.kind === "tool_call") {
     const activity = item.content as Partial<PublicToolActivity>;
     const displayLabel = typeof activity.display_label === "string"
@@ -69,7 +70,7 @@ export default function TimelineActivity({ item }: { item: ItemProjection }) {
             <span className="ex-image-generation-glow" aria-hidden="true" />
             <Image aria-hidden="true" />
           </div>
-          <p><strong>正在生成图片</strong><span>{summary}</span></p>
+          <p><strong>正在生成图片 {elapsed}</strong><span>{summary}</span></p>
         </section>
       );
     }
@@ -79,7 +80,7 @@ export default function TimelineActivity({ item }: { item: ItemProjection }) {
         <summary className="ex-activity-row">
           {icon}
           <span className={webSearch && item.status === "in_progress" ? "ex-activity-shimmer" : undefined}>{summary}</span>
-          <small>{statusLabel(item.status)}</small>
+          <small>{statusLabel(item.status)} {elapsed}</small>
           <ChevronDown className="ex-activity-chevron" aria-hidden="true" />
         </summary>
         <div className="ex-activity-detail">

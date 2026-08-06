@@ -13,7 +13,18 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="real macOS CPython contract")
+@pytest.mark.skipif(
+    sys.platform != "darwin"
+    or not (
+        Path(sys.base_prefix)
+        / "Resources"
+        / "Python.app"
+        / "Contents"
+        / "MacOS"
+        / "Python"
+    ).is_file(),
+    reason="requires the real python.org macOS Framework installation",
+)
 def test_official_macos_cpython_build_support_matches_prune_contract(
     tmp_path: Path,
 ) -> None:

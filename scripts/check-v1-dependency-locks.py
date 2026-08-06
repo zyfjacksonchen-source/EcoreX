@@ -466,7 +466,7 @@ def _validate_workflows(repo: Path) -> dict[str, object]:
             "node": False,
         },
         "emate-v030-macos-universal.yml": {
-            "profiles": {"runtime": 1},
+            "profiles": {"runtime": 2},
             "npm_ci": 1,
             "node": True,
         },

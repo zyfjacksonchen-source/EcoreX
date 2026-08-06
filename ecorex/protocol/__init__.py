@@ -94,6 +94,7 @@ from .models import (
     ProjectProjection,
     PublicArtifactRef,
     PublicToolActivity,
+    RuntimeTiming,
     QuotaSnapshot,
     QueueTurnRequest,
     RenameThreadRequest,

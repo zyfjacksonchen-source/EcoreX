@@ -600,6 +600,7 @@ export function Sidebar({
           <button
             className="ex-sidebar-action"
             type="button"
+            aria-label="设置"
             data-ecorex-feature-trigger="settings"
             onClick={onOpenSettings}
           >

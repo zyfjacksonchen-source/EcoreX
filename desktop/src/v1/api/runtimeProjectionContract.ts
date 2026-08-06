@@ -143,6 +143,26 @@ function assertOneOf<const T extends readonly string[]>(
   }
 }
 
+function timing(
+  value: unknown,
+  contract: ContractName,
+  path: string,
+): void {
+  if (value === null) return;
+  assertRecord(value, contract, path);
+  assertWireFields(value, fields.ThreadProjectionResponse.RuntimeTiming, contract, path);
+  assertTimestamp(value.started_at, contract, `${path}.started_at`);
+  if (value.finished_at === null) {
+    if (value.duration_ms !== null) reject(contract, `${path}.duration_ms`, "null while running");
+    return;
+  }
+  assertTimestamp(value.finished_at, contract, `${path}.finished_at`);
+  assertInteger(value.duration_ms, contract, `${path}.duration_ms`);
+  if (Date.parse(value.finished_at) < Date.parse(value.started_at)) {
+    reject(contract, `${path}.finished_at`, "a timestamp at or after started_at");
+  }
+}
+
 function thread(value: unknown, path = "root"): asserts value is ThreadProjection {
   const contract = "ThreadProjection";
   assertRecord(value, contract, path);
@@ -179,6 +199,7 @@ function turn(value: unknown, path = "root"): asserts value is TurnProjection {
   assertNullableString(value.client_message_id, contract, `${path}.client_message_id`);
   assertRecord(value.metadata, contract, `${path}.metadata`);
   assertNullableString(value.terminal_reason, contract, `${path}.terminal_reason`);
+  timing(value.timing ?? null, contract, `${path}.timing`);
   assertBoolean(value.inherited, contract, `${path}.inherited`);
   assertTimestamp(value.created_at, contract, `${path}.created_at`);
   assertTimestamp(value.updated_at, contract, `${path}.updated_at`);
@@ -195,6 +216,7 @@ function item(value: unknown, path = "root"): asserts value is ItemProjection {
   assertOneOf(value.status, values.itemStatuses, contract, `${path}.status`);
   assertRecord(value.content, contract, `${path}.content`);
   assertBoolean(value.inherited, contract, `${path}.inherited`);
+  if (value.created_seq != null) assertInteger(value.created_seq, contract, `${path}.created_seq`, 1);
   assertTimestamp(value.created_at, contract, `${path}.created_at`);
   assertTimestamp(value.updated_at, contract, `${path}.updated_at`);
 }
@@ -299,6 +321,7 @@ function interaction(value: unknown, path = "root"): asserts value is Interactio
   assertNullableString(value.turn_id, contract, `${path}.turn_id`);
   assertNullableString(value.job_id, contract, `${path}.job_id`);
   if (value.expires_at !== null) assertTimestamp(value.expires_at, contract, `${path}.expires_at`);
+  if (value.created_seq != null) assertInteger(value.created_seq, contract, `${path}.created_seq`, 1);
   assertTimestamp(value.created_at, contract, `${path}.created_at`);
   assertTimestamp(value.updated_at, contract, `${path}.updated_at`);
 }

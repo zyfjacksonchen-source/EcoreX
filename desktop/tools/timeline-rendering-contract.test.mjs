@@ -6,8 +6,8 @@ const timeline = await readFile(
   new URL("../src/v1/components/Timeline.tsx", import.meta.url),
   "utf-8",
 );
-const windowing = await readFile(
-  new URL("../src/v1/state/timelineWindow.ts", import.meta.url),
+const turnProjection = await readFile(
+  new URL("../src/v1/state/timelineTurns.ts", import.meta.url),
   "utf-8",
 );
 const runtimeSession = await readFile(
@@ -39,19 +39,18 @@ const composer = await readFile(
   "utf-8",
 );
 
-test("the chat DOM starts with a bounded anchored conversation window", () => {
-  assert.match(windowing, /TIMELINE_WINDOW_SIZE = 120/u);
-  assert.match(windowing, /items\.slice\(startIndex, endIndex\)/u);
-  assert.match(timeline, /selectTimelineWindow\(timelineEntries, historyEndAnchorId\)/u);
-  assert.match(timeline, /messageWindow\.items\.map/u);
-  assert.doesNotMatch(timeline, /\{messages\.map/u);
-  assert.match(timeline, /回到最新消息/u);
-  assert.match(timeline, /anchorMissing[\s\S]*setHistoryEndAnchorId\(null\)/u);
-  assert.match(timeline, /\|\| item\.kind === "artifact"/u);
-  assert.match(timeline, /item\.kind === "artifact" \? \(\(\) =>/u);
+test("the chat DOM virtualizes durable turn projections", () => {
+  assert.match(timeline, /from "react-virtuoso"/u);
+  assert.match(timeline, /buildTimelineTurns\(turns, items, interactions\)/u);
+  assert.match(timeline, /computeItemKey=\{\(_index, entry\) => entry\.turn\.turn_id\}/u);
+  assert.match(timeline, /increaseViewportBy=\{\{ top: 800, bottom: 800 \}\}/u);
+  assert.match(timeline, /atBottomThreshold=\{TIMELINE_BOTTOM_THRESHOLD_PX\}/u);
+  assert.match(timeline, /TIMELINE_BOTTOM_THRESHOLD_PX = 72/u);
+  assert.match(turnProjection, /foldTurnProcess/u);
+  assert.match(turnProjection, /created_seq/u);
+  assert.doesNotMatch(timeline, /selectTimelineWindow|historyEndAnchorId/u);
+  assert.match(timeline, /item\.kind === "artifact"/u);
   assert.match(timeline, /selectUnbackedArtifactProjections\(itemArtifacts, visibleArtifacts\)/u);
-  assert.doesNotMatch(timeline, /messageWindow\.atLatest \? retouchResults\.map/u);
-  assert.match(timeline, /messageWindow\.startIndex,[\s\S]*messageWindow\.endIndex,/u);
   assert.doesNotMatch(timeline, /item\.content\.arguments/u);
   assert.match(timeline, /lazy\(\(\) => import\("\.\/TimelineActivity\.tsx"\)\)/u);
   assert.doesNotMatch(activity, /content\.(?:arguments|result|path)/u);

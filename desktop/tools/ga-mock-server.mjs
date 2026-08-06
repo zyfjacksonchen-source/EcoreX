@@ -22,7 +22,7 @@ const MIME = {
   ".svg": "image/svg+xml; charset=utf-8",
 };
 
-const SCENARIOS = new Set(["empty", "unauthenticated", "thinking", "slow-reconnect", "retry", "hitl", "connector-login", "connector-device", "connector-reauth", "connector-restart", "artifact", "replay", "thread-switch", "many-threads"]);
+const SCENARIOS = new Set(["empty", "unauthenticated", "thinking", "slow-reconnect", "retry", "hitl", "connector-login", "connector-device", "connector-reauth", "connector-restart", "artifact", "replay", "thread-switch", "many-threads", "long-timeline"]);
 const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted", "superseded"]);
 const GA_THEMES = new Set(["light", "dark"]);
 const GA_VIEWPORTS = Object.freeze({
@@ -413,6 +413,7 @@ function turn(
   threadId = "thread-ga",
   timestamp = NOW,
 ) {
+  const terminal = TERMINAL_TURN_STATUSES.has(status);
   return {
     turn_id: turnId,
     thread_id: threadId,
@@ -422,9 +423,12 @@ function turn(
     image_model_id: imageModelId,
     client_message_id: `message-${turnId}`,
     metadata: {},
-    terminal_reason: ["completed", "failed", "cancelled", "interrupted", "superseded"].includes(status)
-      ? status
-      : null,
+    terminal_reason: terminal ? status : null,
+    timing: {
+      started_at: timestamp,
+      finished_at: terminal ? timestamp : null,
+      duration_ms: terminal ? 38_000 : null,
+    },
     inherited: false,
     created_at: timestamp,
     updated_at: timestamp,
@@ -439,6 +443,7 @@ function item(itemId, turnId, role, text, threadId = "thread-ga", timestamp = NO
     kind: "message",
     status: "completed",
     content: { role, text },
+    created_seq: role === "user" ? 1 : 3,
     inherited: false,
     created_at: timestamp,
     updated_at: timestamp,
@@ -460,6 +465,7 @@ function reasoningItem(itemId, turnId, atomId, text) {
       presentation: "visible",
       archived_reason: null,
     },
+    created_seq: 2,
     inherited: false,
     created_at: NOW,
     updated_at: NOW,
@@ -578,6 +584,7 @@ function interaction() {
     },
     response: null,
     response_client_request_id: null,
+    created_seq: 3,
     thread_id: "thread-ga",
     turn_id: "turn-ga",
     job_id: "job-ga",
@@ -630,6 +637,7 @@ function connectorLoginInteraction() {
     },
     response: null,
     response_client_request_id: null,
+    created_seq: 3,
     thread_id: "thread-ga",
     turn_id: "turn-ga",
     job_id: "job-ga",
@@ -965,6 +973,25 @@ function scenarioState(name) {
     return base;
   }
 
+  if (name === "long-timeline") {
+    const selectedThread = thread("thread-ga", "长会话验收");
+    const turns = [];
+    const items = [];
+    for (let index = 1; index <= 120; index += 1) {
+      const turnId = `turn-long-${index}`;
+      turns.push(turn(turnId, "completed", `第 ${index} 轮问题`));
+      items.push(
+        { ...item(`item-long-user-${index}`, turnId, "user", `第 ${index} 轮问题`), created_seq: index * 2 - 1 },
+        { ...item(`item-long-assistant-${index}`, turnId, "assistant", `第 ${index} 轮回复已完成。`), created_seq: index * 2 },
+      );
+    }
+    base.threads.push(selectedThread);
+    base.projection = { thread: selectedThread, turns, items, jobs: [], interactions: [], watermark: 240 };
+    base.projections.set(selectedThread.thread_id, base.projection);
+    base.seq = 240;
+    return base;
+  }
+
   const activeThread = thread();
   let activeTurn = turn("turn-ga", "completed", "整理季度资料");
   const items = [item("item-user-ga", "turn-ga", "user", "整理季度资料")];
@@ -1079,7 +1106,7 @@ function bootstrap(state) {
         },
       }, {
         model_id: "ecorex-deepseek-v4-pro",
-        display_name: "DeepSeek V4 Flash · 最大推理",
+        display_name: "DeepSeek V4 Pro",
         capabilities: ["chat", "tools", "reasoning"],
         aliases: ["deepseek", "deepseek-v4-pro", "deepseek-v4-flash"],
         is_default: false,
@@ -1166,7 +1193,7 @@ function bootstrap(state) {
     connectors: [],
     extensions: extensionCatalog(state),
     update: {
-      current_version: "0.3.1",
+      current_version: "0.3.2",
       state: "idle",
       target_version: null,
       release_id: null,
@@ -1575,6 +1602,12 @@ function conversationUsage(state, threadId) {
   const projection = projectionResponse(state, threadId);
   if (!projection) return null;
   const modelId = projection.turns.at(-1)?.agent_model_id ?? null;
+  const modelDisplayName = ({
+    "ecorex-chat": "GPT-5.6 Luna · 最大推理",
+    "ecorex-deepseek-v4-pro": "DeepSeek V4 Pro",
+    "ecorex-gemini-3.1-pro": "Gemini 3.1 Pro",
+    "ecorex-doubao-seed-2.0-pro": "豆包 Seed 2.0 Pro",
+  })[modelId] ?? null;
   return {
     thread_id: threadId,
     timezone: "Asia/Shanghai",
@@ -1592,7 +1625,23 @@ function conversationUsage(state, threadId) {
         "ecorex-doubao-seed-2.0-pro": 224_000,
       })[modelId] ?? null,
       model_id: modelId,
+      model_display_name: modelDisplayName,
+      model_catalog_snapshot_id: "models-ga",
       measured_at: NOW,
+    },
+    task_activity: {
+      completed_today: 1,
+      waiting: 0,
+      terminal_today: 1,
+      days: [
+        { date: "2026-07-04", completed: 0, terminal: 0 },
+        { date: "2026-07-05", completed: 0, terminal: 0 },
+        { date: "2026-07-06", completed: 1, terminal: 1 },
+        { date: "2026-07-07", completed: 0, terminal: 0 },
+        { date: "2026-07-08", completed: 2, terminal: 2 },
+        { date: "2026-07-09", completed: 1, terminal: 1 },
+        { date: "2026-07-10", completed: 1, terminal: 1 },
+      ],
     },
     calculated_at: NOW,
   };
@@ -2047,10 +2096,27 @@ async function handleApi(holder, req, res, url) {
     return json(res, 201, created);
   }
 
+  if (path === "/api/v1/usage" && req.method === "GET") {
+    const threadId = state.projection?.thread.thread_id ?? state.threads[0]?.thread_id;
+    const usage = threadId ? conversationUsage(state, threadId) : null;
+    return usage ? json(res, 200, usage) : apiError(res, 404, "usage_unavailable", "Usage is unavailable");
+  }
+
   const usageMatch = path.match(/^\/api\/v1\/threads\/([^/]+)\/usage$/);
   if (usageMatch && req.method === "GET") {
     const usage = conversationUsage(state, decodeURIComponent(usageMatch[1]));
     return usage ? json(res, 200, usage) : apiError(res, 404, "thread_not_found", "Thread not found");
+  }
+
+  if (path === "/api/v1/mcp/oauth" && req.method === "GET") {
+    return json(res, 200, {
+      items: [{
+        service_id: "ecorex.feishu-mcp",
+        state: "authorization_required",
+        expires_at: null,
+        scope: "mcp.read mcp.write",
+      }],
+    });
   }
 
   const pinThreadMatch = path.match(/^\/api\/v1\/threads\/([^/]+)\/pin$/);
@@ -2589,7 +2655,7 @@ async function handleApi(holder, req, res, url) {
   if (path === "/api/v1/artifacts" && req.method === "GET") {
     return json(res, 200, { items: state.artifacts, count: state.artifacts.length });
   }
-  const blobMatch = path.match(/^\/api\/v1\/artifacts\/([^/]+)\/(preview|content)$/);
+  const blobMatch = path.match(/^\/api\/v1\/artifacts\/([^/]+)\/(thumbnail|preview|content)$/);
   if (blobMatch && req.method === "GET") {
     const found = state.artifacts.find((candidate) => candidate.artifact_id === decodeURIComponent(blobMatch[1]));
     if (!found) return apiError(res, 404, "artifact_not_found", "Artifact not found");
@@ -2843,6 +2909,7 @@ async function handleApi(holder, req, res, url) {
             change_summary: workspace.job.change_summary,
             inspection_regions: workspace.job.inspection_regions,
           },
+          created_seq: state.seq + 1,
           inherited: false,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -2939,6 +3006,7 @@ async function handleApi(holder, req, res, url) {
           })),
           preview: { artifact_id: result.artifact_id, revision_id: result.revision_id, mime_type: result.mime_type },
         },
+        created_seq: state.seq + 1,
         inherited: false,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),

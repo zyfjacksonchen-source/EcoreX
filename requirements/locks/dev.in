@@ -1,5 +1,8 @@
 -r runtime.in
 
+# Source-only legacy compatibility tests import retired agent/channel modules.
+requests==2.32.5
+
 Pillow==12.3.0
 
 # Source-quality and contract gates. Exact pins mirror the dev extra.

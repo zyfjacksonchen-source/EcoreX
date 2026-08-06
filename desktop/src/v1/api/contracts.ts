@@ -185,6 +185,12 @@ export interface ConversationUsageProjection {
   calculated_at: string;
 }
 
+export interface RuntimeTiming {
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+}
+
 export interface TurnProjection {
   turn_id: string;
   thread_id: string;
@@ -195,6 +201,7 @@ export interface TurnProjection {
   client_message_id: string | null;
   metadata: JsonObject;
   terminal_reason: string | null;
+  timing?: RuntimeTiming | null;
   inherited: boolean;
   created_at: string;
   updated_at: string;
@@ -208,6 +215,7 @@ export interface ItemProjection {
   status: ItemStatus;
   content: JsonObject;
   inherited: boolean;
+  created_seq?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -232,6 +240,7 @@ export interface PublicToolActivity extends JsonObject {
   argument_sha256: string;
   result_sha256: string | null;
   artifact_refs: PublicArtifactRef[];
+  timing?: RuntimeTiming | null;
 }
 
 export interface ReasoningItemContent extends JsonObject {
@@ -272,6 +281,7 @@ export interface InteractionProjection {
   turn_id: string | null;
   job_id: string | null;
   expires_at: string | null;
+  created_seq?: number | null;
   created_at: string;
   updated_at: string;
 }

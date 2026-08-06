@@ -25,7 +25,6 @@ import type { ArtifactProjection } from "./api/contracts.ts";
 import { IconButton } from "./components/IconButton.tsx";
 import { LazyFeatureBoundary } from "./components/LazyFeatureBoundary.tsx";
 import { LoginPage } from "./components/LoginPage.tsx";
-import { Timeline } from "./components/Timeline.tsx";
 import { useRuntimeSession } from "./state/useRuntimeSession.ts";
 import {
   resolveThemePreference,
@@ -48,6 +47,7 @@ const loadReplayDialog = () => import("./components/ReplayDialog.tsx");
 const loadRetouchWorkspace = () => import("./components/RetouchWorkspace.tsx");
 const loadSettingsDialog = () => import("./components/SettingsDialog.tsx");
 const loadShareDialog = () => import("./components/ShareDialog.tsx");
+const loadTimeline = () => import("./components/Timeline.tsx");
 
 const ArtifactPreviewDialog = lazy(async () => ({
   default: (await loadArtifactPreviewDialog()).ArtifactPreviewDialog,
@@ -78,6 +78,9 @@ const SettingsDialog = lazy(async () => ({
 }));
 const ShareDialog = lazy(async () => ({
   default: (await loadShareDialog()).ShareDialog,
+}));
+const Timeline = lazy(async () => ({
+  default: (await loadTimeline()).Timeline,
 }));
 
 function warmFeature(loader: () => Promise<unknown>): void {
@@ -291,10 +294,15 @@ export function AppV1() {
   const restoreArtifactPreviewFocus = () => {
     const target = previewReturnFocusRef.current;
     previewReturnFocusRef.current = null;
+    const artifactId = target?.dataset.artifactPreviewTrigger ?? null;
     window.requestAnimationFrame(() => {
       restoreFeatureFocus(
         target,
-        [
+        artifactId ? [
+          `[data-artifact-preview-trigger="${CSS.escape(artifactId)}"]`,
+          '[data-ecorex-feature-trigger="task-menu"]',
+          '[data-ecorex-feature-trigger="navigation"]',
+        ] : [
           '[data-ecorex-feature-trigger="task-menu"]',
           '[data-ecorex-feature-trigger="navigation"]',
         ],
@@ -848,28 +856,31 @@ export function AppV1() {
                 />
               </Suspense>
             ) : (
-            <Timeline
-              items={runtime.items}
-              turns={runtime.turns}
-              chatModels={bootstrap?.models.chat || []}
-              activeTurn={runtime.activeTurn}
-              isThinking={runtime.isThinking}
-              visibleReasoning={runtime.visibleReasoning}
-              artifacts={runtime.artifacts}
-              artifactPreviewUrls={runtime.artifactPreviewUrls}
-              onArtifactAction={(artifact, action) => void handleArtifactAction(artifact, action)}
-              onArtifactPreviewVisible={runtime.prefetchArtifactPreview}
-              retouchAvailable={authenticated && bootstrap?.retouch_service.state === "ready"}
-              retouchUnavailableReason={retouchUnavailableReason}
-              projects={runtime.projects}
-              newConversationProject={runtime.newConversationProject}
-              projectPickerBusy={runtime.projectPickerBusy}
-              onSelectConversationProject={runtime.newTask}
-              onPickProject={runtime.pickProject}
-              newConversationComposer={null}
-              onLoadAttachment={runtime.loadInputAttachment}
-              onLoadAttachmentThumbnail={runtime.loadInputAttachmentThumbnail}
-            />
+              <Suspense fallback={<section className="ex-home-loading" role="status">正在加载对话…</section>}>
+                <Timeline
+                  items={runtime.items}
+                  turns={runtime.turns}
+                  interactions={runtime.interactions}
+                  chatModels={bootstrap?.models.chat || []}
+                  serverClockOffsetMs={runtime.serverClockOffsetMs}
+                  activeTurn={runtime.activeTurn}
+                  isThinking={runtime.isThinking}
+                  artifacts={runtime.artifacts}
+                  artifactPreviewUrls={runtime.artifactPreviewUrls}
+                  onArtifactAction={(artifact, action) => void handleArtifactAction(artifact, action)}
+                  onArtifactPreviewVisible={runtime.prefetchArtifactPreview}
+                  retouchAvailable={authenticated && bootstrap?.retouch_service.state === "ready"}
+                  retouchUnavailableReason={retouchUnavailableReason}
+                  projects={runtime.projects}
+                  newConversationProject={runtime.newConversationProject}
+                  projectPickerBusy={runtime.projectPickerBusy}
+                  onSelectConversationProject={runtime.newTask}
+                  onPickProject={runtime.pickProject}
+                  newConversationComposer={null}
+                  onLoadAttachment={runtime.loadInputAttachment}
+                  onLoadAttachmentThumbnail={runtime.loadInputAttachmentThumbnail}
+                />
+              </Suspense>
             )}
           </section>
 

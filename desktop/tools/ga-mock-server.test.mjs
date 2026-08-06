@@ -228,6 +228,8 @@ test("GA harness exposes managed bootstrap, strict CSRF, state reset, and unique
     used_tokens: 42180,
     window_tokens: 272000,
     model_id: "ecorex-chat",
+    model_display_name: "GPT-5.6 Luna · 最大推理",
+    model_catalog_snapshot_id: "models-ga",
     measured_at: usage.context.measured_at,
   });
 

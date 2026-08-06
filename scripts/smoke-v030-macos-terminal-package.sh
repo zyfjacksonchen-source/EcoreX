@@ -142,7 +142,7 @@ VERSION_FILE="$ROOT/version.json" INSTALL_ROOT="$INSTALL_ROOT" python - <<'PY'
 import json, os
 from pathlib import Path
 version = json.loads(Path(os.environ['VERSION_FILE']).read_text())
-if version.get('product') != 'e-Mate' or version.get('version') != '0.3.1':
+if version.get('product') != 'e-Mate' or version.get('version') != '0.3.2':
     raise SystemExit('installed_version_invalid')
 entry = json.loads((Path.home() / 'Desktop/e-Mate.app/Contents/Resources/ecorex-entry.json').read_text())
 if Path(entry.get('install_root', '')).resolve() != Path(os.environ['INSTALL_ROOT']).resolve():
@@ -175,7 +175,7 @@ receipt.write_text(json.dumps({
     'schema_version': 1,
     'status': 'passed',
     'product': 'e-Mate',
-    'version': '0.3.1',
+    'version': '0.3.2',
     'architecture': os.environ['EXPECTED_ARCH'],
     'package_sha256': hashlib.sha256(package.read_bytes()).hexdigest(),
     'installed_runtime_api': True,

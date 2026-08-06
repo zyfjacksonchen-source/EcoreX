@@ -165,6 +165,30 @@ def test_projection_orders_opaque_items_by_durable_event_sequence(tmp_path):
 
     ordered_ids = [item.item_id for item in kernel.projection(thread.thread_id).items]
     assert ordered_ids[-2:] == ["itm_z_created_first", "itm_a_created_second"]
+    ordered = kernel.projection(thread.thread_id).items[-2:]
+    assert ordered[0].created_seq is not None
+    assert ordered[1].created_seq == ordered[0].created_seq + 1
+
+
+def test_projection_derives_server_timing_without_a_schema_migration(tmp_path):
+    kernel = RuntimeKernel(tmp_path / "runtime.db")
+    thread = kernel.create_thread()
+    created = kernel.create_turn(
+        thread.thread_id,
+        CreateTurnRequest(input="计时", client_message_id="timing-message"),
+    )
+
+    active = kernel.projection(thread.thread_id).turns[0]
+    assert active.timing is not None
+    assert active.timing.finished_at is None
+    assert active.timing.duration_ms is None
+
+    kernel.transition_turn(created.turn.turn_id, TurnStatus.CANCELLED)
+    terminal = kernel.projection(thread.thread_id).turns[0]
+    assert terminal.timing is not None
+    assert terminal.timing.finished_at is not None
+    assert terminal.timing.duration_ms is not None
+    assert terminal.timing.duration_ms >= 0
 
 
 def test_steer_replace_interrupt_and_fork_are_transactional(tmp_path):
@@ -295,7 +319,7 @@ def test_api_bootstrap_polling_sse_and_mutations(tmp_path):
 
     version = client.get("/api/version")
     assert version.status_code == 200
-    assert version.json()["version"] == "0.3.1"
+    assert version.json()["version"] == "0.3.2"
     assert "core_version" not in version.json()
     update = client.get("/api/update-check", params={"platform": "win32"})
     assert update.status_code == 200

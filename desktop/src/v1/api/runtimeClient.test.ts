@@ -203,6 +203,12 @@ const bootstrap: BootstrapResponse = {
   server_time: "2026-07-10T00:00:00Z",
 };
 
+const activeTiming = {
+  started_at: bootstrap.server_time,
+  finished_at: null,
+  duration_ms: null,
+};
+
 const conversationUsage: ConversationUsageProjection = {
   thread_id: "thr_usage",
   timezone: "Asia/Shanghai",
@@ -1401,6 +1407,7 @@ test("turn mutations always send separate Agent and image model identities", asy
       client_message_id: "message-replacement",
       metadata: {},
       terminal_reason: null,
+      timing: activeTiming,
       inherited: false,
       created_at: bootstrap.server_time,
       updated_at: bootstrap.server_time,
@@ -1656,6 +1663,7 @@ test("new-thread first message is a recoverable two-phase operation after lost r
         client_message_id: "message_two_phase",
         metadata: {},
         terminal_reason: null,
+        timing: activeTiming,
         inherited: false,
         created_at: now.toISOString(),
         updated_at: now.toISOString(),
@@ -1800,6 +1808,7 @@ test("thread projections reject stale nested wire shapes before reducer state", 
       client_message_id: "message-contract",
       metadata: {},
       terminal_reason: null,
+      timing: activeTiming,
       inherited: false,
       created_at: bootstrap.server_time,
       updated_at: bootstrap.server_time,
@@ -2579,6 +2588,7 @@ test("connector-login HITL begin, check, and cancel never use ordinary respond",
       options: [],
       response: { action_id: "cancel", values: {} },
       response_client_request_id: "connector_cancel_stable",
+      created_seq: 1,
       thread_id: "thread-connector",
       turn_id: null,
       job_id: null,
@@ -2683,6 +2693,7 @@ test("connector-login and HITL mutation responses fail closed on state or identi
       options: [],
       response: { action_id: "check_status", values: {} },
       response_client_request_id: "connector_check_stable",
+      created_seq: 1,
       thread_id: "thread-contract",
       turn_id: null,
       job_id: null,

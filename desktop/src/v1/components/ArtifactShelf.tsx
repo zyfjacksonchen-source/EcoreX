@@ -281,6 +281,7 @@ export function ArtifactShelf({
                 <button
                   className="ex-artifact-primary"
                   type="button"
+                  data-artifact-preview-trigger={artifact.artifact_id}
                   onClick={() => onAction?.(artifact, "preview")}
                 >
                   {primaryContent}

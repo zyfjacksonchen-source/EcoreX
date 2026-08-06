@@ -291,14 +291,12 @@ export function RetouchWorkspace({
     let stale = false;
     setLoading(true);
     setError(null);
-    setSurfaceUrl((current) => {
-      if (current) URL.revokeObjectURL(current);
-      return null;
-    });
-    setResultUrl((current) => {
-      if (current) URL.revokeObjectURL(current);
-      return null;
-    });
+    if (surfaceUrlRef.current) URL.revokeObjectURL(surfaceUrlRef.current);
+    if (resultUrlRef.current) URL.revokeObjectURL(resultUrlRef.current);
+    surfaceUrlRef.current = null;
+    resultUrlRef.current = null;
+    setSurfaceUrl(null);
+    setResultUrl(null);
     void (async () => {
       try {
         const opened = await onOpenWorkspace(artifact);
@@ -306,7 +304,9 @@ export function RetouchWorkspace({
         resetFromProjection(opened);
         const blob = await onLoadBlob(opened.workspace_id, "surface", undefined, controller.signal);
         if (stale) return;
-        setSurfaceUrl(URL.createObjectURL(blob));
+        const next = URL.createObjectURL(blob);
+        surfaceUrlRef.current = next;
+        setSurfaceUrl(next);
       } catch (cause) {
         if (!stale) setError(errorText(cause));
       } finally {
@@ -416,10 +416,9 @@ export function RetouchWorkspace({
       .then((blob) => {
         if (controller.signal.aborted) return;
         const next = URL.createObjectURL(blob);
-        setResultUrl((current) => {
-          if (current) URL.revokeObjectURL(current);
-          return next;
-        });
+        if (resultUrlRef.current) URL.revokeObjectURL(resultUrlRef.current);
+        resultUrlRef.current = next;
+        setResultUrl(next);
       })
       .catch((cause) => {
         if (!controller.signal.aborted) setError(errorText(cause));
@@ -446,10 +445,10 @@ export function RetouchWorkspace({
         entries.forEach(([, url]) => URL.revokeObjectURL(url));
         return;
       }
-      setReferenceUrls((current) => {
-        Object.values(current).forEach((url) => URL.revokeObjectURL(url));
-        return Object.fromEntries(entries);
-      });
+      Object.values(referenceUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
+      const next = Object.fromEntries(entries);
+      referenceUrlsRef.current = next;
+      setReferenceUrls(next);
     }).catch((cause) => {
       if (!controller.signal.aborted) setError(errorText(cause));
     });

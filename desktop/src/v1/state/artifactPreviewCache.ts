@@ -229,7 +229,11 @@ export class ArtifactPreviewCache {
     const record = this.records.get(artifactId);
     if (!record) return;
     this.records.delete(artifactId);
-    this.revokeObjectUrl(record.url);
+    if (typeof globalThis.requestAnimationFrame === "function") {
+      globalThis.requestAnimationFrame(() => this.revokeObjectUrl(record.url));
+    } else {
+      this.revokeObjectUrl(record.url);
+    }
   }
 
   private publish(): void {

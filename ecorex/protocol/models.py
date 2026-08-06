@@ -707,6 +707,24 @@ class PublicArtifactRef(FrozenProtocolModel):
     )
 
 
+class RuntimeTiming(FrozenProtocolModel):
+    """Server-authored timing for one durable runtime operation."""
+
+    started_at: datetime
+    finished_at: datetime | None = None
+    duration_ms: int | None = Field(default=None, ge=0)
+
+    _timestamps_utc = field_validator("started_at", "finished_at")(_ensure_utc)
+
+    @model_validator(mode="after")
+    def _validate_terminal_pair(self) -> "RuntimeTiming":
+        if (self.finished_at is None) != (self.duration_ms is None):
+            raise ValueError("finished_at and duration_ms must be set together")
+        if self.finished_at is not None and self.finished_at < self.started_at:
+            raise ValueError("runtime timing cannot finish before it starts")
+        return self
+
+
 class PublicToolActivity(FrozenProtocolModel):
     """The only Tool Item/Event body that may cross the public Runtime API.
 
@@ -766,6 +784,7 @@ class PublicToolActivity(FrozenProtocolModel):
     argument_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     result_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     artifact_refs: list[PublicArtifactRef] = Field(default_factory=list, max_length=20)
+    timing: RuntimeTiming | None = None
 
     @model_validator(mode="after")
     def _validate_public_tool_state(self) -> "PublicToolActivity":
@@ -886,6 +905,7 @@ class TurnProjection(FrozenProtocolModel):
     metadata: JsonObject = Field(default_factory=dict)
     inherited: bool = False
     terminal_reason: str | None = None
+    timing: RuntimeTiming | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -945,6 +965,7 @@ class ItemProjection(FrozenProtocolModel):
     status: ItemStatus
     content: JsonObject = Field(default_factory=dict)
     inherited: bool = False
+    created_seq: int | None = Field(default=None, ge=1)
     created_at: datetime
     updated_at: datetime
 
@@ -1096,6 +1117,7 @@ class InteractionProjection(FrozenProtocolModel):
     turn_id: str | None = None
     job_id: str | None = None
     expires_at: datetime | None = None
+    created_seq: int | None = Field(default=None, ge=1)
     created_at: datetime
     updated_at: datetime
 

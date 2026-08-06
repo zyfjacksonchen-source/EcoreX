@@ -1,28 +1,42 @@
-import { Fragment, lazy, memo, Suspense, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, FolderOpen, Workflow, WandSparkles } from "lucide-react";
+import {
+  lazy,
+  memo,
+  Suspense,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { ArrowDown, Bot, ChevronDown, FolderOpen, Workflow, WandSparkles } from "lucide-react";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 
 import type {
   ArtifactProjection,
+  InteractionProjection,
   ItemProjection,
   InputAttachmentProjection,
   ModelDescriptor,
   ProjectProjection,
+  PublicToolActivity,
   TurnProjection,
 } from "../api/contracts.ts";
 import { tryValidateArtifactProjection } from "../api/runtimeContract.ts";
-import { retouchPresentation } from "../state/retouchPresentation.ts";
 import { mergeArtifactProjections } from "../state/artifactActions.ts";
+import { retouchPresentation, type RetouchPresentation } from "../state/retouchPresentation.ts";
 import {
   artifactRevisionIdentity,
   selectUnbackedArtifactProjections,
 } from "../state/timelineArtifacts.ts";
 import {
-  earlierTimelineAnchor,
-  newerTimelineAnchor,
-  selectTimelineWindow,
-  TIMELINE_WINDOW_SIZE,
-} from "../state/timelineWindow.ts";
+  buildTimelineTurns,
+  foldTurnProcess,
+  type TimelineBlock,
+  type TimelineSegment,
+  type TimelineTurn,
+} from "../state/timelineTurns.ts";
 import { InputAttachmentPreview, type InputAttachmentBlobLoader } from "./InputAttachmentPreview.tsx";
+import OperationElapsed from "./OperationElapsed.tsx";
 
 const OfficeMarkdown = lazy(() => import("./OfficeMarkdown.tsx"));
 const TimelineActivity = lazy(() => import("./TimelineActivity.tsx"));
@@ -35,10 +49,11 @@ const ArtifactShelf = lazy(async () => ({ default: (await import("./ArtifactShel
 interface TimelineProps {
   items: ItemProjection[];
   turns: TurnProjection[];
+  interactions: InteractionProjection[];
   chatModels: ModelDescriptor[];
+  serverClockOffsetMs: number;
   activeTurn: TurnProjection | null;
   isThinking: boolean;
-  visibleReasoning: ItemProjection | null;
   artifacts: ArtifactProjection[];
   artifactPreviewUrls: Record<string, string>;
   onArtifactAction: (artifact: ArtifactProjection, action: string) => void;
@@ -55,7 +70,8 @@ interface TimelineProps {
   onLoadAttachmentThumbnail: InputAttachmentBlobLoader;
 }
 
-const TIMELINE_BOTTOM_THRESHOLD_PX = 24;
+const TIMELINE_BOTTOM_THRESHOLD_PX = 72;
+const TIMELINE_SCROLL_SETTLE_MS = 80;
 
 function role(item: ItemProjection): string {
   return typeof item.content.role === "string" ? item.content.role : "assistant";
@@ -89,8 +105,7 @@ function messageAttachments(item: ItemProjection): InputAttachmentProjection[] {
 }
 
 function artifactFrom(item: ItemProjection): ArtifactProjection | null {
-  const raw = item.content.artifact ?? item.content;
-  return tryValidateArtifactProjection(raw);
+  return tryValidateArtifactProjection(item.content.artifact ?? item.content);
 }
 
 function phaseLabel(status: TurnProjection["status"] | undefined): string {
@@ -100,25 +115,21 @@ function phaseLabel(status: TurnProjection["status"] | undefined): string {
     case "model_requested": return "正在思考";
     case "streaming": return "正在组织结果";
     case "tool_pending": return "正在选择工具";
+    case "waiting_human": return "等待你确认";
     case "tool_running": return "正在执行";
     case "retry_wait": return "等待重试";
-    case "finalizing": return "正在检查产物";
+    case "finalizing": return "正在检查结果";
     default: return "正在处理";
   }
 }
 
-function isNearTimelineBottom(element: HTMLElement): boolean {
-  const remaining = element.scrollHeight - element.clientHeight - element.scrollTop;
-  return remaining <= TIMELINE_BOTTOM_THRESHOLD_PX;
+function processLabel(turn: TurnProjection): string {
+  if (turn.status === "failed") return "未完成的过程";
+  if (turn.status === "cancelled") return "取消前的过程";
+  if (turn.status === "interrupted") return "中断前的过程";
+  if (turn.status === "superseded") return "已替换的过程";
+  return "完成过程";
 }
-
-const TERMINAL_TURN_STATUSES = new Set<TurnProjection["status"]>([
-  "completed",
-  "failed",
-  "cancelled",
-  "interrupted",
-  "superseded",
-]);
 
 const MessageRow = memo(function MessageRow({
   item,
@@ -135,9 +146,7 @@ const MessageRow = memo(function MessageRow({
   if (!text && !attachments.length) return null;
   const streaming = item.status === "in_progress";
   return (
-    <article
-      className={`ex-message is-${user ? "user" : "assistant"}${streaming ? " is-streaming" : ""}`}
-    >
+    <article className={`ex-message is-${user ? "user" : "assistant"}${streaming ? " is-streaming" : ""}`}>
       <div className="ex-message-body" aria-busy={streaming || undefined}>
         {user && attachments.length ? (
           <div className="ex-message-attachments" aria-label="本条消息的附件">
@@ -163,13 +172,282 @@ const MessageRow = memo(function MessageRow({
   );
 });
 
+function InteractionReceipt({ interaction }: { interaction: InteractionProjection }) {
+  if (interaction.status === "pending") return null;
+  const label = interaction.status === "resolved"
+    ? "已处理"
+    : interaction.status === "cancelled"
+    ? "已取消"
+    : "已过期";
+  return (
+    <div className="ex-interaction-receipt" data-status={interaction.status}>
+      <span>{interaction.contract.title}</span>
+      <small>{label}</small>
+    </div>
+  );
+}
+
+interface BlockProps {
+  block: TimelineBlock;
+  turn: TurnProjection;
+  artifactByRevision: Map<string, ArtifactProjection>;
+  artifactPreviewUrls: Record<string, string>;
+  onArtifactAction: (artifact: ArtifactProjection, action: string) => void;
+  onArtifactPreviewVisible: (artifact: ArtifactProjection) => void;
+  retouchAvailable: boolean;
+  retouchUnavailableReason: string | null;
+  onLoadAttachment: InputAttachmentBlobLoader;
+  onLoadAttachmentThumbnail: InputAttachmentBlobLoader;
+  serverClockOffsetMs: number;
+}
+
+function TimelineBlockView({
+  block,
+  turn,
+  artifactByRevision,
+  artifactPreviewUrls,
+  onArtifactAction,
+  onArtifactPreviewVisible,
+  retouchAvailable,
+  retouchUnavailableReason,
+  onLoadAttachment,
+  onLoadAttachmentThumbnail,
+  serverClockOffsetMs,
+}: BlockProps) {
+  if (block.kind === "interaction") {
+    return <InteractionReceipt interaction={block.interaction} />;
+  }
+  const item = block.item;
+  if (item.kind === "message") {
+    return (
+      <MessageRow
+        item={item}
+        onLoadAttachment={onLoadAttachment}
+        onLoadAttachmentThumbnail={onLoadAttachmentThumbnail}
+      />
+    );
+  }
+  if (item.kind === "reasoning") {
+    return (
+      <Suspense fallback={<div className="ex-thinking-state" role="status">{phaseLabel(turn.status)}</div>}>
+        <ReasoningBlock item={item} label={phaseLabel(turn.status)} />
+      </Suspense>
+    );
+  }
+  if (item.kind === "task_list") {
+    return (
+      <Suspense fallback={<div className="ex-activity-row" role="status">正在载入任务清单…</div>}>
+        <TaskListBlock
+          item={item}
+          interrupted={Boolean(turn.status.match(/failed|cancelled|interrupted|superseded/u))}
+        />
+      </Suspense>
+    );
+  }
+  if (item.kind === "artifact") {
+    const projected = artifactFrom(item);
+    if (!projected) return null;
+    const artifact = artifactByRevision.get(artifactRevisionIdentity(projected)) ?? projected;
+    const retouch = retouchPresentation(item);
+    if (retouch) {
+      return <RetouchResultBlock
+        artifact={artifact}
+        retouch={retouch}
+        previewUrl={artifactPreviewUrls[artifact.artifact_id] ?? null}
+        onAction={onArtifactAction}
+        onPreviewVisible={onArtifactPreviewVisible}
+        retouchAvailable={retouchAvailable}
+        retouchUnavailableReason={retouchUnavailableReason}
+      />;
+    }
+    return (
+      <Suspense fallback={<div className="ex-activity-row" role="status">正在载入产物…</div>}>
+        <ArtifactShelf
+          artifacts={[artifact]}
+          previewUrls={artifactPreviewUrls}
+          onAction={onArtifactAction}
+          onPreviewVisible={onArtifactPreviewVisible}
+          retouchAvailable={retouchAvailable}
+          retouchUnavailableReason={retouchUnavailableReason}
+        />
+      </Suspense>
+    );
+  }
+  const activity = item.kind === "tool_call" ? item.content as Partial<PublicToolActivity> : null;
+  return (
+    <Suspense fallback={<div className="ex-activity-row" role="status">正在更新工作步骤…</div>}>
+      <TimelineActivity
+        item={item}
+        elapsed={activity ? <OperationElapsed
+          timing={activity.timing}
+          fallbackStartedAt={item.created_at}
+          terminal={["completed", "failed", "cancelled"].includes(item.status)}
+          serverClockOffsetMs={serverClockOffsetMs}
+        /> : null}
+      />
+    </Suspense>
+  );
+}
+
+function RetouchResultBlock({
+  artifact,
+  retouch,
+  previewUrl,
+  onAction,
+  onPreviewVisible,
+  retouchAvailable,
+  retouchUnavailableReason,
+}: {
+  artifact: ArtifactProjection;
+  retouch: RetouchPresentation;
+  previewUrl: string | null;
+  onAction: (artifact: ArtifactProjection, action: string) => void;
+  onPreviewVisible: (artifact: ArtifactProjection) => void;
+  retouchAvailable: boolean;
+  retouchUnavailableReason: string | null;
+}) {
+  useEffect(() => onPreviewVisible(artifact), [artifact.artifact_id, artifact.revision_id, onPreviewVisible]);
+  return (
+    <section className="ex-retouch-result" data-retouch-preview-artifact-id={artifact.artifact_id}>
+      <WandSparkles aria-hidden="true" />
+      <div>
+        <strong>精准修图已完成</strong>
+        <p>{retouch.changeSummary}</p>
+        <span>{retouch.inspectionRegionCount > 0 ? `已检查 ${retouch.inspectionRegionCount} 个修改区域。` : "已检查新修订。"}</span>
+        {previewUrl ? (
+          <button className="ex-retouch-result-media" type="button" data-artifact-preview-trigger={artifact.artifact_id} aria-label={`查看修图结果：${artifact.display_name}`} onClick={() => onAction(artifact, "preview")}>
+            <img src={previewUrl} alt="" />
+          </button>
+        ) : <button className="ex-button" type="button" onClick={() => onPreviewVisible(artifact)}>载入预览</button>}
+        <div className="ex-retouch-result-actions">
+          <button className="ex-button" type="button" onClick={() => onAction(artifact, "preview")}>查看大图</button>
+          <button
+            className="ex-button is-primary"
+            type="button"
+            disabled={!retouchAvailable || !artifact.actions.includes("precise_retouch")}
+            title={!retouchAvailable ? retouchUnavailableReason ?? "精准修图当前不可用" : undefined}
+            onClick={() => onAction(artifact, "precise_retouch")}
+          >继续修改</button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ProcessSegment({
+  segment,
+  turn,
+  open,
+  onToggle,
+  renderBlock,
+}: {
+  segment: TimelineSegment;
+  turn: TurnProjection;
+  open: boolean;
+  onToggle: () => void;
+  renderBlock: (block: TimelineBlock) => ReactNode;
+}) {
+  if (segment.kind === "anchor") return <>{segment.blocks.map(renderBlock)}</>;
+  return (
+    <section className="ex-process-segment" data-open={open || undefined}>
+      <button className="ex-process-toggle" type="button" aria-expanded={open} onClick={onToggle}>
+        <ChevronDown aria-hidden="true" />
+        <span>{processLabel(turn)}</span>
+        <small>{segment.blocks.length} 项</small>
+      </button>
+      <div className="ex-process-collapsible" aria-hidden={!open}>
+        <div>{segment.blocks.map(renderBlock)}</div>
+      </div>
+    </section>
+  );
+}
+
+interface TurnRowProps extends Omit<BlockProps, "block" | "turn"> {
+  entry: TimelineTurn;
+  modelSwitch: string | null;
+  openSegments: ReadonlyMap<string, boolean>;
+  onToggleSegment: (key: string, defaultOpen: boolean) => void;
+}
+
+const TurnRow = memo(function TurnRow({
+  entry,
+  modelSwitch,
+  openSegments,
+  onToggleSegment,
+  ...blockProps
+}: TurnRowProps) {
+  const segments = foldTurnProcess(entry);
+  const firstAssistant = entry.assistantBlocks.find((block) => (
+    block.kind !== "interaction" || block.interaction.status !== "pending"
+  ));
+  const copyText = [...entry.blocks].reverse().find((block) => (
+    block.kind === "item"
+    && block.item.kind === "message"
+    && role(block.item) === "assistant"
+    && messageText(block.item).trim()
+  ));
+  const renderBlock = (block: TimelineBlock) => (
+    <TimelineBlockView key={block.key} block={block} turn={entry.turn} {...blockProps} />
+  );
+  let headingRendered = false;
+  return (
+    <article className="ex-timeline-turn" data-turn-status={entry.turn.status}>
+      {modelSwitch ? (
+        <div className="ex-model-switch-divider" role="separator"><span>已切换至 {modelSwitch}</span></div>
+      ) : null}
+      {segments.map((segment) => {
+        const showHeading = !headingRendered
+          && firstAssistant !== undefined
+          && segment.blocks.some((block) => block.key === firstAssistant.key);
+        if (showHeading) headingRendered = true;
+        const segmentKey = `${entry.turn.turn_id}:${segment.segmentId}`;
+        const open = openSegments.get(segmentKey) ?? segment.defaultOpen;
+        return (
+          <div key={segment.segmentId}>
+            {showHeading ? (
+              <div className="ex-assistant-heading"><span><Bot aria-hidden="true" /></span><strong>e-Mate</strong></div>
+            ) : null}
+            <ProcessSegment
+              segment={segment}
+              turn={entry.turn}
+              open={open}
+              onToggle={() => onToggleSegment(segmentKey, segment.defaultOpen)}
+              renderBlock={renderBlock}
+            />
+          </div>
+        );
+      })}
+      {!entry.terminal ? (
+        <div className="ex-thinking-state ex-turn-running">
+          <span className="ex-live-status" role="status">{phaseLabel(entry.turn.status)}</span>
+          <span aria-hidden="true">{phaseLabel(entry.turn.status)} <OperationElapsed
+              timing={entry.turn.timing}
+              fallbackStartedAt={entry.turn.created_at}
+              terminal={false}
+              serverClockOffsetMs={blockProps.serverClockOffsetMs}
+            /></span>
+        </div>
+      ) : null}
+      {entry.terminal ? (
+        <Suspense fallback={null}>
+          <TurnCompletionRow
+            turn={entry.turn}
+            copyText={copyText?.kind === "item" ? messageText(copyText.item) : ""}
+          />
+        </Suspense>
+      ) : null}
+    </article>
+  );
+});
+
 export function Timeline({
   items,
   turns,
+  interactions,
   chatModels,
+  serverClockOffsetMs,
   activeTurn,
   isThinking,
-  visibleReasoning,
   artifacts,
   artifactPreviewUrls,
   onArtifactAction,
@@ -185,237 +463,160 @@ export function Timeline({
   onLoadAttachment,
   onLoadAttachmentThumbnail,
 }: TimelineProps) {
-  const messages = useMemo(
-    () => items.filter((item) => item.kind === "message"),
-    [items],
+  const timelineTurns = useMemo(
+    () => buildTimelineTurns(turns, items, interactions),
+    [interactions, items, turns],
   );
-  const timelineEntries = useMemo(
-    () => items.filter((item) => (
-      item.kind === "message"
-      || item.kind === "tool_call"
-      || item.kind === "checkpoint"
-      || item.kind === "artifact"
-      || item.kind === "task_list"
-    )),
-    [items],
-  );
-  const modelSwitches = useMemo(() => {
-    const labels = new Map(chatModels.map((model) => [model.model_id, model.display_name]));
-    const firstItemByTurn = new Map<string, string>();
-    for (const item of timelineEntries) {
-      if (!firstItemByTurn.has(item.turn_id)) firstItemByTurn.set(item.turn_id, item.item_id);
-    }
-    const switches = new Map<string, string>();
-    let previousModel: string | null = null;
-    for (const turn of [...turns].sort((left, right) => left.created_at.localeCompare(right.created_at))) {
-      const currentModel = turn.agent_model_id;
-      const firstItemId = firstItemByTurn.get(turn.turn_id);
-      if (previousModel && currentModel && currentModel !== previousModel && firstItemId) {
-        switches.set(firstItemId, labels.get(currentModel) || currentModel);
-      }
-      if (currentModel) previousModel = currentModel;
-    }
-    return switches;
-  }, [chatModels, timelineEntries, turns]);
-  const turnCompletions = useMemo(() => {
-    const terminalTurns = new Map(
-      turns
-        .filter((turn) => TERMINAL_TURN_STATUSES.has(turn.status))
-        .map((turn) => [turn.turn_id, turn]),
-    );
-    const lastItemByTurn = new Map<string, string>();
-    const lastReplyByTurn = new Map<string, string>();
-    for (const item of timelineEntries) {
-      if (!terminalTurns.has(item.turn_id)) continue;
-      lastItemByTurn.set(item.turn_id, item.item_id);
-      if (item.kind === "message" && role(item) === "assistant" && messageText(item)) {
-        lastReplyByTurn.set(item.turn_id, messageText(item));
-      }
-    }
-    const result = new Map<string, { turn: TurnProjection; copyText: string }>();
-    for (const [turnId, itemId] of lastItemByTurn) {
-      const turn = terminalTurns.get(turnId);
-      if (turn) result.set(itemId, { turn, copyText: lastReplyByTurn.get(turnId) ?? "" });
-    }
-    return result;
-  }, [timelineEntries, turns]);
-  const [historyEndAnchorId, setHistoryEndAnchorId] = useState<string | null>(null);
-  const messageWindow = useMemo(
-    () => selectTimelineWindow(timelineEntries, historyEndAnchorId),
-    [historyEndAnchorId, timelineEntries],
-  );
-  useEffect(() => {
-    if (messageWindow.anchorMissing) setHistoryEndAnchorId(null);
-  }, [messageWindow.anchorMissing]);
   const itemArtifacts = useMemo(
-    () => items
-      .filter((item) => item.kind === "artifact")
-      .map(artifactFrom)
-      .filter((artifact): artifact is ArtifactProjection => artifact !== null),
-    [items],
-  );
-  const retouchResults = useMemo(
-    () => items
-      .map(retouchPresentation)
-      .filter((result): result is NonNullable<typeof result> => result !== null),
+    () => items.filter((item) => item.kind === "artifact").map(artifactFrom).filter((artifact): artifact is ArtifactProjection => artifact !== null),
     [items],
   );
   const visibleArtifacts = useMemo(
     () => mergeArtifactProjections(itemArtifacts, artifacts),
     [artifacts, itemArtifacts],
   );
-  const listedArtifactByRevision = useMemo(
-    () => new Map(artifacts.map((artifact) => [
-      artifactRevisionIdentity(artifact),
-      artifact,
-    ])),
+  const artifactByRevision = useMemo(
+    () => new Map(artifacts.map((artifact) => [artifactRevisionIdentity(artifact), artifact])),
     [artifacts],
   );
   const fallbackArtifacts = useMemo(
     () => selectUnbackedArtifactProjections(itemArtifacts, visibleArtifacts),
     [itemArtifacts, visibleArtifacts],
   );
-  const timelineRef = useRef<HTMLDivElement>(null);
-  const followLatestRef = useRef(true);
-  const pendingJumpToLatestRef = useRef(false);
+  const modelSwitches = useMemo(() => {
+    const labels = new Map(chatModels.map((model) => [model.model_id, model.display_name]));
+    const switches = new Map<string, string>();
+    let previous: string | null = null;
+    for (const turn of turns) {
+      if (previous && turn.agent_model_id && turn.agent_model_id !== previous) {
+        switches.set(turn.turn_id, labels.get(turn.agent_model_id) ?? turn.agent_model_id);
+      }
+      if (turn.agent_model_id) previous = turn.agent_model_id;
+    }
+    return switches;
+  }, [chatModels, turns]);
+  const [openSegments, setOpenSegments] = useState<Map<string, boolean>>(() => new Map());
+  const [scrollParent, setScrollParent] = useState<HTMLElement | null>(null);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
-  const retouchPreviewIdentity = retouchResults
-    .map((result) => (
-      `${result.artifact.artifact_id}:${result.artifact.revision_id}:`
-      + String(result.artifact.actions.includes("preview"))
-    ))
-    .join("|");
+  const followLatestRef = useRef(true);
+  const followPausedByUserRef = useRef(false);
+  const mountRef = useRef<HTMLDivElement>(null);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const bottomSettleTimer = useRef<number | null>(null);
+  const contentRevision = items.map((item) => `${item.item_id}:${item.updated_at}:${messageText(item).length}`).join("|");
+  const timelineThreadId = timelineTurns[0]?.turn.thread_id ?? null;
 
-  const jumpToLatest = () => {
-    const scroller = timelineRef.current?.parentElement;
-    pendingJumpToLatestRef.current = false;
+  useEffect(() => {
+    followPausedByUserRef.current = false;
     followLatestRef.current = true;
     setShowJumpToLatest(false);
-    if (scroller) {
-      window.requestAnimationFrame(() => {
-        scroller.scrollTo({ top: scroller.scrollHeight, behavior: "auto" });
+  }, [timelineThreadId]);
+
+  useEffect(() => {
+    setScrollParent(mountRef.current?.parentElement ?? null);
+    return () => {
+      if (bottomSettleTimer.current !== null) window.clearTimeout(bottomSettleTimer.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!scrollParent) return undefined;
+    const readAtBottom = () => {
+      const remaining = scrollParent.scrollHeight - scrollParent.clientHeight - scrollParent.scrollTop;
+      return remaining <= TIMELINE_BOTTOM_THRESHOLD_PX;
+    };
+    const syncFollowState = () => {
+      const atBottom = readAtBottom();
+      if (followPausedByUserRef.current) {
+        followLatestRef.current = false;
+        setShowJumpToLatest(true);
+      } else if (atBottom) {
+        followLatestRef.current = true;
+        setShowJumpToLatest(false);
+      } else if (followLatestRef.current) {
+        scrollParent.scrollTop = scrollParent.scrollHeight;
+        setShowJumpToLatest(false);
+      } else {
+        setShowJumpToLatest(true);
+      }
+    };
+    const pauseFollowOnWheel = (event: WheelEvent) => {
+      followPausedByUserRef.current = event.deltaY < 0;
+      if (event.deltaY < 0) {
+        followLatestRef.current = false;
+        setShowJumpToLatest(true);
+      }
+    };
+    const pauseFollowOnTouch = () => {
+      followPausedByUserRef.current = true;
+      followLatestRef.current = false;
+      setShowJumpToLatest(true);
+    };
+    const releaseTouchFollow = () => {
+      followPausedByUserRef.current = false;
+      syncFollowState();
+    };
+    scrollParent.addEventListener("scroll", syncFollowState, { passive: true });
+    scrollParent.addEventListener("wheel", pauseFollowOnWheel, { passive: true });
+    scrollParent.addEventListener("touchmove", pauseFollowOnTouch, { passive: true });
+    scrollParent.addEventListener("touchend", releaseTouchFollow, { passive: true });
+    syncFollowState();
+    return () => {
+      scrollParent.removeEventListener("scroll", syncFollowState);
+      scrollParent.removeEventListener("wheel", pauseFollowOnWheel);
+      scrollParent.removeEventListener("touchmove", pauseFollowOnTouch);
+      scrollParent.removeEventListener("touchend", releaseTouchFollow);
+    };
+  }, [scrollParent]);
+
+  useEffect(() => {
+    if (!followLatestRef.current || timelineTurns.length === 0) return;
+    const frame = window.requestAnimationFrame(() => {
+      virtuosoRef.current?.scrollToIndex({
+        index: timelineTurns.length - 1,
+        align: "end",
+        behavior: "auto",
       });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [contentRevision, interactions, scrollParent, timelineTurns.length]);
+
+  const toggleSegment = (key: string, defaultOpen: boolean) => {
+    setOpenSegments((current) => {
+      const next = new Map(current);
+      next.set(key, !(current.get(key) ?? defaultOpen));
+      return next;
+    });
+  };
+  const jumpToLatest = () => {
+    followPausedByUserRef.current = false;
+    followLatestRef.current = true;
+    setShowJumpToLatest(false);
+    if (timelineTurns.length) {
+      virtuosoRef.current?.scrollToIndex({ index: timelineTurns.length - 1, align: "end", behavior: "auto" });
+      window.requestAnimationFrame(() => {
+        if (followLatestRef.current && scrollParent) scrollParent.scrollTop = scrollParent.scrollHeight;
+      });
+      if (bottomSettleTimer.current !== null) window.clearTimeout(bottomSettleTimer.current);
+      bottomSettleTimer.current = window.setTimeout(() => {
+        bottomSettleTimer.current = null;
+        followLatestRef.current = true;
+        if (scrollParent) scrollParent.scrollTop = scrollParent.scrollHeight;
+      }, TIMELINE_SCROLL_SETTLE_MS);
     }
   };
 
-  useEffect(() => {
-    const timeline = timelineRef.current;
-    if (!timeline || !retouchPreviewIdentity) return;
-    const byId = new Map(
-      retouchResults.map((result) => [result.artifact.artifact_id, result.artifact]),
-    );
-    const candidates = [...timeline.querySelectorAll<HTMLElement>(
-      "[data-retouch-preview-artifact-id]",
-    )];
-    const reveal = (element: HTMLElement) => {
-      const artifactId = element.dataset.retouchPreviewArtifactId;
-      const artifact = artifactId ? byId.get(artifactId) : undefined;
-      if (artifact) onArtifactPreviewVisible(artifact);
-    };
-    if (!("IntersectionObserver" in window)) {
-      candidates.forEach(reveal);
-      return;
-    }
-    const observer = new IntersectionObserver((entries) => {
-      for (const entry of entries) {
-        if (!entry.isIntersecting) continue;
-        const element = entry.target as HTMLElement;
-        observer.unobserve(element);
-        reveal(element);
-      }
-    }, { rootMargin: "240px 0px" });
-    candidates.forEach((element) => observer.observe(element));
-    return () => observer.disconnect();
-  }, [
-    messageWindow.startIndex,
-    messageWindow.endIndex,
-    onArtifactPreviewVisible,
-    retouchPreviewIdentity,
-    retouchResults,
-  ]);
-
-  useEffect(() => {
-    const scroller = timelineRef.current?.parentElement;
-    if (!scroller) return;
-    const syncScrollState = () => {
-      const atBottom = isNearTimelineBottom(scroller);
-      followLatestRef.current = atBottom;
-      setShowJumpToLatest(!atBottom);
-    };
-    syncScrollState();
-    scroller.addEventListener("scroll", syncScrollState, { passive: true });
-    return () => scroller.removeEventListener("scroll", syncScrollState);
-  }, [
-    isThinking,
-    timelineEntries.length,
-    retouchResults.length,
-    visibleArtifacts.length,
-    visibleReasoning,
-  ]);
-
-  useEffect(() => {
-    const scroller = timelineRef.current?.parentElement;
-    if (!scroller || !messageWindow.atLatest) return;
-    if (!followLatestRef.current && !pendingJumpToLatestRef.current) return;
-    const frame = window.requestAnimationFrame(() => {
-      scroller.scrollTo({ top: scroller.scrollHeight, behavior: "auto" });
-      followLatestRef.current = true;
-      pendingJumpToLatestRef.current = false;
-      setShowJumpToLatest(false);
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [
-    isThinking,
-    messageWindow.atLatest,
-    retouchResults.length,
-    timelineEntries.length,
-    visibleArtifacts.length,
-    visibleReasoning,
-  ]);
-  let latestCompletedAssistantId: string | null = null;
-  for (const message of messages) {
-    if (role(message) === "assistant" && message.status === "completed") {
-      latestCompletedAssistantId = message.item_id;
-    }
-  }
-
-  if (
-    !timelineEntries.length
-    && !itemArtifacts.length
-    && !artifacts.length
-    && !retouchResults.length
-    && !isThinking
-    && !visibleReasoning
-  ) {
+  if (!timelineTurns.length && !visibleArtifacts.length && !isThinking) {
     return (
       <div className="ex-empty-state ex-new-conversation-start">
         <h1>和 e-Mate 一起开始工作</h1>
         <p>{newConversationProject ? `${newConversationProject.name} 项目会话` : "选择一个开始方式"}</p>
         <div className="ex-new-conversation-options" role="group" aria-label="新会话入口">
-          <button
-            className={!newConversationProject ? "is-selected" : ""}
-            type="button"
-            aria-pressed={!newConversationProject}
-            onClick={() => onSelectConversationProject(null)}
-          >
+          <button className={!newConversationProject ? "is-selected" : ""} type="button" aria-pressed={!newConversationProject} onClick={() => onSelectConversationProject(null)}>
             <Workflow aria-hidden="true" />
             <span><strong>通用会话</strong><small>不绑定项目，适合临时问答、资料整理和轻量任务。</small></span>
           </button>
-          <Suspense fallback={(
-              <button
-                className={`ex-new-project-trigger${newConversationProject ? " is-selected" : ""}`}
-                type="button"
-                aria-label="选择项目会话"
-                aria-pressed={Boolean(newConversationProject)}
-                disabled
-              >
-                <FolderOpen aria-hidden="true" />
-                <span>
-                  <strong>{newConversationProject?.name || "项目会话"}</strong>
-                  <small>正在准备项目列表…</small>
-                </span>
-              </button>
-          )}>
+          <Suspense fallback={<button className="ex-new-project-trigger" type="button" disabled><FolderOpen aria-hidden="true" /><span><strong>项目会话</strong><small>正在准备项目列表…</small></span></button>}>
             <NewConversationProjectSelector
               projects={projects}
               selectedProject={newConversationProject}
@@ -425,198 +626,75 @@ export function Timeline({
             />
           </Suspense>
         </div>
-        <p className="ex-new-conversation-note">
-          {newConversationProject
-            ? `将从 ${newConversationProject.name} 项目开始，不会自动复用旧项目会话。`
-            : "将从不绑定项目的通用会话开始，不会串入项目文件夹上下文。"}
-        </p>
-        {newConversationComposer ? (
-          <div className="ex-new-conversation-composer">
-            {newConversationComposer}
-          </div>
-        ) : null}
+        <p className="ex-new-conversation-note">{newConversationProject ? `将从 ${newConversationProject.name} 项目开始。` : "将从不绑定项目的通用会话开始。"}</p>
+        {newConversationComposer ? <div className="ex-new-conversation-composer">{newConversationComposer}</div> : null}
       </div>
     );
   }
 
+  const footer = fallbackArtifacts.length ? () => (
+    <div className="ex-timeline-turn">
+      <Suspense fallback={<div className="ex-activity-row" role="status">正在载入产物…</div>}>
+        <ArtifactShelf
+          artifacts={fallbackArtifacts}
+          previewUrls={artifactPreviewUrls}
+          onAction={onArtifactAction}
+          onPreviewVisible={onArtifactPreviewVisible}
+          retouchAvailable={retouchAvailable}
+          retouchUnavailableReason={retouchUnavailableReason}
+        />
+      </Suspense>
+    </div>
+  ) : undefined;
+  const latestCompleted = [...turns].reverse().find((turn) => turn.status === "completed");
   return (
     <>
-      <div ref={timelineRef} className="ex-timeline-inner">
+      <div ref={mountRef} className="ex-timeline-inner ex-timeline-virtualized">
         <div className="ex-live-status" aria-live="polite" aria-atomic="true">
-          {latestCompletedAssistantId ? (
-            <span key={latestCompletedAssistantId}>e-Mate 已完成回复</span>
-          ) : null}
+          {latestCompleted ? <span key={latestCompleted.turn_id}>e-Mate 已完成回复</span> : null}
         </div>
-        {messageWindow.hiddenBefore > 0 ? (
-          <div className="ex-timeline-history-nav is-before">
-            <button
-              className="ex-button"
-              type="button"
-              onClick={() => setHistoryEndAnchorId(
-                earlierTimelineAnchor(timelineEntries, messageWindow),
-              )}
-            >
-              显示更早的 {Math.min(TIMELINE_WINDOW_SIZE, messageWindow.hiddenBefore)} 条记录
-            </button>
-          </div>
-        ) : null}
-        {!messageWindow.atLatest ? (
-          <p className="ex-timeline-history-status" role="status">
-            正在查看历史消息；当前任务的最新进度和产物仍在末尾。
-          </p>
-        ) : null}
-        {messageWindow.items.map((item) => {
-          const completion = turnCompletions.get(item.item_id);
-          return (
-          <Fragment key={item.item_id}>
-            {modelSwitches.has(item.item_id) ? (
-              <div className="ex-model-switch-divider" role="separator">
-                <span>已切换至 {modelSwitches.get(item.item_id)}</span>
-              </div>
-            ) : null}
-            {item.kind === "message" ? (
-                <MessageRow
-                  item={item}
-                  onLoadAttachment={onLoadAttachment}
-                  onLoadAttachmentThumbnail={onLoadAttachmentThumbnail}
-                />
-              ) : item.kind === "task_list" ? (
-                <Suspense fallback={<div className="ex-activity-row" role="status">正在载入任务清单…</div>}>
-                  <TaskListBlock
-                    item={item}
-                    interrupted={Boolean(turns.find((turn) => turn.turn_id === item.turn_id)?.status.match(/failed|cancelled|interrupted|superseded/))}
-                  />
-                </Suspense>
-              ) : item.kind === "artifact" ? (() => {
-                const projected = artifactFrom(item);
-                if (!projected) return null;
-                const artifact = listedArtifactByRevision.get(
-                  artifactRevisionIdentity(projected),
-                ) ?? projected;
-                const retouch = retouchPresentation(item);
-                return retouch ? (
-                  <section
-                    className="ex-retouch-result"
-                    data-retouch-preview-artifact-id={artifact.artifact_id}
-                  >
-                    <WandSparkles aria-hidden="true" />
-                    <div>
-                      <strong>精准修图已完成</strong>
-                      <p>{retouch.changeSummary}</p>
-                      <span>
-                        {retouch.inspectionRegionCount > 0
-                          ? `已检查 ${retouch.inspectionRegionCount} 个修改区域。请看一眼下方新图片。`
-                          : "已检查新修订。请看一眼下方图片。"}
-                      </span>
-                      {artifactPreviewUrls[artifact.artifact_id] ? (
-                        <button
-                          className="ex-retouch-result-media"
-                          type="button"
-                          onClick={() => onArtifactAction(artifact, "preview")}
-                        >
-                          <img
-                            src={artifactPreviewUrls[artifact.artifact_id]}
-                            alt={`查看修图结果：${artifact.display_name}`}
-                          />
-                        </button>
-                      ) : (
-                        <div className="ex-retouch-result-loading" role="status">正在载入新修订预览…</div>
-                      )}
-                      <div className="ex-retouch-result-actions">
-                        <button className="ex-button" type="button" onClick={() => onArtifactAction(artifact, "preview")}>查看大图</button>
-                        <button
-                          className="ex-button is-primary"
-                          type="button"
-                          disabled={!retouchAvailable || !artifact.actions.includes("precise_retouch")}
-                          title={!retouchAvailable ? retouchUnavailableReason ?? "精准修图当前不可用" : undefined}
-                          onClick={() => onArtifactAction(artifact, "precise_retouch")}
-                        >继续修改</button>
-                      </div>
-                    </div>
-                  </section>
-                ) : (
-                  <Suspense fallback={<div className="ex-activity-row" role="status">正在载入产物…</div>}>
-                    <ArtifactShelf
-                      artifacts={[artifact]}
-                      previewUrls={artifactPreviewUrls}
-                      onAction={onArtifactAction}
-                      onPreviewVisible={onArtifactPreviewVisible}
-                      retouchAvailable={retouchAvailable}
-                      retouchUnavailableReason={retouchUnavailableReason}
-                    />
-                  </Suspense>
-                );
-              })() : (
-                <Suspense fallback={<div className="ex-activity-row" role="status">正在更新工作步骤…</div>}>
-                  <TimelineActivity item={item} />
-                </Suspense>
-              )}
-            {completion ? (
-              <Suspense fallback={null}><TurnCompletionRow turn={completion.turn} copyText={completion.copyText} /></Suspense>
-            ) : null}
-          </Fragment>
-          );
-        })}
-        {!messageWindow.atLatest ? (
-          <div className="ex-timeline-history-nav is-after" role="group" aria-label="历史消息翻页">
-            <button
-              className="ex-button"
-              type="button"
-              onClick={() => setHistoryEndAnchorId(
-                newerTimelineAnchor(timelineEntries, messageWindow),
-              )}
-            >
-              显示较新的消息
-            </button>
-            <button
-              className="ex-button is-primary"
-              type="button"
-              onClick={() => {
-                pendingJumpToLatestRef.current = true;
-                setHistoryEndAnchorId(null);
-                jumpToLatest();
-              }}
-            >
-              回到最新消息
-            </button>
-          </div>
-        ) : null}
-        {messageWindow.atLatest && fallbackArtifacts.length ? (
-          <Suspense fallback={<div className="ex-activity-row" role="status">正在载入产物…</div>}>
-            <ArtifactShelf
-              artifacts={fallbackArtifacts}
-              previewUrls={artifactPreviewUrls}
-              onAction={onArtifactAction}
-              onPreviewVisible={onArtifactPreviewVisible}
-              retouchAvailable={retouchAvailable}
-              retouchUnavailableReason={retouchUnavailableReason}
-            />
-          </Suspense>
-        ) : null}
-        {messageWindow.atLatest && (isThinking || visibleReasoning) ? (
-          visibleReasoning ? (
-            <Suspense fallback={<div className="ex-thinking-state" role="status">{phaseLabel(activeTurn?.status)}</div>}>
-              <ReasoningBlock item={visibleReasoning} label={phaseLabel(activeTurn?.status)} />
-            </Suspense>
-          ) : <div className="ex-thinking-state" role="status">{phaseLabel(activeTurn?.status)}</div>
+        {scrollParent ? (
+          <Virtuoso
+            ref={virtuosoRef}
+            data={timelineTurns}
+            customScrollParent={scrollParent}
+            computeItemKey={(_index, entry) => entry.turn.turn_id}
+            increaseViewportBy={{ top: 800, bottom: 800 }}
+            atBottomThreshold={TIMELINE_BOTTOM_THRESHOLD_PX}
+            followOutput={() => followLatestRef.current ? "auto" : false}
+            totalListHeightChanged={() => {
+              if (followLatestRef.current) scrollParent.scrollTop = scrollParent.scrollHeight;
+            }}
+            components={{ Footer: footer }}
+            itemContent={(_index, entry) => (
+              <TurnRow
+                entry={entry}
+                modelSwitch={modelSwitches.get(entry.turn.turn_id) ?? null}
+                openSegments={openSegments}
+                onToggleSegment={toggleSegment}
+                artifactByRevision={artifactByRevision}
+                artifactPreviewUrls={artifactPreviewUrls}
+                onArtifactAction={onArtifactAction}
+                onArtifactPreviewVisible={onArtifactPreviewVisible}
+                retouchAvailable={retouchAvailable}
+                retouchUnavailableReason={retouchUnavailableReason}
+                onLoadAttachment={onLoadAttachment}
+                onLoadAttachmentThumbnail={onLoadAttachmentThumbnail}
+                serverClockOffsetMs={serverClockOffsetMs}
+              />
+            )}
+          />
         ) : null}
       </div>
       {showJumpToLatest ? (
         <div className="ex-timeline-jump">
-          <button
-            className="ex-timeline-jump-button"
-            type="button"
-            aria-label="回到底部"
-            title="回到底部"
-            onClick={() => {
-              pendingJumpToLatestRef.current = true;
-              setHistoryEndAnchorId(null);
-              jumpToLatest();
-            }}
-          >
+          <button className="ex-timeline-jump-button" type="button" aria-label="回到底部" title="回到底部" onClick={jumpToLatest}>
             <ArrowDown aria-hidden="true" />
           </button>
         </div>
+      ) : null}
+      {activeTurn && !timelineTurns.some((entry) => entry.turn.turn_id === activeTurn.turn_id) ? (
+        <div className="ex-live-status" role="status">{phaseLabel(activeTurn.status)}</div>
       ) : null}
     </>
   );

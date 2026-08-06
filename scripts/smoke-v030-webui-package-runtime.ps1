@@ -1,8 +1,8 @@
 param(
-    [string]$PackagePath = "release-artifacts/EcoreX_0.3.1-webui-windows-x64.zip",
-    [string]$OutputPath = "docs/v0.3.1/artifacts/webui-package-runtime-smoke.json",
+    [string]$PackagePath = "release-artifacts/EcoreX_0.3.2-webui-windows-x64.zip",
+    [string]$OutputPath = "docs/v0.3.2/artifacts/webui-package-runtime-smoke.json",
     [string]$SmokeRoot = "tmp/v030-webui-package-smoke",
-    [string]$ExpectedVersion = "0.3.1",
+    [string]$ExpectedVersion = "0.3.2",
     [int]$Port = 9929,
     [int]$TimeoutSeconds = 90
 )
@@ -154,7 +154,7 @@ $stdoutLogPath = Join-Path $runtimeDir "run.stdout.log"
 $stderrLogPath = Join-Path $runtimeDir "run.stderr.log"
 $process = $null
 $result = [ordered]@{
-    schema = "ecorex.v0.3.1.package-runtime-smoke.v1"
+    schema = "ecorex.v0.3.2.package-runtime-smoke.v1"
     version = $ExpectedVersion
     status = "fail"
     generatedAt = (Get-Date).ToUniversalTime().ToString("o")

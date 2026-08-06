@@ -27,7 +27,7 @@ def test_native_picker_process_is_hidden_and_never_uses_a_shell(monkeypatch) -> 
         return subprocess.CompletedProcess(command, 0, stdout="C:\\workspace\n".encode())
 
     monkeypatch.setattr(picker_module.subprocess, "run", run)
-    monkeypatch.setattr(picker_module.os, "name", "nt")
+    monkeypatch.setattr(picker_module, "os", SimpleNamespace(name="nt"))
 
     assert picker_module._run_picker(("picker.exe",)) == picker_module.Path(
         "C:\\workspace"

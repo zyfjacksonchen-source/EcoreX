@@ -584,7 +584,7 @@ def run(argv: list[str] | None = None) -> int:
         ):
             raise ValueError("gate_receipt_input_invalid")
         snapshots = tempfile.TemporaryDirectory(prefix="ecorex-gate-authority-")
-        snapshot_root = Path(snapshots.name)
+        snapshot_root = Path(snapshots.name).resolve(strict=True)
         args.evidence_file = _snapshot_file(
             args.evidence_file,
             snapshot_root / "evidence.json",
