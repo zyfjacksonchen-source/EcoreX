@@ -15,6 +15,7 @@ import type {
 
 const TERMINAL_TURNS = new Set<TurnStatus>([
   "completed",
+  "partial",
   "failed",
   "cancelled",
   "interrupted",

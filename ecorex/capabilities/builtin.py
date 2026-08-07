@@ -24,42 +24,6 @@ from .registry import CapabilityRegistry
 
 
 _OBJECT = {"type": "object"}
-_FEISHU_CLI_INPUT = {
-    "type": "object",
-    "properties": {
-        "action": {
-            "type": "string",
-            "enum": [
-                "status",
-                "ensure",
-                "diagnose",
-                "install",
-                "agent_auth",
-                "config_init",
-                "config_init_status",
-                "auth_login",
-                "auth_login_status",
-                "agent_auth_status",
-                "run",
-            ],
-        },
-        "session_id": {"type": "string"},
-        "args": {"type": "array", "items": {"type": "string"}},
-        "scope": {"type": "string"},
-        "domain": {"type": "string"},
-        "device_code": {"type": "string"},
-        "app_id": {"type": "string"},
-        "app_secret": {"type": "string"},
-        "brand": {"type": "string"},
-        "timeout": {"type": "integer", "minimum": 1, "maximum": 3600},
-        "registry": {"type": "string"},
-        "discovery_source": {"type": "string"},
-        "find_skill_result": {"type": "object"},
-        "expected_paths": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["action"],
-    "additionalProperties": False,
-}
 _JSON_VALUE = {
     "type": ["object", "array", "string", "integer", "number", "boolean", "null"]
 }
@@ -221,7 +185,10 @@ _CDP_INPUT = {
                             "parameters": {
                                 "type": "object",
                                 "properties": {
-                                    "expression": {"type": "string", "maxLength": 20000},
+                                    "expression": {
+                                        "type": "string",
+                                        "maxLength": 20000,
+                                    },
                                     "selector": {"type": "string", "maxLength": 2048},
                                     "text": {"type": "string", "maxLength": 20000},
                                 },
@@ -279,9 +246,15 @@ _TASK_LIST_INPUT = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
+                    "id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                    },
                     "title": {"type": "string", "minLength": 1, "maxLength": 240},
-                    "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "in_progress", "completed"],
+                    },
                 },
                 "required": ["id", "title", "status"],
                 "additionalProperties": False,
@@ -1037,7 +1010,9 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             output_schema=_TASK_LIST_OUTPUT,
             aliases=("todo-list", "update-plan"),
             default_exposure=Exposure.DIRECT,
-            intent_tags=frozenset({"task", "plan", "workflow", "multi-step", "任务", "计划"}),
+            intent_tags=frozenset(
+                {"task", "plan", "workflow", "multi-step", "任务", "计划"}
+            ),
         ),
         ToolSpec(
             tool_id="skill_read",
@@ -1185,6 +1160,11 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             intent_tags=frozenset(
                 {"web", "research", "fetch", "read", "page", "读取网页"}
             ),
+            recovery_hints=(
+                "Broaden the URL or search scope only when the user's goal permits it.",
+                "Relax optional filters before switching to another read-only web tool.",
+            ),
+            cache_ttl_seconds=300,
             required_packs=frozenset({"browser"}),
         ),
         ToolSpec(
@@ -1217,6 +1197,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             intent_tags=frozenset(
                 {"ocr", "image", "text", "read", "文字识别", "识别图片文字"}
             ),
+            cache_ttl_seconds=86_400,
             required_packs=frozenset({"ocr"}),
         ),
         ToolSpec(
@@ -1239,38 +1220,20 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             required_packs=frozenset({"browser"}),
         ),
         ToolSpec(
-            tool_id="feishu_cli",
-            version="1.0.0",
-            display_name="飞书办公工具",
-            description="通过官方 lark-cli 执行飞书文档、表格、云盘和消息等结构化办公操作",
-            input_schema=_FEISHU_CLI_INPUT,
-            output_schema=_OBJECT,
-            aliases=("lark-cli", "feishu", "lark"),
-            effects=frozenset(
-                {
-                    CapabilityEffect.READ,
-                    CapabilityEffect.WRITE,
-                    CapabilityEffect.NETWORK,
-                    CapabilityEffect.EXECUTE,
-                }
-            ),
-            idempotency=IdempotencyClass.NON_IDEMPOTENT,
-            concurrency_safe=False,
-            required_sandbox=SandboxLevel.WORKSPACE_WRITE,
-            approval_requirement=ApprovalRequirement.ON_REQUEST,
-            default_exposure=Exposure.DIRECT,
-            intent_tags=frozenset(
-                {"feishu", "lark", "document", "spreadsheet", "飞书", "表格"}
-            ),
-        ),
-        ToolSpec(
             tool_id="shell",
             version="1.0.0",
             display_name="命令执行",
-            description="在策略规定的沙箱中执行命令",
+            description="在策略规定的沙箱中执行命令，并读取、创建或修改工作区文件",
             input_schema=_SHELL_INPUT,
             output_schema=_OBJECT,
-            aliases=("bash", "powershell", "terminal"),
+            aliases=(
+                "bash",
+                "powershell",
+                "terminal",
+                "write",
+                "write-file",
+                "写文件",
+            ),
             effects=frozenset({CapabilityEffect.WRITE, CapabilityEffect.EXECUTE}),
             # A shell command is an opaque program boundary.  Even apparently
             # harmless text can expand aliases, profiles or child processes,
@@ -1283,7 +1246,16 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             required_sandbox=SandboxLevel.WORKSPACE_WRITE,
             approval_requirement=ApprovalRequirement.ON_REQUEST,
             intent_tags=frozenset(
-                {"shell", "command", "automation", "run", "执行命令"}
+                {
+                    "shell",
+                    "command",
+                    "automation",
+                    "run",
+                    "write",
+                    "file",
+                    "执行命令",
+                    "写文件",
+                }
             ),
             required_packs=frozenset({"sandbox"}),
         ),
@@ -1308,6 +1280,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
                     "media.image.edit.background_remove",
                 }
             ),
+            workflow_skill_ids=frozenset({"skill.image-generation"}),
             required_packs=frozenset({"image"}),
             required_model_modalities=frozenset({"image"}),
             required_model_capabilities={

@@ -247,18 +247,18 @@ def test_workflow_builds_and_runs_both_terminal_macos_architectures():
     producer = SCRIPT.read_text(encoding="utf-8")
     smoke = SMOKE_SCRIPT.read_text(encoding="utf-8")
 
-    assert "github.sha == vars.ECOREX_V032_RELEASE_COMMIT_SHA" in workflow
+    assert "github.sha == inputs.candidate_commit_sha" in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
     assert "github.repository == 'zyfjacksonchen-source/EcoreX'" in workflow
     assert "github.ref_protected" not in workflow
-    assert "EcoreX_0.3.2-direct-candidate.zip" in workflow
+    assert '"EcoreX_${VERSION}-direct-candidate.zip"' in workflow
     assert "candidate_bundle_sha256" in workflow
     assert "candidate_commit_sha" in workflow
     assert "APPLE_NOTARY_KEY_BASE64" not in workflow
     assert "--terminal-distribution" in workflow
     assert "runs-on: macos-15" in workflow
     assert "runs-on: macos-15-intel" in workflow
-    assert "runs-on: windows-2022" not in workflow
+    assert "runs-on: windows-2022" in workflow
     assert "build-v030-windows-webui.py" not in workflow
     assert workflow.count(
         "python scripts/install-v1-python-profile.py --profile runtime"
@@ -273,13 +273,16 @@ def test_workflow_builds_and_runs_both_terminal_macos_architectures():
         < workflow.index("ecorex.release.legacy_webui_manifest")
         < workflow.index("Upload package handoff and arm64 user evidence")
     )
-    assert workflow.count("include-hidden-files: true") == 2
+    assert workflow.count("include-hidden-files: true") == 3
     assert "emate-v031-" not in workflow
-    assert "emate-v032-arm64-qualified-webui-packages" in workflow
+    assert "emate-v${{ inputs.version }}-arm64-qualified-webui-packages" in workflow
     assert "--web-dist .producer/source/desktop/dist" in workflow
     assert "--candidate-root .producer/candidate" in workflow
     assert "--windows-receipt" in workflow
-    assert "--windows-package .producer/downloads/EcoreX_0.3.2-webui-windows-x64.zip" in workflow
+    assert (
+        "--windows-package .producer/downloads/"
+        "EcoreX_${{ inputs.version }}-webui-windows-x64.zip"
+    ) in workflow
     assert "--windows-receipt .producer/downloads/emate-webui-build-receipt.json" in workflow
     assert "macos-distribution-receipt.json" in workflow
     assert "x86_64) PACKAGE_ARCH=x64" in smoke

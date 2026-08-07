@@ -92,6 +92,13 @@ test("WebUI Skill Hub exposes real detail, download, upload, and Runtime install
   assert.doesNotMatch(component, /emate:\/\//);
 });
 
+test("unconfigured MCP is an explicit empty state rather than a fake capability", () => {
+  assert.match(component, /item\.kind === "mcp_server"/u);
+  assert.match(component, /data-empty-state="mcp-unconfigured"/u);
+  assert.match(component, /MCP 未配置/u);
+  assert.match(component, /不会把未配置的服务显示为可用能力/u);
+});
+
 test("local Skill import derives identity and keeps Hub publishing advanced", () => {
   assert.match(component, /e-Mate 会自动识别名称/u);
   assert.doesNotMatch(component, /localExtensionId|<span>扩展 ID<\/span>/u);

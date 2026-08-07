@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$PackagePath,
-    [Parameter(Mandatory = $true)][string]$ReceiptPath
+    [Parameter(Mandatory = $true)][string]$ReceiptPath,
+    [Parameter(Mandatory = $true)][string]$ExpectedVersion
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,7 +43,7 @@ try {
     if ($install.HasExited -and $install.ExitCode -ne 0) {
         throw "windows_user_installer_failed"
     }
-    if ($null -eq $version -or $version.product -ne "e-Mate" -or $version.version -ne "0.3.2") {
+    if ($null -eq $version -or $version.product -ne "e-Mate" -or $version.version -ne $ExpectedVersion) {
         throw "windows_user_runtime_version_invalid"
     }
 
@@ -57,6 +58,20 @@ try {
         $shortcut.Arguments -notlike "*--install-root*") {
         throw "windows_user_shortcut_invalid"
     }
+    if ($shortcut.Arguments -notmatch '--install-root\s+"([^"]+)"') {
+        throw "windows_user_install_root_missing"
+    }
+    $installRoot = $Matches[1]
+    $browserReceiptPath = Join-Path $installRoot "bootstrap\browser-opened.json"
+    if (-not (Test-Path -LiteralPath $browserReceiptPath -PathType Leaf)) {
+        throw "windows_user_browser_receipt_missing"
+    }
+    $browserReceipt = Get-Content -Raw -LiteralPath $browserReceiptPath | ConvertFrom-Json
+    if ($browserReceipt.status -ne "opened" -or
+        $browserReceipt.version -ne $ExpectedVersion -or
+        $browserReceipt.url -ne "http://127.0.0.1:8765/") {
+        throw "windows_user_browser_receipt_invalid"
+    }
 
     $launch = Start-Process -FilePath $entry -PassThru
     if (-not $launch.WaitForExit(60000)) {
@@ -64,7 +79,7 @@ try {
         throw "windows_user_shortcut_launch_timeout"
     }
     $after = Invoke-RestMethod -Uri "http://127.0.0.1:8765/api/version" -TimeoutSec 5
-    if ($after.product -ne "e-Mate" -or $after.version -ne "0.3.2") {
+    if ($after.product -ne "e-Mate" -or $after.version -ne $ExpectedVersion) {
         throw "windows_user_shortcut_launch_invalid"
     }
 
@@ -72,11 +87,13 @@ try {
         schema_version = 1
         status = "passed"
         product = "e-Mate"
-        version = "0.3.2"
+        version = $ExpectedVersion
         architecture = "x64"
         package_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $package).Hash.ToLowerInvariant()
         installed_runtime_api = $true
         desktop_entry_launch = $true
+        automatic_browser_open = $true
+        browser_receipt_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $browserReceiptPath).Hash.ToLowerInvariant()
         generated_at = (Get-Date).ToUniversalTime().ToString("o")
     }
     New-Item -ItemType Directory -Path (Split-Path -Parent $receipt) -Force | Out-Null

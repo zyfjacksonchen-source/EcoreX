@@ -193,7 +193,9 @@ def test_full_access_revocation_between_projection_and_dispatch_creates_hitl_not
     assert admission.effective_sandbox.value == "workspace-write"
     assert not any(
         interaction.kind.value == "conflict_resolution"
-        for interaction in restarted_kernel.list_interactions(thread.thread_id).interactions
+        for interaction in restarted_kernel.list_interactions(
+            thread.thread_id
+        ).interactions
     )
 
 
@@ -256,12 +258,15 @@ def test_permission_update_and_final_admission_have_one_linear_order(tmp_path) -
     assert calls[0].current_policy_snapshot_id == admission.current_policy_snapshot_id
 
 
-def test_separate_authority_revocation_wins_before_admission_transaction(tmp_path) -> None:
+def test_separate_authority_revocation_wins_before_admission_transaction(
+    tmp_path,
+) -> None:
     calls = []
     app, kernel, composition, thread, created = _shell_runtime(
         tmp_path,
-        lambda arguments, context: calls.append((arguments, context))
-        or {"exit_code": 0},
+        lambda arguments, context: (
+            calls.append((arguments, context)) or {"exit_code": 0}
+        ),
     )
     authority = app.state.permission_authority
     separate_process_authority = PermissionAuthority(
@@ -287,7 +292,9 @@ def test_separate_authority_revocation_wins_before_admission_transaction(tmp_pat
 
     worker.tool_executions.admit = delayed_admit
     with ThreadPoolExecutor(max_workers=1) as executor:
-        run_future = executor.submit(asyncio.run, worker.run_once("cross-process-worker"))
+        run_future = executor.submit(
+            asyncio.run, worker.run_once("cross-process-worker")
+        )
         assert entered_admission.wait(timeout=10)
         # This authority has a distinct Python lock, like another Runtime
         # process. Its SQLite permission transaction commits first.
@@ -309,12 +316,15 @@ def test_separate_authority_revocation_wins_before_admission_transaction(tmp_pat
     assert interactions[0].kind.value == "permission_approval"
 
 
-def test_admin_audit_denies_do_not_block_local_tool_execution_by_default(tmp_path) -> None:
+def test_admin_audit_denies_do_not_block_local_tool_execution_by_default(
+    tmp_path,
+) -> None:
     calls = []
     app, kernel, composition, thread, created = _shell_runtime(
         tmp_path,
-        lambda arguments, context: calls.append((arguments, context))
-        or {"exit_code": 0},
+        lambda arguments, context: (
+            calls.append((arguments, context)) or {"exit_code": 0}
+        ),
         admin_hard_denies=("shell",),
     )
     gateway = _Gateway(_shell_scripts(call_id="admin-denied"))
@@ -342,8 +352,9 @@ def test_regulated_runtime_can_explicitly_enforce_admin_tool_denies(tmp_path) ->
     calls = []
     app, kernel, composition, thread, created = _shell_runtime(
         tmp_path,
-        lambda arguments, context: calls.append((arguments, context))
-        or {"exit_code": 0},
+        lambda arguments, context: (
+            calls.append((arguments, context)) or {"exit_code": 0}
+        ),
         admin_hard_denies=("shell",),
         enforce_admin_tool_denies=True,
     )
@@ -391,8 +402,9 @@ def test_missing_tool_is_observed_and_model_recovers_with_a_safe_alternative(
     calls = []
     app, kernel, composition, thread, created = _shell_runtime(
         tmp_path,
-        lambda arguments, context: calls.append((dict(arguments), context))
-        or {"exit_code": 0},
+        lambda arguments, context: (
+            calls.append((dict(arguments), context)) or {"exit_code": 0}
+        ),
     )
     gateway = _Gateway(
         [
@@ -472,8 +484,9 @@ def test_handler_loss_after_projection_is_observed_and_recovers_without_dispatch
     calls = []
     app, kernel, composition, _thread, created = _shell_runtime(
         tmp_path,
-        lambda arguments, context: calls.append((dict(arguments), context))
-        or {"exit_code": 0},
+        lambda arguments, context: (
+            calls.append((dict(arguments), context)) or {"exit_code": 0}
+        ),
     )
     gateway = _Gateway(
         [
@@ -628,6 +641,88 @@ def test_read_only_pack_failure_never_creates_uncertain_side_effect_hitl(
     assert kernel.list_interactions(thread.thread_id).interactions == []
 
 
+def test_exact_fetch_result_is_reused_inside_same_frozen_authority(tmp_path) -> None:
+    calls = []
+
+    def fetch(arguments, _context):
+        calls.append(dict(arguments))
+        return {"status": 200, "title": "Example"}
+
+    app = create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "runtime.db",
+            full_access=True,
+            installed_capability_packs=frozenset({"browser"}),
+            capability_handlers={"fetch": fetch},
+        )
+    )
+    kernel = app.state.runtime
+    composition = app.state.runtime_composition
+    thread = kernel.create_thread(CreateThreadRequest(title="exact cache"))
+    gateway = _Gateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": f"response-fetch-{index}",
+                    "tool_call_id": f"fetch-{index}",
+                    "tool_name": "fetch",
+                    "arguments": {"url": "https://example.com"},
+                }
+            ]
+            if part == "tool"
+            else [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": f"response-done-{index}",
+                }
+            ]
+            for index in range(2)
+            for part in ("tool", "done")
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+        permission_mutation_lock=app.state.permission_authority.mutation_lock,
+    )
+
+    created_turns = []
+    for index in range(2):
+        prepared = composition.prepare_turn(
+            CreateTurnRequest(
+                input="使用 fetch 读取网页",
+                explicit_tool_ids=["fetch"],
+                client_message_id=f"exact-cache-{index}",
+            )
+        )
+        created = kernel.create_turn(
+            thread.thread_id,
+            prepared.request,
+            snapshot_context=prepared.snapshot_context,
+        )
+        created_turns.append(created.turn.turn_id)
+        assert asyncio.run(worker.run_once(f"cache-worker-{index}")).outcome is (
+            WorkerOutcome.COMPLETED
+        )
+
+    assert calls == [{"url": "https://example.com"}]
+    cache_event = next(
+        event
+        for event in kernel.events.page(thread.thread_id, limit=1_000).events
+        if event.event_type == "tool.cache_reused"
+    )
+    assert cache_event.payload["tool_id"] == "fetch"
+    assert cache_event.payload["ttl_seconds"] == 300
+    second_execution = ToolExecutionRepository(kernel.database).get(
+        _execution_id(created_turns[1], "fetch-1")
+    )
+    assert second_execution.status == "completed"
+
+
 def test_invocation_permit_cannot_cross_execution_batch(tmp_path) -> None:
     calls = []
     app, kernel, composition, thread, created = _shell_runtime(
@@ -641,7 +736,10 @@ def test_invocation_permit_cannot_cross_execution_batch(tmp_path) -> None:
         capabilities=composition.capability_service,
         permission_mutation_lock=app.state.permission_authority.mutation_lock,
     )
-    assert asyncio.run(worker.run_once("batch-bound-worker")).outcome is WorkerOutcome.COMPLETED
+    assert (
+        asyncio.run(worker.run_once("batch-bound-worker")).outcome
+        is WorkerOutcome.COMPLETED
+    )
     execution_id = _execution_id(created.turn.turn_id, "batch-bound-call")
     context = worker._job_context(created.job.job_id)
 
@@ -670,7 +768,9 @@ def test_resolved_deny_interaction_cannot_mint_an_approved_permit(tmp_path) -> N
         settings=RuntimeSettings(
             database_path=tmp_path / "runtime.db",
             installed_capability_packs=frozenset({"sandbox"}),
-            capability_handlers={"shell": lambda _arguments, _context: {"exit_code": 0}},
+            capability_handlers={
+                "shell": lambda _arguments, _context: {"exit_code": 0}
+            },
         )
     )
     kernel = app.state.runtime
@@ -696,7 +796,10 @@ def test_resolved_deny_interaction_cannot_mint_an_approved_permit(tmp_path) -> N
         capabilities=composition.capability_service,
         permission_mutation_lock=authority.mutation_lock,
     )
-    assert asyncio.run(worker.run_once("deny-worker")).outcome is WorkerOutcome.WAITING_HUMAN
+    assert (
+        asyncio.run(worker.run_once("deny-worker")).outcome
+        is WorkerOutcome.WAITING_HUMAN
+    )
     interaction = kernel.list_interactions(thread.thread_id).interactions[0]
     kernel.respond_interaction(
         interaction.interaction_id,
@@ -742,15 +845,18 @@ def test_resolved_deny_interaction_cannot_mint_an_approved_permit(tmp_path) -> N
         )
 
 
-def test_invalid_non_idempotent_arguments_recover_before_item_or_approval(tmp_path) -> None:
+def test_invalid_non_idempotent_arguments_recover_before_item_or_approval(
+    tmp_path,
+) -> None:
     calls = []
     app = create_app(
         settings=RuntimeSettings(
             database_path=tmp_path / "runtime.db",
             installed_capability_packs=frozenset({"sandbox"}),
             capability_handlers={
-                "shell": lambda arguments, context: calls.append((arguments, context))
-                or {"exit_code": 0}
+                "shell": lambda arguments, context: (
+                    calls.append((arguments, context)) or {"exit_code": 0}
+                )
             },
         )
     )
@@ -771,19 +877,23 @@ def test_invalid_non_idempotent_arguments_recover_before_item_or_approval(tmp_pa
     )
     gateway = _Gateway(
         [
-            [{
-                "seq": 1,
-                "event_type": "tool_call.requested",
-                "response_id": "invalid-shell-response",
-                "tool_call_id": "invalid-shell-call",
-                "tool_name": "shell",
-                "arguments": {},
-            }],
-            [{
-                "seq": 1,
-                "event_type": "response.completed",
-                "response_id": "invalid-shell-recovered",
-            }],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "invalid-shell-response",
+                    "tool_call_id": "invalid-shell-call",
+                    "tool_name": "shell",
+                    "arguments": {},
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "invalid-shell-recovered",
+                }
+            ],
         ]
     )
     worker = AgentTurnWorker(
@@ -812,12 +922,15 @@ def test_invalid_non_idempotent_arguments_recover_before_item_or_approval(tmp_pa
     assert recovery_output["recovery"]["retry_allowed"] is True
 
 
-def test_model_can_correct_safe_tool_arguments_and_retry_in_the_same_turn(tmp_path) -> None:
+def test_model_can_correct_safe_tool_arguments_and_retry_in_the_same_turn(
+    tmp_path,
+) -> None:
     calls = []
     app, kernel, composition, _thread, created = _shell_runtime(
         tmp_path,
-        lambda arguments, context: calls.append((dict(arguments), context))
-        or {"exit_code": 0},
+        lambda arguments, context: (
+            calls.append((dict(arguments), context)) or {"exit_code": 0}
+        ),
     )
     gateway = _Gateway(
         [
@@ -905,10 +1018,12 @@ def test_current_availability_preserves_turn_selected_model_capabilities() -> No
             "image": frozenset({"image_generation", "image_edit"}),
         },
     )
-    current = {"availability": RuntimeAvailability(
-        platform="windows",
-        installed_packs=frozenset({"image"}),
-    )}
+    current = {
+        "availability": RuntimeAvailability(
+            platform="windows",
+            installed_packs=frozenset({"image"}),
+        )
+    }
     plan = service.create_plan(
         intent="生成一张图片",
         availability=frozen,

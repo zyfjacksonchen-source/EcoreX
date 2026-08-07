@@ -742,8 +742,8 @@ def test_replica_audit_sink_is_durable_redacted_and_idempotent(tmp_path: Path) -
     [
         (PRODUCT_VERSION, PRODUCT_VERSION),
         (f"v0{PRODUCT_VERSION}", f"0{PRODUCT_VERSION}"),
-        ("v1.0.0", PRODUCT_VERSION),
-        (RELEASE_NAMESPACE, "1.0.0"),
+        ("v1.0.1", PRODUCT_VERSION),
+        (RELEASE_NAMESPACE, "1.0.1"),
         (f"{RELEASE_NAMESPACE}/../v9.9.9", PRODUCT_VERSION),
     ],
 )

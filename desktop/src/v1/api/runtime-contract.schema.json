@@ -3155,6 +3155,7 @@
             "retry_wait",
             "finalizing",
             "completed",
+            "partial",
             "failed",
             "cancelled",
             "interrupted",
@@ -3987,6 +3988,7 @@
             "retry_wait",
             "finalizing",
             "completed",
+            "partial",
             "failed",
             "cancelled",
             "interrupted",
@@ -4174,6 +4176,12 @@
               "title": "Date",
               "type": "string"
             },
+            "partial": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Partial",
+              "type": "integer"
+            },
             "terminal": {
               "default": 0,
               "minimum": 0,
@@ -4204,6 +4212,12 @@
               "maxItems": 7,
               "title": "Days",
               "type": "array"
+            },
+            "partial_today": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Partial Today",
+              "type": "integer"
             },
             "terminal_today": {
               "default": 0,
@@ -5447,6 +5461,7 @@
             "retry_wait",
             "finalizing",
             "completed",
+            "partial",
             "failed",
             "cancelled",
             "interrupted",
@@ -7684,6 +7699,7 @@
             "retry_wait",
             "finalizing",
             "completed",
+            "partial",
             "failed",
             "cancelled",
             "interrupted",
@@ -10166,6 +10182,7 @@
             "retry_wait",
             "finalizing",
             "completed",
+            "partial",
             "failed",
             "cancelled",
             "interrupted",
@@ -10227,6 +10244,7 @@
             "retry_wait",
             "finalizing",
             "completed",
+            "partial",
             "failed",
             "cancelled",
             "interrupted",
@@ -11306,6 +11324,7 @@
             "retry_wait",
             "finalizing",
             "completed",
+            "partial",
             "failed",
             "cancelled",
             "interrupted",
@@ -11646,6 +11665,7 @@
             "retry_wait",
             "finalizing",
             "completed",
+            "partial",
             "failed",
             "cancelled",
             "interrupted",
@@ -11740,6 +11760,7 @@
             "retry_wait",
             "finalizing",
             "completed",
+            "partial",
             "failed",
             "cancelled",
             "interrupted",

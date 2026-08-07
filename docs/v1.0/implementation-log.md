@@ -2,15 +2,16 @@
 
 ## Recovery header
 
-- Goal: implement the approved EcoreX v1.0 productization architecture.
+- Goal: implement the approved e-Mate v1 Runtime failure recovery and
+  capability architecture on the EcoreX v1 code line.
 - Status: active.
-- Public target: `1.0.0` directly from the v0.3.0 product line.
-- Baseline branch: `codex/ecorex-v0.3.0-hardening`.
-- Baseline commit observed at start: `9ac3b958`.
+- Public target: `1.0.0`.
+- Baseline branch: `codex/ecorex-v0.3.2`.
+- Baseline commit observed at start: `1cc91fdd8dc4f5cd25f29ed6163957ed4f274b41`.
 - Worktree policy: preserve all pre-existing modified and untracked files; never
   reset or overwrite them to obtain a clean tree.
-- Current recovery point: foundation batch in progress. New v1 modules are being
-  built under `ecorex/` with isolated tests under `tests/v1/`.
+- Current recovery point: Goal baseline and `1.0.0` version convergence in
+  progress; Runtime recovery contracts are the next implementation batch.
 
 ## 2026-07-10 - Goal initialization
 
@@ -6865,3 +6866,206 @@ first CSS paint. An explicit persisted light choice remains respected. The
 compact theme action lives immediately to the left of the right-aligned share
 action in the conversation header; it uses the same frameless IconButton
 language and remains reachable even when sharing is unavailable.
+
+## 2026-08-07 - e-Mate v1 Runtime recovery Goal initialization
+
+### Scope and baseline
+
+- Started the persistent Goal for Runtime failure recovery, capability/Pack
+  authority and Codex-style ImageGen workflow routing.
+- Fixed the public product target at `1.0.0`; `ecorex.__version__` remains the
+  single packaging and release version source.
+- Observed a clean `codex/ecorex-v0.3.2` worktree at
+  `1cc91fdd8dc4f5cd25f29ed6163957ed4f274b41` before the first edit.
+- Reused this implementation log, `progress.json` and the architecture decision
+  log as the only development recovery records. No parallel tracker was added.
+
+### Decisions
+
+- Existing Worker checkpoints, Reasoning items, TaskList, InteractionService,
+  ToolExecution records and native MCP circuit breakers remain authoritative.
+- The implementation will add only the missing behavior at their shared
+  boundaries and will not introduce a second recovery or planning service.
+
+### Verification
+
+- Baseline Git status -> clean.
+- Version and recovery-record verification remains in progress.
+
+### Known gaps and rollback
+
+- The repository still contains historical release documentation and tests
+  referring to pre-1.0 product versions; only live product-version expectations
+  will move to `1.0.0`, while historical migration fixtures stay unchanged.
+- Rollback is the isolated version/ledger diff; no runtime state has changed.
+
+### Next recovery action
+
+1. Verify the `1.0.0` version source, then implement `PARTIAL`, budget and
+   checkpoint-v3 contracts with focused compatibility tests.
+
+## 2026-08-07 - Runtime recovery and capability architecture implementation
+
+### Runtime recovery
+
+- Added terminal `partial` projection across Core, usage contracts and WebUI.
+  Budget exhaustion preserves completed messages, tools or Artifacts as a
+  visible amber “部分完成” result; an empty result still fails.
+- Advanced Agent checkpoints to schema v3, retained v2 resume compatibility,
+  persisted cumulative provider tokens and added hard model-round, token and
+  finalization-reserve guards.
+- Added bounded safe-tool retry with exponential backoff, Retry-After handling,
+  durable attempts and structured exhaustion feedback. Non-idempotent uncertain
+  execution remains on the existing human-reconciliation path.
+- Added exact frozen-authority cache reuse, a Core-tool circuit breaker, model
+  recovery actions, completed-result digests, repeated-action reflection and
+  same/alternating loop detection. No semantic cache or second recovery service
+  was introduced.
+
+### Capability and ImageGen authority
+
+- Marked `runtime-packs` as v0.3 compatibility data. Added exact `minimal` and
+  `full_offline` names over the existing empty/full signed Pack sets; partial
+  production Pack sets continue to fail closed.
+- Retained Feishu as an on-demand managed Connector/extension. OCR and CDP stay
+  signed product Packs. Agent task-time npm/pip installation is not an authority.
+- Linked `imagegen` to the built-in image workflow Skill. The worker resolves
+  only that exact Skill revision from the frozen Extension snapshot, caches it
+  per snapshot, verifies its digest and maps it to Responses `instructions` or
+  a Chat Completions developer message.
+- Kept image intent in the existing capability planner. “再来一张” style
+  follow-ups become direct only after a same-Thread completed image Artifact or
+  a bound image attachment; absent context and explicit negation stay deferred.
+
+### Product and public contracts
+
+- Set the package, CLI and Web product identity to `1.0.0` and regenerated the
+  checked-in Runtime Web contracts.
+- Added `partial_today` and daily `partial` usage fields and updated strict Web
+  validators, reducer terminal sets, timeline completion copy and dashboard
+  summaries.
+
+### Verification so far
+
+- Python compile and `scripts/run-v1-lint.py` passed.
+- Focused recovery, cache, circuit, ImageGen workflow/provider, follow-up route,
+  Pack-profile and PARTIAL tests passed.
+- Web TypeScript typecheck and focused state/API tests passed.
+- Full v1 backend and Web/build verification is the active final batch.
+
+### Rollback and recovery point
+
+- Baseline remains commit `1cc91fdd8dc4f5cd25f29ed6163957ed4f274b41` on
+  `codex/ecorex-v0.3.2`; no user changes were present at start and no database
+  migration was added.
+- Resume from this section, then inspect `docs/v1.0/progress.json`. Do not add a
+  parallel retry service, router, cache table or dependency installer.
+
+## 2026-08-07 - Runtime recovery Goal verification closure
+
+- Full v1 backend suite with the complete repository release toolchain:
+  `2660 passed, 55 skipped`; skips are existing platform/provider gates.
+- Complete Web v1 suite: `222 passed`.
+- Production Web build completed; the content-addressed bundle gate reported
+  33 chunks, 456.14 KiB initial JavaScript and 206.89 KiB deferred features,
+  within the existing budgets.
+- Final recovery/routing/version focused suite: `120 passed`.
+- Python compile, v1 lint, TypeScript typecheck, generated-contract check and
+  `git diff --check` passed.
+- No schema migration, new dependency, commit, push or external publication was
+  performed. The implementation remains as an inspectable working-tree diff.
+
+## 2026-08-07 - v1.0.0 production repair merge and built-in capability audit
+
+The completed recovery branch was reopened as one long Goal and merged with the
+production repair plan. `1.0.0` is the only current target; references to
+`0.3.2` are retained solely where they identify the installed upgrade source or
+historical fixtures. No live Runtime or release manifest advertises `1.0.7`.
+
+The complete 19-tool Core catalog was audited through catalog identity,
+exposure, permission/availability planning, composed handlers, signed Pack
+membership and public projection. Runtime now reconciles only stale
+`verified_handler_not_installed` facts when an exact handler has been bound.
+Workspace Read accepts root and continuation locators. Shell owns Bash,
+PowerShell and workspace-write aliases, and the smallest supported Pack profile
+includes sandbox. The false local `feishu_cli` tool was removed; Feishu remains
+a Connector/Skill workflow.
+
+Production Skill Hub migration now converges an existing read-only seed Skill
+into the existing CAS and fails closed if its packaged digest is missing or
+changed. Production MCP remains an explicit unconfigured empty state. The
+ImageGen Skill remains just-in-time guidance attached to the planner-selected
+`imagegen` tool, not a second intent router. Image waiting preserves attempt
+budgets, the bounded pool keeps one upstream execution per ID, and Pro falls
+back to the compatible public image model only after a definite model-
+unavailable response.
+
+Model activation now exercises the complete streamed tool continuation before
+activation, including one bounded stateless compatibility fallback. The shared
+e-Mate identity/recovery instruction is merged with Skill guidance while
+reserving the gateway limit. Terminal reasons are shown outside the collapsed
+process with a controlled Chinese explanation, recovery suggestion and folded
+technical code. The 120-turn browser test now proves bounded DOM rendering,
+bottom-follow, manual-scroll pause and jump-to-latest restoration.
+
+Focused verification at this recovery point: 158 built-in/Pack/composition
+tests, 11 Skill Hub/production tests, 26 Image provider tests, 35 activation/
+instruction/release/version tests, Web typecheck and contract tests, and the
+120-turn Playwright scenario all pass. Full repository gates and any genuinely
+configured production publication remain the next batch; no secret, commit,
+push or external release mutation has been made.
+
+### Full gate and installed-baseline closure
+
+- Complete backend: `2682 passed, 55 skipped`; complete Web: `224 passed`;
+  complete Chromium E2E: `51 passed`.
+- TypeScript, generated contracts, production build, lint/compile, design,
+  legacy cutoff, public download, dependency locks, Runtime/server schema,
+  reproducibility and diff checks all passed.
+- A built v1.0.0 Wheel was inspected directly. It contains the packaged
+  read-only seed Skill and normalizes to the production-pinned CAS digest.
+- Read-only authenticated browser inspection of the installed machine records
+  the pre-upgrade baseline: v0.3.2, SOL/medium, all six signed Packs healthy and
+  enabled, sandbox exposing shell, and Skill Hub returning a controlled error.
+  This is the exact state the v1.0.0 in-place upgrade must replace while
+  preserving history and settings.
+- The host has no Go executable. No dependency was installed to make the test
+  green; platform Go verification remains a required Candidate CI receipt.
+
+## 2026-08-07 - Manual publication and full browser acceptance closure
+
+The v1.0.0 publication path is explicitly operator-owned. The five Actions
+workflows reachable from `scripts/release-v1.py` retain read-only repository
+permissions and produce only immutable build or real-platform acceptance
+evidence. The local transport rejects every workflow outside that allowlist,
+and the historical promote workflow plus its publication Environments/Runner
+role have been removed from active governance. Release promotion, production
+activation, update notification and rollback remain local state-machine steps
+behind exact interactive confirmation. The manual gate also uses Ruff's valid
+`concise` output format.
+
+The post-upgrade browser receipt now requires the exact 19 built-in ToolSpecs,
+not one representative read call. Every tool must show a visible terminal
+state; only connector describe/read/write may report the explicit configured-
+absence result. The same receipt binds `ecorex-chat` with `max` reasoning, two
+overlapping real `gpt-image-2` jobs, at least one Skill, the deliberate zero-MCP
+projection, long-session behavior and public version facts. Real tokens are
+consumed only through the server Secret Provider and are excluded from all
+stored evidence. The receipt derives its tool IDs from `builtin_tool_specs()`;
+it does not maintain a second capability catalog.
+
+The local credential probe found neither `ECOREX_GITHUB_TOKEN` nor a GitHub
+credential-helper entry. The token pasted into chat is treated as exposed and
+is not copied into a command, environment, log or repository. Local commit and
+verification may continue, but push and manual publication remain fail-closed
+until a rotated credential is installed through the workstation's protected
+credential path.
+
+The complete verified source was committed locally on `codex/ecorex-v0.3.2`.
+Push is the next release transition and remains fenced by the missing protected
+GitHub credential.
+
+Focused retirement verification passes 75/75 tests across Candidate,
+repository-readiness, protected deployment, live acceptance and manual release
+contracts. The dependency-lock/workflow inventory and Ruff/compile gates also
+pass with six pinned Actions and no CI publication workflow.

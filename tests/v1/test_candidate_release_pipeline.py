@@ -190,11 +190,13 @@ def _external_signer(tmp_path: Path) -> tuple[DigestPinnedExternalSigner, bytes,
         serialization.PublicFormat.Raw,
     )
     adapter = tmp_path / "kms_adapter.py"
+    site_packages = next(path for path in sys.path if path.endswith("site-packages"))
     adapter.write_text(
-        """\
+        f"""\
 import base64
 import os
 import sys
+sys.path.insert(0, {site_packages!r})
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 if len(sys.argv) != 1:
@@ -1068,20 +1070,17 @@ def test_candidate_and_publication_workflows_are_split_and_default_safe() -> Non
         / "workflows"
         / "ecorex-v1-candidate.yml"
     ).read_text(encoding="utf-8")
-    publication = (
-        Path(__file__).resolve().parents[2]
-        / ".github"
-        / "workflows"
-        / "ecorex-v1-promote-candidate.yml"
-    ).read_text(encoding="utf-8")
+    root = Path(__file__).resolve().parents[2]
+    manual = (root / "scripts/release-v1.py").read_text(encoding="utf-8")
 
-    assert "github.sha != vars.ECOREX_V032_RELEASE_COMMIT_SHA" in platform_stage
+    assert "github.sha != inputs.source_sha" in platform_stage
     assert "github.repository != 'zyfjacksonchen-source/EcoreX'" in platform_stage
     assert "github.ref_protected" not in platform_stage
 
     assert "pull_request:" not in candidate
     assert "workflow_dispatch:" in candidate
-    assert "vars.ECOREX_V032_RELEASE_COMMIT_SHA" in candidate
+    assert "REQUESTED_SHA: ${{ inputs.source_sha }}" in candidate
+    assert 'os.environ["SOURCE_SHA"] == os.environ["REQUESTED_SHA"]' in candidate
     assert "refs/heads/main" in candidate
     assert "github.ref_protected" not in candidate
     assert "cancel-in-progress: false" in candidate
@@ -1103,77 +1102,24 @@ def test_candidate_and_publication_workflows_are_split_and_default_safe() -> Non
     assert "GH_TOKEN: ${{ github.token }}" not in delta_download
     assert "ECOREX_GITHUB_RELEASE_TOKEN" not in candidate
 
-    assert "pull_request:" not in publication
-    assert "workflow_dispatch:" in publication
-    assert "vars.ECOREX_V032_RELEASE_COMMIT_SHA" in publication
-    assert "refs/heads/main" in publication
-    assert "github.ref_protected" not in publication
-    assert "default: verify-only" in publication
-    assert 'default: "1"' in publication
-    assert "candidate_run_id:" in publication
-    assert "candidate_run_attempt:" in publication
-    assert "candidate_artifact_id:" in publication
-    assert "scripts/select-v1-accepted-candidate.py" in publication
-    assert "scripts/verify-v1-accepted-candidate.py" in publication
-    assert "actions/artifacts/${CANDIDATE_ARTIFACT_ID}/zip" in publication
-    assert publication.count("curl --fail --location --silent --show-error") == 6
-    assert publication.count("X-GitHub-Api-Version: 2026-03-10") == 8
-    assert "steps.candidate.outputs.artifact_sha256" in publication
-    assert "scripts/extract-v1-workflow-artifact.py" in publication
-    assert "publication_artifact_sha256:" in publication
-    assert "actions/download-artifact" not in publication
-    assert publication.count("artifact-id") >= 5
-    assert publication.count("artifact-digest") >= 5
-    assert "ecorex-release-publication-${{ inputs.channel }}" in publication
-    assert "contents: write" in publication
-    assert "id-token: write" in publication
-    assert "cancel-in-progress: false" in publication
-    assert "ECOREX_RELEASE_SIGNER_EXECUTABLE_SHA256" in publication
-    assert "--expected-workflow-run-id ${{ inputs.candidate_run_id }}" in publication
-    assert "--publish-github" in publication
-    assert "ECOREX_GITHUB_RELEASE_TOKEN" in publication
-    assert 'os.environ["REPOSITORY"] == "zyfjacksonchen-source/EcoreX"' in publication
-    assert 'github.get("owner"), github.get("repository")' in publication
-    assert '("zyfjacksonchen-source", "EcoreX-installers")' in publication
-    assert "ECOREX_GITHUB_RELEASE_READ_TOKEN" not in publication
-    assert "ECOREX_MIRROR_TOKEN" not in publication
-    assert "Publish GitHub origin and verify the configured release sources" in publication
-    assert publication.index("verify-v1-accepted-candidate.py") < publication.index(
-        "publish-assets"
+    assert not (root / ".github/workflows/ecorex-v1-promote-candidate.yml").exists()
+    assert "class GitHubActions" in manual
+    assert "_READ_ONLY_BUILD_WORKFLOWS" in manual
+    assert "ecorex-v1-promote-candidate.yml" not in manual
+    assert "def _publication_prepare(" in manual
+    assert "def _stage_production(" in manual
+    assert "def _github_release(" in manual
+    assert "def _remote_activation(" in manual
+    assert "def _activate_update_notification(" in manual
+    assert "def _compensate_activation(" in manual
+    assert "release_interactive_confirmation_required" in manual
+    assert manual.index("_interactive_confirmation(confirmation_phrase(store.spec))") < manual.index(
+        "_github_release(store)"
     )
-    assert publication.index("publish-assets") < publication.index(
-        "build-public-bootstrap-index"
+    assert manual.index("_github_release(store)") < manual.index("_remote_activation(store)")
+    assert manual.index("_remote_activation(store)") < manual.index(
+        "_activate_update_notification(store)"
     )
-    assert publication.index("build-public-bootstrap-index") < publication.index(
-        "stage-public-bootstrap-index"
-    )
-    assert publication.index("stage-public-bootstrap-index") < publication.index(
-        "assemble-v1-release-evidence.py"
-    )
-    assert "sign-v1-release-gate-bundle.py" in publication
-    assert publication.index("assemble-v1-release-evidence.py") < publication.index(
-        "sign-v1-release-gate-bundle.py"
-    )
-    assert "release-evidence-prepare-unsigned.json" in publication
-    assert "release-evidence-unsigned.json" in publication
-    assert publication.count('--trusted-key "$KEY_ID=$PUBLIC_KEY"') >= 7
-    assert "ECOREX_PUBLICATION_SIGNER_EXECUTABLE_SHA256" in publication
-    assert "--trusted-publication-key" in publication
-    assert publication.index(
-        "Create stable candidate gates and paused draft rollout"
-    ) < publication.index("activate-public-bootstrap-index")
-    assert "bootstrap-index-stage-receipt.json" in publication
-    assert "bootstrap-index-publication-receipt.json" in publication
-    assert "ecorex-v1-publication-result-${{ inputs.channel }}-${{ github.run_id }}" in publication
-    assert publication.index(
-        "Execute server-local atomic cloud and public-site authorities"
-    ) < publication.index("Assemble final stable evidence after Bootstrap activation")
-    assert publication.index(
-        "Assemble final stable evidence after Bootstrap activation"
-    ) < publication.index("Re-authenticate admission then activate rollout")
-    assert "if: ${{ inputs.publication_mode == 'create-and-activate' }}" in publication
-    assert "--mode \"${{ inputs.publication_mode }}\"" in publication
-    assert "--rollout-percentage \"${{ inputs.rollout_percentage }}\"" in publication
 
 
 def test_every_external_action_in_v1_workflows_is_commit_pinned() -> None:

@@ -36,6 +36,7 @@ _CATALOG_LIMIT = 2 * 1024 * 1024
 _TEXT_RESULT_LIMIT = 2 * 1024 * 1024
 _IMAGE_RESULT_LIMIT = 64 * 1024 * 1024
 _ACTIVATION_MARKER = "ECOREX_ACTIVATION_OK"
+_ACTIVATION_TOOL = "ecorex_activation_check"
 _IMAGE_EDGE = 1024
 
 
@@ -199,6 +200,19 @@ class HTTPSModelConnectionTester:
                 policy = ecorex_chat_gateway_policy(configuration.local_model_id)
             except ValueError:
                 raise _ProbeFailure("provider_test_unconfigured") from None
+            common = {
+                "model": configuration.upstream_model_id,
+                "max_output_tokens": 512,
+                "reasoning": {"effort": policy.reasoning_effort},
+                "context_management": [
+                    {
+                        "type": policy.context_management.type,
+                        "compact_threshold": (
+                            policy.context_management.compact_threshold_tokens
+                        ),
+                    }
+                ],
+            }
             response = await self._request(
                 "POST",
                 origin + "/v1/responses",
@@ -206,9 +220,9 @@ class HTTPSModelConnectionTester:
                 maximum=_TEXT_RESULT_LIMIT,
                 submission=True,
                 json_body={
-                    "model": configuration.upstream_model_id,
                     "instructions": (
-                        "Return exactly ECOREX_ACTIVATION_OK and no other text."
+                        "Call ecorex_activation_check exactly once with value "
+                        "ECOREX_ACTIVATION_OK. Do not answer with text yet."
                     ),
                     "input": [
                         {
@@ -222,24 +236,120 @@ class HTTPSModelConnectionTester:
                             ],
                         }
                     ],
-                    "max_output_tokens": 512,
-                    "store": False,
-                    "reasoning": {"effort": policy.reasoning_effort},
-                    "context_management": [
+                    "tools": [
                         {
-                            "type": policy.context_management.type,
-                            "compact_threshold": (
-                                policy.context_management.compact_threshold_tokens
-                            ),
+                            "type": "function",
+                            "name": _ACTIVATION_TOOL,
+                            "description": "Verify the e-Mate model tool handoff.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "value": {
+                                        "type": "string",
+                                        "enum": [_ACTIVATION_MARKER],
+                                    }
+                                },
+                                "required": ["value"],
+                                "additionalProperties": False,
+                            },
+                            "strict": True,
                         }
                     ],
+                    "tool_choice": {"type": "function", "name": _ACTIVATION_TOOL},
+                    "parallel_tool_calls": False,
+                    "stream": True,
+                    "store": True,
+                    **common,
                 },
             )
-            value = self._json_response(response)
-            self._validate_returned_model(value, configuration.upstream_model_id)
-            text = self._responses_text(value)
-            if text.strip() != _ACTIVATION_MARKER:
-                raise _ProbeFailure("provider_test_protocol")
+            response_id, call_id = self._responses_tool_call(
+                response,
+                expected_model=configuration.upstream_model_id,
+            )
+            continuation = {
+                "instructions": (
+                    "The activation tool succeeded. Return exactly "
+                    "ECOREX_ACTIVATION_OK and no other text."
+                ),
+                "previous_response_id": response_id,
+                "input": [
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps(
+                            {"value": _ACTIVATION_MARKER},
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    }
+                ],
+                "stream": True,
+                "store": False,
+                **common,
+            }
+            try:
+                final = await self._request(
+                    "POST",
+                    origin + "/v1/responses",
+                    configuration=configuration,
+                    maximum=_TEXT_RESULT_LIMIT,
+                    submission=True,
+                    submission_scope="continuation",
+                    json_body=continuation,
+                )
+            except _ProbeFailure as error:
+                if error.code != "provider_inference_rejected":
+                    raise
+                # Some enterprise Responses proxies reject provider-side chains.
+                # Exercise the Runtime's one permitted, non-reexecuting fallback.
+                final = await self._request(
+                    "POST",
+                    origin + "/v1/responses",
+                    configuration=configuration,
+                    maximum=_TEXT_RESULT_LIMIT,
+                    submission=True,
+                    submission_scope="stateless-continuation",
+                    json_body={
+                        "instructions": (
+                            "Return exactly ECOREX_ACTIVATION_OK and no other text."
+                        ),
+                        "input": [
+                            {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [
+                                    {
+                                        "type": "output_text",
+                                        "text": (
+                                            "[e-Mate Runtime continuity note] The "
+                                            "activation tool completed successfully."
+                                        ),
+                                    }
+                                ],
+                            },
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "input_text",
+                                        "text": (
+                                            "Verified activation result: "
+                                            + _ACTIVATION_MARKER
+                                        ),
+                                    }
+                                ],
+                            },
+                        ],
+                        "stream": True,
+                        "store": False,
+                        **common,
+                    },
+                )
+            self._responses_stream_text(
+                final,
+                expected_model=configuration.upstream_model_id,
+            )
             return
         if configuration.provider_preset == "openai_compatible_chat":
             response = await self._request(
@@ -331,6 +441,7 @@ class HTTPSModelConnectionTester:
         configuration: ActiveModelConfiguration,
         maximum: int,
         submission: bool,
+        submission_scope: str | None = None,
         json_body: Mapping[str, Any] | None = None,
         form: Mapping[str, str] | None = None,
         files: Mapping[str, tuple[str, bytes, str]] | None = None,
@@ -342,7 +453,9 @@ class HTTPSModelConnectionTester:
             "User-Agent": "EcoreX-Control-Plane/1.0",
         }
         if submission:
-            headers["Idempotency-Key"] = self._idempotency_key(configuration)
+            headers["Idempotency-Key"] = self._idempotency_key(
+                configuration, submission_scope
+            )
         request = self._client.build_request(
             method,
             url,
@@ -416,27 +529,128 @@ class HTTPSModelConnectionTester:
             raise _ProbeFailure("provider_test_protocol")
 
     @staticmethod
-    def _responses_text(value: Mapping[str, Any]) -> str:
-        output = value.get("output")
-        if not isinstance(output, list) or len(output) > 128:
+    def _sse_events(
+        response: tuple[int, Mapping[str, str], bytes]
+    ) -> list[dict[str, Any]]:
+        _status, headers, body = response
+        content_type = headers.get("content-type", "").split(";", 1)[0]
+        if content_type.strip().casefold() != "text/event-stream" or not body:
             raise _ProbeFailure("provider_test_protocol")
-        parts: list[str] = []
-        for item in output:
-            if not isinstance(item, Mapping) or item.get("type") != "message":
+        try:
+            text = body.decode("utf-8").replace("\r\n", "\n")
+        except UnicodeDecodeError:
+            raise _ProbeFailure("provider_test_protocol") from None
+        events: list[dict[str, Any]] = []
+        for record in text.split("\n\n"):
+            data = "\n".join(
+                line[5:].lstrip()
+                for line in record.splitlines()
+                if line.startswith("data:")
+            )
+            if not data or data == "[DONE]":
                 continue
-            content = item.get("content")
-            if not isinstance(content, list) or len(content) > 128:
+            try:
+                value = json.loads(data)
+            except (json.JSONDecodeError, RecursionError):
+                raise _ProbeFailure("provider_test_protocol") from None
+            if not isinstance(value, dict) or len(events) >= 2_048:
                 raise _ProbeFailure("provider_test_protocol")
-            for part in content:
-                if (
-                    isinstance(part, Mapping)
-                    and part.get("type") == "output_text"
-                    and isinstance(part.get("text"), str)
-                ):
-                    parts.append(part["text"])
-        if not parts:
+            events.append(value)
+        if not events:
             raise _ProbeFailure("provider_test_protocol")
-        return "".join(parts)
+        return events
+
+    @classmethod
+    def _responses_tool_call(
+        cls,
+        response: tuple[int, Mapping[str, str], bytes],
+        *,
+        expected_model: str,
+    ) -> tuple[str, str]:
+        response_id: str | None = None
+        returned_model: str | None = None
+        call_id: str | None = None
+        name: str | None = None
+        arguments = ""
+        completed = False
+        for event in cls._sse_events(response):
+            event_type = event.get("type")
+            response_value = event.get("response")
+            if isinstance(response_value, Mapping):
+                if isinstance(response_value.get("id"), str):
+                    response_id = response_value["id"]
+                if isinstance(response_value.get("model"), str):
+                    returned_model = response_value["model"]
+            item = event.get("item")
+            if isinstance(item, Mapping) and item.get("type") == "function_call":
+                if isinstance(item.get("call_id"), str):
+                    call_id = item["call_id"]
+                if isinstance(item.get("name"), str):
+                    name = item["name"]
+                if isinstance(item.get("arguments"), str):
+                    arguments = item["arguments"]
+            if event_type == "response.function_call_arguments.delta":
+                delta = event.get("delta")
+                if isinstance(delta, str):
+                    arguments += delta
+            if event_type == "response.function_call_arguments.done":
+                if isinstance(event.get("call_id"), str):
+                    call_id = event["call_id"]
+                if isinstance(event.get("name"), str):
+                    name = event["name"]
+                if isinstance(event.get("arguments"), str):
+                    arguments = event["arguments"]
+            completed = completed or event_type == "response.completed"
+        try:
+            parsed_arguments = json.loads(arguments)
+        except (json.JSONDecodeError, RecursionError):
+            raise _ProbeFailure("provider_test_protocol") from None
+        if (
+            not completed
+            or not response_id
+            or not call_id
+            or name != _ACTIVATION_TOOL
+            or parsed_arguments != {"value": _ACTIVATION_MARKER}
+            or not returned_model
+            or not (
+                returned_model == expected_model
+                or returned_model.startswith(expected_model + "-")
+            )
+        ):
+            raise _ProbeFailure("provider_test_protocol")
+        return response_id, call_id
+
+    @classmethod
+    def _responses_stream_text(
+        cls,
+        response: tuple[int, Mapping[str, str], bytes],
+        *,
+        expected_model: str,
+    ) -> None:
+        parts: list[str] = []
+        returned_model: str | None = None
+        completed = False
+        for event in cls._sse_events(response):
+            response_value = event.get("response")
+            if isinstance(response_value, Mapping) and isinstance(
+                response_value.get("model"), str
+            ):
+                returned_model = response_value["model"]
+            if event.get("type") == "response.output_text.delta" and isinstance(
+                event.get("delta"), str
+            ):
+                parts.append(event["delta"])
+            completed = completed or event.get("type") == "response.completed"
+        if (
+            not completed
+            or "".join(parts).strip() != _ACTIVATION_MARKER
+            or not returned_model
+            or not (
+                returned_model == expected_model
+                or returned_model.startswith(expected_model + "-")
+            )
+        ):
+            raise _ProbeFailure("provider_test_protocol")
 
     @staticmethod
     def _chat_text(value: Mapping[str, Any]) -> str:
@@ -483,11 +697,15 @@ class HTTPSModelConnectionTester:
             raise _ProbeFailure("provider_test_protocol")
 
     @staticmethod
-    def _idempotency_key(configuration: ActiveModelConfiguration) -> str:
+    def _idempotency_key(
+        configuration: ActiveModelConfiguration, scope: str | None = None
+    ) -> str:
         material = (
             f"{configuration.config_id}\0{configuration.revision}\0"
             f"{configuration.provider_preset}\0{configuration.upstream_model_id}"
         ).encode("utf-8")
+        if scope is not None:
+            material += b"\0" + scope.encode("utf-8")
         return "ecorex-model-activation-" + hashlib.sha256(material).hexdigest()[:32]
 
     async def aclose(self) -> None:

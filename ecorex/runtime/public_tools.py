@@ -46,6 +46,7 @@ class _CorePublicPolicy:
 _CORE_POLICIES: dict[str, _CorePublicPolicy] = {
     "tool_search": _CorePublicPolicy("正在查找可用能力", "已完成能力查找"),
     "tool_describe": _CorePublicPolicy("正在查看能力说明", "已确认能力说明"),
+    "task_list": _CorePublicPolicy("正在更新任务清单", "已更新任务清单"),
     "skill_search": _CorePublicPolicy("正在查找办公技能", "已完成技能查找"),
     "skill_read": _CorePublicPolicy("正在读取技能说明", "已读取技能说明"),
     "skill_run": _CorePublicPolicy("正在运行技能", "已完成技能运行"),
@@ -71,6 +72,9 @@ _CORE_POLICIES: dict[str, _CorePublicPolicy] = {
         argument_artifacts="root_pair",
         result_artifacts="root_pair",
     ),
+    "input_attachment_read": _CorePublicPolicy(
+        "正在读取本条消息的附件", "已读取消息附件"
+    ),
     "read": _CorePublicPolicy("正在读取工作资料", "已读取工作资料"),
     "fetch": _CorePublicPolicy("正在查找在线资料", "已获取在线资料"),
     "vision": _CorePublicPolicy(
@@ -78,6 +82,7 @@ _CORE_POLICIES: dict[str, _CorePublicPolicy] = {
         "已完成图片检查",
         argument_artifacts="artifact_ids",
     ),
+    "ocr": _CorePublicPolicy("正在识别图片文字", "已完成图片文字识别"),
     "cdp": _CorePublicPolicy("正在浏览网页", "已完成网页操作"),
     "shell": _CorePublicPolicy("正在执行已批准的命令", "命令执行已完成"),
     "imagegen": _CorePublicPolicy(

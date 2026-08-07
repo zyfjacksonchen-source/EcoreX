@@ -1067,6 +1067,37 @@ def test_apply_creates_no_clobber_slot_atomic_pointer_and_root_receipt(
     }
 
 
+def test_stage_materializes_slot_without_changing_live_pointer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _require_symlink(tmp_path)
+    paths = _paths(tmp_path)
+    _write_staging(paths)
+    _enable_portable_apply(monkeypatch)
+
+    first = deployment.stage(
+        RELEASE_ID,
+        paths=paths,
+        expected_owner_uid=None,
+        enforce_server_fence=False,
+    )
+    second = deployment.stage(
+        RELEASE_ID,
+        paths=paths,
+        expected_owner_uid=None,
+        enforce_server_fence=False,
+    )
+
+    assert first["status"] == "staged"
+    assert first["live_pointer_changed"] is False
+    assert first["mutation_performed"] is True
+    assert first["slot_action"] == "created"
+    assert second["slot_action"] == "reused"
+    assert second["mutation_performed"] is False
+    assert not paths.current_path.exists()
+    assert (paths.slots_root / RELEASE_ID).is_dir()
+
+
 def test_protected_v2_plan_apply_readback_and_journal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

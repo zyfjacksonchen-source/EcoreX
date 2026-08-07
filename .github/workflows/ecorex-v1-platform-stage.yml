@@ -1,7 +1,25 @@
 name: EcoreX v1 protected platform stage
+run-name: manual-stage-v${{ inputs.version }}-${{ inputs.local_gate_sha256 }}
 
 on:
   workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact protected main commit
+        required: true
+        type: string
+      version:
+        description: Exact product SemVer
+        required: true
+        type: string
+      from_version:
+        description: Public version exercised by upgrade smoke
+        required: true
+        type: string
+      local_gate_sha256:
+        description: Signed local gate receipt SHA-256
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -42,7 +60,7 @@ jobs:
 
     steps:
       - name: Refuse non-dispatch or unpinned release source
-        if: ${{ github.event_name != 'workflow_dispatch' || github.repository != 'zyfjacksonchen-source/EcoreX' || github.ref != 'refs/heads/main' || github.sha != vars.ECOREX_V032_RELEASE_COMMIT_SHA }}
+        if: ${{ github.event_name != 'workflow_dispatch' || github.repository != 'zyfjacksonchen-source/EcoreX' || github.ref != 'refs/heads/main' || github.sha != inputs.source_sha }}
         shell: bash
         run: exit 1
 
@@ -61,6 +79,26 @@ jobs:
 
       - name: Prove checkout workspace is clean before dependency installation
         run: python scripts/run-v1-platform-stage-step.py clean-check
+
+      - name: Bind source version and signed local gate
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
+          FROM_VERSION: ${{ inputs.from_version }}
+          LOCAL_GATE_SHA256: ${{ inputs.local_gate_sha256 }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, re
+          from ecorex import __version__
+          semver = re.compile(r'(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)')
+          ok = (
+              __version__ == os.environ['EXPECTED_VERSION']
+              and semver.fullmatch(os.environ['EXPECTED_VERSION'])
+              and semver.fullmatch(os.environ['FROM_VERSION'])
+              and re.fullmatch(r'[0-9a-f]{64}', os.environ['LOCAL_GATE_SHA256'])
+          )
+          raise SystemExit(0 if ok else 1)
+          PY
 
       - name: Set up Node 22 for the one final Web build
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

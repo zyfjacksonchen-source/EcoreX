@@ -52,6 +52,7 @@ exclude = ["cli*", "agent*", "channel*", "desktop*", "tests*"]
 
 [tool.setuptools.package-data]
 "ecorex.control_plane.admin_web" = ["static/*"]
+"ecorex.control_plane" = ["seed_skills/official-writing/*"]
 
 [tool.setuptools.dynamic]
 version = {attr = "ecorex.__version__"}

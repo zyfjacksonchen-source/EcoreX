@@ -12,10 +12,8 @@ import re
 import tempfile
 from typing import Any, Mapping
 
-from ecorex import __version__
-
-
 RECEIPT_SCHEMA = "emate.webui-build-receipt.v1"
+_SEMVER = re.compile(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\Z")
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _ARTIFACTS = {
     "webui-windows-x64": ("Windows", "WebUI one-click local package"),
@@ -35,7 +33,8 @@ def build_legacy_webui_manifest(receipt_path: Path) -> dict[str, object]:
     if (
         set(receipt) != {"schema", "version", "status", "generated_at", "artifacts"}
         or receipt.get("schema") != RECEIPT_SCHEMA
-        or receipt.get("version") != __version__
+        or not isinstance(receipt.get("version"), str)
+        or _SEMVER.fullmatch(str(receipt["version"])) is None
         or receipt.get("status") != "verified"
         or not _timestamp(receipt.get("generated_at"))
     ):
@@ -44,6 +43,7 @@ def build_legacy_webui_manifest(receipt_path: Path) -> dict[str, object]:
     if not isinstance(artifacts, list) or len(artifacts) != len(_ARTIFACTS):
         raise LegacyManifestError("build receipt must contain both WebUI packages")
 
+    version = str(receipt["version"])
     projected: dict[str, dict[str, object]] = {}
     for item in artifacts:
         if not isinstance(item, Mapping) or set(item) != {
@@ -53,7 +53,7 @@ def build_legacy_webui_manifest(receipt_path: Path) -> dict[str, object]:
         artifact_id = item.get("id")
         if artifact_id not in _ARTIFACTS or artifact_id in projected:
             raise LegacyManifestError("build receipt artifact set is invalid")
-        expected_name = f"EcoreX_{__version__}-{artifact_id}.zip"
+        expected_name = f"EcoreX_{version}-{artifact_id}.zip"
         if item.get("file_name") != expected_name:
             raise LegacyManifestError("build receipt artifact filename is invalid")
         size = item.get("size_bytes")
@@ -75,7 +75,7 @@ def build_legacy_webui_manifest(receipt_path: Path) -> dict[str, object]:
         platform, variant = _ARTIFACTS[artifact_id]
         projected[artifact_id] = {
             "id": artifact_id,
-            "version": __version__,
+            "version": version,
             "platform": platform,
             "variant": variant,
             "fileName": expected_name,
@@ -83,30 +83,30 @@ def build_legacy_webui_manifest(receipt_path: Path) -> dict[str, object]:
             "size": actual_size,
             "sha256": actual_digest.upper(),
             "status": "ready",
-            "source": f"Verified e-Mate v{__version__} WebUI release package.",
+            "source": f"Verified e-Mate v{version} WebUI release package.",
             "updatedAt": receipt["generated_at"],
         }
 
-    version = __version__
     return {
         "product": "e-Mate",
         "version": version,
         "updatedAt": receipt["generated_at"],
         "notes": f"e-Mate v{version} WebUI update from the v0.2.9.2 baseline.",
         "download": {
-            "mode": "github-cn-primary",
+            "mode": "github-primary",
             "mirrors": [
+                {
+                    "id": f"ecorex-github-v{version}",
+                    "kind": "github-release",
+                    "baseUrl": "https://github.com/zyfjacksonchen-source/EcoreX-installers/releases/download/"
+                    f"v{version}",
+                    "pathMode": "fileName",
+                },
                 {
                     "id": f"ecorex-github-cn-mirror-v{version}",
                     "kind": "github-release-cn-mirror",
                     "baseUrl": "https://gh-proxy.com/https://github.com/zyfjacksonchen-source/EcoreX-installers/releases/download/"
                     f"v{version}",
-                    "pathMode": "fileName",
-                },
-                {
-                    "id": f"ecorex-download-origin-v{version}",
-                    "kind": "asset-cache",
-                    "baseUrl": "https://mvdcm.ecoremedia.net/ecorex-agent/downloads",
                     "pathMode": "fileName",
                 },
                 {

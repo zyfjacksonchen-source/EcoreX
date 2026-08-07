@@ -73,7 +73,7 @@ from ecorex.observability import (
     ManagedOTLPHTTPTraceExporter,
 )
 from ecorex.output import standard_output_roots
-from ecorex.pack_catalog import REQUIRED_CAPABILITY_PACK_IDS
+from ecorex.pack_catalog import capability_pack_profile
 from ecorex.runtime.database import SCHEMA_VERSION as RUNTIME_STORAGE_SCHEMA_VERSION
 from ecorex.runtime.storage_migrations import (
     MAX_STORAGE_MIGRATION_BYTES,
@@ -1431,9 +1431,9 @@ def load_verified_capability_packs(
 ) -> CapabilityPackRuntime:
     runtime = CapabilityPackRuntime(builtin_capability_registry())
     configured_ids = tuple(definition.pack_id for definition in config.capability_packs)
-    if configured_ids not in {(), REQUIRED_CAPABILITY_PACK_IDS}:
+    if capability_pack_profile(configured_ids) is None:
         raise ProductRuntimeConfigurationError(
-            "Product Runtime requires the complete required Capability Pack set"
+            "Product Runtime requires an exact Capability Pack profile"
         )
     if config.capability_packs and resolver is None:
         raise ProductRuntimeConfigurationError(

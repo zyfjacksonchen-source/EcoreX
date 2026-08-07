@@ -106,7 +106,13 @@ def _usage_from_payload(raw: object) -> _Usage | None:
         total_tokens = input_tokens + output_tokens
     if input_tokens == output_tokens == total_tokens == 0 and not any(
         key in raw
-        for key in ("input_tokens", "output_tokens", "total_tokens", "prompt_tokens", "completion_tokens")
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "prompt_tokens",
+            "completion_tokens",
+        )
     ):
         return None
     return _Usage(input_tokens, output_tokens, total_tokens)
@@ -130,7 +136,9 @@ class UsageProjectionService:
         except ZoneInfoNotFoundError:
             raise ValueError("usage timezone is invalid") from None
         self.database = (
-            database if isinstance(database, SQLiteDatabase) else SQLiteDatabase(database)
+            database
+            if isinstance(database, SQLiteDatabase)
+            else SQLiteDatabase(database)
         )
         self.model_catalog = model_catalog
         self.timezone_name = timezone_name
@@ -197,11 +205,18 @@ class UsageProjectionService:
                     payload = json.loads(str(row["payload_json"]))
                 except (TypeError, ValueError):
                     payload = None
-                modalities = payload.get("modalities") if isinstance(payload, Mapping) else None
-                chat = modalities.get("chat") if isinstance(modalities, Mapping) else None
+                modalities = (
+                    payload.get("modalities") if isinstance(payload, Mapping) else None
+                )
+                chat = (
+                    modalities.get("chat") if isinstance(modalities, Mapping) else None
+                )
                 if isinstance(chat, list):
                     for item in chat:
-                        if not isinstance(item, Mapping) or item.get("model_id") != model_id:
+                        if (
+                            not isinstance(item, Mapping)
+                            or item.get("model_id") != model_id
+                        ):
                             continue
                         policy = item.get("model_policy")
                         context = (
@@ -217,7 +232,9 @@ class UsageProjectionService:
                         display_name = item.get("display_name")
                         return (
                             threshold if threshold and threshold >= 1_000 else None,
-                            str(display_name) if isinstance(display_name, str) else None,
+                            str(display_name)
+                            if isinstance(display_name, str)
+                            else None,
                             snapshot_id,
                         )
 
@@ -285,7 +302,9 @@ class UsageProjectionService:
                     (thread_id,),
                 ).fetchone()
                 context_model_id = (
-                    str(latest_turn["agent_model_id"]) if latest_turn is not None else None
+                    str(latest_turn["agent_model_id"])
+                    if latest_turn is not None
+                    else None
                 )
                 context_turn_id = (
                     str(latest_turn["turn_id"]) if latest_turn is not None else ""
@@ -322,7 +341,9 @@ class UsageProjectionService:
                 payload = json.loads(str(row["payload_json"]))
             except (TypeError, ValueError):
                 continue
-            usage = _usage_from_payload(payload.get("usage") if isinstance(payload, Mapping) else None)
+            usage = _usage_from_payload(
+                payload.get("usage") if isinstance(payload, Mapping) else None
+            )
             if usage is None:
                 continue
             week = week.add(usage)
@@ -340,7 +361,7 @@ class UsageProjectionService:
             latest_context_time = _parse_time(context_row["created_at"])
 
         activity = {
-            (activity_start_local + timedelta(days=offset)).date(): [0, 0]
+            (activity_start_local + timedelta(days=offset)).date(): [0, 0, 0]
             for offset in range(7)
         }
         for row in terminal_rows:
@@ -351,8 +372,11 @@ class UsageProjectionService:
             if counts is None:
                 continue
             counts[1] += 1
-            if TurnStatus(str(row["status"])) is TurnStatus.COMPLETED:
+            status = TurnStatus(str(row["status"]))
+            if status is TurnStatus.COMPLETED:
                 counts[0] += 1
+            elif status is TurnStatus.PARTIAL:
+                counts[2] += 1
         today_counts = activity[day_start_local.date()]
 
         window_tokens: int | None = None
@@ -376,7 +400,9 @@ class UsageProjectionService:
             week=week.projection(),
             context=ContextUsageProjection(
                 used_tokens=(
-                    None if latest_context_usage is None else latest_context_usage.input_tokens
+                    None
+                    if latest_context_usage is None
+                    else latest_context_usage.input_tokens
                 ),
                 window_tokens=window_tokens,
                 model_id=context_model_id,
@@ -386,10 +412,16 @@ class UsageProjectionService:
             ),
             task_activity=TaskActivityProjection(
                 completed_today=today_counts[0],
+                partial_today=today_counts[2],
                 waiting=waiting,
                 terminal_today=today_counts[1],
                 days=[
-                    TaskActivityDay(date=day, completed=counts[0], terminal=counts[1])
+                    TaskActivityDay(
+                        date=day,
+                        completed=counts[0],
+                        partial=counts[2],
+                        terminal=counts[1],
+                    )
                     for day, counts in activity.items()
                 ],
             ),

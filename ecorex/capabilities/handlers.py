@@ -124,6 +124,28 @@ class WorkspaceReadHandler:
     def _resolve(self, raw_path: str, roots: tuple[Path, ...]) -> tuple[Path, int, Path]:
         if "\x00" in raw_path or not raw_path.strip():
             raise WorkspaceReadError("workspace path is invalid")
+        if raw_path == ".":
+            return roots[0], 0, Path()
+        locator_root_index: int | None = None
+        if raw_path.startswith("workspace://"):
+            locator = raw_path.removeprefix("workspace://")
+            root_text, separator, suffix = locator.partition("/")
+            if (
+                not separator
+                or not root_text.isascii()
+                or not root_text.isdecimal()
+                or (locator_root_index := int(root_text)) >= len(roots)
+            ):
+                raise WorkspaceReadError("workspace locator is invalid")
+            if not suffix:
+                return roots[locator_root_index], locator_root_index, Path()
+            relative = PurePosixPath(suffix)
+            if relative.is_absolute() or any(
+                part in {"", ".", ".."} for part in relative.parts
+            ):
+                raise WorkspaceReadError("workspace locator is invalid")
+            raw_path = relative.as_posix()
+            roots = (roots[locator_root_index],)
         requested = Path(raw_path)
         candidates: list[tuple[Path, int]] = []
         if requested.is_absolute():
@@ -170,12 +192,18 @@ class WorkspaceReadHandler:
             except OSError:
                 continue
             if _within(resolved, root):
-                return resolved, index, resolved.relative_to(root)
+                return (
+                    resolved,
+                    locator_root_index if locator_root_index is not None else index,
+                    resolved.relative_to(root),
+                )
         raise WorkspaceReadError("workspace path is outside the authorized roots or missing")
 
     @staticmethod
     def _locator(root_index: int, relative: Path) -> str:
         suffix = relative.as_posix()
+        if suffix == ".":
+            suffix = ""
         return f"workspace://{root_index}/{suffix}" if suffix else f"workspace://{root_index}/"
 
     def _directory(self, path: Path, locator: str) -> dict[str, Any]:

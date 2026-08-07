@@ -1186,6 +1186,20 @@ func TestOrphanRuntimeIsOpenedWithoutRotatingItsOwnerNonce(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatal("orphan Runtime owner nonce was rotated before hot-open")
 	}
+	browserReceipt, err := os.ReadFile(filepath.Join(root, "bootstrap", "browser-opened.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var browserOpen map[string]any
+	if err := json.Unmarshal(browserReceipt, &browserOpen); err != nil {
+		t.Fatal(err)
+	}
+	if browserOpen["status"] != "opened" ||
+		browserOpen["release_id"] != releaseID ||
+		browserOpen["version"] != version ||
+		browserOpen["url"] != server.URL+"/" {
+		t.Fatalf("browser-open receipt is not bound to the installed Runtime: %#v", browserOpen)
+	}
 	if _, err := issueRuntimeOwnerReceipt(root); err != nil {
 		t.Fatal(err)
 	}

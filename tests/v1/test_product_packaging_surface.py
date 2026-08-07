@@ -37,7 +37,8 @@ def test_python_product_distribution_excludes_legacy_runtime_packages() -> None:
         "tests*",
     }
     assert project["tool"]["setuptools"]["package-data"] == {
-        "ecorex.control_plane.admin_web": ["static/*"]
+        "ecorex.control_plane.admin_web": ["static/*"],
+        "ecorex.control_plane": ["seed_skills/official-writing/*"],
     }
 
     dependencies = {

@@ -40,10 +40,35 @@ if any(
 # Sorting makes this the single deterministic identity used by bootstrap,
 # Runtime configuration, Candidate staging and updater completeness checks.
 REQUIRED_CAPABILITY_PACK_IDS = tuple(sorted(_tool_pack_ids))
+CAPABILITY_PACK_PROFILES = MappingProxyType(
+    {
+        # Projection-only and legacy signed slots remain valid without optional
+        # Packs; workspace execution adds the reviewed sandbox boundary.
+        "minimal": (),
+        "workspace": ("sandbox",),
+        # Managed offline install: ship the complete reviewed Pack closure.
+        "full_offline": REQUIRED_CAPABILITY_PACK_IDS,
+    }
+)
+
+
+def capability_pack_profile(pack_ids: tuple[str, ...]) -> str | None:
+    """Return the exact product profile; arbitrary partial sets fail closed."""
+
+    return next(
+        (
+            profile
+            for profile, expected in CAPABILITY_PACK_PROFILES.items()
+            if pack_ids == expected
+        ),
+        None,
+    )
 
 
 __all__ = [
     "CAPABILITY_PACK_SERVICE_IDS",
     "CAPABILITY_PACK_TOOL_IDS",
+    "CAPABILITY_PACK_PROFILES",
     "REQUIRED_CAPABILITY_PACK_IDS",
+    "capability_pack_profile",
 ]

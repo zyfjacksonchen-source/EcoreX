@@ -258,11 +258,13 @@ def test_gate_bundle_signing_script_pins_external_signer_and_revalidates(
         serialization.PublicFormat.Raw,
     )
     adapter = tmp_path / "signer_adapter.py"
+    site_packages = next(path for path in sys.path if path.endswith("site-packages"))
     adapter.write_text(
-        """\
+        f"""\
 import base64
 import os
 import sys
+sys.path.insert(0, {site_packages!r})
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 payload = sys.stdin.buffer.read()

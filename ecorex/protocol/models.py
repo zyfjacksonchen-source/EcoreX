@@ -65,6 +65,7 @@ class TurnStatus(str, Enum):
     RETRY_WAIT = "retry_wait"
     FINALIZING = "finalizing"
     COMPLETED = "completed"
+    PARTIAL = "partial"
     FAILED = "failed"
     CANCELLED = "cancelled"
     INTERRUPTED = "interrupted"
@@ -74,6 +75,7 @@ class TurnStatus(str, Enum):
 TERMINAL_TURN_STATUSES = frozenset(
     {
         TurnStatus.COMPLETED,
+        TurnStatus.PARTIAL,
         TurnStatus.FAILED,
         TurnStatus.CANCELLED,
         TurnStatus.INTERRUPTED,
@@ -100,6 +102,7 @@ TURN_TRANSITIONS: dict[TurnStatus, frozenset[TurnStatus]] = {
             TurnStatus.TOOL_PENDING,
             TurnStatus.WAITING_HUMAN,
             TurnStatus.RETRY_WAIT,
+            TurnStatus.PARTIAL,
             TurnStatus.FAILED,
             TurnStatus.CANCELLED,
             TurnStatus.INTERRUPTED,
@@ -112,6 +115,7 @@ TURN_TRANSITIONS: dict[TurnStatus, frozenset[TurnStatus]] = {
             TurnStatus.TOOL_PENDING,
             TurnStatus.WAITING_HUMAN,
             TurnStatus.RETRY_WAIT,
+            TurnStatus.PARTIAL,
             TurnStatus.FAILED,
             TurnStatus.CANCELLED,
             TurnStatus.INTERRUPTED,
@@ -123,6 +127,7 @@ TURN_TRANSITIONS: dict[TurnStatus, frozenset[TurnStatus]] = {
             TurnStatus.TOOL_PENDING,
             TurnStatus.RETRY_WAIT,
             TurnStatus.FINALIZING,
+            TurnStatus.PARTIAL,
             TurnStatus.FAILED,
             TurnStatus.CANCELLED,
             TurnStatus.INTERRUPTED,
@@ -137,6 +142,7 @@ TURN_TRANSITIONS: dict[TurnStatus, frozenset[TurnStatus]] = {
             # its tool checkpoint. Lease recovery must return authority to the
             # durable retry path instead of stranding the Turn forever.
             TurnStatus.RETRY_WAIT,
+            TurnStatus.PARTIAL,
             TurnStatus.FAILED,
             TurnStatus.CANCELLED,
             TurnStatus.INTERRUPTED,
@@ -163,6 +169,7 @@ TURN_TRANSITIONS: dict[TurnStatus, frozenset[TurnStatus]] = {
             TurnStatus.WAITING_HUMAN,
             TurnStatus.RETRY_WAIT,
             TurnStatus.FINALIZING,
+            TurnStatus.PARTIAL,
             TurnStatus.FAILED,
             TurnStatus.CANCELLED,
             TurnStatus.INTERRUPTED,
@@ -174,6 +181,7 @@ TURN_TRANSITIONS: dict[TurnStatus, frozenset[TurnStatus]] = {
             TurnStatus.PREPARING,
             TurnStatus.MODEL_REQUESTED,
             TurnStatus.TOOL_RUNNING,
+            TurnStatus.PARTIAL,
             TurnStatus.FAILED,
             TurnStatus.CANCELLED,
             TurnStatus.INTERRUPTED,
@@ -183,6 +191,7 @@ TURN_TRANSITIONS: dict[TurnStatus, frozenset[TurnStatus]] = {
     TurnStatus.FINALIZING: frozenset(
         {
             TurnStatus.COMPLETED,
+            TurnStatus.PARTIAL,
             TurnStatus.FAILED,
             TurnStatus.CANCELLED,
             TurnStatus.INTERRUPTED,
@@ -1599,6 +1608,7 @@ class TaskActivityDay(FrozenProtocolModel):
 
     date: date
     completed: int = Field(default=0, ge=0, strict=True)
+    partial: int = Field(default=0, ge=0, strict=True)
     terminal: int = Field(default=0, ge=0, strict=True)
 
 
@@ -1606,6 +1616,7 @@ class TaskActivityProjection(FrozenProtocolModel):
     """Device-local task activity derived from authoritative Turn states."""
 
     completed_today: int = Field(default=0, ge=0, strict=True)
+    partial_today: int = Field(default=0, ge=0, strict=True)
     waiting: int = Field(default=0, ge=0, strict=True)
     terminal_today: int = Field(default=0, ge=0, strict=True)
     days: list[TaskActivityDay] = Field(default_factory=list, max_length=7)

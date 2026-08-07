@@ -841,6 +841,9 @@ func waitForRuntimeAndOpen(root string, timeout time.Duration) error {
 			if err := openWebUI(productWebUIURL); err != nil {
 				return fmt.Errorf("EcoreX WebUI could not be opened")
 			}
+			if err := recordBrowserOpen(root, productWebUIURL); err != nil {
+				return err
+			}
 			return nil
 		}
 		if !time.Now().Before(deadline) {
@@ -882,7 +885,36 @@ func openRunningRuntimeAt(
 	if err := opener(webUIURL); err != nil {
 		return false, fmt.Errorf("EcoreX WebUI could not be opened")
 	}
+	if err := recordBrowserOpen(root, webUIURL); err != nil {
+		return false, err
+	}
 	return true, nil
+}
+
+func recordBrowserOpen(root, webUIURL string) error {
+	releaseID, version, ok := installedRuntimeIdentity(root)
+	if !ok || webUIURL == "" {
+		return fmt.Errorf("WebUI browser receipt identity is unavailable")
+	}
+	payload, err := json.Marshal(map[string]any{
+		"schema_version": 1,
+		"status":         "opened",
+		"release_id":     releaseID,
+		"version":        version,
+		"url":            webUIURL,
+		"opened_at":      time.Now().UTC().Truncate(time.Second).Format("2006-01-02T15:04:05Z"),
+	})
+	if err != nil {
+		return fmt.Errorf("WebUI browser receipt could not be encoded")
+	}
+	if err := atomicWrite(
+		filepath.Join(root, "bootstrap", "browser-opened.json"),
+		append(payload, '\n'),
+		0o600,
+	); err != nil {
+		return fmt.Errorf("WebUI browser receipt could not be persisted")
+	}
+	return nil
 }
 
 func runtimeUIReadyAt(client *http.Client, root, webUIURL string) bool {

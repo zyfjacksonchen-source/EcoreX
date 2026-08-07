@@ -78,6 +78,7 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument("--candidate-artifact-sha256", required=True)
     parser.add_argument("--mode", required=True, choices=("create", "create-and-activate"))
     parser.add_argument("--rollout-percentage", required=True, type=int)
+    parser.add_argument("--valid-for-seconds", type=int, default=3600)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
@@ -105,6 +106,8 @@ def run(argv: list[str] | None = None) -> int:
         gate_paths = {name: root / f"gates/{name}.json" for name in gate_names}
         if not all(path.is_file() for path in gate_paths.values()):
             raise ValueError("deployment_gate_set_invalid")
+        if not 60 <= args.valid_for_seconds <= 86_400:
+            raise ValueError("protected_deployment_admission_time_invalid")
         issued = datetime.now(timezone.utc).replace(microsecond=0)
         release_id = str(manifest["release_id"])
         admission = {
@@ -152,7 +155,7 @@ def run(argv: list[str] | None = None) -> int:
                 "rollout_percentage": args.rollout_percentage,
             },
             "issued_at": issued.isoformat().replace("+00:00", "Z"),
-            "expires_at": (issued + timedelta(hours=1))
+            "expires_at": (issued + timedelta(seconds=args.valid_for_seconds))
             .isoformat()
             .replace("+00:00", "Z"),
         }

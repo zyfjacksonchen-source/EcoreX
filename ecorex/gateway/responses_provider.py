@@ -105,7 +105,9 @@ def normalize_https_origin(value: str) -> str:
     try:
         host.encode("ascii")
     except UnicodeEncodeError:
-        raise ResponsesProviderConfigurationError("provider origin is invalid") from None
+        raise ResponsesProviderConfigurationError(
+            "provider origin is invalid"
+        ) from None
     try:
         ipaddress.ip_address(host)
     except ValueError:
@@ -145,7 +147,9 @@ class ManagedHTTPSResponsesProvider:
                 "provider origin allowlist is invalid"
             ) from None
         if normalized_origin not in normalized_allowlist:
-            raise ResponsesProviderConfigurationError("provider origin is not allowlisted")
+            raise ResponsesProviderConfigurationError(
+                "provider origin is not allowlisted"
+            )
         mapping = dict(model_mapping)
         if not allow_dynamic_mapping:
             try:
@@ -366,7 +370,12 @@ class ManagedHTTPSResponsesProvider:
                             "managed Responses provider is not ready"
                         )
                     self._validate_identity_encoding(response)
-                    media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().casefold()
+                    media_type = (
+                        response.headers.get("content-type", "")
+                        .split(";", 1)[0]
+                        .strip()
+                        .casefold()
+                    )
                     if media_type != "application/json":
                         raise ResponsesProviderProtocolError(
                             "provider health content type is invalid"
@@ -423,7 +432,10 @@ class ManagedHTTPSResponsesProvider:
         policy = self.model_policies.get(request.model_id)
         if policy is None or request.model_id not in self.model_mapping:
             raise ResponsesProviderRejected("managed model is unavailable")
-        if principal.account_id == "" or request.model_id not in principal.allowed_model_ids:
+        if (
+            principal.account_id == ""
+            or request.model_id not in principal.allowed_model_ids
+        ):
             raise ResponsesProviderRejected("managed model is not allowed")
         if request.model_policy != policy:
             raise ResponsesProviderRejected("managed model policy is not allowed")
@@ -476,9 +488,7 @@ class ManagedHTTPSResponsesProvider:
                     {
                         "type": "message",
                         "role": "assistant",
-                        "content": [
-                            {"type": "output_text", "text": item.content}
-                        ],
+                        "content": [{"type": "output_text", "text": item.content}],
                     }
                 )
             else:  # pragma: no cover - closed Pydantic union defense
@@ -526,6 +536,8 @@ class ManagedHTTPSResponsesProvider:
             # provider for serial calls prevents a second side effect from
             # racing past that durable boundary.
             value["parallel_tool_calls"] = False
+        if request.instructions is not None:
+            value["instructions"] = request.instructions
         if request.previous_response_id is not None:
             value["previous_response_id"] = request.previous_response_id
         return value, tool_name_mapping
@@ -557,7 +569,9 @@ class ManagedHTTPSResponsesProvider:
 
     @staticmethod
     def _validate_identity_encoding(response: httpx.Response) -> None:
-        encoding = response.headers.get("content-encoding", "identity").strip().casefold()
+        encoding = (
+            response.headers.get("content-encoding", "identity").strip().casefold()
+        )
         if encoding not in {"", "identity"}:
             raise ResponsesProviderProtocolError(
                 "provider response encoding is unsupported"
@@ -565,13 +579,21 @@ class ManagedHTTPSResponsesProvider:
 
     def _validate_stream_response(self, response: httpx.Response) -> None:
         if response.status_code == 429 or response.status_code >= 500:
-            raise ResponsesProviderUnavailable("managed Responses provider is unavailable")
+            raise ResponsesProviderUnavailable(
+                "managed Responses provider is unavailable"
+            )
         if response.status_code < 200 or response.status_code >= 300:
-            raise ResponsesProviderRejected("managed Responses provider rejected the request")
+            raise ResponsesProviderRejected(
+                "managed Responses provider rejected the request"
+            )
         self._validate_identity_encoding(response)
-        media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().casefold()
+        media_type = (
+            response.headers.get("content-type", "").split(";", 1)[0].strip().casefold()
+        )
         if media_type != "text/event-stream":
-            raise ResponsesProviderProtocolError("provider stream content type is invalid")
+            raise ResponsesProviderProtocolError(
+                "provider stream content type is invalid"
+            )
         declared = response.headers.get("content-length")
         if declared is not None and (
             not declared.isdigit() or int(declared) > _MAX_PROVIDER_STREAM_BYTES
@@ -629,10 +651,7 @@ class _ResponsesEventParser:
             isinstance(provider_seq, bool)
             or not isinstance(provider_seq, int)
             or not 0 <= provider_seq <= 10_000_000
-            or (
-                self._provider_seq is None
-                and provider_seq not in {0, 1}
-            )
+            or (self._provider_seq is None and provider_seq not in {0, 1})
             or (
                 self._provider_seq is not None
                 and provider_seq != self._provider_seq + 1
@@ -665,8 +684,14 @@ class _ResponsesEventParser:
         if event_type == "response.reasoning_summary_text.delta":
             delta = raw.get("delta")
             reasoning_id = raw.get("item_id")
-            if not isinstance(delta, str) or not delta or not _provider_id(reasoning_id):
-                raise ResponsesProviderProtocolError("provider reasoning summary is invalid")
+            if (
+                not isinstance(delta, str)
+                or not delta
+                or not _provider_id(reasoning_id)
+            ):
+                raise ResponsesProviderProtocolError(
+                    "provider reasoning summary is invalid"
+                )
             return (
                 self._event(
                     GatewayEventType.REASONING_SUMMARY_DELTA,
@@ -690,9 +715,10 @@ class _ResponsesEventParser:
             if isinstance(response, dict):
                 self._capture_response_object(response, require_model=False)
             if self.response_id is None:
-                self.response_id = "response_" + hashlib.sha256(
-                    self.request_id.encode("utf-8")
-                ).hexdigest()[:32]
+                self.response_id = (
+                    "response_"
+                    + hashlib.sha256(self.request_id.encode("utf-8")).hexdigest()[:32]
+                )
             retryable = event_type != "response.failed" or _retryable_error(raw)
             event = self._event(
                 GatewayEventType.RESPONSE_FAILED,
@@ -719,15 +745,16 @@ class _ResponsesEventParser:
     ) -> None:
         self._set_response_id(response.get("id"))
         model = response.get("model")
-        if (
-            (require_model and model is None)
-            or (model is not None and model != self.expected_model_id)
+        if (require_model and model is None) or (
+            model is not None and model != self.expected_model_id
         ):
             raise ResponsesProviderProtocolError("provider response model changed")
 
     def _set_response_id(self, candidate: Any) -> None:
         if not _provider_id(candidate):
-            raise ResponsesProviderProtocolError("provider response identity is invalid")
+            raise ResponsesProviderProtocolError(
+                "provider response identity is invalid"
+            )
         if self.response_id is not None and self.response_id != candidate:
             raise ResponsesProviderProtocolError("provider changed response identity")
         self.response_id = candidate
@@ -768,7 +795,9 @@ class _ResponsesEventParser:
             raise ResponsesProviderProtocolError("provider tool call is missing")
         combined = call["arguments"] + delta
         if len(combined.encode("utf-8")) > _MAX_ARGUMENT_BYTES:
-            raise ResponsesProviderProtocolError("provider tool arguments are oversized")
+            raise ResponsesProviderProtocolError(
+                "provider tool arguments are oversized"
+            )
         call["arguments"] = combined
 
     def _call_done(self, raw: Mapping[str, Any]) -> GatewayEvent | None:
@@ -797,15 +826,20 @@ class _ResponsesEventParser:
             return None
         if done_arguments is not None:
             if not isinstance(done_arguments, str):
-                raise ResponsesProviderProtocolError("provider tool arguments are invalid")
+                raise ResponsesProviderProtocolError(
+                    "provider tool arguments are invalid"
+                )
             if call["arguments"] and call["arguments"] != done_arguments:
                 raise ResponsesProviderProtocolError("provider tool arguments changed")
             call["arguments"] = done_arguments
         arguments = _decode_object(call["arguments"].encode("utf-8"))
         self._emitted_calls.add(item_id)
-        idempotency = "tool_" + hashlib.sha256(
-            (self.request_id + "\0" + call["call_id"]).encode("utf-8")
-        ).hexdigest()[:48]
+        idempotency = (
+            "tool_"
+            + hashlib.sha256(
+                (self.request_id + "\0" + call["call_id"]).encode("utf-8")
+            ).hexdigest()[:48]
+        )
         return self._event(
             GatewayEventType.TOOL_CALL_REQUESTED,
             tool_call_id=call["call_id"],
@@ -817,7 +851,9 @@ class _ResponsesEventParser:
     def _event(self, event_type: GatewayEventType, **values: Any) -> GatewayEvent:
         response_id = self.response_id
         if response_id is None:
-            raise ResponsesProviderProtocolError("provider response identity is missing")
+            raise ResponsesProviderProtocolError(
+                "provider response identity is missing"
+            )
         try:
             event = GatewayEvent(
                 seq=self.seq,
@@ -826,7 +862,9 @@ class _ResponsesEventParser:
                 **values,
             )
         except (TypeError, ValueError):
-            raise ResponsesProviderProtocolError("provider event contract is invalid") from None
+            raise ResponsesProviderProtocolError(
+                "provider event contract is invalid"
+            ) from None
         self.seq += 1
         return event
 
@@ -857,11 +895,15 @@ async def _iter_sse_data(response: httpx.Response) -> AsyncIterator[bytes]:
                 if data_lines:
                     events += 1
                     if events > _MAX_PROVIDER_EVENTS:
-                        raise ResponsesProviderProtocolError("provider emitted too many events")
+                        raise ResponsesProviderProtocolError(
+                            "provider emitted too many events"
+                        )
                     payload = b"\n".join(data_lines)
                     data_lines.clear()
                     if len(payload) > _MAX_PROVIDER_EVENT_BYTES:
-                        raise ResponsesProviderProtocolError("provider SSE event is oversized")
+                        raise ResponsesProviderProtocolError(
+                            "provider SSE event is oversized"
+                        )
                     yield payload
                 continue
             if line.startswith(b":"):
@@ -944,7 +986,11 @@ def _usage(value: Any) -> dict[str, int] | None:
     for name in ("input_tokens", "output_tokens", "total_tokens"):
         item = value.get(name)
         if item is not None:
-            if isinstance(item, bool) or not isinstance(item, int) or not 0 <= item <= 10**12:
+            if (
+                isinstance(item, bool)
+                or not isinstance(item, int)
+                or not 0 <= item <= 10**12
+            ):
                 raise ResponsesProviderProtocolError("provider usage is invalid")
             output[name] = item
     return output or None
@@ -978,7 +1024,9 @@ def _provider_tools(
     # deliberately repeats the limits.  ``model_copy(update=...)`` and future
     # alternate transports must not be able to bypass the network fence.
     if len(descriptors) > MAX_MODEL_VISIBLE_TOOLS:
-        raise ResponsesProviderRejected("managed tool projection exceeds its count budget")
+        raise ResponsesProviderRejected(
+            "managed tool projection exceeds its count budget"
+        )
     if len(disclosed_tool_ids) > MAX_DISCLOSED_WORKING_SET:
         raise ResponsesProviderRejected(
             "managed disclosed tool projection exceeds its count budget"
@@ -995,7 +1043,9 @@ def _provider_tools(
     except (TypeError, ValueError, UnicodeEncodeError):
         raise ResponsesProviderRejected("managed tool descriptor is invalid") from None
     if batch_bytes > MAX_TOOL_SCHEMA_BATCH_BYTES:
-        raise ResponsesProviderRejected("managed tool projection exceeds its byte budget")
+        raise ResponsesProviderRejected(
+            "managed tool projection exceeds its byte budget"
+        )
 
     provider_tools: list[dict[str, Any]] = []
     names: dict[str, str] = {}
@@ -1020,7 +1070,9 @@ def _provider_tools(
             or decision.get("tool_id") != tool_id
             or decision.get("tool_version") != spec.get("version")
             or decision.get("exposure")
-            not in ({"direct", "deferred"} if tool_id in disclosed_tool_ids else {"direct"})
+            not in (
+                {"direct", "deferred"} if tool_id in disclosed_tool_ids else {"direct"}
+            )
             or decision.get("eligible") is not True
         ):
             raise ResponsesProviderRejected("managed tool descriptor is invalid")

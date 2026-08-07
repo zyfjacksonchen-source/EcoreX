@@ -1,0 +1,149 @@
+name: EcoreX v1 public online update verification
+run-name: manual-online-update-v${{ inputs.version }}-${{ inputs.notification_sha256 }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact protected main commit containing the smoke executor
+        required: true
+        type: string
+      version:
+        description: Exact public target SemVer
+        required: true
+        type: string
+      from_version:
+        description: Exact installed source SemVer
+        required: true
+        type: string
+      notification_sha256:
+        description: SHA-256 of the activated signed stable update pointer
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ecorex-online-update-${{ inputs.version }}-${{ inputs.notification_sha256 }}
+  cancel-in-progress: false
+
+jobs:
+  validate-request:
+    name: Validate immutable public-update request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Reject automatic, malformed, or non-main input
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref }}
+          SOURCE_SHA: ${{ github.sha }}
+          REQUESTED_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+          FROM_VERSION: ${{ inputs.from_version }}
+          NOTIFICATION_SHA256: ${{ inputs.notification_sha256 }}
+        run: |
+          python - <<'PY'
+          import os, re
+          semver = r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+          ok = (
+              os.environ["EVENT_NAME"] == "workflow_dispatch"
+              and os.environ["REPOSITORY"] == "zyfjacksonchen-source/EcoreX"
+              and os.environ["REF_NAME"] == "refs/heads/main"
+              and os.environ["SOURCE_SHA"] == os.environ["REQUESTED_SHA"]
+              and re.fullmatch(r"[0-9a-f]{40}", os.environ["REQUESTED_SHA"] or "")
+              and re.fullmatch(semver, os.environ["VERSION"] or "")
+              and re.fullmatch(semver, os.environ["FROM_VERSION"] or "")
+              and os.environ["VERSION"] != os.environ["FROM_VERSION"]
+              and re.fullmatch(r"[0-9a-f]{64}", os.environ["NOTIFICATION_SHA256"] or "")
+          )
+          raise SystemExit(0 if ok else 1)
+          PY
+
+  windows-x64:
+    name: Windows x64 ${{ inputs.from_version }} to public target
+    needs: validate-request
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact smoke executor
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+          clean: true
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Install old public package then update from production
+        shell: pwsh
+        run: >-
+          ./scripts/smoke-v1-online-update-windows.ps1
+          -Version ${{ inputs.version }}
+          -FromVersion ${{ inputs.from_version }}
+          -Receipt .candidate/online-update/windows-x64.json
+
+      - name: Retain real-user update evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ecorex-v${{ inputs.version }}-online-update-windows-x64
+          path: .candidate/online-update/windows-x64.json
+          if-no-files-found: error
+          retention-days: 30
+
+  macos:
+    name: ${{ matrix.label }} ${{ inputs.from_version }} to public target
+    needs: validate-request
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: macos-arm64
+            label: macOS Apple Silicon
+            os: macos-15
+            architecture: arm64
+          - id: macos-x64
+            label: macOS Intel
+            os: macos-15-intel
+            architecture: x86_64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact smoke executor
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+          clean: true
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Install old public package then update from production
+        run: >-
+          bash scripts/smoke-v1-online-update-macos.sh
+          ${{ inputs.version }}
+          ${{ inputs.from_version }}
+          ${{ matrix.architecture }}
+          .candidate/online-update/${{ matrix.id }}.json
+
+      - name: Retain real-user update evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ecorex-v${{ inputs.version }}-online-update-${{ matrix.id }}
+          path: .candidate/online-update/${{ matrix.id }}.json
+          if-no-files-found: error
+          retention-days: 30

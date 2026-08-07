@@ -6,12 +6,14 @@ import asyncio
 import base64
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import aclosing, suppress
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
 import hashlib
 import json
 import threading
+import time
 from typing import Any, Protocol
 
 from ecorex.capabilities import (
@@ -23,6 +25,7 @@ from ecorex.capabilities import (
     Exposure,
     IdempotencyClass,
     ToolHandlerMissingError,
+    ToolProviderKind,
     ToolArgumentsValidationError,
     ToolExecutionScope,
     UnknownCapabilityError,
@@ -73,9 +76,25 @@ from .snapshots import TurnSnapshotContext
 from .tool_executions import StaleInvocationAdmission, ToolExecutionRepository
 
 
+_CUMULATIVE_MODEL_TOKENS: ContextVar[int] = ContextVar(
+    "ecorex_cumulative_model_tokens",
+    default=0,
+)
+
+_EMATE_MODEL_INSTRUCTIONS = (
+    "You are e-Mate, an AI work assistant. Always identify yourself as e-Mate; "
+    "do not claim to be Claude, Codex, ChatGPT, or the underlying model. Reply in "
+    "the user's language. Treat tool failures as evidence: adjust the plan, "
+    "parameters, or safe tool choice instead of blindly repeating the same call. "
+    "Never repeat an already completed side-effecting tool call."
+)
+_GATEWAY_INSTRUCTION_LIMIT = 131_072
+
+
 class WorkerOutcome(StrEnum):
     IDLE = "idle"
     COMPLETED = "completed"
+    PARTIAL = "partial"
     WAITING_HUMAN = "waiting_human"
     RETRY_SCHEDULED = "retry_scheduled"
     FAILED = "failed"
@@ -146,6 +165,20 @@ class _ImageToolDeferred(RuntimeError):
         super().__init__(code)
         self.code = code
         self.retry_delay_seconds = 1
+
+
+class _SafeToolRetryExhausted(RuntimeError):
+    def __init__(self, code: str, *, attempts: int) -> None:
+        super().__init__(code)
+        self.code = code
+        self.attempts = attempts
+
+
+@dataclass(slots=True)
+class _CircuitState:
+    failures: int = 0
+    open_until: float = 0.0
+    half_open_probe: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,14 +292,26 @@ class AgentTurnWorker:
         capabilities: CapabilityService,
         lease_seconds: int = 60,
         retry_delay_seconds: int = 5,
-        max_model_rounds: int = 64,
+        max_model_rounds: int = 24,
+        token_budget: int = 262_144,
+        finalization_reserve: int = 16_384,
+        tool_retry_max_attempts: int = 3,
+        tool_retry_base_delay_seconds: float = 1.0,
+        retry_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        circuit_failure_threshold: int = 3,
+        circuit_open_seconds: float = 30.0,
         extension_fence: ExtensionInvocationFence | None = None,
+        workflow_instruction_resolver: Callable[
+            [str, tuple[str, ...]], Mapping[str, Any] | None
+        ]
+        | None = None,
         turn_preparer: Callable[[CreateTurnRequest], Any] | None = None,
         permission_mutation_lock: Any | None = None,
         permission_account_id: str = "local-user",
         connector_uncertain_resolver: Callable[[str, str], None] | None = None,
         input_attachments: InputAttachmentService | None = None,
-        visual_evidence_resolver: Callable[..., tuple[GatewayImageInput, ...]] | None = None,
+        visual_evidence_resolver: Callable[..., tuple[GatewayImageInput, ...]]
+        | None = None,
         stream_checkpoint_interval_seconds: float = 0.2,
         image_execution_concurrency: int = 2,
         image_execution_queue_capacity: int = 8,
@@ -276,6 +321,20 @@ class AgentTurnWorker:
             raise ValueError("Agent worker lease must be at least five seconds")
         if not 1 <= max_model_rounds <= 128:
             raise ValueError("Agent worker model round limit is invalid")
+        if not 1 <= token_budget <= 10**9:
+            raise ValueError("Agent worker token budget is invalid")
+        if not 0 <= finalization_reserve < token_budget:
+            raise ValueError("Agent worker finalization reserve is invalid")
+        if not 1 <= tool_retry_max_attempts <= 8:
+            raise ValueError("Tool retry attempt limit is invalid")
+        if not 0 <= tool_retry_base_delay_seconds <= 30:
+            raise ValueError("Tool retry base delay is invalid")
+        if not callable(retry_sleep):
+            raise ValueError("Tool retry sleep function is invalid")
+        if not 1 <= circuit_failure_threshold <= 32:
+            raise ValueError("Tool circuit failure threshold is invalid")
+        if not 1 <= circuit_open_seconds <= 300:
+            raise ValueError("Tool circuit open duration is invalid")
         if not 0.1 <= stream_checkpoint_interval_seconds <= 0.25:
             raise ValueError("Agent worker stream checkpoint interval is invalid")
         self.kernel = kernel
@@ -284,7 +343,20 @@ class AgentTurnWorker:
         self.lease_seconds = lease_seconds
         self.retry_delay_seconds = retry_delay_seconds
         self.max_model_rounds = max_model_rounds
+        self.token_budget = token_budget
+        self.finalization_reserve = finalization_reserve
+        self.tool_retry_max_attempts = tool_retry_max_attempts
+        self.tool_retry_base_delay_seconds = tool_retry_base_delay_seconds
+        self.retry_sleep = retry_sleep
+        self.circuit_failure_threshold = circuit_failure_threshold
+        self.circuit_open_seconds = circuit_open_seconds
+        self._tool_circuits: dict[str, _CircuitState] = {}
         self.extension_fence = extension_fence
+        self.workflow_instruction_resolver = workflow_instruction_resolver
+        self._workflow_guidance_cache: dict[
+            tuple[str, tuple[str, ...]], Mapping[str, Any] | None
+        ] = {}
+        self._workflow_request_metadata: dict[str, dict[str, Any]] = {}
         self.turn_preparer = turn_preparer
         self.permission_mutation_lock = permission_mutation_lock or threading.RLock()
         if not all(
@@ -416,6 +488,21 @@ class AgentTurnWorker:
 
             base_context = await _run_blocking(self._job_context, job.job_id)
             checkpoint = dict(job.checkpoint or {})
+            checkpoint_version = checkpoint.get("schema_version")
+            if checkpoint_version not in {None, 2, 3}:
+                raise ConflictError("agent checkpoint schema version is unsupported")
+            cumulative_tokens = checkpoint.get("cumulative_tokens", 0)
+            if (
+                isinstance(cumulative_tokens, bool)
+                or not isinstance(cumulative_tokens, int)
+                or cumulative_tokens < 0
+            ):
+                raise ConflictError("agent checkpoint token usage is invalid")
+            durable_tokens = await _run_blocking(
+                self._turn_reported_tokens,
+                job.turn_id,
+            )
+            _CUMULATIVE_MODEL_TOKENS.set(max(cumulative_tokens, durable_tokens))
             context = dict(base_context)
             checkpoint_batch_id = checkpoint.get("execution_batch_id")
             if isinstance(checkpoint_batch_id, str) and checkpoint_batch_id:
@@ -523,10 +610,32 @@ class AgentTurnWorker:
                 tool_outputs = []
 
             while True:
-                if round_index >= self.max_model_rounds:
-                    raise _GatewayResponseFailure(
-                        "model_round_limit_exceeded", retryable=False
+                budget_finalization = False
+                budget_reason = (
+                    "model_round_limit_exceeded"
+                    if round_index >= self.max_model_rounds
+                    else (
+                        "token_budget_exhausted"
+                        if _CUMULATIVE_MODEL_TOKENS.get() >= self.token_budget
+                        else None
                     )
+                )
+                if budget_reason is not None:
+                    return await self._finish_guardrail(
+                        job_id=job.job_id,
+                        turn_id=turn.turn_id,
+                        worker_id=worker_id,
+                        lease_token=lease_token,
+                        reason=budget_reason,
+                        round_index=round_index,
+                    )
+                if (
+                    round_index >= self.max_model_rounds - 1
+                    or _CUMULATIVE_MODEL_TOKENS.get()
+                    >= self.token_budget - self.finalization_reserve
+                ):
+                    force_text_response = True
+                    budget_finalization = True
                 turn = await _run_blocking(self.kernel.get_turn, job.turn_id)
                 if turn.status is TurnStatus.PREPARING:
                     await _run_blocking(
@@ -582,6 +691,10 @@ class AgentTurnWorker:
                     stateless_continuation=stateless_continuation,
                     force_text_response=force_text_response,
                 )
+                workflow_metadata = self._workflow_request_metadata.pop(
+                    request.request_id,
+                    None,
+                )
                 if resumed_request_id is not None:
                     if (
                         assistant_item_id is not None
@@ -605,7 +718,7 @@ class AgentTurnWorker:
                     worker_id,
                     lease_token,
                     {
-                        "schema_version": 2,
+                        "schema_version": 3,
                         "phase": "model_prepare",
                         "round": round_index,
                         "request_id": request.request_id,
@@ -679,16 +792,42 @@ class AgentTurnWorker:
                             if stateless_continuation is not None
                             else {}
                         ),
+                        **(
+                            {"workflow_guidance": workflow_metadata}
+                            if workflow_metadata is not None
+                            else {}
+                        ),
                     },
                     idempotency_key=f"{request.request_id}:requested",
                 )
+                if workflow_metadata is not None:
+                    await _run_blocking(
+                        self.kernel.append_execution_event,
+                        job_id=job.job_id,
+                        lease_token=lease_token,
+                        thread_id=turn.thread_id,
+                        turn_id=turn.turn_id,
+                        event_type=(
+                            "workflow.guidance_loaded"
+                            if workflow_metadata.get("status") == "loaded"
+                            else "workflow.guidance_unavailable"
+                        ),
+                        payload={
+                            "schema_version": 1,
+                            **workflow_metadata,
+                            "capability_snapshot_id": context["capability_snapshot_id"],
+                            "extension_snapshot_id": context["extension_snapshot_id"],
+                            "round": round_index,
+                        },
+                        idempotency_key=f"{request.request_id}:workflow-guidance",
+                    )
                 tool_event: GatewayEvent | None = None
                 continue_after_response = False
                 response_has_text = False
                 response_id: str | None = None
                 last_seq = 0
                 wait_checkpoint: dict[str, Any] = {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "phase": "model_wait",
                     "round": round_index,
                     "request_id": request.request_id,
@@ -790,7 +929,7 @@ class AgentTurnWorker:
                             )
                             await checkpoint_pulse.stage(
                                 {
-                                    "schema_version": 2,
+                                    "schema_version": 3,
                                     "phase": "streaming",
                                     "round": round_index,
                                     "request_id": request.request_id,
@@ -896,7 +1035,7 @@ class AgentTurnWorker:
                                     worker_id,
                                     lease_token,
                                     {
-                                        "schema_version": 2,
+                                        "schema_version": 3,
                                         "phase": "stateless_continuation_recovery",
                                         "round": round_index,
                                         "previous_response_id": None,
@@ -917,6 +1056,11 @@ class AgentTurnWorker:
                             )
                         elif event.event_type is GatewayEventType.RESPONSE_COMPLETED:
                             await checkpoint_pulse.stage(wait_checkpoint, force=True)
+                            reported_tokens = self._reported_total_tokens(event.usage)
+                            if reported_tokens:
+                                _CUMULATIVE_MODEL_TOKENS.set(
+                                    _CUMULATIVE_MODEL_TOKENS.get() + reported_tokens
+                                )
                             if stateless_continuation is not None:
                                 await _run_blocking(
                                     self.kernel.append_execution_event,
@@ -950,6 +1094,9 @@ class AgentTurnWorker:
                                 payload={
                                     "response_id": event.response_id,
                                     "usage": event.usage or {},
+                                    "cumulative_tokens": (
+                                        _CUMULATIVE_MODEL_TOKENS.get()
+                                    ),
                                     "round": round_index,
                                 },
                                 idempotency_key=(
@@ -957,10 +1104,27 @@ class AgentTurnWorker:
                                     f"{event.response_id}:completed"
                                 ),
                             )
+                            if response_has_text:
+                                await _run_blocking(
+                                    self._record_reflection_resolved,
+                                    job_id=job.job_id,
+                                    lease_token=lease_token,
+                                    thread_id=turn.thread_id,
+                                    turn_id=turn.turn_id,
+                                    resolved_by="model_response",
+                                )
                             if not response_has_text:
-                                if (
-                                    not force_text_response
-                                    and (previous_response_id is not None or tool_outputs)
+                                if force_text_response and budget_finalization:
+                                    return await self._finish_guardrail(
+                                        job_id=job.job_id,
+                                        turn_id=turn.turn_id,
+                                        worker_id=worker_id,
+                                        lease_token=lease_token,
+                                        reason="budget_finalization_empty",
+                                        round_index=round_index,
+                                    )
+                                if not force_text_response and (
+                                    previous_response_id is not None or tool_outputs
                                 ):
                                     await _run_blocking(
                                         self.kernel.append_execution_event,
@@ -988,7 +1152,7 @@ class AgentTurnWorker:
                                         worker_id,
                                         lease_token,
                                         {
-                                            "schema_version": 2,
+                                            "schema_version": 3,
                                             "phase": "empty_final_response_recovery",
                                             "round": round_index,
                                             "previous_response_id": previous_response_id,
@@ -1042,7 +1206,7 @@ class AgentTurnWorker:
                                     worker_id,
                                     lease_token,
                                     {
-                                        "schema_version": 2,
+                                        "schema_version": 3,
                                         "phase": "between_batches",
                                         "round": round_index,
                                         "previous_response_id": previous_response_id,
@@ -1779,6 +1943,65 @@ class AgentTurnWorker:
             f"result={raw}"
         )
 
+    def _workflow_guidance(
+        self,
+        *,
+        extension_snapshot_id: str,
+        direct_tool_ids: tuple[str, ...],
+    ) -> tuple[str | None, dict[str, Any] | None]:
+        workflow_skill_ids = tuple(
+            dict.fromkeys(
+                skill_id
+                for tool_id in direct_tool_ids
+                for skill_id in sorted(
+                    self.capabilities.registry.resolve(tool_id).workflow_skill_ids
+                )
+            )
+        )
+        if not workflow_skill_ids:
+            return None, None
+        key = (extension_snapshot_id, workflow_skill_ids)
+        if key not in self._workflow_guidance_cache:
+            resolver = self.workflow_instruction_resolver
+            try:
+                resolved = (
+                    resolver(extension_snapshot_id, workflow_skill_ids)
+                    if resolver is not None
+                    else None
+                )
+            except Exception:
+                resolved = None
+            self._workflow_guidance_cache[key] = resolved
+        guidance = self._workflow_guidance_cache[key]
+        unavailable = {
+            "status": "unavailable",
+            "workflow_skill_ids": list(workflow_skill_ids),
+        }
+        if not isinstance(guidance, Mapping):
+            return None, unavailable
+        instructions = guidance.get("instructions")
+        instruction_sha256 = guidance.get("instruction_sha256")
+        skills = guidance.get("skills")
+        if (
+            not isinstance(instructions, str)
+            or not instructions.strip()
+            or len(instructions.encode("utf-8"))
+            > _GATEWAY_INSTRUCTION_LIMIT
+            - len(_EMATE_MODEL_INSTRUCTIONS.encode("utf-8"))
+            - len("\n\n".encode("utf-8"))
+            or not isinstance(instruction_sha256, str)
+            or hashlib.sha256(instructions.encode("utf-8")).hexdigest()
+            != instruction_sha256
+            or not isinstance(skills, list)
+        ):
+            return None, unavailable
+        return instructions, {
+            "status": "loaded",
+            "workflow_skill_ids": list(workflow_skill_ids),
+            "instruction_sha256": instruction_sha256,
+            "skills": skills,
+        }
+
     def _gateway_request(
         self,
         *,
@@ -1835,6 +2058,15 @@ class AgentTurnWorker:
             job_id,
             context["execution_batch_id"],
             plan.snapshot_id,
+        )
+        workflow_instructions, workflow_metadata = self._workflow_guidance(
+            extension_snapshot_id=context["extension_snapshot_id"],
+            direct_tool_ids=tool_projection.direct_tool_ids,
+        )
+        gateway_instructions = "\n\n".join(
+            value
+            for value in (_EMATE_MODEL_INSTRUCTIONS, workflow_instructions)
+            if value
         )
 
         def input_with_attachments(input_text: str, metadata: Mapping[str, Any]) -> str:
@@ -1901,7 +2133,9 @@ class AgentTurnWorker:
                             attachment_id=projection.attachment_id,
                             revision_id=projection.revision_id,
                             mime_type=rendition.mime_type,
-                            data_base64=base64.b64encode(rendition.content).decode("ascii"),
+                            data_base64=base64.b64encode(rendition.content).decode(
+                                "ascii"
+                            ),
                             sha256=rendition.sha256,
                             source_sha256=rendition.source_sha256,
                         )
@@ -1950,13 +2184,11 @@ class AgentTurnWorker:
                 visual_evidence_items.append(
                     GatewayUserMessageInput(
                         message_id=(
-                            f"{turn.turn_id}:vision:{output.tool_call_id}:"
-                            f"{round_index}"
+                            f"{turn.turn_id}:vision:{output.tool_call_id}:{round_index}"
                         ),
                         content=(
                             "e-Mate Runtime 已验证并附加视觉工具选中的图片。"
-                            "请直接查看图片并完成以下视觉任务：\n"
-                            + instruction
+                            "请直接查看图片并完成以下视觉任务：\n" + instruction
                         ),
                         images=list(images),
                     )
@@ -2092,7 +2324,7 @@ class AgentTurnWorker:
             )
             input_items = None
             legacy_tool_outputs = []
-        return ModelGatewayRequest(
+        request = ModelGatewayRequest(
             # A transport replay inside one leased attempt must retain its ID,
             # while an explicitly scheduled retry is a new billable/provider
             # attempt.  Without the durable Job attempt in this identity, the
@@ -2104,6 +2336,7 @@ class AgentTurnWorker:
             trace_id=f"trace_{turn_id}",
             model_id=turn.agent_model_id,
             model_policy=model_policy,
+            instructions=gateway_instructions,
             model_catalog_snapshot_id=context["model_catalog_snapshot_id"],
             input=legacy_input,
             input_items=input_items,
@@ -2111,7 +2344,9 @@ class AgentTurnWorker:
             capability_snapshot_id=context["capability_snapshot_id"],
             permission_snapshot_id=context["permission_snapshot_id"],
             tool_projection_budget_version=TOOL_PROJECTION_BUDGET_VERSION,
-            direct_tools=([] if force_text_response else list(tool_projection.descriptors)),
+            direct_tools=(
+                [] if force_text_response else list(tool_projection.descriptors)
+            ),
             deferred_tool_ids=(
                 list(tool_projection.deferred_tool_ids)
                 if not force_text_response
@@ -2128,6 +2363,9 @@ class AgentTurnWorker:
             previous_response_id=previous_response_id,
             tool_outputs=legacy_tool_outputs,
         )
+        if workflow_metadata is not None:
+            self._workflow_request_metadata[request.request_id] = workflow_metadata
+        return request
 
     def _thread_conversation_context(
         self,
@@ -2344,6 +2582,54 @@ class AgentTurnWorker:
             ).fetchone()
         return int(row["count"] if row is not None else 0)
 
+    def _recent_recovery_fingerprints(self, turn_id: str) -> list[str]:
+        with self.kernel.database.reader() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM events WHERE turn_id=? "
+                "AND event_type='tool.recovery_planned' ORDER BY seq DESC LIMIT 8",
+                (turn_id,),
+            ).fetchall()
+        fingerprints = []
+        for row in reversed(rows):
+            payload = json_loads(row["payload_json"], {})
+            value = (
+                payload.get("action_fingerprint") if isinstance(payload, dict) else None
+            )
+            if isinstance(value, str) and len(value) == 64:
+                fingerprints.append(value)
+        return fingerprints
+
+    @staticmethod
+    def _loop_trigger(fingerprints: list[str]) -> str | None:
+        if len(fingerprints) >= 3 and len(set(fingerprints[-3:])) == 1:
+            return "same_failure_three_times"
+        if (
+            len(fingerprints) >= 4
+            and fingerprints[-4] == fingerprints[-2]
+            and fingerprints[-3] == fingerprints[-1]
+            and fingerprints[-4] != fingerprints[-3]
+        ):
+            return "alternating_actions_twice"
+        return None
+
+    def _completed_recovery_facts(self, job_id: str) -> list[dict[str, str]]:
+        with self.kernel.database.reader() as connection:
+            rows = connection.execute(
+                "SELECT tool_id, result_json FROM tool_executions "
+                "WHERE job_id=? AND status='completed' "
+                "ORDER BY updated_at DESC LIMIT 8",
+                (job_id,),
+            ).fetchall()
+        return [
+            {
+                "tool_id": str(row["tool_id"]),
+                "result_sha256": hashlib.sha256(
+                    str(row["result_json"]).encode("utf-8")
+                ).hexdigest(),
+            }
+            for row in reversed(rows)
+        ]
+
     @staticmethod
     def _recovery_action(code: str, *, exhausted: bool) -> tuple[str, bool]:
         if exhausted:
@@ -2354,6 +2640,8 @@ class AgentTurnWorker:
             return "correct_arguments", True
         if code == "tool_permission_denied":
             return "choose_authorized_alternative", False
+        if code == "tool_retry_exhausted":
+            return "switch_tool", False
         return "discover_or_switch", False
 
     async def _recover_tool_event(
@@ -2371,6 +2659,7 @@ class AgentTurnWorker:
         code: str,
         source: str,
         details: Mapping[str, Any] | None = None,
+        execution_error_code: str | None = None,
         tool_item_id: str | None = None,
     ) -> GatewayToolOutput:
         """Persist a safe recovery plan and return it to the model.
@@ -2386,17 +2675,47 @@ class AgentTurnWorker:
         requested_tool = self._safe_tool_reference(
             details.get("tool_id") or details.get("requested_tool") or event.tool_name
         )
-        recovery_count, candidates = await asyncio.gather(
+        (
+            recovery_count,
+            candidates,
+            prior_fingerprints,
+            completed_facts,
+        ) = await asyncio.gather(
             _run_blocking(self._tool_recovery_count, turn_id),
             _run_blocking(
                 self._recovery_candidates,
                 capability_snapshot_id=context["capability_snapshot_id"],
                 reference=requested_tool,
             ),
+            _run_blocking(self._recent_recovery_fingerprints, turn_id),
+            _run_blocking(self._completed_recovery_facts, job_id),
+        )
+        arguments_sha256 = (
+            details["arguments_sha256"]
+            if isinstance(details.get("arguments_sha256"), str)
+            else hashlib.sha256(json_dumps(event.arguments).encode("utf-8")).hexdigest()
+        )
+        action_fingerprint = hashlib.sha256(
+            f"{requested_tool}\0{arguments_sha256}\0{code}".encode("utf-8")
+        ).hexdigest()
+        fingerprints = [*prior_fingerprints, action_fingerprint]
+        loop_trigger = self._loop_trigger(fingerprints)
+        reflection_trigger = loop_trigger or (
+            "same_failure_twice"
+            if len(fingerprints) >= 2 and fingerprints[-1] == fingerprints[-2]
+            else None
         )
         exhausted = recovery_count >= self._MAX_AUTOMATIC_TOOL_RECOVERIES
         action, retry_allowed = self._recovery_action(code, exhausted=exhausted)
+        if loop_trigger is not None:
+            action, retry_allowed, exhausted = "respond_without_tool", False, True
         reasons = details.get("reason_codes")
+        try:
+            recovery_hints = list(
+                self.capabilities.registry.resolve(requested_tool).recovery_hints
+            )
+        except (CapabilityError, KeyError, ValueError):
+            recovery_hints = []
         reason_codes = (
             [value for value in reasons if isinstance(value, str)][:32]
             if isinstance(reasons, list)
@@ -2413,8 +2732,36 @@ class AgentTurnWorker:
                 "automatic_attempt": recovery_count + 1,
                 "automatic_attempt_limit": self._MAX_AUTOMATIC_TOOL_RECOVERIES,
                 "candidate_tools": candidates if not exhausted else [],
+                "available_actions": (
+                    ["respond_without_tool"]
+                    if exhausted
+                    else [
+                        "correct_arguments",
+                        "mutate_parameters",
+                        "switch_tool",
+                        "decompose_task",
+                        "use_cached_result",
+                        "respond_without_tool",
+                    ]
+                ),
+                "reflection_required": reflection_trigger is not None,
+                "reflection_trigger": reflection_trigger,
+                "recent_action_fingerprints": fingerprints[-8:],
+                "completed_facts": completed_facts,
+                "parameter_mutation_hints": recovery_hints,
+                "remaining_budget": {
+                    "model_rounds": max(0, self.max_model_rounds - round_index - 1),
+                    "provider_tokens": max(
+                        0,
+                        self.token_budget - _CUMULATIVE_MODEL_TOKENS.get(),
+                    ),
+                },
             },
         }
+        if isinstance(details.get("tool_attempts"), int):
+            recovery["failure_attempts"] = details["tool_attempts"]
+        if isinstance(details.get("arguments_sha256"), str):
+            recovery["arguments_sha256"] = details["arguments_sha256"]
         turn = await _run_blocking(self.kernel.get_turn, turn_id)
         await _run_blocking(
             self.kernel.append_execution_event,
@@ -2438,11 +2785,46 @@ class AgentTurnWorker:
                 "candidate_tool_ids": [
                     candidate["tool_id"] for candidate in candidates[:5]
                 ],
+                "action_fingerprint": action_fingerprint,
+                "arguments_sha256": arguments_sha256,
+                "reflection_trigger": reflection_trigger,
+                "loop_detected": loop_trigger is not None,
                 "capability_snapshot_id": context["capability_snapshot_id"],
                 "execution_batch_id": execution_batch_id,
             },
             idempotency_key=(f"{turn_id}:{event.tool_call_id}:tool-recovery:{code}"),
         )
+        if reflection_trigger is not None:
+            await _run_blocking(
+                self.kernel.append_execution_event,
+                job_id=job_id,
+                lease_token=lease_token,
+                thread_id=turn.thread_id,
+                turn_id=turn_id,
+                tool_call_id=event.tool_call_id,
+                event_type=(
+                    "agent.loop_detected"
+                    if loop_trigger is not None
+                    else "agent.reflection_requested"
+                ),
+                payload={
+                    "schema_version": 1,
+                    "trigger": reflection_trigger,
+                    "action_fingerprint": action_fingerprint,
+                    "recent_action_fingerprints": fingerprints[-8:],
+                    "remaining_model_rounds": max(
+                        0,
+                        self.max_model_rounds - round_index - 1,
+                    ),
+                    "remaining_provider_tokens": max(
+                        0,
+                        self.token_budget - _CUMULATIVE_MODEL_TOKENS.get(),
+                    ),
+                },
+                idempotency_key=(
+                    f"{turn_id}:{event.tool_call_id}:reflection:{reflection_trigger}"
+                ),
+            )
         output = GatewayToolOutput(tool_call_id=event.tool_call_id, output=recovery)
         # A crash after recovery planning but before the next model request
         # resumes with the exact same function output.  It must not repeat an
@@ -2452,7 +2834,7 @@ class AgentTurnWorker:
             worker_id,
             lease_token,
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "phase": "tool_recovery",
                 "round": round_index + 1,
                 "previous_response_id": event.response_id,
@@ -2513,6 +2895,64 @@ class AgentTurnWorker:
                 "resolved_by_tool_id": tool_id,
             },
             idempotency_key=(f"{turn_id}:{pending_event_id}:tool-recovery-resolved"),
+        )
+        self._record_reflection_resolved(
+            job_id=job_id,
+            lease_token=lease_token,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            resolved_by=f"tool:{tool_id}",
+        )
+
+    def _record_reflection_resolved(
+        self,
+        *,
+        job_id: str,
+        lease_token: str,
+        thread_id: str,
+        turn_id: str,
+        resolved_by: str,
+    ) -> None:
+        with self.kernel.database.reader() as connection:
+            rows = connection.execute(
+                "SELECT event_id, event_type, payload_json FROM events "
+                "WHERE turn_id=? AND event_type IN "
+                "('agent.reflection_requested', 'agent.loop_detected', "
+                "'agent.reflection_resolved') ORDER BY seq DESC LIMIT 32",
+                (turn_id,),
+            ).fetchall()
+        resolved = {
+            payload.get("reflection_event_id")
+            for row in rows
+            for payload in (json_loads(row["payload_json"], {}),)
+            if row["event_type"] == "agent.reflection_resolved"
+            and isinstance(payload, dict)
+            and isinstance(payload.get("reflection_event_id"), str)
+        }
+        pending = next(
+            (
+                str(row["event_id"])
+                for row in rows
+                if row["event_type"]
+                in {"agent.reflection_requested", "agent.loop_detected"}
+                and row["event_id"] not in resolved
+            ),
+            None,
+        )
+        if pending is None:
+            return
+        self.kernel.append_execution_event(
+            job_id=job_id,
+            lease_token=lease_token,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            event_type="agent.reflection_resolved",
+            payload={
+                "schema_version": 1,
+                "reflection_event_id": pending,
+                "resolved_by": resolved_by[:128],
+            },
+            idempotency_key=f"{turn_id}:{pending}:reflection-resolved",
         )
 
     def _record_tool_governance_rejection(
@@ -2678,7 +3118,7 @@ class AgentTurnWorker:
             public_activity,
         )
         checkpoint = {
-            "schema_version": 2,
+            "schema_version": 3,
             "phase": "waiting_tool_approval",
             "round": round_index,
             "response_id": event.response_id,
@@ -3308,6 +3748,8 @@ class AgentTurnWorker:
         round_index: int,
         code: str,
         source: str,
+        details: Mapping[str, Any] | None = None,
+        execution_error_code: str | None = None,
     ) -> GatewayToolOutput:
         """Close an admitted-but-not-dispatched Tool before model recovery.
 
@@ -3323,7 +3765,7 @@ class AgentTurnWorker:
             lease_token,
             self.tool_executions.fail,
             execution_id,
-            error_code=code,
+            error_code=execution_error_code or code,
         )
         item = await _run_blocking(self._item, tool_item_id)
         if item.status is ItemStatus.IN_PROGRESS:
@@ -3349,9 +3791,225 @@ class AgentTurnWorker:
             details={
                 "requested_tool": self._safe_tool_reference(event.tool_name),
                 "reason_codes": [code],
+                **dict(details or {}),
             },
             tool_item_id=tool_item_id,
         )
+
+    @staticmethod
+    def _tool_retry_delay(
+        execution_id: str,
+        next_attempt: int,
+        *,
+        base_seconds: float,
+        retry_after: Any,
+    ) -> float:
+        if (
+            isinstance(retry_after, (int, float))
+            and not isinstance(retry_after, bool)
+            and 0 <= retry_after <= 30
+        ):
+            return float(retry_after)
+        unit = (
+            hashlib.sha256(f"{execution_id}:{next_attempt}".encode("utf-8")).digest()[0]
+            / 255
+        )
+        jitter = 0.8 + (0.4 * unit)
+        return min(30.0, base_seconds * (2 ** (next_attempt - 2)) * jitter)
+
+    @staticmethod
+    def _has_native_circuit(spec: Any) -> bool:
+        return (
+            spec.provider.kind is ToolProviderKind.MCP
+            or spec.tool_id in {"imagegen", "connector_read", "connector_write"}
+        )
+
+    def _circuit_admits(self, spec: Any) -> bool:
+        if self._has_native_circuit(spec):
+            return True
+        state = self._tool_circuits.get(spec.tool_id)
+        if state is None or state.open_until == 0:
+            return True
+        now = time.monotonic()
+        if now < state.open_until or state.half_open_probe:
+            return False
+        state.half_open_probe = True
+        return True
+
+    def _record_circuit_failure(self, spec: Any) -> bool:
+        if self._has_native_circuit(spec):
+            return False
+        state = self._tool_circuits.setdefault(spec.tool_id, _CircuitState())
+        was_open = state.open_until > time.monotonic()
+        state.failures += 1
+        state.half_open_probe = False
+        if state.failures >= self.circuit_failure_threshold:
+            state.open_until = time.monotonic() + self.circuit_open_seconds
+        return not was_open and state.open_until > time.monotonic()
+
+    def _record_circuit_success(self, spec: Any) -> bool:
+        if self._has_native_circuit(spec):
+            return False
+        state = self._tool_circuits.pop(spec.tool_id, None)
+        return state is not None and (state.open_until > 0 or state.failures > 0)
+
+    async def _call_tool_with_retry(
+        self,
+        *,
+        invoke: Callable[[], Awaitable[Any]],
+        spec: Any,
+        execution_id: str,
+        job_id: str,
+        turn_id: str,
+        worker_id: str,
+        lease_token: str,
+        running_checkpoint: Mapping[str, Any],
+    ) -> Any:
+        record = await _run_blocking(self.tool_executions.get, execution_id)
+        attempt = record.attempt
+        while True:
+            try:
+                result = await self._await_with_lease(
+                    invoke(),
+                    job_id=job_id,
+                    worker_id=worker_id,
+                    lease_token=lease_token,
+                    checkpoint={**running_checkpoint, "tool_attempt": attempt},
+                )
+                circuit_closed = self._record_circuit_success(spec)
+                if circuit_closed:
+                    turn = await _run_blocking(self.kernel.get_turn, turn_id)
+                    await _run_blocking(
+                        self.kernel.append_execution_event,
+                        job_id=job_id,
+                        lease_token=lease_token,
+                        thread_id=turn.thread_id,
+                        turn_id=turn_id,
+                        tool_call_id=execution_id,
+                        event_type="tool.circuit_closed",
+                        payload={"schema_version": 1, "tool_id": spec.tool_id},
+                        idempotency_key=f"{execution_id}:circuit-closed",
+                    )
+                return result
+            except LeaseError:
+                raise
+            except (
+                CapabilityUnavailableError,
+                CapabilityDeniedError,
+                ToolHandlerMissingError,
+                ToolArgumentsValidationError,
+            ):
+                raise
+            except Exception as error:
+                if (
+                    spec.idempotency is IdempotencyClass.NON_IDEMPOTENT
+                    or bool(getattr(error, "side_effect_uncertain", False))
+                ):
+                    raise
+                code = self._safe_error_code(error)
+                retryable = bool(getattr(error, "retryable", False))
+                turn = await _run_blocking(self.kernel.get_turn, turn_id)
+                circuit_opened = self._record_circuit_failure(spec)
+                if circuit_opened:
+                    await _run_blocking(
+                        self.kernel.append_execution_event,
+                        job_id=job_id,
+                        lease_token=lease_token,
+                        thread_id=turn.thread_id,
+                        turn_id=turn_id,
+                        tool_call_id=execution_id,
+                        event_type="tool.circuit_opened",
+                        payload={
+                            "schema_version": 1,
+                            "tool_id": spec.tool_id,
+                            "failure_threshold": self.circuit_failure_threshold,
+                            "open_seconds": self.circuit_open_seconds,
+                            "error_code": code,
+                        },
+                        idempotency_key=f"{execution_id}:circuit-opened",
+                    )
+                if (
+                    circuit_opened
+                    or not retryable
+                    or attempt >= self.tool_retry_max_attempts
+                ):
+                    await _run_blocking(
+                        self.kernel.append_execution_event,
+                        job_id=job_id,
+                        lease_token=lease_token,
+                        thread_id=turn.thread_id,
+                        turn_id=turn_id,
+                        tool_call_id=execution_id,
+                        event_type="tool.retry_exhausted",
+                        payload={
+                            "schema_version": 1,
+                            "tool_id": spec.tool_id,
+                            "attempts": attempt,
+                            "attempt_limit": self.tool_retry_max_attempts,
+                            "error_code": code,
+                            "arguments_sha256": record.arguments_sha256,
+                        },
+                        idempotency_key=f"{execution_id}:retry-exhausted:{attempt}",
+                    )
+                    raise _SafeToolRetryExhausted(
+                        code,
+                        attempts=attempt,
+                    ) from error
+                next_attempt = attempt + 1
+                delay = self._tool_retry_delay(
+                    execution_id,
+                    next_attempt,
+                    base_seconds=self.tool_retry_base_delay_seconds,
+                    retry_after=getattr(error, "retry_after_seconds", None),
+                )
+                retry_checkpoint = {
+                    **running_checkpoint,
+                    "phase": "tool_retry_wait",
+                    "tool_attempt": attempt,
+                    "next_tool_attempt": next_attempt,
+                    "retry_delay_seconds": delay,
+                    "error_code": code,
+                }
+                await _run_blocking(
+                    self.kernel.append_execution_event,
+                    job_id=job_id,
+                    lease_token=lease_token,
+                    thread_id=turn.thread_id,
+                    turn_id=turn_id,
+                    tool_call_id=execution_id,
+                    event_type="tool.retry_scheduled",
+                    payload={
+                        "schema_version": 1,
+                        "tool_id": spec.tool_id,
+                        "attempt": attempt,
+                        "next_attempt": next_attempt,
+                        "attempt_limit": self.tool_retry_max_attempts,
+                        "delay_seconds": delay,
+                        "error_code": code,
+                        "arguments_sha256": record.arguments_sha256,
+                    },
+                    idempotency_key=f"{execution_id}:retry-scheduled:{next_attempt}",
+                )
+                await self._heartbeat(
+                    job_id,
+                    worker_id,
+                    lease_token,
+                    dict(retry_checkpoint),
+                )
+                await self._await_with_lease(
+                    self.retry_sleep(delay),
+                    job_id=job_id,
+                    worker_id=worker_id,
+                    lease_token=lease_token,
+                    checkpoint=retry_checkpoint,
+                )
+                record = await self._run_execution_sync(
+                    job_id,
+                    lease_token,
+                    self.tool_executions.record_retry,
+                    execution_id,
+                )
+                attempt = record.attempt
 
     async def _execute_tool(
         self,
@@ -3385,7 +4043,7 @@ class AgentTurnWorker:
         if spec.tool_id not in projection.projected_tool_ids:
             raise _GatewayResponseFailure("tool_not_disclosed", retryable=False)
         running_checkpoint = {
-            "schema_version": 2,
+            "schema_version": 3,
             "phase": "tool_running",
             "round": round_index,
             "response_id": event.response_id,
@@ -3442,7 +4100,7 @@ class AgentTurnWorker:
                     and not allow_uncertain_retry
                 ):
                     checkpoint = {
-                        "schema_version": 2,
+                        "schema_version": 3,
                         "phase": "uncertain_tool_execution",
                         "round": round_index,
                         "response_id": event.response_id,
@@ -3555,7 +4213,41 @@ class AgentTurnWorker:
                         code="tool_permission_denied",
                         source="admission",
                     )
-            if spec.tool_id == "imagegen":
+            cached_record = (
+                await _run_blocking(
+                    self.tool_executions.exact_cached_result,
+                    exclude_tool_call_id=execution_id,
+                    capability_snapshot_id=context["capability_snapshot_id"],
+                    policy_snapshot_id=context["permission_snapshot_id"],
+                    tool_id=spec.tool_id,
+                    tool_version=spec.version,
+                    arguments_sha256=record.arguments_sha256,
+                    ttl_seconds=spec.cache_ttl_seconds,
+                )
+                if spec.idempotency is IdempotencyClass.READ_ONLY
+                and spec.cache_ttl_seconds > 0
+                else None
+            )
+            if cached_record is not None:
+                call_value = cached_record.result
+            elif not self._circuit_admits(spec):
+                return await self._recover_dispatched_tool_failure(
+                    job_id=job_id,
+                    turn_id=turn_id,
+                    worker_id=worker_id,
+                    lease_token=lease_token,
+                    context=context,
+                    execution_batch_id=execution_batch_id,
+                    event=event,
+                    tool_item_id=tool_item_id,
+                    execution_id=execution_id,
+                    assistant_item_id=assistant_item_id,
+                    round_index=round_index,
+                    code="tool_circuit_open",
+                    source="worker_circuit",
+                    details={"reason_codes": ["service_temporarily_unavailable"]},
+                )
+            elif spec.tool_id == "imagegen":
                 submit_status = await self.image_executions.submit(
                     execution_id=execution_id,
                     job_id=job_id,
@@ -3580,134 +4272,171 @@ class AgentTurnWorker:
                     if submit_status == "queue_full"
                     else "image_execution_pending"
                 )
-            try:
-                call = await self._await_with_lease(
-                    self.capabilities.tool_call(
-                        context["capability_snapshot_id"],
-                        event.tool_name,
-                        event.arguments,
-                        policy_snapshot_id=context["permission_snapshot_id"],
-                        approved=approved,
-                        idempotency_key=f"{turn_id}:{event.tool_call_id}",
-                        execution_scope=ToolExecutionScope(
-                            job_id=job_id,
-                            thread_id=turn.thread_id,
-                            turn_id=turn_id,
-                            execution_batch_id=execution_batch_id,
+            else:
+                try:
+                    call = await self._call_tool_with_retry(
+                        invoke=lambda: self.capabilities.tool_call(
+                            context["capability_snapshot_id"],
+                            event.tool_name,
+                            event.arguments,
+                            policy_snapshot_id=context["permission_snapshot_id"],
+                            approved=approved,
+                            idempotency_key=f"{turn_id}:{event.tool_call_id}",
+                            execution_scope=ToolExecutionScope(
+                                job_id=job_id,
+                                thread_id=turn.thread_id,
+                                turn_id=turn_id,
+                                execution_batch_id=execution_batch_id,
+                            ),
+                            tool_call_id=execution_id,
                         ),
-                        tool_call_id=execution_id,
-                    ),
-                    job_id=job_id,
-                    worker_id=worker_id,
-                    lease_token=lease_token,
-                    checkpoint=running_checkpoint,
-                )
-            except LeaseError:
-                raise
-            except (
-                CapabilityUnavailableError,
-                CapabilityDeniedError,
-                ToolHandlerMissingError,
-                ToolArgumentsValidationError,
-            ) as error:
-                return await self._recover_dispatched_tool_failure(
-                    job_id=job_id,
-                    turn_id=turn_id,
-                    worker_id=worker_id,
-                    lease_token=lease_token,
-                    context=context,
-                    execution_batch_id=execution_batch_id,
-                    event=event,
-                    tool_item_id=tool_item_id,
-                    execution_id=execution_id,
-                    assistant_item_id=assistant_item_id,
-                    round_index=round_index,
-                    code=getattr(error, "code", "capability_unavailable"),
-                    source="dispatch_preflight",
-                )
-            except Exception as error:
-                # Generic opaque handlers remain conservative for a
-                # non-idempotent Tool.  Pack-process errors carry an explicit
-                # acknowledgement boundary, so rejected sandbox preflight
-                # failures are safely recorded as failed instead of trapping
-                # the user in a false "might have executed" interaction.
-                # A transport can only make an invocation ambiguous when the
-                # Tool contract itself is non-idempotent.  Pack adapters mark
-                # the acknowledgement boundary independently of ToolSpec;
-                # treating that transport flag as sufficient trapped failed
-                # read-only fetches in a misleading conflict-resolution HITL.
-                connector_invocation_id = getattr(error, "invocation_id", None)
-                uncertain = bool(getattr(error, "side_effect_uncertain", True)) and (
-                    spec.idempotency is IdempotencyClass.NON_IDEMPOTENT
-                    or (
-                        spec.tool_id == "connector_write"
-                        and isinstance(connector_invocation_id, str)
-                        and bool(connector_invocation_id)
+                        spec=spec,
+                        execution_id=execution_id,
+                        job_id=job_id,
+                        turn_id=turn_id,
+                        worker_id=worker_id,
+                        lease_token=lease_token,
+                        running_checkpoint=running_checkpoint,
                     )
-                )
-                if not uncertain:
-                    error_code = self._safe_error_code(error)
-                    await self._run_execution_sync(
-                        job_id,
-                        lease_token,
-                        self.tool_executions.fail,
-                        execution_id,
-                        error_code=error_code,
+                    call_value = call.value
+                except LeaseError:
+                    raise
+                except (
+                    CapabilityUnavailableError,
+                    CapabilityDeniedError,
+                    ToolHandlerMissingError,
+                    ToolArgumentsValidationError,
+                ) as error:
+                    return await self._recover_dispatched_tool_failure(
+                        job_id=job_id,
+                        turn_id=turn_id,
+                        worker_id=worker_id,
+                        lease_token=lease_token,
+                        context=context,
+                        execution_batch_id=execution_batch_id,
+                        event=event,
+                        tool_item_id=tool_item_id,
+                        execution_id=execution_id,
+                        assistant_item_id=assistant_item_id,
+                        round_index=round_index,
+                        code=getattr(error, "code", "capability_unavailable"),
+                        source="dispatch_preflight",
                     )
-                    raise _GatewayResponseFailure(
-                        error_code,
-                        retryable=bool(getattr(error, "retryable", False)),
-                    ) from error
-                # Once an opaque side-effecting process was admitted, a lost
-                # acknowledgement is uncertain regardless of whether the
-                # transport labels the failure retryable.  Persist HITL now;
-                # never let the generic Durable Job retry path invoke it.
-                checkpoint = {
-                    **running_checkpoint,
-                    "phase": "uncertain_tool_execution",
-                    "approved": approved,
-                    "uncertain_error_code": self._safe_error_code(error),
-                }
-                if isinstance(connector_invocation_id, str) and connector_invocation_id:
-                    checkpoint["connector_invocation_id"] = connector_invocation_id
-                    prompt = (
-                        "连接器写入可能已经完成。请先在对应服务中核对："
-                        "只有确认未执行时才选择重试；如果已完成或不再需要，请跳过。"
+                except _SafeToolRetryExhausted as error:
+                    return await self._recover_dispatched_tool_failure(
+                        job_id=job_id,
+                        turn_id=turn_id,
+                        worker_id=worker_id,
+                        lease_token=lease_token,
+                        context=context,
+                        execution_batch_id=execution_batch_id,
+                        event=event,
+                        tool_item_id=tool_item_id,
+                        execution_id=execution_id,
+                        assistant_item_id=assistant_item_id,
+                        round_index=round_index,
+                        code="tool_retry_exhausted",
+                        source="dispatch_retry",
+                        details={
+                            "reason_codes": [error.code],
+                            "tool_attempts": error.attempts,
+                            "arguments_sha256": (
+                                await _run_blocking(
+                                    self.tool_executions.get,
+                                    execution_id,
+                                )
+                            ).arguments_sha256,
+                        },
+                        execution_error_code=error.code,
                     )
-                    options = [
-                        {"id": "retry", "label": "已确认未执行，重试"},
-                        {"id": "skip", "label": "已核对，跳过"},
-                        {"id": "cancel", "label": "取消任务"},
-                    ]
-                else:
-                    prompt = (
-                        "上次命令可能已经执行，但 e-Mate 没有收到可验证的结果。"
-                        "请先检查工作区或外部状态，再选择重试或跳过；重试可能重复产生副作用。"
+                except Exception as error:
+                    # Generic opaque handlers remain conservative for a
+                    # non-idempotent Tool.  Pack-process errors carry an explicit
+                    # acknowledgement boundary, so rejected sandbox preflight
+                    # failures are safely recorded as failed instead of trapping
+                    # the user in a false "might have executed" interaction.
+                    # A transport can only make an invocation ambiguous when the
+                    # Tool contract itself is non-idempotent.  Pack adapters mark
+                    # the acknowledgement boundary independently of ToolSpec;
+                    # treating that transport flag as sufficient trapped failed
+                    # read-only fetches in a misleading conflict-resolution HITL.
+                    connector_invocation_id = getattr(error, "invocation_id", None)
+                    uncertain = bool(
+                        getattr(error, "side_effect_uncertain", True)
+                    ) and (
+                        spec.idempotency is IdempotencyClass.NON_IDEMPOTENT
+                        or (
+                            spec.tool_id == "connector_write"
+                            and isinstance(connector_invocation_id, str)
+                            and bool(connector_invocation_id)
+                        )
                     )
-                    options = [
-                        {"id": "skip", "label": "已检查，跳过"},
-                        {"id": "retry", "label": "仍然重试"},
-                        {"id": "cancel", "label": "取消任务"},
-                    ]
-                await _run_blocking(
-                    self.kernel.request_interaction,
-                    job_id=job_id,
-                    worker_id=worker_id,
-                    lease_token=lease_token,
-                    kind=InteractionKind.CONFLICT_RESOLUTION,
-                    prompt=prompt,
-                    idempotency_key=(
-                        f"{turn_id}:{event.tool_call_id}:uncertain:"
-                        f"{connector_invocation_id}"
-                        if isinstance(connector_invocation_id, str)
+                    if not uncertain:
+                        error_code = self._safe_error_code(error)
+                        await self._run_execution_sync(
+                            job_id,
+                            lease_token,
+                            self.tool_executions.fail,
+                            execution_id,
+                            error_code=error_code,
+                        )
+                        raise _GatewayResponseFailure(
+                            error_code,
+                            retryable=bool(getattr(error, "retryable", False)),
+                        ) from error
+                    # Once an opaque side-effecting process was admitted, a lost
+                    # acknowledgement is uncertain regardless of whether the
+                    # transport labels the failure retryable.  Persist HITL now;
+                    # never let the generic Durable Job retry path invoke it.
+                    checkpoint = {
+                        **running_checkpoint,
+                        "phase": "uncertain_tool_execution",
+                        "approved": approved,
+                        "uncertain_error_code": self._safe_error_code(error),
+                    }
+                    if (
+                        isinstance(connector_invocation_id, str)
                         and connector_invocation_id
-                        else f"{turn_id}:{event.tool_call_id}:uncertain"
-                    ),
-                    options=options,
-                    checkpoint=checkpoint,
-                )
-                return None
-            encoded = json_dumps(call.value)
+                    ):
+                        checkpoint["connector_invocation_id"] = connector_invocation_id
+                        prompt = (
+                            "连接器写入可能已经完成。请先在对应服务中核对："
+                            "只有确认未执行时才选择重试；如果已完成或不再需要，请跳过。"
+                        )
+                        options = [
+                            {"id": "retry", "label": "已确认未执行，重试"},
+                            {"id": "skip", "label": "已核对，跳过"},
+                            {"id": "cancel", "label": "取消任务"},
+                        ]
+                    else:
+                        prompt = (
+                            "上次命令可能已经执行，但 e-Mate 没有收到可验证的结果。"
+                            "请先检查工作区或外部状态，再选择重试或跳过；重试可能重复产生副作用。"
+                        )
+                        options = [
+                            {"id": "skip", "label": "已检查，跳过"},
+                            {"id": "retry", "label": "仍然重试"},
+                            {"id": "cancel", "label": "取消任务"},
+                        ]
+                    await _run_blocking(
+                        self.kernel.request_interaction,
+                        job_id=job_id,
+                        worker_id=worker_id,
+                        lease_token=lease_token,
+                        kind=InteractionKind.CONFLICT_RESOLUTION,
+                        prompt=prompt,
+                        idempotency_key=(
+                            f"{turn_id}:{event.tool_call_id}:uncertain:"
+                            f"{connector_invocation_id}"
+                            if isinstance(connector_invocation_id, str)
+                            and connector_invocation_id
+                            else f"{turn_id}:{event.tool_call_id}:uncertain"
+                        ),
+                        options=options,
+                        checkpoint=checkpoint,
+                    )
+                    return None
+            encoded = json_dumps(call_value)
             if len(encoded.encode("utf-8")) > 1024 * 1024:
                 await self._run_execution_sync(
                     job_id,
@@ -3722,16 +4451,35 @@ class AgentTurnWorker:
                 lease_token,
                 self.tool_executions.complete,
                 execution_id,
-                call.value,
+                call_value,
             )
             result = completed_record.result
             execution_status = completed_record.status
+            if cached_record is not None:
+                await _run_blocking(
+                    self.kernel.append_execution_event,
+                    job_id=job_id,
+                    lease_token=lease_token,
+                    thread_id=turn.thread_id,
+                    turn_id=turn_id,
+                    tool_call_id=event.tool_call_id,
+                    event_type="tool.cache_reused",
+                    payload={
+                        "schema_version": 1,
+                        "tool_id": spec.tool_id,
+                        "tool_version": spec.version,
+                        "arguments_sha256": record.arguments_sha256,
+                        "reused_from_tool_call_id": cached_record.tool_call_id,
+                        "ttl_seconds": spec.cache_ttl_seconds,
+                    },
+                    idempotency_key=f"{execution_id}:cache-reused",
+                )
         directive = self._tool_interaction_directive(spec.output_schema, result)
         if directive is not None:
             tool_result = dict(result)
             tool_result.pop("_ecorex_interaction", None)
             followup_checkpoint = {
-                "schema_version": 2,
+                "schema_version": 3,
                 "phase": "waiting_tool_followup",
                 "round": round_index,
                 "response_id": event.response_id,
@@ -3806,7 +4554,7 @@ class AgentTurnWorker:
             worker_id,
             lease_token,
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "phase": "tool_completed",
                 "round": round_index,
                 "response_id": event.response_id,
@@ -4000,6 +4748,11 @@ class AgentTurnWorker:
         lease_token: str,
         checkpoint: dict[str, Any],
     ) -> None:
+        checkpoint = {
+            **checkpoint,
+            "schema_version": 3,
+            "cumulative_tokens": _CUMULATIVE_MODEL_TOKENS.get(),
+        }
         await _run_blocking(
             self.kernel.jobs.heartbeat,
             job_id,
@@ -4007,6 +4760,101 @@ class AgentTurnWorker:
             lease_token,
             lease_seconds=self.lease_seconds,
             checkpoint=checkpoint,
+        )
+
+    @staticmethod
+    def _reported_total_tokens(usage: Mapping[str, Any] | None) -> int:
+        if not isinstance(usage, Mapping):
+            return 0
+        total = usage.get("total_tokens")
+        if isinstance(total, int) and not isinstance(total, bool) and total >= 0:
+            return total
+        parts = []
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "prompt_tokens",
+            "completion_tokens",
+        ):
+            value = usage.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                parts.append(value)
+        return sum(parts[:2])
+
+    def _turn_reported_tokens(self, turn_id: str) -> int:
+        with self.kernel.database.reader() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM events WHERE turn_id = ? "
+                "AND event_type = 'model.response_completed'",
+                (turn_id,),
+            ).fetchall()
+        return sum(
+            self._reported_total_tokens(
+                payload.get("usage") if isinstance(payload, Mapping) else None
+            )
+            for row in rows
+            for payload in (json_loads(row["payload_json"], {}),)
+        )
+
+    def _has_usable_partial_result(self, turn_id: str) -> bool:
+        with self.kernel.database.reader() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM items WHERE turn_id = ? AND status = ? AND ("
+                "kind IN (?, ?) OR (kind = ? "
+                "AND json_extract(content_json, '$.role') = 'assistant' "
+                "AND length(trim(json_extract(content_json, '$.text'))) > 0)) LIMIT 1",
+                (
+                    turn_id,
+                    ItemStatus.COMPLETED.value,
+                    ItemKind.ARTIFACT.value,
+                    ItemKind.TOOL_CALL.value,
+                    ItemKind.MESSAGE.value,
+                ),
+            ).fetchone()
+        return row is not None
+
+    async def _finish_guardrail(
+        self,
+        *,
+        job_id: str,
+        turn_id: str,
+        worker_id: str,
+        lease_token: str,
+        reason: str,
+        round_index: int,
+    ) -> WorkerRunResult:
+        partial = await _run_blocking(self._has_usable_partial_result, turn_id)
+        turn = await _run_blocking(self.kernel.get_turn, turn_id)
+        await _run_blocking(
+            self.kernel.append_execution_event,
+            job_id=job_id,
+            lease_token=lease_token,
+            thread_id=turn.thread_id,
+            turn_id=turn_id,
+            event_type="agent.budget_exhausted",
+            payload={
+                "schema_version": 1,
+                "reason": reason,
+                "round": round_index,
+                "cumulative_tokens": _CUMULATIVE_MODEL_TOKENS.get(),
+                "partial_result": partial,
+            },
+            idempotency_key=f"{job_id}:budget-exhausted:{reason}",
+        )
+        target = TurnStatus.PARTIAL if partial else TurnStatus.FAILED
+        await _run_blocking(
+            self.kernel.finish_turn_job,
+            job_id=job_id,
+            worker_id=worker_id,
+            lease_token=lease_token,
+            target=target,
+            reason=("budget_exhausted" if partial else reason),
+        )
+        return WorkerRunResult(
+            WorkerOutcome.PARTIAL if partial else WorkerOutcome.FAILED,
+            job_id=job_id,
+            turn_id=turn_id,
+            reason="budget_exhausted" if partial else reason,
         )
 
     @staticmethod

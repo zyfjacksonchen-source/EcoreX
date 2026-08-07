@@ -2,9 +2,8 @@
 
 This adapter runs only in the cloud Image Orchestrator.  Administrator-managed
 credentials therefore never cross into the local Runtime.  A submit is never
-retried inside this adapter: after a timeout or 5xx response the upstream may
-already have billed the request, so the durable worker moves into recovery
-instead of creating a second image implicitly.
+replayed after an uncertain response.  The sole in-adapter fallback follows a
+definite model-unavailable rejection, before the provider accepted any work.
 """
 
 from __future__ import annotations
@@ -13,9 +12,11 @@ import asyncio
 import base64
 import binascii
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from io import BytesIO
+import hashlib
 import json
 import re
 import ssl
@@ -30,6 +31,7 @@ from .managed_provider import (
 )
 from .models import ImageJob, ImageOperation, ImageUsage, canonical_json
 from .provider import (
+    ProviderModelUnavailable,
     ProviderRateLimited,
     ProviderRejected,
     ProviderResult,
@@ -48,6 +50,7 @@ _HEALTH_BYTES = 2 * 1024 * 1024
 _MAX_EDIT_IMAGES = 16
 _MAX_RETRY_AFTER_BYTES = 128
 _UPSTREAM_INPUT_BYTES = 50 * 1024 * 1024
+_ERROR_BYTES = 64 * 1024
 _GPT_IMAGE_2_MAX_EDGE = 3840
 _GPT_IMAGE_2_MIN_PIXELS = 655_360
 _GPT_IMAGE_2_MAX_PIXELS = 8_294_400
@@ -161,6 +164,28 @@ class OpenAICompatibleImageProvider:
     async def submit(self, job: ImageJob, *, idempotency_key: str) -> ProviderResult:
         self._validate_job(job)
         self._validate_idempotency_key(idempotency_key)
+        try:
+            return await self._submit_once(job, idempotency_key=idempotency_key)
+        except ProviderModelUnavailable:
+            if (
+                job.request.model_id != "gpt-image-2-pro"
+                or "gpt-image-2" not in self.allowed_models
+            ):
+                raise
+            fallback_job = replace(
+                job, request=replace(job.request, model_id="gpt-image-2")
+            )
+            fallback_key = "image-fallback-" + hashlib.sha256(
+                idempotency_key.encode("utf-8")
+            ).hexdigest()
+            return await self._submit_once(
+                fallback_job,
+                idempotency_key=fallback_key,
+            )
+
+    async def _submit_once(
+        self, job: ImageJob, *, idempotency_key: str
+    ) -> ProviderResult:
         if job.request.operation is ImageOperation.GENERATE:
             body, headers = await self._request(
                 "POST",
@@ -169,6 +194,7 @@ class OpenAICompatibleImageProvider:
                 content_type="application/json",
                 idempotency_key=idempotency_key,
                 submission=True,
+                model_id=job.request.model_id,
                 maximum=self._image_json_limit,
             )
         else:
@@ -180,6 +206,7 @@ class OpenAICompatibleImageProvider:
                 files=files,
                 idempotency_key=idempotency_key,
                 submission=True,
+                model_id=job.request.model_id,
                 maximum=self._image_json_limit,
             )
         return self._completed(job, body, headers)
@@ -429,6 +456,7 @@ class OpenAICompatibleImageProvider:
         idempotency_key: str | None = None,
         submission: bool,
         maximum: int,
+        model_id: str | None = None,
     ) -> tuple[bytes, Mapping[str, str]]:
         headers = self._headers()
         if content_type is not None:
@@ -463,11 +491,17 @@ class OpenAICompatibleImageProvider:
                             )
                         raise ProviderUnavailable("image provider is unavailable")
                     if response.status_code < 200 or response.status_code >= 300:
+                        error_body = await self._bounded_body(response, _ERROR_BYTES)
+                        if self._model_unavailable(error_body, model_id=model_id):
+                            raise ProviderModelUnavailable(
+                                "image provider model is unavailable"
+                            )
                         raise ProviderRejected("image provider rejected the request")
                     body = await self._bounded_body(response, maximum)
                     return body, dict(response.headers)
             except (
                 ProviderRateLimited,
+                ProviderModelUnavailable,
                 ProviderRejected,
                 ProviderUncertain,
                 ProviderUnavailable,
@@ -813,6 +847,31 @@ class OpenAICompatibleImageProvider:
         if not isinstance(value, dict):
             raise ProviderRejected("image provider response is invalid")
         return value
+
+    @staticmethod
+    def _model_unavailable(payload: bytes, *, model_id: str | None) -> bool:
+        if model_id != "gpt-image-2-pro" or not payload:
+            return False
+        try:
+            value = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+            return False
+        error = value.get("error") if isinstance(value, Mapping) else None
+        if not isinstance(error, Mapping):
+            return False
+        code = str(error.get("code") or error.get("type") or "").casefold()
+        if code in {
+            "invalid_model",
+            "model_not_found",
+            "model_unavailable",
+            "unsupported_model",
+        }:
+            return True
+        message = str(error.get("message") or "").casefold()
+        return "gpt-image-2-pro" in message and any(
+            phrase in message
+            for phrase in ("does not exist", "not found", "unavailable", "unsupported")
+        )
 
     @staticmethod
     def _retry_after(

@@ -218,9 +218,7 @@ def test_checked_in_schemas_are_strict_and_versioned() -> None:
 def test_protected_workflow_dag_uses_isolated_roles_and_generic_admission() -> None:
     root = Path(__file__).resolve().parents[2]
     candidate = (root / ".github/workflows/ecorex-v1-candidate.yml").read_text()
-    promote = (
-        root / ".github/workflows/ecorex-v1-promote-candidate.yml"
-    ).read_text()
+    manual = (root / "scripts/release-v1.py").read_text()
 
     assert "\n  cloud-build-unsigned:" in candidate
     assert "\n  cloud-sign:" in candidate
@@ -239,24 +237,11 @@ def test_protected_workflow_dag_uses_isolated_roles_and_generic_admission() -> N
     assert "cloud-unsigned-signature-descriptor.json" in cloud_signer
     assert "cloud-release-manifest.signing-payload" in cloud_signer
     assert "actions/download-artifact" not in candidate[candidate.index("\n  cloud-build-unsigned:") :]
-    for job in (
-        "validate-request",
-        "publish-and-promote",
-        "authorize-production",
-        "deploy-production",
-        "authorize-finalization",
-        "activate-rollout",
-        "finalize-production",
-    ):
-        assert f"\n  {job}:" in promote
-    assert "ecorex-deployment-authorize" in promote
-    assert "ecorex-production-deploy" in promote
-    assert "ecorex-production-readback" in promote
-    assert "sign-v1-protected-deployment-admission.py" in promote
-    assert "verify-v1-protected-deployment-admission.py" in promote
-    assert "if: ${{ inputs.publication_mode == 'create-and-activate' }}" in promote
-    assert '--mode "${{ inputs.publication_mode }}"' in promote
-    assert '--rollout-percentage "${{ inputs.rollout_percentage }}"' in promote
-    protected_tail = promote[promote.index("\n  authorize-production:") :]
-    assert "direct-release" not in protected_tail
-    assert "direct-deployable" not in protected_tail
+    assert not (root / ".github/workflows/ecorex-v1-promote-candidate.yml").exists()
+    assert "scripts/sign-v1-protected-deployment-admission.py" in manual
+    assert "def _stage_production(" in manual
+    assert "def _remote_activation(" in manual
+    assert "def _compensate_activation(" in manual
+    assert "--confirm-target" in manual
+    assert "direct-release" not in manual
+    assert "direct-deployable" not in manual

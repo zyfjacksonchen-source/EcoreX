@@ -3018,6 +3018,140 @@ def apply(
         _release_lock(descriptor)
 
 
+def stage(
+    release_id: str,
+    *,
+    paths: DeploymentPaths = DeploymentPaths(),
+    expected_owner_uid: int | None = 0,
+    enforce_server_fence: bool = True,
+) -> dict[str, Any]:
+    """Materialize one immutable site slot without changing the live pointer."""
+
+    if enforce_server_fence and (
+        not sys.platform.startswith("linux")
+        or not hasattr(os, "geteuid")
+        or os.geteuid() != 0
+        or paths != DeploymentPaths()
+    ):
+        raise PublicSiteDeployError("production_server_fence_failed")
+    descriptor = _acquire_lock(paths.lock_path)
+    try:
+        if enforce_server_fence:
+            _prepare_production_layout(paths, release_id)
+        site = validate_staged_site(
+            release_id,
+            paths=paths,
+            expected_owner_uid=expected_owner_uid,
+        )
+        slot, action = _copy_site_to_slot(
+            site,
+            paths,
+            expected_owner_uid=expected_owner_uid,
+        )
+        validate_site_slot(slot, site)
+        if _journal(paths) is not None:
+            raise PublicSiteDeployError("site_activation_recovery_required")
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "status": "staged",
+            "mutation_performed": action == "created",
+            "release_id": site.release_id,
+            "version": site.version,
+            "site_tree_sha256": site.tree_sha256,
+            "public_index_sha256": site.public_index_sha256,
+            "target": PUBLIC_ORIGIN,
+            "slot": str(slot),
+            "slot_action": action,
+            "live_pointer_changed": False,
+        }
+    finally:
+        _release_lock(descriptor)
+
+
+def reactivate(
+    release_id: str,
+    *,
+    confirm_target: str,
+    paths: DeploymentPaths = DeploymentPaths(),
+    controller: ServerController | None = None,
+    client: ReadbackClient | None = None,
+    expected_owner_uid: int | None = 0,
+    enforce_server_fence: bool = True,
+) -> dict[str, Any]:
+    """Atomically return the static site pointer to a validated retained slot."""
+
+    if confirm_target != PUBLIC_ORIGIN:
+        raise PublicSiteDeployError("deployment_target_confirmation_mismatch")
+    if enforce_server_fence and (
+        not sys.platform.startswith("linux")
+        or not hasattr(os, "geteuid")
+        or os.geteuid() != 0
+        or paths != DeploymentPaths()
+    ):
+        raise PublicSiteDeployError("production_server_fence_failed")
+    descriptor = _acquire_lock(paths.lock_path)
+    try:
+        if enforce_server_fence:
+            _prepare_production_layout(paths, release_id)
+        site = validate_staged_site(
+            release_id,
+            paths=paths,
+            expected_owner_uid=expected_owner_uid,
+        )
+        trust = _read_public_pointer_trust(paths, expected_owner_uid=expected_owner_uid)
+        if enforce_server_fence:
+            _verify_local_public_pointer(paths, site, trust)
+        controller = controller or FixedNginxController()
+        client = client or FixedCurlReadback(paths.state_root)
+        recovered = _recover(site, paths, controller, client, trust)
+        if recovered is not None and recovered["resolution"] == "target":
+            return {
+                "schema_version": SCHEMA_VERSION,
+                "status": "reactivated",
+                "release_id": site.release_id,
+                "recovered": True,
+            }
+        controller.validate()
+        _copy_site_to_slot(site, paths, expected_owner_uid=expected_owner_uid)
+        if _current_points_to_site(paths, site):
+            _verify_target_readback(site, client, trust)
+            return {
+                "schema_version": SCHEMA_VERSION,
+                "status": "reactivated",
+                "release_id": site.release_id,
+                "idempotent": True,
+            }
+        transaction_id = f"site-{os.urandom(16).hex()}"
+        journal = _new_journal(site, paths, _source_state(paths, transaction_id))
+        try:
+            _switch_current(paths, journal)
+            journal = _advance_journal(paths, journal, "current_switched")
+            controller.reload()
+            _verify_target_readback(site, client, trust)
+            _advance_journal(paths, journal, "verified")
+            _clear_journal(paths)
+        except PublicSiteDeployError:
+            try:
+                _restore_source(paths, journal)
+                controller.reload()
+                _verify_source_after_restore(paths, journal, client)
+                _clear_journal(paths)
+            except PublicSiteDeployError:
+                raise PublicSiteDeployError("site_activation_recovery_required") from None
+            raise
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "status": "reactivated",
+            "release_id": site.release_id,
+            "version": site.version,
+            "site_tree_sha256": site.tree_sha256,
+            "target": PUBLIC_ORIGIN,
+            "recovered": False,
+        }
+    finally:
+        _release_lock(descriptor)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="deploy-v1-public-site",
@@ -3026,7 +3160,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--release-id", required=True)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--stage", action="store_true")
     mode.add_argument("--apply", action="store_true")
+    mode.add_argument("--reactivate", action="store_true")
     parser.add_argument("--confirm-target")
     return parser
 
@@ -3038,10 +3174,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.confirm_target is not None:
                 raise PublicSiteDeployError("dry_run_target_confirmation_forbidden")
             result = plan(args.release_id)
-        else:
+        elif args.stage:
+            if args.confirm_target is not None:
+                raise PublicSiteDeployError("stage_target_confirmation_forbidden")
+            result = stage(args.release_id)
+        elif args.apply:
             if args.confirm_target is None:
                 raise PublicSiteDeployError("deployment_target_confirmation_required")
             result = apply(args.release_id, confirm_target=args.confirm_target)
+        else:
+            if args.confirm_target is None:
+                raise PublicSiteDeployError("deployment_target_confirmation_required")
+            result = reactivate(args.release_id, confirm_target=args.confirm_target)
     except PublicSiteDeployError as error:
         print(
             json.dumps(
@@ -3081,9 +3225,11 @@ __all__ = [
     "build_admin_deployment_identity",
     "main",
     "plan",
+    "reactivate",
     "public_site_authorization_payload",
     "public_site_authorization_signing_bytes",
     "sign_public_site_authorization",
+    "stage",
     "validate_site_slot",
     "validate_staged_site",
     "validate_admin_deployment_identity",

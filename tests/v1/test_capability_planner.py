@@ -794,7 +794,6 @@ def test_image_link_intent_keeps_browser_fetch_vision_read_and_shell_discoverabl
         "cdp",
         "shell",
         "imagegen",
-        "feishu_cli",
         "skill_search",
         "task_list",
         "skill_read",
@@ -855,6 +854,8 @@ def test_browser_tool_contract_exposes_page_script_and_batch_arguments() -> None
     ("intent", "tool_id"),
     (
         ("请测试 bash 能力并执行命令", "shell"),
+        ("write a file in the workspace", "shell"),
+        ("请写文件到工作区", "shell"),
         ("使用 shell 读取工作区", "shell"),
         ("用 fetch 获取这个网页", "fetch"),
         ("用 imagegen 生成一张图", "imagegen"),

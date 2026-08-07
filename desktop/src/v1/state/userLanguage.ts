@@ -60,6 +60,46 @@ const REASON_MESSAGES: Record<string, string> = {
   adapter_not_installed: "所需连接组件尚未安装。",
 };
 
+const TURN_REASON_MESSAGES: Record<string, { message: string; suggestion: string }> = {
+  provider_response_failed: {
+    message: "模型服务未能完成这次回复，已完成的步骤和结果仍然保留。",
+    suggestion: "可以重试本次任务；e-Mate 不会重复执行已经完成的工具步骤。",
+  },
+  gateway_unavailable: {
+    message: "模型服务暂时不可用，当前任务状态已经保留。",
+    suggestion: "请稍后重试。",
+  },
+  budget_exhausted: {
+    message: "任务已达到本次运行预算，因此提前停止。",
+    suggestion: "可以缩小任务范围后重试，或保留当前部分结果。",
+  },
+  image_execution_timeout: {
+    message: "图片服务等待超时，本次生成已经停止。",
+    suggestion: "请稍后重试；同一执行不会在后台重复提交。",
+  },
+  image_execution_queue_full: {
+    message: "图片任务较多，当前队列暂时已满。",
+    suggestion: "请稍后重试。",
+  },
+  cancelled_by_user: {
+    message: "任务已按你的要求取消。",
+    suggestion: "需要时可以从当前结果重新开始。",
+  },
+};
+
+export function turnTerminalPresentation(
+  reason: string | null | undefined,
+): { message: string; suggestion: string; technicalCode: string | null } | null {
+  const code = String(reason ?? "").trim();
+  if (!code || code === "completed") return null;
+  const known = TURN_REASON_MESSAGES[code];
+  return {
+    message: known?.message ?? "e-Mate 未能完成这次任务，当前进度和结果已经保留。",
+    suggestion: known?.suggestion ?? "请重试；如果问题持续出现，请联系管理员并提供下方技术码。",
+    technicalCode: code,
+  };
+}
+
 const TECHNICAL_WORDS = /\b(?:runtime|snapshot|idempotency|trace|lease|exception|failed|unavailable|danger-full-access|workspace-write)\b|[a-z][a-z0-9]+(?:_[a-z0-9]+){2,}/i;
 
 export function serviceReasonMessage(

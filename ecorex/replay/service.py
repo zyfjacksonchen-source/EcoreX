@@ -318,7 +318,9 @@ class ReplayService:
                     ),
                 )
 
-            return self.composition.admit_turn(turn_request, accept)
+            return self.composition.admit_turn(
+                turn_request, accept, thread_id=thread_id
+            )
 
     @staticmethod
     def _live_replay_client_message_id(client_request_id: str) -> str:

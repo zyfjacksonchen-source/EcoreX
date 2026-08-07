@@ -248,17 +248,10 @@ def test_candidate_workflow_cannot_publish_the_pre_acceptance_artifact() -> None
     assert "name: ecorex-v1-accepted-${{ inputs.channel }}" in accepted
     assert "publish-assets" not in source
 
-    publication = (
-        ROOT / ".github/workflows/ecorex-v1-promote-candidate.yml"
-    ).read_text(encoding="utf-8")
-    assert "candidate_run_id:" in publication
-    assert "candidate_artifact_id:" in publication
-    assert "scripts/select-v1-accepted-candidate.py" in publication
-    assert "actions/artifacts/${CANDIDATE_ARTIFACT_ID}/zip" in publication
-    assert "scripts/extract-v1-workflow-artifact.py" in publication
-    assert publication.index("verify-v1-accepted-candidate.py") < publication.index(
-        "publish-assets"
-    )
+    assert not (ROOT / ".github/workflows/ecorex-v1-promote-candidate.yml").exists()
+    manual = (ROOT / "scripts/release-v1.py").read_text(encoding="utf-8")
+    assert 'required_gates = {"cdp-acceptance", "image-soak", "live-image", "live-model", "signature"}' in manual
+    assert manual.index("required_gates =") < manual.index("def _publication_prepare(")
 
 
 def test_acceptance_driver_cannot_run_before_candidate_authentication() -> None:

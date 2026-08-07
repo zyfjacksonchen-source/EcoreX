@@ -124,6 +124,7 @@ function phaseLabel(status: TurnProjection["status"] | undefined): string {
 }
 
 function processLabel(turn: TurnProjection): string {
+  if (turn.status === "partial") return "部分完成的过程";
   if (turn.status === "failed") return "未完成的过程";
   if (turn.status === "cancelled") return "取消前的过程";
   if (turn.status === "interrupted") return "中断前的过程";
@@ -646,12 +647,16 @@ export function Timeline({
       </Suspense>
     </div>
   ) : undefined;
-  const latestCompleted = [...turns].reverse().find((turn) => turn.status === "completed");
+  const latestTerminal = [...turns].reverse().find((turn) => (
+    turn.status === "completed" || turn.status === "partial"
+  ));
   return (
     <>
       <div ref={mountRef} className="ex-timeline-inner ex-timeline-virtualized">
         <div className="ex-live-status" aria-live="polite" aria-atomic="true">
-          {latestCompleted ? <span key={latestCompleted.turn_id}>e-Mate 已完成回复</span> : null}
+          {latestTerminal ? <span key={latestTerminal.turn_id}>
+            {latestTerminal.status === "partial" ? "e-Mate 已返回部分结果" : "e-Mate 已完成回复"}
+          </span> : null}
         </div>
         {scrollParent ? (
           <Virtuoso

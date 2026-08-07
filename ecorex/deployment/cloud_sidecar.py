@@ -3391,6 +3391,51 @@ def deploy(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, Any]
         return receipt
 
 
+def stage(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, Any]:
+    """Install and health-check the inactive slot without switching traffic."""
+
+    spec.validate()
+    _target_preflight(spec, confirmation)
+    _validate_attestation(spec)
+    with _deployment_lock():
+        if _transition_journal() is not None:
+            raise CloudDeployError("activation_recovery_required")
+        manifest = _validate_artifact(spec)
+        prior = _state()
+        _validate_legacy_migration_plan(spec, prior)
+        current = None if prior is None else str(prior["active_slot"])
+        target = "blue" if current in {None, "green"} else "green"
+        release = _install_release(spec, manifest)
+        _install_deployment_templates(spec, release)
+        _write_slot_environment(target, release)
+        _verify_staged_runtime(release)
+        _verify_nginx_wiring(spec)
+        _recovery_schema_check(release, target, source=False)
+        api_units = _slot_api_units(target)
+        _systemctl(spec, "stop", reversed(api_units))
+        try:
+            _prepare_slot_runtime_directory(target)
+            _systemctl(spec, "start", api_units)
+            _wait_api_health(spec, target)
+            _systemctl(spec, "is-active", api_units)
+        finally:
+            _systemctl(spec, "stop", reversed(api_units))
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "status": "staged",
+            "release_id": spec.release_id,
+            "version": PRODUCT_VERSION,
+            "target_slot": target,
+            "artifact_manifest_sha256": spec.artifact_manifest_sha256,
+            "api_health": "passed",
+            "worker_contract": "passed",
+            "live_routes_changed": False,
+            "active_release_id": (
+                None if prior is None else prior.get("active_release_id")
+            ),
+        }
+
+
 def rollback(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, Any]:
     """Return traffic to the recorded known-good slot without schema downgrade."""
 
@@ -3494,22 +3539,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="deploy-v1-cloud-sidecar")
     parser.add_argument("--spec", type=Path, required=True)
     action = parser.add_mutually_exclusive_group()
+    action.add_argument("--stage", action="store_true")
     action.add_argument("--apply", action="store_true")
     action.add_argument("--rollback", action="store_true")
     parser.add_argument("--confirm-target", default="")
     arguments = parser.parse_args(argv)
     try:
         spec = CloudDeploymentSpec.from_json(arguments.spec)
-        if not arguments.apply and not arguments.rollback:
+        if not arguments.stage and not arguments.apply and not arguments.rollback:
             print(json.dumps(build_plan(spec).to_dict(), ensure_ascii=False, sort_keys=True))
             return 0
         if not SHA256.fullmatch(arguments.confirm_target):
             raise CloudDeployError("target_confirmation_required")
-        receipt = (
-            rollback(spec, confirmation=arguments.confirm_target)
-            if arguments.rollback
-            else deploy(spec, confirmation=arguments.confirm_target)
-        )
+        if arguments.rollback:
+            receipt = rollback(spec, confirmation=arguments.confirm_target)
+        elif arguments.stage:
+            receipt = stage(spec, confirmation=arguments.confirm_target)
+        else:
+            receipt = deploy(spec, confirmation=arguments.confirm_target)
         # The receipt contains only public release/slot metadata.
         print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
         return 0

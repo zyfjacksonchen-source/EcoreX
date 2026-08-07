@@ -1211,6 +1211,7 @@ test("touch artifact exposes one real more target and opens the bottom action sh
 test("timeline exposes a persistent jump-to-latest control after scrolling away from the bottom", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "long-timeline");
   const timeline = guardedPage.locator(".ex-timeline");
+  await expect.poll(() => timeline.locator(".ex-timeline-turn").count()).toBeLessThan(60);
   await expect.poll(() => timeline.evaluate((element) => (
     Math.max(0, Math.round(element.scrollHeight - element.clientHeight - element.scrollTop))
   ))).toBeLessThanOrEqual(4);
@@ -1222,6 +1223,15 @@ test("timeline exposes a persistent jump-to-latest control after scrolling away 
 
   const jumpButton = guardedPage.getByRole("button", { name: "回到底部" });
   await expect(jumpButton).toBeVisible();
+  const pausedScrollTop = await timeline.evaluate((element) => element.scrollTop);
+  await guardedPage.locator(".ex-workspace-bottom .ex-composer textarea").fill("长会话滚动暂停验收");
+  await guardedPage.getByRole("button", { name: "发送" }).click();
+  await expect.poll(() => timeline.evaluate(
+    (element, paused) => Math.abs(element.scrollTop - paused),
+    pausedScrollTop,
+  )).toBeLessThanOrEqual(4);
+  await expect(jumpButton).toBeVisible();
+  await expect.poll(() => timeline.locator(".ex-timeline-turn").count()).toBeLessThan(60);
   await jumpButton.click();
 
   await expect.poll(() => guardedPage.evaluate(() => {

@@ -374,17 +374,14 @@ def ecorex_chat_gateway_policy(
 
 class ModelGatewayRequest(GatewayModel):
     schema_version: Literal[1] = 1
-    tool_projection_budget_version: Literal["1.0.0"] = (
-        TOOL_PROJECTION_BUDGET_VERSION
-    )
+    tool_projection_budget_version: Literal["1.0.0"] = TOOL_PROJECTION_BUDGET_VERSION
     request_id: str = Field(min_length=1, max_length=256)
     thread_id: str = Field(min_length=1, max_length=256)
     turn_id: str = Field(min_length=1, max_length=256)
     trace_id: str = Field(min_length=1, max_length=256)
     model_id: str = Field(min_length=1, max_length=256)
-    model_policy: GatewayModelPolicy = Field(
-        default_factory=ecorex_chat_gateway_policy
-    )
+    model_policy: GatewayModelPolicy = Field(default_factory=ecorex_chat_gateway_policy)
+    instructions: str | None = Field(default=None, min_length=1, max_length=131_072)
     # Runtime-originated requests bind the execution attempt to the same
     # immutable catalog revision used for Turn admission and usage. Optional
     # only for compatibility with older direct Gateway SDK callers.
@@ -418,6 +415,8 @@ class ModelGatewayRequest(GatewayModel):
     def validate_resources(self) -> "ModelGatewayRequest":
         if self.input is not None:
             _validate_json_value(self.input, "model input")
+        if self.instructions is not None:
+            _validate_json_value(self.instructions, "model instructions")
         for label, value in (
             ("request_id", self.request_id),
             ("thread_id", self.thread_id),
@@ -648,16 +647,21 @@ class GatewayEvent(GatewayModel):
                 raise ValueError("reasoning_summary.delta cannot be retryable")
         elif self.event_type is GatewayEventType.TOOL_CALL_REQUESTED:
             if not self.tool_call_id or not self.tool_name or self.arguments is None:
-                raise ValueError("tool_call.requested is missing tool identity or arguments")
-            if any(
-                value is not None
-                for value in (
-                    self.delta,
-                    self.reasoning_id,
-                    self.error_code,
-                    self.error_message,
+                raise ValueError(
+                    "tool_call.requested is missing tool identity or arguments"
                 )
-            ) or self.retryable:
+            if (
+                any(
+                    value is not None
+                    for value in (
+                        self.delta,
+                        self.reasoning_id,
+                        self.error_code,
+                        self.error_message,
+                    )
+                )
+                or self.retryable
+            ):
                 raise ValueError("tool_call.requested contains incompatible fields")
         elif self.event_type is GatewayEventType.RESPONSE_COMPLETED:
             if any(

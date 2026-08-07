@@ -49,7 +49,7 @@ from .event_store import EventStore
 from .ids import new_id
 from .interactions import InteractionStore
 from .invariants import RuntimeInvariantAuditor
-from .jobs import DurableJobStore
+from .jobs import DurableJobStore, PRESERVE_ATTEMPT_CHECKPOINT_KEY
 from .public_tools import PublicToolActivityProjector
 from .reasoning import ReasoningItemStore, archive_visible_reasoning_in_transaction
 from .snapshots import RuntimeSnapshotRepository, TurnSnapshotContext
@@ -1720,9 +1720,11 @@ class RuntimeKernel:
                 retry_available_at = now + timedelta(
                     seconds=max(0, retry_delay_seconds)
                 )
-                retry_max_attempts = int(job["max_attempts"]) + int(
-                    preserve_attempt
-                )
+                checkpoint = json_loads(job["checkpoint_json"], {})
+                if not isinstance(checkpoint, dict):
+                    checkpoint = {}
+                if preserve_attempt:
+                    checkpoint[PRESERVE_ATTEMPT_CHECKPOINT_KEY] = True
                 self.jobs._assert_transition(
                     JobStatus(job["status"]), JobStatus.RETRY_SCHEDULED
                 )
@@ -1734,19 +1736,20 @@ class RuntimeKernel:
                         "attempt": job["attempt"],
                         "error": error,
                         "available_at": _store_time(retry_available_at),
-                        "max_attempts": retry_max_attempts,
+                        "max_attempts": job["max_attempts"],
+                        "preserve_attempt": preserve_attempt,
                     },
                     created_at=now,
+                    occurrence=str(job["lease_token"]),
                 )
                 connection.execute(
-                    "UPDATE jobs SET status = ?, max_attempts = CASE WHEN ? THEN "
-                    "max_attempts + 1 ELSE max_attempts END, "
+                    "UPDATE jobs SET status = ?, checkpoint_json = ?, "
                     "lease_owner = NULL, lease_token = NULL, "
                     "lease_expires_at = NULL, heartbeat_at = NULL, available_at = ?, "
                     "last_error = ?, updated_at = ? WHERE job_id = ?",
                     (
                         JobStatus.RETRY_SCHEDULED.value,
-                        int(preserve_attempt),
+                        json_dumps(checkpoint) if checkpoint else None,
                         _store_time(retry_available_at),
                         error,
                         _store_time(now),
@@ -1858,7 +1861,7 @@ class RuntimeKernel:
         reason: str | None,
         now: datetime,
     ) -> None:
-        if target == TurnStatus.COMPLETED:
+        if target in {TurnStatus.COMPLETED, TurnStatus.PARTIAL}:
             job_target, job_event = JobStatus.COMPLETED, "job.completed"
             item_target = ItemStatus.COMPLETED
         elif target == TurnStatus.FAILED:

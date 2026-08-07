@@ -907,7 +907,7 @@ class RuntimeInvariantAuditor:
                     )
                 if (
                     job_status is JobStatus.COMPLETED
-                    and status is not TurnStatus.COMPLETED
+                    and status not in {TurnStatus.COMPLETED, TurnStatus.PARTIAL}
                 ):
                     add(
                         "completed_job_turn_mismatch",

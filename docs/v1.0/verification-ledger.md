@@ -2592,3 +2592,18 @@ and live tool invocation.
 | Same-version update convergence | 0 local + installed Runtime | An installed `1.0.5` slot with a stale `awaiting_user → 1.0.5` update record was verified, safely converged to `idle`, and re-read. Backend recovery covers all non-idle states; WebUI presentation independently hides a same-version target. Python update tests: 17 passed; WebUI product suite: 188 passed. |
 | Theme default and control placement | 0 local | Token contract proves the initial paint is dark, an explicit light preference is retained, and the header theme control is grouped immediately before the right-aligned share action. Focused theme/token tests: 4 passed. |
 | Candidate validation | pending | v1.0.7 has passed focused regression and compile checks. A fresh signed candidate plus real authenticated chat, image/retouch and tool acceptance are still required before any Stable promotion. |
+
+## e-Mate v1.0.0 merged Runtime recovery evidence - 2026-08-07
+
+| Scope | Exit | Result |
+| --- | ---: | --- |
+| Complete Python product regression | 0 | 2,682 passed and 55 existing platform/provider skips. Recovery, all 19 Core ToolSpecs, composed handlers, Pack binding, model continuation, image waiting/fallback, Skill Hub, MCP empty projection, updater and release orchestration are included. |
+| Web contracts and production build | 0 | Generated contracts and TypeScript passed; 224/224 Web tests passed. The build emitted 39 content-addressed assets; initial JavaScript is 457.37 KiB / 145.44 KiB gzip within the fixed budget. |
+| Complete browser E2E | 0 | 51/51 Chromium cases passed, including terminal states, retry/HITL, abilities workspace, image Artifact handling, long-timeline virtualization, scroll pause and jump-to-latest recovery. |
+| Static product boundaries | 0 | Lint/compile, diff check, design, strict legacy cutoff, download site, dependency locks, 20-fragment Runtime schema, 12-authority server schema and Web byte reproducibility passed. |
+| Packaged Skill seed | 0 | The built `ecorex_agent_runtime-1.0.0` Wheel contains the exact 2,165-byte `official-writing/SKILL.md`; its product CAS normalization equals `f223e54f…eca2`, matching the production fail-closed seed identity. |
+| Installed production baseline | 0 read-only browser | Existing loopback Runtime is still v0.3.2 with SOL/medium. Six signed Packs, including sandbox, report healthy and enabled and expose shell, but Skill Hub returns a controlled failure. This proves source repair still requires a new signed slot and in-place upgrade. |
+| Go platform helper | not run locally | No Go toolchain is installed on this Mac. No task-time dependency was installed; the pinned cross-platform CI matrix remains the authority for the modified Go helper. |
+| Manual publication authority | 0 local | The operator script accepts only five read-only build/acceptance workflows; each has no automatic trigger and no contents, Release, package or deployment write permission. Formal Release promotion, server activation, signed pointer change and rollback remain local interactive steps. |
+| Real-user acceptance contract | 0 local contract | Completion now requires `ecorex-chat`/max, all 19 built-ins with visible terminals, two overlapping real `gpt-image-2` jobs, Skill discovery, explicit zero-MCP state, 120-turn virtualization and public readback. Tokens remain outside evidence. |
+| CI publisher retirement | 0 local | Removed the former promote workflow, two publication Environments and publication/deployment Runner roles from active governance. Candidate/build/acceptance remains read-only; 75 focused tests, dependency-lock inventory and Ruff/compile pass. |

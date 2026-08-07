@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
+from ecorex.capabilities import Exposure
 from ecorex.connectors import InMemoryCredentialVault
 from ecorex.integration import ImageGenerationToolHandler
 from ecorex.server import (
@@ -269,13 +270,21 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
     assert app.state.runtime_composition.availability.disabled_tools == {
         "cdp": "verified_handler_not_installed",
         "fetch": "verified_handler_not_installed",
-        "feishu_cli": "verified_handler_not_installed",
         "imagegen": "verified_handler_not_installed",
         "ocr": "input_attachment_ocr_runtime_not_bound",
         "shell": "verified_handler_not_installed",
-        "task_list": "verified_handler_not_installed",
         "vision": "verified_handler_not_installed",
     }
+    specs = capability_service.registry.all()
+    handlers = set(capability_service.handlers)
+    pack_bound = {spec.tool_id for spec in specs if spec.required_packs}
+    assert {spec.tool_id for spec in specs} == handlers | pack_bound
+    for spec in specs:
+        if spec.default_exposure is Exposure.DIRECT:
+            assert spec.tool_id in handlers
+            assert spec.tool_id not in (
+                app.state.runtime_composition.availability.disabled_tools
+            )
     client = TestClient(app, base_url=ORIGIN)
 
     index = client.get("/")
@@ -411,25 +420,14 @@ def test_product_app_disables_imagegen_when_managed_image_service_is_absent(
     )
 
 
-def test_product_app_binds_feishu_only_from_explicit_capability_authority(
-    tmp_path,
-):
+def test_product_app_rejects_legacy_feishu_cli_as_a_core_tool(tmp_path):
     signed = _write_signed_bundle(tmp_path)
-
-    def feishu_handler(_arguments, _context):
-        return {"status": "completed"}
-
     settings = replace(
         _settings(tmp_path, signed),
-        capability_handlers={"feishu_cli": feishu_handler},
+        capability_handlers={"feishu_cli": lambda _arguments: {}},
     )
-    app = create_product_app(settings)
-
-    assert (
-        app.state.runtime_composition.capability_service.handlers["feishu_cli"]
-        is feishu_handler
-    )
-    assert "feishu_cli" not in app.state.runtime_composition.availability.disabled_tools
+    with pytest.raises(ValueError, match="unknown tool"):
+        create_product_app(settings)
 
 
 def test_product_settings_inject_cloud_authoritative_session(tmp_path):

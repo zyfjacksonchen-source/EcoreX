@@ -324,7 +324,11 @@ def test_workspace_read_is_bounded_and_does_not_leak_host_paths(tmp_path: Path) 
     assert text["content"] == "abc"
     assert text["truncated"] is True
     assert text["next_offset_bytes"] == 3
-    assert handler({"path": "brief.txt", "offset_bytes": 3})["content"] == "def"
+    assert handler({"path": text["path"], "offset_bytes": 3})["content"] == "def"
+    root = handler({"path": "."})
+    assert root["path"] == "workspace://0/"
+    assert [item["name"] for item in root["entries"]] == ["binary.bin", "brief.txt"]
+    assert handler({"path": root["path"]}) == root
     assert handler({"path": "binary.bin"})["encoding"] == "base64"
     with pytest.raises(WorkspaceReadError):
         handler({"path": "../outside.txt"})
@@ -379,9 +383,8 @@ def test_handler_set_reports_real_executability_not_declared_pack_flags(
             "shell",
             "skill_search",
             "skill_read",
-                "skill_run",
-                "task_list",
-                "feishu_cli",
+            "skill_run",
+            "task_list",
             "tool_search",
             "tool_describe",
             "connector_search",

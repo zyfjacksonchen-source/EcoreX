@@ -395,6 +395,39 @@ def test_default_dynamic_provider_uses_cloud_direct_adapter_and_shared_inputs(
     asyncio.run(provider.aclose())
 
 
+def test_dynamic_pro_image_revision_allows_only_its_exact_safe_fallback(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    _activate_new(
+        repository,
+        local_model_id="gpt-image-2",
+        modality="image_generation",
+        upstream_model_id="gpt-image-2-pro",
+        api_key="sk-image-version-one",
+        request_suffix="image-pro-fallback",
+    )
+    dynamic = DynamicManagedImageProvider(
+        repository,
+        provider_id="managed-image",
+        origins={"ecorex_image": "https://images.ecorex.example"},
+        timeout_seconds=120,
+        connect_timeout_seconds=5,
+        max_image_bytes=64 * 1024 * 1024,
+        max_connections=8,
+        max_concurrency=4,
+    )
+    configuration = repository.active_model(modality="image_generation")
+    provider = dynamic._create_provider(
+        configuration, "https://images.ecorex.example"
+    )
+    assert isinstance(provider, OpenAICompatibleImageProvider)
+    assert provider.allowed_models == frozenset(
+        {"gpt-image-2-pro", "gpt-image-2"}
+    )
+    asyncio.run(provider.aclose())
+
+
 def test_dynamic_provider_close_drains_in_flight_calls_exactly_once(
     tmp_path: Path,
 ) -> None:

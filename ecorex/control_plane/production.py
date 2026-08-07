@@ -128,6 +128,11 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _BUCKET = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 _PREFIX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$")
 _KEY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+_SKILL_HUB_SEED_SLUG = "official-writing"
+_SKILL_HUB_SEED_VERSION = "1.0.2"
+_SKILL_HUB_SEED_SHA256 = (
+    "f223e54fb100fd40c278ce0466af2d501dca0fcd9adf635eeba1a1f654e8eca2"
+)
 _HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _SECRET_NAMES = {
     "share-keyring": "ECOREX_CP_SHARE_KEYRING_JSON",
@@ -1860,11 +1865,12 @@ class SingleNodeSQLiteS3Provider:
                 ).migrate()
                 if config.device_identity_enabled:
                     DeviceIdentitySchemaManager(config.database_path).migrate()
-                SkillHubRegistry(
+                skill_hub_registry = SkillHubRegistry(
                     config.database_path,
                     author_key=_skill_hub_author_key(secrets),
                 )
-                LocalSkillBundleStore(_skill_hub_cas_root(config))
+                skill_hub_store = LocalSkillBundleStore(_skill_hub_cas_root(config))
+                _converge_skill_hub_seed(skill_hub_registry, skill_hub_store)
                 volume.install_or_validate()
                 volume.validate_wal()
                 post_backup = backup.create(reason="post-migration")
@@ -1906,7 +1912,7 @@ class SingleNodeSQLiteS3Provider:
         management = AdminManagementSchemaManager(config.database_path).validate()
         if config.device_identity_enabled:
             DeviceIdentitySchemaManager(config.database_path).validate()
-        SkillHubRegistry(
+        skill_hub_registry = SkillHubRegistry(
             config.database_path,
             author_key=_skill_hub_author_key(secrets),
             initialize=False,
@@ -1914,7 +1920,8 @@ class SingleNodeSQLiteS3Provider:
         skill_hub_root = _skill_hub_cas_root(config)
         if not skill_hub_root.is_dir():
             raise ProductionConfigurationError("Skill Hub CAS is unavailable")
-        LocalSkillBundleStore(skill_hub_root, create=False)
+        skill_hub_store = LocalSkillBundleStore(skill_hub_root, create=False)
+        _require_skill_hub_seed(skill_hub_registry, skill_hub_store)
         receipt = backup.latest(full_digest=True)
         _require_recent_backup(receipt, config.maximum_backup_age_seconds)
         audit_encryption = _secret_bytes(
@@ -2055,6 +2062,7 @@ class SingleNodeSQLiteS3Provider:
             skill_hub_bundle_store = LocalSkillBundleStore(
                 skill_hub_root, create=False
             )
+            _require_skill_hub_seed(skill_hub_registry, skill_hub_bundle_store)
             backup.latest(full_digest=True)
             storage, object_store = self._share_storage(config)
             verifier = Ed25519SignatureVerifier(release_keys)
@@ -2406,6 +2414,54 @@ def _validate_runtime_schema_receipts(database_path: Path) -> None:
 
 def _skill_hub_cas_root(config: ControlPlaneProductionConfig) -> Path:
     return config.database_path.parent / "skill-hub-cas"
+
+
+def _converge_skill_hub_seed(
+    registry: SkillHubRegistry,
+    store: LocalSkillBundleStore,
+) -> None:
+    try:
+        bundle = store.ingest_directory(
+            Path(__file__).with_name("seed_skills") / _SKILL_HUB_SEED_SLUG
+        )
+        if bundle.artifact_sha256 != _SKILL_HUB_SEED_SHA256:
+            raise ValueError("seed digest changed")
+        registry.publish(
+            account_id="system:skill-hub-seed",
+            nickname="e-Mate",
+            slug=_SKILL_HUB_SEED_SLUG,
+            version=_SKILL_HUB_SEED_VERSION,
+            title=bundle.metadata.name,
+            summary=bundle.metadata.description,
+            category="office_productivity",
+            tags=bundle.metadata.tags,
+            package_sha256=bundle.artifact_sha256,
+            package_size_bytes=bundle.total_size_bytes,
+            original_platform="Cow Skill Hub",
+            original_url="https://skills.cowagent.ai/official-writing",
+        )
+        _require_skill_hub_seed(registry, store)
+    except Exception:
+        raise ProductionConfigurationError("Skill Hub seed is unavailable") from None
+
+
+def _require_skill_hub_seed(
+    registry: SkillHubRegistry,
+    store: LocalSkillBundleStore,
+) -> None:
+    try:
+        card = registry.get(_SKILL_HUB_SEED_SLUG, version=_SKILL_HUB_SEED_VERSION)
+        bundle = store.verify(_SKILL_HUB_SEED_SHA256)
+        if (
+            card.package_sha256 != _SKILL_HUB_SEED_SHA256
+            or card.version != _SKILL_HUB_SEED_VERSION
+            or bundle.artifact_sha256 != _SKILL_HUB_SEED_SHA256
+            or bundle.metadata.name != _SKILL_HUB_SEED_SLUG
+            or bundle.metadata.version != _SKILL_HUB_SEED_VERSION
+        ):
+            raise ValueError("seed identity changed")
+    except Exception:
+        raise ProductionConfigurationError("Skill Hub seed is unavailable") from None
 
 
 def _skill_hub_author_key(secrets: SecretProvider) -> bytes:

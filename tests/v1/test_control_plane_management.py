@@ -352,23 +352,49 @@ def test_connection_test_uses_server_origin_and_checks_exact_model() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         if request.url.path == "/v1/responses":
+            body = json.loads(request.content)
+            if "previous_response_id" in body:
+                events = [
+                    {
+                        "type": "response.created",
+                        "response": {"id": "resp-final", "model": "gpt-5.6-luna"},
+                    },
+                    {
+                        "type": "response.output_text.delta",
+                        "delta": "ECOREX_ACTIVATION_OK",
+                    },
+                    {
+                        "type": "response.completed",
+                        "response": {"id": "resp-final", "model": "gpt-5.6-luna"},
+                    },
+                ]
+            else:
+                events = [
+                    {
+                        "type": "response.created",
+                        "response": {"id": "resp-tool", "model": "gpt-5.6-luna"},
+                    },
+                    {
+                        "type": "response.output_item.added",
+                        "item": {
+                            "type": "function_call",
+                            "call_id": "call-tool",
+                            "name": "ecorex_activation_check",
+                            "arguments": '{"value":"ECOREX_ACTIVATION_OK"}',
+                        },
+                    },
+                    {
+                        "type": "response.completed",
+                        "response": {"id": "resp-tool", "model": "gpt-5.6-luna"},
+                    },
+                ]
             return httpx.Response(
                 200,
-                headers={"Content-Type": "application/json"},
-                json={
-                    "model": "gpt-5.6-luna",
-                    "output": [
-                        {
-                            "type": "message",
-                            "content": [
-                                {
-                                    "type": "output_text",
-                                    "text": "ECOREX_ACTIVATION_OK",
-                                }
-                            ],
-                        }
-                    ],
-                },
+                headers={"Content-Type": "text/event-stream"},
+                content="".join(
+                    f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
+                    for event in events
+                ),
             )
         return httpx.Response(
             200,
@@ -393,6 +419,8 @@ def test_connection_test_uses_server_origin_and_checks_exact_model() -> None:
         "ecorex-model-activation-"
     )
     assert json.loads(requests[1].content)["model"] == "gpt-5.6-luna"
+    assert len(requests) == 3
+    assert json.loads(requests[2].content)["previous_response_id"] == "resp-tool"
 
 
 def _repository_for_active_configuration():

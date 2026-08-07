@@ -6,6 +6,7 @@ import type {
 
 const TERMINAL = new Set<TurnProjection["status"]>([
   "completed",
+  "partial",
   "failed",
   "cancelled",
   "interrupted",
@@ -150,6 +151,7 @@ export function foldTurnProcess(entry: TimelineTurn): TimelineSegment[] {
       : `process-${leftAnchor}-${rightAnchor}`;
     const failureWithoutAnswer = assistantMessages.length === 0
       && entry.turn.status !== "completed"
+      && entry.turn.status !== "partial"
       && entry.turn.status !== "superseded";
     segments.push({
       segmentId,

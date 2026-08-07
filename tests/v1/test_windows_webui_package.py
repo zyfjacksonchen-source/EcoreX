@@ -315,17 +315,17 @@ def test_macos_workflow_consumes_only_the_manual_verified_windows_handoff() -> N
         / "emate-v030-macos-universal.yml"
     ).read_text(encoding="utf-8")
 
-    assert "github.sha == vars.ECOREX_V032_RELEASE_COMMIT_SHA" in workflow
+    assert "github.sha == inputs.candidate_commit_sha" in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
     assert "github.repository == 'zyfjacksonchen-source/EcoreX'" in workflow
     assert "github.ref_protected" not in workflow
     assert "candidate_commit_mismatch" in workflow
-    assert "EcoreX_0.3.2-direct-candidate.zip" in workflow
-    assert "EcoreX_0.3.2-webui-windows-x64.zip" in workflow
+    assert '"EcoreX_${VERSION}-direct-candidate.zip"' in workflow
+    assert '"EcoreX_${VERSION}-webui-windows-x64.zip"' in workflow
     assert "emate-webui-build-receipt.json" in workflow
     assert "Download authenticated manual Candidate and Windows handoffs" in workflow
     assert "build-v030-windows-webui.py" not in workflow
-    assert "smoke-v030-windows-terminal-package.ps1" not in workflow
-    assert "runs-on: windows-2022" not in workflow
+    assert "smoke-v030-windows-terminal-package.ps1" in workflow
+    assert "runs-on: windows-2022" in workflow
     assert "include-hidden-files: true" in workflow
     assert "emate-v031-" not in workflow

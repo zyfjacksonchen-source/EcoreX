@@ -140,6 +140,34 @@ def test_chat_completions_payload_contains_compatible_image_url_part() -> None:
     assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
+def test_verified_workflow_instructions_map_to_each_provider_contract() -> None:
+    request = _request().model_copy(
+        update={"instructions": "Use the verified image workflow."}
+    )
+    responses_fake = SimpleNamespace(
+        validate_request=lambda _request, _principal: None,
+        model_policies={request.model_id: request.model_policy},
+        model_mapping={request.model_id: request.model_policy.upstream_model_id},
+    )
+    chat_fake = SimpleNamespace(
+        model_mapping={request.model_id: request.model_policy.upstream_model_id}
+    )
+
+    responses, _names = ManagedHTTPSResponsesProvider._payload(
+        responses_fake, request, SimpleNamespace(account_id="account_1")
+    )
+    chat, _names = ManagedHTTPSChatCompletionsProvider._payload(
+        chat_fake, request, prior=None
+    )
+
+    assert responses["instructions"] == "Use the verified image workflow."
+    assert chat["messages"][0] == {
+        "role": "developer",
+        "content": "Use the verified image workflow.",
+    }
+    assert chat["messages"][1]["role"] == "user"
+
+
 def test_gateway_image_rejects_invalid_digest_and_four_mib_unsafe_size() -> None:
     with pytest.raises(ValidationError, match="digest"):
         GatewayImageInput(

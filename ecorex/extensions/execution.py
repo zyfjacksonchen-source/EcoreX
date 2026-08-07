@@ -218,9 +218,7 @@ class SkillRuntime:
         self.search_fact_resolver = search_fact_resolver
         self.read_fact_resolver = read_fact_resolver
         self.controlled_runner = (
-            controlled_runner
-            if controlled_runner is not None
-            else service.skill_runner
+            controlled_runner if controlled_runner is not None else service.skill_runner
         )
         self._snapshots: dict[str, ExtensionContributionSnapshot] = {}
 
@@ -274,7 +272,9 @@ class SkillRuntime:
             state_revision = item.get("revision")
             if isinstance(state_revision, bool) or not isinstance(state_revision, int):
                 raise ExtensionIntegrityError("active Skill state revision is invalid")
-            skills.append(self._skill_contribution(manifest, state_revision=state_revision))
+            skills.append(
+                self._skill_contribution(manifest, state_revision=state_revision)
+            )
         skills.sort(
             key=lambda value: (normalize_reference(value.name), value.extension_id)
         )
@@ -482,6 +482,62 @@ class SkillRuntime:
                 for item in skill.references
             ],
             "references": references,
+        }
+
+    def workflow_instructions(
+        self,
+        extension_snapshot_id: str,
+        workflow_skill_ids: Sequence[str],
+    ) -> dict[str, Any] | None:
+        """Read product-linked workflow guidance without granting Skill tools."""
+
+        requested = tuple(dict.fromkeys(workflow_skill_ids))
+        if not requested or len(requested) > 8:
+            return None
+        snapshot = self._snapshot(extension_snapshot_id)
+        selected: list[SkillContribution] = []
+        for workflow_id in requested:
+            logical_name = normalize_reference(str(workflow_id).removeprefix("skill."))
+            matches = [
+                skill
+                for skill in snapshot.skills
+                if normalize_reference(skill.name) == logical_name
+                or normalize_reference(skill.extension_id)
+                == normalize_reference(str(workflow_id))
+            ]
+            if len(matches) != 1:
+                return None
+            selected.append(matches[0])
+        payloads = []
+        for skill in selected:
+            self._assert_skill_current(extension_snapshot_id, skill)
+            payload = self.read(
+                extension_snapshot_id,
+                _skill_discovery_id(skill),
+            )
+            payloads.append((skill, payload))
+        instructions = "\n\n".join(
+            str(payload["instructions"]) for _skill, payload in payloads
+        )
+        _validate_token_budget(instructions)
+        return {
+            "instructions": instructions,
+            "instruction_sha256": hashlib.sha256(
+                instructions.encode("utf-8")
+            ).hexdigest(),
+            "skills": [
+                {
+                    "workflow_skill_id": workflow_id,
+                    "extension_id": skill.extension_id,
+                    "revision_id": skill.revision_id,
+                    "instruction_sha256": skill.instruction_sha256,
+                }
+                for workflow_id, (skill, _payload) in zip(
+                    requested,
+                    payloads,
+                    strict=True,
+                )
+            ],
         }
 
     def explicit_skill_names(
@@ -833,13 +889,17 @@ class _SkillRunHandler:
             raise ExtensionIntegrityError("Skill read result digest is invalid")
         runner = self.runtime.controlled_runner
         if runner is None:
-            raise SkillNotExecutable("Skill has no available controlled executable runner")
+            raise SkillNotExecutable(
+                "Skill has no available controlled executable runner"
+            )
         bundle = await asyncio.to_thread(
             self.runtime.store.verify, skill.artifact_sha256
         )
         files = {record.path: b"" for record in bundle.files}
         if SKILL_RUNTIME_FILE not in files:
-            raise SkillNotExecutable("Skill has no declared controlled executable entry")
+            raise SkillNotExecutable(
+                "Skill has no declared controlled executable entry"
+            )
         files[SKILL_RUNTIME_FILE] = await asyncio.to_thread(
             self.runtime.store.read_verified_file,
             skill.artifact_sha256,
@@ -852,7 +912,9 @@ class _SkillRunHandler:
             or runtime_manifest.network_domains
             or not runner.supports(runtime_manifest.runtime)
         ):
-            raise SkillNotExecutable("Skill has no available controlled executable entry")
+            raise SkillNotExecutable(
+                "Skill has no available controlled executable entry"
+            )
         environment: Mapping[str, str] = {}
         if runtime_manifest.environment:
             vault = self.runtime.service.credential_vault
@@ -865,7 +927,9 @@ class _SkillRunHandler:
                     )
                 )
             except (KeyError, RuntimeError) as error:
-                raise SkillNotExecutable("Skill configuration is unavailable") from error
+                raise SkillNotExecutable(
+                    "Skill configuration is unavailable"
+                ) from error
             if set(environment) != set(runtime_manifest.environment):
                 raise SkillNotExecutable("Skill configuration is incomplete")
 

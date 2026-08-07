@@ -1458,13 +1458,33 @@
 .ex-turn-completion {
   min-height: var(--target-desktop);
   margin-top: calc(var(--space-1) * -1);
-  display: flex;
-  align-items: center;
+  display: grid;
   gap: var(--space-1);
   color: var(--color-ink-muted);
   font-size: var(--text-caption-size);
   line-height: var(--text-caption-line);
   animation: ex-chat-block-in var(--chat-motion-block) ease-out;
+}
+
+.ex-turn-completion-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.ex-turn-terminal-reason {
+  display: grid;
+  gap: var(--space-1);
+  max-width: var(--chat-body-width);
+  color: var(--color-ink-muted);
+}
+
+.ex-turn-terminal-reason details {
+  width: fit-content;
+}
+
+.ex-turn-completion[data-turn-status="partial"] {
+  color: var(--color-warning);
 }
 
 .ex-turn-copy {

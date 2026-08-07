@@ -244,8 +244,8 @@ reviewed VS 2022/MSVC 14.44 and Windows SDK 10.0.26100.0 set, and verify the
 checked-in toolchain manifest before enabling it. Its service identity must not
 have release signing keys, Model/Image Gateway sessions, CDP acceptance
 credentials, mirror/CDN tokens or Control Plane publication authority. Do not
-assign `ecorex-release-sign`, `ecorex-live-acceptance` or
-`ecorex-release-publish` to the same physical Runner. It may be ephemeral and
+assign `ecorex-release-sign` or `ecorex-live-acceptance` to the same physical
+Runner. It may be ephemeral and
 online only for a protected stage; repository readiness treats offline capacity
 as a release blocker, while ordinary read-only CI remains hosted.
 
@@ -300,34 +300,32 @@ installs and unreviewed GitHub Actions. `requirements/locks/github-actions.json`
 is the sole Action authority: every workflow `uses:` line must match one exact
 verified official Node 24 release/commit and every checkout must set
 `persist-credentials: false`. Protected self-hosted Runners must run GitHub
-Actions Runner 2.327.1 or newer before receiving a stage, signing,
-live-acceptance or publication label. Candidate Python is fixed to 3.11.9 and
+Actions Runner 2.327.1 or newer before receiving a stage, signing or
+live-acceptance label. Candidate Python is fixed to 3.11.9 and
 the Web build uses the exact Node.js 22.23.1 LTS toolchain;
 the installer refuses a different patch-level interpreter because the platform
 stager packages that interpreter into the Core. The platform matrix is also the external
 wheel-availability gate: if the exact Windows x64, macOS arm64 or macOS x64
 wheel closure cannot be installed, staging fails before any receipt is issued.
 
-## Protected automated Candidate chain
+## Protected Candidate and local manual publication chain
 
-The protected chain has two deliberate administrator boundaries:
+The chain has two deliberate authority boundaries:
 
 - `.github/workflows/ecorex-v1-candidate.yml` builds, externally signs and runs
   protected Model/Image/CDP acceptance. It can only emit an immutable
   `ecorex-v1-accepted-<channel>` Artifact; it has no origin or Control Plane
   publication job.
-- `.github/workflows/ecorex-v1-promote-candidate.yml` is the sole remote
-  publication entrypoint. It accepts the exact successful Candidate run ID,
-  attempt and accepted Artifact ID, authenticates all three against the current
-  protected commit, then waits at `ecorex-release-publication-<channel>` for the
-  administrator's separate publication approval.
+- `scripts/release-v1.py` is the sole publication entrypoint. It downloads and
+  authenticates the exact accepted Artifact, prepares a private GitHub Draft,
+  stages production without changing live pointers, and waits for an exact
+  local interactive confirmation before promotion or user notification.
 
-Both workflows are `workflow_dispatch` only, hold channel-wide non-cancelling
-concurrency locks, require `github.ref_protected` and have no PR trigger.
-Configure `ecorex-release-signing-canary/stable`, `ecorex-live-acceptance` and
-`ecorex-release-publication-canary/stable` as protected GitHub Environments.
-An approval to create/test a Candidate is never authority to mutate an origin
-or activate users.
+Candidate workflows are `workflow_dispatch` only, hold non-cancelling locks and
+have no PR trigger. Configure `ecorex-release-signing-canary/stable` and
+`ecorex-live-acceptance` as protected GitHub Environments. No CI workflow has a
+Release, deployment or update-pointer writer. Approval to create/test a
+Candidate is never authority to mutate an origin or activate users.
 
 The Candidate dispatch names immutable upstream evidence:
 
@@ -337,16 +335,15 @@ The Candidate dispatch names immutable upstream evidence:
 - `ci_run_id`: the successful protected `EcoreX v1 CI` run for the same commit;
 - `ci_run_attempt`: the exact successful attempt of `ci_run_id`.
 
-After the accepted Artifact exists, dispatch the publication workflow with its
-exact `candidate_run_id`, `candidate_run_attempt` and `candidate_artifact_id`.
-Its default `publication_mode=verify-only` performs no remote mutation.
-`create` publishes exact bytes and creates a paused 1–100% rollout;
-`create-and-activate` is the only option that activates that rollout. The
-selected Artifact archive and the second same-run handoff archive are fetched
-by immutable Artifact ID, checked against their SHA-256 values and safely
-extracted. Digest mismatch, expiration, duplicate names, mixed attempts,
-symlinks, case-colliding members, path traversal, insufficient disk or an
-unexpected root fails before publication.
+From a clean protected-main commit, run `python scripts/release-v1.py prepare
+--version 1.0.0 --commit <sha> --channel stable --from-version 0.3.2`. The local
+state machine dispatches only the reviewed read-only build/acceptance workflows,
+binds their immutable IDs and SHA-256 values, safely extracts the accepted
+Candidate, creates the private Draft and stages inactive production bytes. Run
+`finalize --run-id <id>` only after reviewing status and type the exact prompted
+phrase. Digest mismatch, expiration, duplicate names, mixed attempts, symlinks,
+case collisions, path traversal, insufficient disk or unexpected roots fail
+before publication.
 
 Before Candidate dispatch, run
 `.github/workflows/ecorex-v1-platform-stage.yml` on the same protected commit.
@@ -388,7 +385,7 @@ the protected public key before ReleaseBuilder accepts it.
 The Candidate workflow runs lint, compile, full unit/contract/integration/E2E
 suites, WebUI audit/typecheck/tests/build, migration dry-run, schema authority,
 reproducibility, license, secret, SBOM, signature, size and protected live
-acceptance gates. The separate publication workflow re-authenticates the signed
+acceptance gates. The local manual publisher re-authenticates the signed
 Candidate and every gate before reusing `ReleaseAssetPublicationCoordinator`,
 which creates/uploads the GitHub draft, finalizes CDN, makes the exact GitHub
 release public and only then streams every byte through the read-through
@@ -415,10 +412,11 @@ Required protected configuration is deliberately operational, not committed:
   installer repository; it must never reuse the publication writer token;
 - live-acceptance environment: digest-pinned Windows acceptance driver and the
   managed Model/Image/CDP test session held outside repository files;
-- publication environments: publication config, public GitHub release target,
-  GitHub release/CDN/Bootstrap credentials, Control Plane URL/host
-  allowlist/token and required reviewers. A read-through mirror must never have
-  an upload credential.
+- local manual publisher: protected environment variables provide the
+  digest-pinned release/publication/deployment signers, publication configs and
+  GitHub/CDN/Bootstrap authorities. Production SSH identity is read from the
+  reviewed local credential provider. These values never enter GitHub Actions;
+  a read-through mirror must never have an upload credential.
 
 The stager, production Windows sandbox helper, platform launchers and Pack
 implementations are repository-owned sources. Their compiled bytes and the

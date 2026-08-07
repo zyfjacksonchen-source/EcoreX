@@ -252,10 +252,6 @@ def test_workflows_isolate_exact_windows_stage_and_privileged_runners() -> None:
     assert "runs-on: [self-hosted, linux, x64, ecorex-image-soak]" not in candidate
     assert {runner.role for runner in contract.runners} == {
         "cloud-build",
-        "deployment-authorize",
         "live-acceptance",
-        "production-deploy",
-        "production-readback",
-        "release-publication",
         "release-sign",
     }

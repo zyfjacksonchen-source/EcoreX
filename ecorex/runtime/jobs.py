@@ -38,6 +38,9 @@ from .invariant_guard import (
 from .reasoning import archive_visible_reasoning_in_transaction
 
 
+PRESERVE_ATTEMPT_CHECKPOINT_KEY = "_ecorex_preserve_job_attempt"
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -420,6 +423,7 @@ class DurableJobStore:
         event_type: str,
         payload: dict[str, Any],
         created_at: datetime | None = None,
+        occurrence: str | None = None,
     ) -> EventEnvelope | None:
         thread_id = row_or_values["thread_id"]
         if thread_id is None:
@@ -438,6 +442,11 @@ class DurableJobStore:
             context = dict(context_row) if context_row is not None else {}
         if not isinstance(context, dict):
             raise RuntimeError("durable job runtime context is invalid")
+        occurrence_key = (
+            hashlib.sha256(occurrence.encode("utf-8")).hexdigest()[:24]
+            if occurrence is not None
+            else str(payload.get("attempt", ""))
+        )
         return self.events.append_in_transaction(
             connection,
             thread_id=thread_id,
@@ -449,7 +458,7 @@ class DurableJobStore:
             capability_snapshot_id=context.get("capability_snapshot_id"),
             permission_snapshot_id=context.get("permission_snapshot_id"),
             extension_snapshot_id=context.get("extension_snapshot_id"),
-            idempotency_key=f"{job_id}:{event_type}:{payload.get('attempt', '')}",
+            idempotency_key=f"{job_id}:{event_type}:{occurrence_key}",
             created_at=created_at,
         )
 
@@ -1264,7 +1273,13 @@ class DurableJobStore:
                 return None
             target = JobStatus.LEASED
             self._assert_transition(JobStatus(row["status"]), target)
-            attempt = int(row["attempt"]) + 1
+            checkpoint = json_loads(row["checkpoint_json"], {})
+            if not isinstance(checkpoint, dict):
+                checkpoint = {}
+            preserve_attempt = bool(
+                checkpoint.pop(PRESERVE_ATTEMPT_CHECKPOINT_KEY, False) is True
+            )
+            attempt = int(row["attempt"]) + int(not preserve_attempt)
             lease_token = new_id("fence")
             expires_at = now + timedelta(seconds=lease_seconds)
             self._append_job_event(
@@ -1273,10 +1288,11 @@ class DurableJobStore:
                 event_type="job.leased",
                 payload={"attempt": attempt},
                 created_at=now,
+                occurrence=lease_token,
             )
             connection.execute(
                 "UPDATE jobs SET status = ?, attempt = ?, lease_owner = ?, lease_token = ?, "
-                "lease_expires_at = ?, heartbeat_at = ?, updated_at = ? "
+                "lease_expires_at = ?, heartbeat_at = ?, checkpoint_json = ?, updated_at = ? "
                 "WHERE job_id = ?",
                 (
                     target.value,
@@ -1285,6 +1301,7 @@ class DurableJobStore:
                     lease_token,
                     _store_time(expires_at),
                     _store_time(now),
+                    json_dumps(checkpoint) if checkpoint else None,
                     _store_time(now),
                     row["job_id"],
                 ),
@@ -1361,6 +1378,7 @@ class DurableJobStore:
                     event_type="job.started",
                     payload={"attempt": row["attempt"]},
                     created_at=now,
+                    occurrence=lease_token,
                 )
                 connection.execute(
                     "UPDATE jobs SET status = ?, updated_at = ? WHERE job_id = ?",

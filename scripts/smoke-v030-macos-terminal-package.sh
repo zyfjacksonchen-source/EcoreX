@@ -4,6 +4,7 @@ set -eu
 PACKAGE=${1:?package required}
 EXPECTED_ARCH=${2:?architecture required}
 RECEIPT=${3:?receipt required}
+EXPECTED_VERSION=${4:?expected version required}
 ACTUAL_ARCH=$(uname -m)
 test "$ACTUAL_ARCH" = "$EXPECTED_ARCH"
 case "$EXPECTED_ARCH" in
@@ -138,11 +139,11 @@ done
 test "$READY" = true
 test -x "$HOME/Desktop/e-Mate.app/Contents/MacOS/EcoreX"
 
-VERSION_FILE="$ROOT/version.json" INSTALL_ROOT="$INSTALL_ROOT" python - <<'PY'
+VERSION_FILE="$ROOT/version.json" INSTALL_ROOT="$INSTALL_ROOT" EXPECTED_VERSION="$EXPECTED_VERSION" python - <<'PY'
 import json, os
 from pathlib import Path
 version = json.loads(Path(os.environ['VERSION_FILE']).read_text())
-if version.get('product') != 'e-Mate' or version.get('version') != '0.3.2':
+if version.get('product') != 'e-Mate' or version.get('version') != os.environ['EXPECTED_VERSION']:
     raise SystemExit('installed_version_invalid')
 entry = json.loads((Path.home() / 'Desktop/e-Mate.app/Contents/Resources/ecorex-entry.json').read_text())
 if Path(entry.get('install_root', '')).resolve() != Path(os.environ['INSTALL_ROOT']).resolve():
@@ -164,22 +165,30 @@ wait "$LAUNCH_PID"
 curl --fail --silent --show-error --max-time 5 \
   http://127.0.0.1:8765/api/version >"$ROOT/version-after-launch.json"
 
-PACKAGE="$PACKAGE" RECEIPT="$RECEIPT" EXPECTED_ARCH="$EXPECTED_ARCH" python - <<'PY'
+PACKAGE="$PACKAGE" RECEIPT="$RECEIPT" INSTALL_ROOT="$INSTALL_ROOT" EXPECTED_ARCH="$EXPECTED_ARCH" EXPECTED_VERSION="$EXPECTED_VERSION" python - <<'PY'
 import hashlib, json, os
 from datetime import datetime, timezone
 from pathlib import Path
 package = Path(os.environ['PACKAGE'])
 receipt = Path(os.environ['RECEIPT'])
+browser_path = Path(os.environ['INSTALL_ROOT']) / 'bootstrap/browser-opened.json'
+browser = json.loads(browser_path.read_text())
+if (browser.get('status'), browser.get('version'), browser.get('url')) != (
+    'opened', os.environ['EXPECTED_VERSION'], 'http://127.0.0.1:8765/'
+):
+    raise SystemExit('automatic_browser_open_invalid')
 receipt.parent.mkdir(parents=True, exist_ok=True)
 receipt.write_text(json.dumps({
     'schema_version': 1,
     'status': 'passed',
     'product': 'e-Mate',
-    'version': '0.3.2',
+    'version': os.environ['EXPECTED_VERSION'],
     'architecture': os.environ['EXPECTED_ARCH'],
     'package_sha256': hashlib.sha256(package.read_bytes()).hexdigest(),
     'installed_runtime_api': True,
     'desktop_entry_launch': True,
+    'automatic_browser_open': True,
+    'browser_receipt_sha256': hashlib.sha256(browser_path.read_bytes()).hexdigest(),
     'generated_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
 }, sort_keys=True, separators=(',', ':')) + '\n', encoding='utf-8')
 PY

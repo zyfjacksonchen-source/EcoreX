@@ -1,4 +1,5 @@
 name: EcoreX v1 protected Candidate
+run-name: manual-candidate-v${{ inputs.version }}-${{ inputs.local_gate_sha256 }}
 
 on:
   workflow_dispatch:
@@ -28,6 +29,22 @@ on:
         required: false
         type: string
         default: ""
+      source_sha:
+        description: Exact protected main commit
+        required: true
+        type: string
+      version:
+        description: Exact product SemVer
+        required: true
+        type: string
+      from_version:
+        description: Public version exercised by upgrade smoke
+        required: true
+        type: string
+      local_gate_sha256:
+        description: Signed local gate receipt SHA-256
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -49,7 +66,10 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           REF_NAME: ${{ github.ref }}
           SOURCE_SHA: ${{ github.sha }}
-          RELEASE_SHA: ${{ vars.ECOREX_V032_RELEASE_COMMIT_SHA }}
+          REQUESTED_SHA: ${{ inputs.source_sha }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+          FROM_VERSION: ${{ inputs.from_version }}
+          LOCAL_GATE_SHA256: ${{ inputs.local_gate_sha256 }}
           STAGING_RUN_ID: ${{ inputs.staging_run_id }}
           CI_RUN_ID: ${{ inputs.ci_run_id }}
           CI_RUN_ATTEMPT: ${{ inputs.ci_run_attempt }}
@@ -61,8 +81,11 @@ jobs:
               os.environ["EVENT_NAME"] == "workflow_dispatch"
               and os.environ["REPOSITORY"] == "zyfjacksonchen-source/EcoreX"
               and os.environ["REF_NAME"] == "refs/heads/main"
-              and re.fullmatch(r"[0-9a-f]{40}", os.environ["RELEASE_SHA"] or "")
-              and os.environ["SOURCE_SHA"] == os.environ["RELEASE_SHA"]
+              and os.environ["SOURCE_SHA"] == os.environ["REQUESTED_SHA"]
+              and re.fullmatch(r"[0-9a-f]{40}", os.environ["REQUESTED_SHA"] or "")
+              and re.fullmatch(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)", os.environ["REQUESTED_VERSION"] or "")
+              and re.fullmatch(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)", os.environ["FROM_VERSION"] or "")
+              and re.fullmatch(r"[0-9a-f]{64}", os.environ["LOCAL_GATE_SHA256"] or "")
               and re.fullmatch(r"[1-9][0-9]{0,18}", os.environ["STAGING_RUN_ID"] or "")
               and re.fullmatch(r"[1-9][0-9]{0,18}", os.environ["CI_RUN_ID"] or "")
               and re.fullmatch(r"[1-9][0-9]{0,8}", os.environ["CI_RUN_ATTEMPT"] or "")
@@ -102,6 +125,11 @@ jobs:
         run: |
           git diff --check HEAD --
           python scripts/check-v1-source-tree.py
+
+      - name: Bind source to requested product version
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
+        run: python -c "import os; from ecorex import __version__; raise SystemExit(0 if __version__ == os.environ['EXPECTED_VERSION'] else 1)"
 
       - name: Set up Python 3.11
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0

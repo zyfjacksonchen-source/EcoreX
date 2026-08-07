@@ -1,32 +1,40 @@
 {
   "schema_version": 1,
-  "goal": "EcoreX v1.0 productization implementation",
-  "status": "active",
+  "goal": "e-Mate v1.0.0 Runtime failure recovery and production capability architecture",
+  "status": "in_progress",
   "public_target": "1.0.0",
   "baseline": {
-    "branch": "codex/ecorex-v0.3.0-hardening",
-    "commit": "9ac3b958",
+    "branch": "codex/ecorex-v0.3.2",
+    "commit": "1cc91fdd8dc4f5cd25f29ed6163957ed4f274b41",
     "dirty_worktree_preserved": true
   },
-  "current_milestone": "direct_production_publication",
-  "current_batch": "Exact Cloud b923bb3a and Stable Web/Admin are active in production with signed pointer, exact HTTPS readback and durable receipts. Chrome real-user acceptance remains because Chrome is not currently running on the operator workstation.",
-  "last_verified_batch": "On 2026-07-18, Green Cloud ecorex-cloud-v1.0.0-b923bb3a0ec5 and release-stable-b3f2eadd4b3cd0de88fc99ed were activated. The public site receipt is 1ac04fce81bb9403911008638629f728edfaf3d2c5ffa8492032624841c3da67; current targets the immutable slot and the activation journal is absent.",
+  "current_milestone": "source_commit_and_candidate",
+  "current_batch": "Push the committed v1.0.0 source, obtain read-only build/acceptance receipts, then publish only through the local interactive state machine and run full real-user browser acceptance.",
+  "last_verified_batch": "Python 2682 passed/55 skipped; Web 224 passed; Chromium E2E 51 passed; production build, generated contracts, static product gates, reproducibility and v1.0.0 Wheel seed inspection passed on 2026-08-07.",
   "recovery_document": "docs/v1.0/implementation-log.md",
   "verification_document": "docs/v1.0/verification-ledger.md",
   "milestones": [
-    {"id": "foundation", "status": "completed"},
-    {"id": "runtime_core", "status": "completed"},
-    {"id": "capability_policy", "status": "completed"},
-    {"id": "office_artifacts_connectors", "status": "completed"},
-    {"id": "thin_webui_design_system", "status": "completed"},
-    {"id": "release_update_control_plane", "status": "completed"},
-    {"id": "migration_ga_gates", "status": "in_progress"}
+    {"id": "runtime_recovery_contracts", "status": "completed"},
+    {"id": "tool_and_agent_recovery", "status": "completed"},
+    {"id": "builtin_capability_audit", "status": "completed"},
+    {"id": "imagegen_workflow_routing", "status": "completed"},
+    {"id": "skill_hub_and_mcp_projection", "status": "completed"},
+    {"id": "model_stream_continuation", "status": "completed"},
+    {"id": "web_terminal_and_long_session", "status": "completed"},
+    {"id": "version_and_update_sources", "status": "completed"},
+    {"id": "full_verification", "status": "completed"},
+    {"id": "source_commit_and_candidate", "status": "in_progress"},
+    {"id": "configured_production_acceptance", "status": "pending"}
   ],
   "remaining_local_work": [
-    "complete Chrome/CDP real-user acceptance after Chrome is launched"
+    "Push the committed v1.0.0 source without using the exposed user token",
+    "Obtain signed Candidate and cross-platform receipts from read-only protected build/acceptance workflows; do not use CI as a publication authority",
+    "Upgrade the installed v0.3.2 slot and execute authenticated real-token browser acceptance for all 19 built-ins, Skill, MCP empty state, concurrent images, long session and update flow"
   ],
   "external_blockers": [
-    "Gemini's retained legacy proxy currently returns HTTP 502 and must remain inactive unless a later real probe passes",
-    "whole-machine reboot requires the recorded LUKS operator unlock procedure; the current single-host CAS replica and shared PostgreSQL role remain explicitly waived availability constraints"
+    "No safe GitHub publication credential is currently installed; the token pasted into chat is considered exposed and must be revoked rather than used",
+    "Real paid model and image calls require an operator-configured production endpoint and server-side Secret Provider",
+    "Signing and public activation require release signing authority and explicit final publication confirmation",
+    "No production MCP endpoint or authentication method is configured, so production must remain an explicit empty state"
   ]
 }

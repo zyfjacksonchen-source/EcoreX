@@ -234,6 +234,7 @@ export function SkillsWorkspace({
   const selectedMcpOAuth = selected ? mcpOAuthStatuses[selected.extension_id] ?? null : null;
   const protectedItems = items.filter(protectedExtension);
   const installedItems = items.filter((item) => !protectedExtension(item));
+  const mcpConfigured = items.some((item) => item.kind === "mcp_server");
   const visibleItems = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("zh-CN");
     return installedItems.filter((extension) => (
@@ -483,8 +484,15 @@ export function SkillsWorkspace({
           {category === "collaboration" ? (
             <ConnectorCatalogPanel {...connectorRuntime} />
           ) : null}
+          {category === "collaboration" && catalogReady && !mcpConfigured ? (
+            <div className="ex-skills-empty" data-empty-state="mcp-unconfigured">
+              <PackageSearch aria-hidden="true" />
+              <strong>MCP 未配置</strong>
+              <p>当前没有连接扩展服务；e-Mate 不会把未配置的服务显示为可用能力。</p>
+            </div>
+          ) : null}
           {loadState === "loading" && !snapshot ? <p className="ex-skills-loading"><LoaderCircle className="ex-spin" aria-hidden="true" />正在读取技能目录…</p> : null}
-          {visibleItems.length ? <div className="ex-skill-grid">{visibleItems.map(renderCard)}</div> : snapshot ? (
+          {visibleItems.length ? <div className="ex-skill-grid">{visibleItems.map(renderCard)}</div> : snapshot && !(category === "collaboration" && !mcpConfigured) ? (
             <div className="ex-skills-empty"><PackageSearch aria-hidden="true" /><strong>没有匹配的技能</strong><p>清除搜索或切换分类后再查看。</p></div>
           ) : null}
           {protectedItems.length ? (

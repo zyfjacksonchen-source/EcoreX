@@ -1,22 +1,71 @@
 name: EcoreX v1 CI
+run-name: manual-ci-v${{ inputs.version }}-${{ inputs.local_gate_sha256 }}
 
 on:
-  pull_request:
-  push:
-    branches:
-      - main
   workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact protected main commit
+        required: true
+        type: string
+      version:
+        description: Exact product SemVer
+        required: true
+        type: string
+      from_version:
+        description: Installed version exercised by upgrade smoke
+        required: true
+        type: string
+      local_gate_sha256:
+        description: Signed local gate receipt SHA-256
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: ecorex-v1-ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ecorex-v1-ci-${{ inputs.source_sha }}-${{ inputs.local_gate_sha256 }}
+  cancel-in-progress: false
 
 jobs:
+  validate-request:
+    name: Validate immutable manual dispatch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Reject automatic, malformed, or non-main input
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref }}
+          SOURCE_SHA: ${{ github.sha }}
+          REQUESTED_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+          FROM_VERSION: ${{ inputs.from_version }}
+          LOCAL_GATE_SHA256: ${{ inputs.local_gate_sha256 }}
+        run: |
+          python - <<'PY'
+          import os, re
+          semver = r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+          ok = (
+              os.environ["EVENT_NAME"] == "workflow_dispatch"
+              and os.environ["REPOSITORY"] == "zyfjacksonchen-source/EcoreX"
+              and os.environ["REF_NAME"] == "refs/heads/main"
+              and os.environ["SOURCE_SHA"] == os.environ["REQUESTED_SHA"]
+              and re.fullmatch(r"[0-9a-f]{40}", os.environ["REQUESTED_SHA"] or "")
+              and re.fullmatch(semver, os.environ["VERSION"] or "")
+              and re.fullmatch(semver, os.environ["FROM_VERSION"] or "")
+              and os.environ["VERSION"] != os.environ["FROM_VERSION"]
+              and re.fullmatch(r"[0-9a-f]{64}", os.environ["LOCAL_GATE_SHA256"] or "")
+          )
+          raise SystemExit(0 if ok else 1)
+          PY
+
   quality:
     name: v1 quality and deterministic build
+    needs: validate-request
     runs-on: ubuntu-24.04
     timeout-minutes: 35
 
@@ -24,8 +73,14 @@ jobs:
       - name: Checkout with the fixed v0.3 release baseline
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ inputs.source_sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Bind checkout to requested product version
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
+        run: python -c "import os; from ecorex import __version__; raise SystemExit(0 if __version__ == os.environ['EXPECTED_VERSION'] else 1)"
 
       - name: Reject invisible untracked source and whitespace drift
         run: |
@@ -133,6 +188,7 @@ jobs:
 
   platform-smoke:
     name: ${{ matrix.label }} compatibility
+    needs: validate-request
     strategy:
       fail-fast: false
       matrix:
@@ -153,6 +209,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ inputs.source_sha }}
           persist-credentials: false
 
       - name: Set up Python 3.11
@@ -218,6 +275,7 @@ jobs:
   byte-stability:
     name: Cross-runner byte stability
     needs:
+      - validate-request
       - quality
       - platform-smoke
     runs-on: ubuntu-24.04
@@ -227,6 +285,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ inputs.source_sha }}
           persist-credentials: false
 
       - name: Set up Python 3.11

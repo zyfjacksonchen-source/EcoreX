@@ -117,11 +117,11 @@ def test_empty_remote_state_reports_every_operational_release_layer() -> None:
 
 def test_environment_configuration_is_scoped_and_fail_closed() -> None:
     snapshot = _healthy_snapshot()
-    environment = snapshot["environments"]["ecorex-release-publication-stable"]
+    environment = snapshot["environments"]["ecorex-release-signing-stable"]
     environment["reviewer_count"] = 0
     environment["protected_branches"] = False
-    environment["variables"].remove("ECOREX_CONTROL_PLANE_URL")
-    environment["secrets"].remove("ECOREX_CONTROL_PLANE_TOKEN")
+    environment["variables"].remove("ECOREX_RELEASE_SIGNER_EXECUTABLE")
+    environment["secrets"].remove("ECOREX_GITHUB_RELEASE_READ_TOKEN")
 
     result = evaluate_release_repository(snapshot)
     findings = {
@@ -130,19 +130,19 @@ def test_environment_configuration_is_scoped_and_fail_closed() -> None:
 
     assert (
         "environment_variable_missing",
-        "ecorex-release-publication-stable:ECOREX_CONTROL_PLANE_URL",
+        "ecorex-release-signing-stable:ECOREX_RELEASE_SIGNER_EXECUTABLE",
     ) in findings
     assert (
         "environment_secret_missing",
-        "ecorex-release-publication-stable:ECOREX_CONTROL_PLANE_TOKEN",
+        "ecorex-release-signing-stable:ECOREX_GITHUB_RELEASE_READ_TOKEN",
     ) in findings
     assert (
         "environment_reviewer_missing",
-        "ecorex-release-publication-stable",
+        "ecorex-release-signing-stable",
     ) in findings
     assert (
         "environment_branch_policy_invalid",
-        "ecorex-release-publication-stable",
+        "ecorex-release-signing-stable",
     ) in findings
 
 
@@ -161,12 +161,13 @@ def test_signing_environment_requires_cross_repository_read_only_token() -> None
             "ecorex-release-signing-stable:ECOREX_GITHUB_RELEASE_READ_TOKEN",
         )
     }
-    publication = snapshot["environments"]["ecorex-release-publication-stable"]
-    assert "ECOREX_GITHUB_RELEASE_TOKEN" in publication["secrets"]
-    assert "ECOREX_GITHUB_RELEASE_READ_TOKEN" not in publication["secrets"]
+    assert all(
+        "ECOREX_GITHUB_RELEASE_TOKEN" not in environment["secrets"]
+        for environment in snapshot["environments"].values()
+    )
 
 
-def test_platform_signing_live_and_publication_roles_must_not_overlap() -> None:
+def test_signing_live_and_cloud_build_roles_must_not_overlap() -> None:
     snapshot = _healthy_snapshot()
     shared = {
         "busy": False,
@@ -178,7 +179,7 @@ def test_platform_signing_live_and_publication_roles_must_not_overlap() -> None:
             "x64",
             "ecorex-release-sign",
             "ecorex-live-acceptance",
-            "ecorex-release-publish",
+            "ecorex-cloud-build",
         ],
         "name": "unsafe-shared-privileged-runner",
         "status": "online",
@@ -190,7 +191,7 @@ def test_platform_signing_live_and_publication_roles_must_not_overlap() -> None:
         not in {
             "runner-release-sign",
             "runner-live-acceptance",
-            "runner-release-publication",
+            "runner-cloud-build",
         }
     ] + [shared]
 
@@ -214,7 +215,6 @@ def test_contract_covers_every_protected_workflow_and_environment() -> None:
         ".github/workflows/ecorex-v1-ci.yml",
         ".github/workflows/ecorex-v1-platform-stage.yml",
         ".github/workflows/ecorex-v1-candidate.yml",
-        ".github/workflows/ecorex-v1-promote-candidate.yml",
     }
     assert (
         "Windows x64 compatibility"

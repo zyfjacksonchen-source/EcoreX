@@ -1,4 +1,4 @@
-"""Publish verified v0.3.2 WebUI packages, then switch the legacy pointer."""
+"""Stage verified WebUI packages, then switch the legacy update pointer."""
 
 from __future__ import annotations
 
@@ -29,13 +29,12 @@ PUBLIC_ORIGINS = (
     "https://mvdcm.ecoremedia.net/ecorex-agent",
     "https://dl.ecoremedia.net/ecorex-agent",
 )
-PACKAGE_ORIGINS = (
-    "https://gh-proxy.com/https://github.com/zyfjacksonchen-source/EcoreX-installers/releases/download/v0.3.2",
-    *(f"{origin}/downloads" for origin in PUBLIC_ORIGINS),
-)
+PACKAGE_ORIGINS = tuple(f"{origin}/downloads" for origin in PUBLIC_ORIGINS)
 PRODUCTION_DOWNLOADS = Path("/srv/ecorex-agent-download/current/downloads")
 PRODUCTION_POINTER = Path("/srv/ecorex-agent-download/legacy-pointer/manifest.json")
 PRODUCTION_LOCK = Path("/run/lock/ecorex-cloud-deploy.lock")
+# Preserve the legacy publisher's historical default; the manual v1 pipeline
+# always binds its explicit current stable source version (0.3.2 for v1.0.0).
 BASELINE_VERSION = "0.2.9.2"
 
 
@@ -80,8 +79,9 @@ def publish_legacy_webui(
     *,
     paths: PublicationPaths = PublicationPaths(),
     readback: Readback | None = None,
-    package_origins: tuple[str, ...] = PACKAGE_ORIGINS,
+    package_origins: tuple[str, ...] | None = None,
     manifest_origins: tuple[str, ...] = PUBLIC_ORIGINS,
+    from_version: str = BASELINE_VERSION,
     enforce_server_fence: bool = True,
     receipt_output: Path | None = None,
 ) -> dict[str, object]:
@@ -92,49 +92,36 @@ def publish_legacy_webui(
         or paths != PublicationPaths()
     ):
         raise LegacyPublicationError("production_server_fence_failed")
+    manifest = build_legacy_webui_manifest(receipt_path)
+    version = str(manifest["version"])
+    package_origins = package_origins or _package_origins(version)
     if (
         len(package_origins) < 2
         or len(manifest_origins) < 2
-        or any(_valid_origin(value) is False for value in package_origins)
-        or any(_valid_origin(value) is False for value in manifest_origins)
+        or any(_valid_origin(value, version=version) is False for value in package_origins)
+        or any(_valid_origin(value, version=version) is False for value in manifest_origins)
     ):
         raise LegacyPublicationError("public_origins_invalid")
 
-    manifest = build_legacy_webui_manifest(receipt_path)
     manifest_bytes = _canonical_json(manifest)
     artifacts = manifest["artifacts"]
     assert isinstance(artifacts, list)
     reader = readback or HTTPSReadback()
 
     with _publication_lock(paths.lock, enforce=enforce_server_fence):
-        _validate_pointer(paths.pointer, enforce_owner=enforce_server_fence)
-        paths.downloads.mkdir(parents=True, exist_ok=True)
-        _validate_directory(paths.downloads, enforce_owner=enforce_server_fence)
-        for artifact in artifacts:
-            assert isinstance(artifact, dict)
-            name = str(artifact["fileName"])
-            source = receipt_path.resolve(strict=True).parent / name
-            _publish_immutable(source, paths.downloads / name)
-
-        readbacks: list[dict[str, object]] = []
-        for origin in package_origins:
-            for artifact in artifacts:
-                assert isinstance(artifact, dict)
-                name = str(artifact["fileName"])
-                size = int(artifact["size"])
-                digest = str(artifact["sha256"]).casefold()
-                url = f"{origin}/{quote(name)}"
-                observed = reader.identity(url, maximum_bytes=size)
-                if observed != (size, digest):
-                    raise LegacyPublicationError("package_readback_mismatch")
-                readbacks.append(
-                    {
-                        "origin": origin,
-                        "file_name": name,
-                        "size": size,
-                        "sha256": digest,
-                    }
-                )
+        _validate_pointer(
+            paths.pointer,
+            expected_version=from_version,
+            enforce_owner=enforce_server_fence,
+        )
+        readbacks = _stage_packages(
+            receipt_path,
+            artifacts=artifacts,
+            paths=paths,
+            reader=reader,
+            package_origins=package_origins,
+            enforce_owner=enforce_server_fence,
+        )
 
         previous = paths.pointer.read_bytes()
         _atomic_replace(paths.pointer, manifest_bytes)
@@ -163,7 +150,95 @@ def publish_legacy_webui(
         return result
 
 
-def _valid_origin(value: str) -> bool:
+def stage_legacy_webui(
+    receipt_path: Path,
+    *,
+    paths: PublicationPaths = PublicationPaths(),
+    readback: Readback | None = None,
+    package_origins: tuple[str, ...] | None = None,
+    enforce_server_fence: bool = True,
+) -> dict[str, object]:
+    """Publish immutable package bytes without changing the update pointer."""
+
+    if enforce_server_fence and (
+        not sys.platform.startswith("linux")
+        or not hasattr(os, "geteuid")
+        or os.geteuid() != 0
+        or paths != PublicationPaths()
+    ):
+        raise LegacyPublicationError("production_server_fence_failed")
+    manifest = build_legacy_webui_manifest(receipt_path)
+    version = str(manifest["version"])
+    origins = package_origins or PACKAGE_ORIGINS
+    if len(origins) < 2 or any(
+        not _valid_origin(value, version=version) for value in origins
+    ):
+        raise LegacyPublicationError("public_origins_invalid")
+    artifacts = manifest["artifacts"]
+    assert isinstance(artifacts, list)
+    with _publication_lock(paths.lock, enforce=enforce_server_fence):
+        readbacks = _stage_packages(
+            receipt_path,
+            artifacts=artifacts,
+            paths=paths,
+            reader=readback or HTTPSReadback(),
+            package_origins=origins,
+            enforce_owner=enforce_server_fence,
+        )
+    return {
+        "schema": "emate.legacy-webui-stage.v1",
+        "status": "staged",
+        "version": version,
+        "package_readbacks": readbacks,
+        "update_pointer_changed": False,
+    }
+
+
+def _stage_packages(
+    receipt_path: Path,
+    *,
+    artifacts: list[object],
+    paths: PublicationPaths,
+    reader: Readback,
+    package_origins: tuple[str, ...],
+    enforce_owner: bool,
+) -> list[dict[str, object]]:
+    paths.downloads.mkdir(parents=True, exist_ok=True)
+    _validate_directory(paths.downloads, enforce_owner=enforce_owner)
+    for artifact in artifacts:
+        assert isinstance(artifact, dict)
+        name = str(artifact["fileName"])
+        source = receipt_path.resolve(strict=True).parent / name
+        _publish_immutable(source, paths.downloads / name)
+    readbacks: list[dict[str, object]] = []
+    for origin in package_origins:
+        for artifact in artifacts:
+            assert isinstance(artifact, dict)
+            name = str(artifact["fileName"])
+            size = int(artifact["size"])
+            digest = str(artifact["sha256"]).casefold()
+            if reader.identity(f"{origin}/{quote(name)}", maximum_bytes=size) != (
+                size,
+                digest,
+            ):
+                raise LegacyPublicationError("package_readback_mismatch")
+            readbacks.append(
+                {"origin": origin, "file_name": name, "size": size, "sha256": digest}
+            )
+    return readbacks
+
+
+def _package_origins(version: str) -> tuple[str, ...]:
+    return (
+        "https://github.com/zyfjacksonchen-source/"
+        f"EcoreX-installers/releases/download/v{version}",
+        "https://gh-proxy.com/https://github.com/zyfjacksonchen-source/"
+        f"EcoreX-installers/releases/download/v{version}",
+        "https://dl.ecoremedia.net/ecorex-agent/downloads",
+    )
+
+
+def _valid_origin(value: str, *, version: str) -> bool:
     parsed = urlsplit(value)
     if (
         parsed.scheme != "https"
@@ -179,8 +254,12 @@ def _valid_origin(value: str) -> bool:
         ("mvdcm.ecoremedia.net", "/ecorex-agent/downloads"),
         ("dl.ecoremedia.net", "/ecorex-agent/downloads"),
         (
+            "github.com",
+            f"/zyfjacksonchen-source/EcoreX-installers/releases/download/v{version}",
+        ),
+        (
             "gh-proxy.com",
-            "/https://github.com/zyfjacksonchen-source/EcoreX-installers/releases/download/v0.3.2",
+            f"/https://github.com/zyfjacksonchen-source/EcoreX-installers/releases/download/v{version}",
         ),
     }
 
@@ -194,7 +273,9 @@ def _canonical_json(value: object) -> bytes:
     )
 
 
-def _validate_pointer(path: Path, *, enforce_owner: bool) -> None:
+def _validate_pointer(
+    path: Path, *, expected_version: str, enforce_owner: bool
+) -> None:
     try:
         metadata = path.lstat()
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -204,10 +285,7 @@ def _validate_pointer(path: Path, *, enforce_owner: bool) -> None:
         raise LegacyPublicationError("legacy_pointer_invalid")
     if enforce_owner and (metadata.st_uid not in {0, 994} or metadata.st_mode & 0o022):
         raise LegacyPublicationError("legacy_pointer_permissions_invalid")
-    if not isinstance(value, dict) or value.get("version") not in {
-        BASELINE_VERSION,
-        "0.3.2",
-    }:
+    if not isinstance(value, dict) or value.get("version") != expected_version:
         raise LegacyPublicationError("legacy_pointer_version_invalid")
 
 
@@ -322,9 +400,22 @@ def _publication_lock(path: Path, *, enforce: bool) -> Iterator[None]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("receipt", type=Path)
-    parser.add_argument("--receipt-output", required=True, type=Path)
+    parser.add_argument("--receipt-output", type=Path)
+    parser.add_argument("--from-version", default=BASELINE_VERSION)
+    parser.add_argument("--stage", action="store_true")
     args = parser.parse_args()
-    result = publish_legacy_webui(args.receipt, receipt_output=args.receipt_output)
+    if args.stage:
+        if args.receipt_output is not None:
+            parser.error("--receipt-output is not valid with --stage")
+        result = stage_legacy_webui(args.receipt)
+    else:
+        if args.receipt_output is None:
+            parser.error("--receipt-output is required for publication")
+        result = publish_legacy_webui(
+            args.receipt,
+            from_version=args.from_version,
+            receipt_output=args.receipt_output,
+        )
     print(json.dumps(result, ensure_ascii=True, sort_keys=True))
 
 

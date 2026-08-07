@@ -54,6 +54,7 @@ const TURN_STATUS_LABELS: Record<TurnProjection["status"], string> = {
   retry_wait: "等待重试",
   finalizing: "正在收尾",
   completed: "已完成",
+  partial: "部分完成",
   failed: "已失败",
   cancelled: "已取消",
   interrupted: "已中断",

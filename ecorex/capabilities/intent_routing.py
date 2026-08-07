@@ -46,6 +46,19 @@ _IMAGE_CONTEXT_FOLLOWUPS = (
     "make another",
     "generate another",
 )
+_IMAGE_CONTEXT_NEGATIONS = (
+    "不要",
+    "不用",
+    "别",
+    "停止",
+    "取消",
+    "do not",
+    "don't",
+    "dont",
+    "not",
+    "stop",
+    "cancel",
+)
 
 _CLAUSE_BREAK_RE = re.compile(
     r"[\r\n,，。!！？?；;]+"
@@ -117,7 +130,14 @@ def intent_inherits_image_context(value: object) -> bool:
     if not intent_is_routable(value):
         return False
     normalized = normalize_intent_text(value)
-    return any(_contains_phrase(normalized, phrase) for phrase in _IMAGE_CONTEXT_FOLLOWUPS)
+    if any(
+        _context_starts_with(normalized, prefix)
+        for prefix in _IMAGE_CONTEXT_NEGATIONS
+    ):
+        return False
+    return any(
+        _contains_phrase(normalized, phrase) for phrase in _IMAGE_CONTEXT_FOLLOWUPS
+    )
 
 
 def _contains_phrase(normalized_intent: str, phrase: str) -> bool:

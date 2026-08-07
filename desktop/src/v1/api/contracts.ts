@@ -162,11 +162,13 @@ export interface ContextUsageProjection {
 export interface TaskActivityDay {
   date: string;
   completed: number;
+  partial: number;
   terminal: number;
 }
 
 export interface TaskActivityProjection {
   completed_today: number;
+  partial_today: number;
   waiting: number;
   terminal_today: number;
   days: TaskActivityDay[];

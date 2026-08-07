@@ -103,34 +103,7 @@ _SIGNER_VARIABLES = frozenset(
         "ECOREX_RELEASE_SIGNER_PUBLIC_KEY",
     }
 )
-_PUBLICATION_SIGNER_VARIABLES = frozenset(
-    {
-        "ECOREX_PUBLICATION_SIGNER_EXECUTABLE",
-        "ECOREX_PUBLICATION_SIGNER_EXECUTABLE_SHA256",
-        "ECOREX_PUBLICATION_SIGNER_ADAPTER",
-        "ECOREX_PUBLICATION_SIGNER_ADAPTER_SHA256",
-        "ECOREX_PUBLICATION_SIGNER_KEY_ID",
-        "ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY",
-    }
-)
 _SIGNING_SECRETS = frozenset({"ECOREX_GITHUB_RELEASE_READ_TOKEN"})
-_PUBLICATION_VARIABLES = frozenset(
-    {
-        "ECOREX_GITHUB_RELEASE_REPOSITORY",
-        "ECOREX_RELEASE_PUBLICATION_CONFIG",
-        "ECOREX_BOOTSTRAP_INDEX_PUBLICATION_CONFIG",
-        "ECOREX_CONTROL_PLANE_URL",
-        "ECOREX_CONTROL_PLANE_HOSTS",
-    }
-)
-_PUBLICATION_SECRETS = frozenset(
-    {
-        "ECOREX_GITHUB_RELEASE_TOKEN",
-        "ECOREX_CDN_TOKEN",
-        "ECOREX_BOOTSTRAP_INDEX_TOKEN",
-        "ECOREX_CONTROL_PLANE_TOKEN",
-    }
-)
 _STAGE_VARIABLES = frozenset(
     {
         "ECOREX_STAGE_RUNTIME_CONFIG_WINDOWS_X64_BASE64",
@@ -143,36 +116,6 @@ _STAGE_VARIABLES = frozenset(
         "ECOREX_PUBLICATION_PUBLIC_KEYS_JSON",
     }
 )
-_DEPLOYMENT_SIGNER_VARIABLES = frozenset(
-    {
-        "ECOREX_DEPLOYMENT_SIGNER_EXECUTABLE",
-        "ECOREX_DEPLOYMENT_SIGNER_EXECUTABLE_SHA256",
-        "ECOREX_DEPLOYMENT_SIGNER_ADAPTER",
-        "ECOREX_DEPLOYMENT_SIGNER_ADAPTER_SHA256",
-        "ECOREX_DEPLOYMENT_SIGNER_KEY_ID",
-        "ECOREX_DEPLOYMENT_SIGNER_PUBLIC_KEY",
-    }
-)
-_PRODUCTION_DEPLOYMENT_VARIABLES = frozenset(
-    {
-        "ECOREX_DEPLOYMENT_SIGNER_KEY_ID",
-        "ECOREX_DEPLOYMENT_SIGNER_PUBLIC_KEY",
-        "ECOREX_PRODUCTION_CLOUD_SPEC",
-        "ECOREX_PRODUCTION_PUBLIC_SITE_ROOT",
-        "ECOREX_BOOTSTRAP_INDEX_PUBLICATION_CONFIG",
-        "ECOREX_CONTROL_PLANE_URL",
-        "ECOREX_CONTROL_PLANE_HOSTS",
-        "ECOREX_RELEASE_SIGNER_KEY_ID",
-        "ECOREX_RELEASE_SIGNER_PUBLIC_KEY",
-        "ECOREX_PUBLICATION_SIGNER_KEY_ID",
-        "ECOREX_PUBLICATION_SIGNER_PUBLIC_KEY",
-    }
-)
-_PRODUCTION_DEPLOYMENT_SECRETS = frozenset(
-    {"ECOREX_BOOTSTRAP_INDEX_TOKEN", "ECOREX_CONTROL_PLANE_TOKEN"}
-)
-
-
 def default_release_repository_contract() -> ReleaseRepositoryContract:
     """Return the single v1 repository governance contract."""
 
@@ -181,9 +124,6 @@ def default_release_repository_contract() -> ReleaseRepositoryContract:
         "ECOREX_RELEASE_MIRROR_BASE_URL",
         "ECOREX_RELEASE_CDN_BASE_URL",
     }
-    publication_variables = (
-        _SIGNER_VARIABLES | _PUBLICATION_SIGNER_VARIABLES | _PUBLICATION_VARIABLES
-    )
     return ReleaseRepositoryContract(
         default_branch="main",
         workflows=frozenset(
@@ -191,7 +131,6 @@ def default_release_repository_contract() -> ReleaseRepositoryContract:
                 ".github/workflows/ecorex-v1-ci.yml",
                 ".github/workflows/ecorex-v1-platform-stage.yml",
                 ".github/workflows/ecorex-v1-candidate.yml",
-                ".github/workflows/ecorex-v1-promote-candidate.yml",
             }
         ),
         status_checks=frozenset(
@@ -229,39 +168,6 @@ def default_release_repository_contract() -> ReleaseRepositoryContract:
                 "ecorex-cloud-build",
                 _SIGNER_VARIABLES | {"ECOREX_CLOUD_BUILD_RELEASE_ROOT"},
             ),
-            EnvironmentContract(
-                "ecorex-deployment-authorization",
-                _DEPLOYMENT_SIGNER_VARIABLES | _SIGNER_VARIABLES,
-            ),
-            EnvironmentContract(
-                "ecorex-production-deployment-canary",
-                _PRODUCTION_DEPLOYMENT_VARIABLES,
-                _PRODUCTION_DEPLOYMENT_SECRETS,
-            ),
-            EnvironmentContract(
-                "ecorex-production-deployment-stable",
-                _PRODUCTION_DEPLOYMENT_VARIABLES,
-                _PRODUCTION_DEPLOYMENT_SECRETS,
-            ),
-            EnvironmentContract(
-                "ecorex-production-readback",
-                frozenset(
-                    {
-                        "ECOREX_PUBLIC_ORIGIN",
-                        "ECOREX_ADMIN_HEALTH_URL",
-                    }
-                ),
-            ),
-            EnvironmentContract(
-                "ecorex-release-publication-canary",
-                publication_variables,
-                _PUBLICATION_SECRETS,
-            ),
-            EnvironmentContract(
-                "ecorex-release-publication-stable",
-                publication_variables,
-                _PUBLICATION_SECRETS,
-            ),
         ),
         runners=(
             RunnerContract(
@@ -273,30 +179,8 @@ def default_release_repository_contract() -> ReleaseRepositoryContract:
                 frozenset({"self-hosted", "windows", "x64", "ecorex-live-acceptance"}),
             ),
             RunnerContract(
-                "release-publication",
-                frozenset({"self-hosted", "linux", "arm64", "ecorex-release-publish"}),
-            ),
-            RunnerContract(
                 "cloud-build",
                 frozenset({"self-hosted", "linux", "arm64", "ecorex-cloud-build"}),
-            ),
-            RunnerContract(
-                "deployment-authorize",
-                frozenset(
-                    {"self-hosted", "linux", "arm64", "ecorex-deployment-authorize"}
-                ),
-            ),
-            RunnerContract(
-                "production-deploy",
-                frozenset(
-                    {"self-hosted", "linux", "arm64", "ecorex-production-deploy"}
-                ),
-            ),
-            RunnerContract(
-                "production-readback",
-                frozenset(
-                    {"self-hosted", "linux", "arm64", "ecorex-production-readback"}
-                ),
             ),
         ),
     )
@@ -480,19 +364,15 @@ def evaluate_release_repository(
 
     isolated = (
         role_matches.get("release-sign", set()),
-        role_matches.get("release-publication", set()),
         role_matches.get("live-acceptance", set()),
         role_matches.get("cloud-build", set()),
-        role_matches.get("deployment-authorize", set()),
-        role_matches.get("production-deploy", set()),
-        role_matches.get("production-readback", set()),
     )
     if any(left & right for index, left in enumerate(isolated) for right in isolated[index + 1 :]):
         findings.append(
             ReadinessFinding(
                 "privileged_runner_role_overlap",
                 "runner",
-                "platform/sign/live/publication",
+                "sign/live/cloud-build",
             )
         )
 

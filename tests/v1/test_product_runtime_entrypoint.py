@@ -24,7 +24,11 @@ from ecorex.bootstrap import RUNTIME_RELOAD_EXIT_CODE
 
 from ecorex.connectors import InMemoryCredentialVault
 from ecorex.observability.audit import AuditIntegrityError
-from ecorex.pack_catalog import REQUIRED_CAPABILITY_PACK_IDS
+from ecorex.pack_catalog import (
+    CAPABILITY_PACK_PROFILES,
+    REQUIRED_CAPABILITY_PACK_IDS,
+    capability_pack_profile,
+)
 from ecorex.protocol import CreateTurnRequest
 from ecorex.release import (
     ArtifactBuildInput,
@@ -2092,6 +2096,16 @@ def test_configured_capability_pack_requires_verified_artifact_and_trusted_adapt
             runtime_payload_root=product["payload"],
             resolver=None,
         )
+
+
+def test_capability_pack_profiles_are_exact_and_share_one_catalog() -> None:
+    assert CAPABILITY_PACK_PROFILES["minimal"] == ()
+    assert CAPABILITY_PACK_PROFILES["workspace"] == ("sandbox",)
+    assert CAPABILITY_PACK_PROFILES["full_offline"] == REQUIRED_CAPABILITY_PACK_IDS
+    assert capability_pack_profile(()) == "minimal"
+    assert capability_pack_profile(("sandbox",)) == "workspace"
+    assert capability_pack_profile(REQUIRED_CAPABILITY_PACK_IDS) == "full_offline"
+    assert capability_pack_profile(("image",)) is None
 
 
 def test_config_or_ancestor_link_is_rejected(tmp_path: Path) -> None:

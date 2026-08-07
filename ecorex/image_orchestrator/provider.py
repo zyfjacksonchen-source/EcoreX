@@ -63,6 +63,12 @@ class ProviderRejected(ProviderError):
     retryable = False
 
 
+class ProviderModelUnavailable(ProviderRejected):
+    """A definite pre-execution rejection that permits a model fallback."""
+
+    code = "provider_model_unavailable"
+
+
 def normalize_retry_after_seconds(value: object) -> float | None:
     """Return a safe provider backoff hint or ``None`` for malformed input.
 
@@ -135,6 +141,7 @@ __all__ = [
     "ProviderError",
     "ProviderOutOfMemory",
     "ProviderRateLimited",
+    "ProviderModelUnavailable",
     "ProviderRejected",
     "ProviderResult",
     "ProviderState",

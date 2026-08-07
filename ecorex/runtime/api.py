@@ -64,7 +64,10 @@ from ecorex.extensions.mcp_oauth import MCPOAuthService, register_mcp_oauth_rout
 from ecorex.extensions.local_bundle import LocalSkillBundleStore
 from ecorex.extensions.repository import SQLiteExtensionRepository
 from ecorex.extensions.service import ExtensionService
-from ecorex.extensions.hub_api import SkillHubCloudClient, register_skill_hub_runtime_routes
+from ecorex.extensions.hub_api import (
+    SkillHubCloudClient,
+    register_skill_hub_runtime_routes,
+)
 from ecorex.integration import (
     ArtifactEventOutbox,
     ArtifactEventOutboxSupervisor,
@@ -304,6 +307,13 @@ class RuntimeSettings:
     model_worker_concurrency: int = 2
     model_worker_poll_seconds: float = 0.25
     model_worker_shutdown_seconds: float = 5.0
+    agent_max_model_rounds: int = 24
+    agent_token_budget: int = 262_144
+    agent_finalization_reserve: int = 16_384
+    tool_retry_max_attempts: int = 3
+    tool_retry_base_delay_seconds: float = 1.0
+    tool_circuit_failure_threshold: int = 3
+    tool_circuit_open_seconds: float = 30.0
     image_execution_concurrency: int = 2
     image_execution_queue_capacity: int = 8
     image_execution_timeout_seconds: float = 900.0
@@ -501,9 +511,7 @@ def _managed_catalog_from_cloud(
             if policy is not None:
                 if not isinstance(upstream_model_id, str) or not upstream_model_id:
                     raise ModelCatalogError("managed gateway upstream model is invalid")
-                reasoning_effort = item.get(
-                    "reasoning_effort", policy.reasoning_effort
-                )
+                reasoning_effort = item.get("reasoning_effort", policy.reasoning_effort)
                 if reasoning_effort not in {"medium", "high", "max"}:
                     raise ModelCatalogError(
                         "managed gateway reasoning effort is invalid"
@@ -1432,9 +1440,7 @@ def create_app(
         else None
     )
     managed_models = signed_models or builtin_models
-    active_model_catalog: dict[str, ManagedModelCatalog] = {
-        "value": managed_models
-    }
+    active_model_catalog: dict[str, ManagedModelCatalog] = {"value": managed_models}
     model_catalog_refresh_lock = asyncio.Lock()
 
     def current_runtime_model_catalog() -> ManagedModelCatalog:
@@ -1479,7 +1485,9 @@ def create_app(
                 )
                 refreshed = _managed_catalog_from_cloud(signed, cloud)
             except (_ManagedSessionRestartRequired, ManagedSessionError) as error:
-                raise ModelCatalogError("managed model catalog is unavailable") from error
+                raise ModelCatalogError(
+                    "managed model catalog is unavailable"
+                ) from error
             except Exception:
                 # Preserve the last fully validated immutable revision during
                 # a transient catalog read failure. The Gateway independently
@@ -1488,6 +1496,7 @@ def create_app(
                 return current_runtime_model_catalog()
             active_model_catalog["value"] = refreshed
             return refreshed
+
     usage_projection_service = UsageProjectionService(
         kernel.database,
         model_catalog=managed_models,
@@ -1546,8 +1555,7 @@ def create_app(
         MCPOAuthService(
             mcp_oauth_registrations,
             redirect_uri=(
-                oauth_return_uri.rsplit("/api/v1/", 1)[0]
-                + "/api/v1/mcp/oauth/callback"
+                oauth_return_uri.rsplit("/api/v1/", 1)[0] + "/api/v1/mcp/oauth/callback"
             ),
             vault=connector_vault,
         )
@@ -1890,14 +1898,12 @@ def create_app(
         availability = composition.current_invocation_availability()
         items: list[dict[str, str]] = []
         for spec in composition.capability_registry.all():
-            if (
-                spec.default_exposure is Exposure.HIDDEN
-                or availability_reasons(spec, availability)
+            if spec.default_exposure is Exposure.HIDDEN or availability_reasons(
+                spec, availability
             ):
                 continue
-            collaboration = (
-                spec.provider.kind is ToolProviderKind.MCP
-                or bool(spec.required_connectors)
+            collaboration = spec.provider.kind is ToolProviderKind.MCP or bool(
+                spec.required_connectors
             )
             items.append(
                 {
@@ -1925,7 +1931,9 @@ def create_app(
             )
         items.sort(key=lambda item: (item["kind"], item["label"], item["reference"]))
         digest = hashlib.sha256(
-            json.dumps(items, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+            json.dumps(
+                items, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode()
         ).hexdigest()
         return {
             "schema_version": 1,
@@ -2047,6 +2055,7 @@ def create_app(
                     if extension_governance_enabled
                     else None
                 ),
+                workflow_instruction_resolver=composition.workflow_instructions,
                 turn_preparer=composition.prepare_turn,
                 permission_mutation_lock=composition.permission_mutation_lock,
                 permission_account_id=composition.permission_account_id,
@@ -2061,6 +2070,13 @@ def create_app(
                 image_execution_timeout_seconds=(
                     settings.image_execution_timeout_seconds
                 ),
+                max_model_rounds=settings.agent_max_model_rounds,
+                token_budget=settings.agent_token_budget,
+                finalization_reserve=settings.agent_finalization_reserve,
+                tool_retry_max_attempts=settings.tool_retry_max_attempts,
+                tool_retry_base_delay_seconds=(settings.tool_retry_base_delay_seconds),
+                circuit_failure_threshold=(settings.tool_circuit_failure_threshold),
+                circuit_open_seconds=settings.tool_circuit_open_seconds,
             ),
             concurrency=settings.model_worker_concurrency,
             idle_poll_seconds=settings.model_worker_poll_seconds,
@@ -2779,21 +2795,16 @@ def create_app(
     async def local_origin_and_cache_policy(request: Request, call_next):
         commit_guard = None
         runtime_owner_probe = (
-            request.method == "GET"
-            and request.url.path == "/api/v1/runtime-owner"
+            request.method == "GET" and request.url.path == "/api/v1/runtime-owner"
         )
         if request.url.path.startswith("/api/v1") and not runtime_owner_probe:
             recovery_scope = recovery_mutation_scopes.get(
                 (request.method, request.url.path)
             )
-            oauth_callback = (
-                request.method == "GET"
-                and request.url.path
-                in {
-                    "/api/v1/connectors/oauth/callback",
-                    "/api/v1/mcp/oauth/callback",
-                }
-            )
+            oauth_callback = request.method == "GET" and request.url.path in {
+                "/api/v1/connectors/oauth/callback",
+                "/api/v1/mcp/oauth/callback",
+            }
             if not oauth_callback:
                 authorization = request.headers.get("authorization", "")
                 scheme, _, supplied = authorization.partition(" ")
@@ -2935,13 +2946,10 @@ def create_app(
         else:
             with transaction_commit_guard(commit_guard):
                 response = await call_next(request)
-        if (
-            request.url.path.startswith("/api/v1")
-            and not (
-                request.method == "GET"
-                and request.url.path.startswith("/api/v1/input-attachments/")
-                and request.url.path.endswith("/thumbnail")
-            )
+        if request.url.path.startswith("/api/v1") and not (
+            request.method == "GET"
+            and request.url.path.startswith("/api/v1/input-attachments/")
+            and request.url.path.endswith("/thumbnail")
         ):
             response.headers["Cache-Control"] = "no-store"
         return response
@@ -3605,7 +3613,9 @@ def create_app(
     @app.get("/api/v1/input-attachments/{attachment_id}/thumbnail")
     def get_input_attachment_thumbnail(attachment_id: str) -> Response:
         try:
-            projection, rendition = input_attachment_service.read_thumbnail(attachment_id)
+            projection, rendition = input_attachment_service.read_thumbnail(
+                attachment_id
+            )
         except InputAttachmentUnavailable as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InputAttachmentError as error:
@@ -3672,7 +3682,9 @@ def create_app(
         if status == "all":
             status_value = None
         elif status not in {"active", "archived"}:
-            raise HTTPException(status_code=422, detail="thread status filter is invalid")
+            raise HTTPException(
+                status_code=422, detail="thread status filter is invalid"
+            )
         else:
             try:
                 status_value = ThreadStatus(status)
@@ -3752,9 +3764,7 @@ def create_app(
         "/api/v1/threads/{thread_id}",
         response_model=ThreadProjection,
     )
-    def delete_thread(
-        thread_id: str, request: ThreadStatusRequest
-    ) -> ThreadProjection:
+    def delete_thread(thread_id: str, request: ThreadStatusRequest) -> ThreadProjection:
         return kernel.delete_thread(
             thread_id, client_request_id=request.client_request_id
         )
@@ -3777,7 +3787,9 @@ def create_app(
         status_code=202,
         response_model=TurnMutationResponse,
     )
-    async def create_turn(thread_id: str, request: CreateTurnRequest) -> TurnMutationResponse:
+    async def create_turn(
+        thread_id: str, request: CreateTurnRequest
+    ) -> TurnMutationResponse:
         require_model_task_service()
         try:
             await refresh_runtime_model_catalog()
@@ -3790,6 +3802,7 @@ def create_app(
                     snapshot_context=prepared.snapshot_context,
                     permission_account_id=composition.permission_account_id,
                 ),
+                thread_id=thread_id,
             )
         except CapabilityIntentError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
@@ -3831,7 +3844,9 @@ def create_app(
         status_code=202,
         response_model=TurnMutationResponse,
     )
-    async def queue_turn(thread_id: str, request: QueueTurnRequest) -> TurnMutationResponse:
+    async def queue_turn(
+        thread_id: str, request: QueueTurnRequest
+    ) -> TurnMutationResponse:
         require_model_task_service()
         try:
             await refresh_runtime_model_catalog()
@@ -3846,6 +3861,7 @@ def create_app(
                     snapshot_context=prepared.snapshot_context,
                     permission_account_id=composition.permission_account_id,
                 ),
+                thread_id=thread_id,
             )
         except CapabilityIntentError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
@@ -3859,7 +3875,9 @@ def create_app(
         status_code=202,
         response_model=ReplaceTurnResponse,
     )
-    async def replace_turn(turn_id: str, request: ReplaceTurnRequest) -> ReplaceTurnResponse:
+    async def replace_turn(
+        turn_id: str, request: ReplaceTurnRequest
+    ) -> ReplaceTurnResponse:
         require_model_task_service()
         try:
             await refresh_runtime_model_catalog()
@@ -3884,9 +3902,11 @@ def create_app(
             )
 
         try:
+            parent_turn = kernel.get_turn(turn_id)
             return composition.admit_turn(
                 turn_request,
                 accept_replacement,
+                thread_id=parent_turn.thread_id,
             )
         except CapabilityIntentError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
@@ -3969,12 +3989,8 @@ def create_app(
                 "scope": "account",
                 "source": "managed_gateway",
                 "complete_across_devices": True,
-                "today": TokenUsageWindow(
-                    **account_projection.today.model_dump()
-                ),
-                "week": TokenUsageWindow(
-                    **account_projection.week.model_dump()
-                ),
+                "today": TokenUsageWindow(**account_projection.today.model_dump()),
+                "week": TokenUsageWindow(**account_projection.week.model_dump()),
                 "calculated_at": account_projection.calculated_at,
             }
         )

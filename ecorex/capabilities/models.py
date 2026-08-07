@@ -26,12 +26,8 @@ _SEMVER_RE = re.compile(
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
-_ROUTING_FACET_RE = re.compile(
-    r"^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9_-]*){1,7}$"
-)
-_MODEL_CAPABILITY_RE = re.compile(
-    r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$"
-)
+_ROUTING_FACET_RE = re.compile(r"^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9_-]*){1,7}$")
+_MODEL_CAPABILITY_RE = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
 _PROVIDER_ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
 _PROVIDER_REVISION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _PROVIDER_KEY_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -40,6 +36,8 @@ MAX_TOOL_ALIASES = 32
 MAX_INTENT_TAGS = 32
 MAX_ROUTING_FACETS = 8
 MAX_ROUTING_METADATA_TEXT = 128
+MAX_WORKFLOW_SKILLS = 8
+MAX_RECOVERY_HINTS = 8
 _MODEL_MODALITIES = frozenset({"chat", "image", "vision", "audio", "embedding"})
 
 
@@ -81,14 +79,11 @@ def _freeze_model_capabilities(
             }
         except UnicodeEncodeError:
             raise ValueError(f"{label} are invalid") from None
-        if (
-            len(capabilities) != len(raw_capabilities)
-            or any(
-                not capability
-                or capability_sizes[capability] > 128
-                or not _MODEL_CAPABILITY_RE.fullmatch(capability)
-                for capability in capabilities
-            )
+        if len(capabilities) != len(raw_capabilities) or any(
+            not capability
+            or capability_sizes[capability] > 128
+            or not _MODEL_CAPABILITY_RE.fullmatch(capability)
+            for capability in capabilities
         ):
             raise ValueError(f"{label} are invalid")
         normalized[modality] = capabilities
@@ -345,6 +340,9 @@ class ToolSpec:
     # may use these facets, while MCP-provided names, descriptions and tags
     # can only contribute bounded catalog-search evidence.
     routing_facets: frozenset[str] = frozenset()
+    workflow_skill_ids: frozenset[str] = frozenset()
+    recovery_hints: tuple[str, ...] = ()
+    cache_ttl_seconds: int = 0
     required_packs: frozenset[str] = frozenset()
     required_connectors: frozenset[str] = frozenset()
     # Some capabilities need a model selected for a separate modality.  This
@@ -383,6 +381,9 @@ class ToolSpec:
                 not self.tool_id.startswith(expected_prefix)
                 or self.default_exposure is not Exposure.DEFERRED
                 or self.routing_facets
+                or self.workflow_skill_ids
+                or self.recovery_hints
+                or self.cache_ttl_seconds != 0
                 or self.priority_bias != 0
             ):
                 raise ValueError(
@@ -400,8 +401,12 @@ class ToolSpec:
             self.output_schema, Mapping
         ):
             raise TypeError("tool input_schema and output_schema must be mappings")
-        validate_schema_contract(self.input_schema, label=f"{self.tool_id}.input_schema")
-        validate_schema_contract(self.output_schema, label=f"{self.tool_id}.output_schema")
+        validate_schema_contract(
+            self.input_schema, label=f"{self.tool_id}.input_schema"
+        )
+        validate_schema_contract(
+            self.output_schema, label=f"{self.tool_id}.output_schema"
+        )
         # ``frozen=True`` is shallow.  Copy and recursively freeze nested
         # schemas before a registry can cache its digest, otherwise a provider
         # could mutate validation/model-visible contracts without changing the
@@ -437,7 +442,9 @@ class ToolSpec:
             len(tag.encode("utf-8")) > MAX_ROUTING_METADATA_TEXT
             for tag in self.intent_tags
         ):
-            raise ValueError("tool intent tag exceeds the product metadata length limit")
+            raise ValueError(
+                "tool intent tag exceeds the product metadata length limit"
+            )
         if len(set(normalized_tags)) != len(normalized_tags):
             raise ValueError("tool intent tags must be unique after normalization")
         if len(self.routing_facets) > MAX_ROUTING_FACETS:
@@ -449,6 +456,35 @@ class ToolSpec:
             for facet in self.routing_facets
         ):
             raise ValueError("tool routing facet is invalid")
+        if (
+            not isinstance(self.workflow_skill_ids, frozenset)
+            or len(self.workflow_skill_ids) > MAX_WORKFLOW_SKILLS
+            or any(
+                not isinstance(skill_id, str) or not _TOOL_ID_RE.fullmatch(skill_id)
+                for skill_id in self.workflow_skill_ids
+            )
+        ):
+            raise ValueError("tool workflow Skill identity is invalid")
+        if (
+            not isinstance(self.recovery_hints, tuple)
+            or len(self.recovery_hints) > MAX_RECOVERY_HINTS
+            or len(set(self.recovery_hints)) != len(self.recovery_hints)
+            or any(
+                not isinstance(hint, str)
+                or not hint.strip()
+                or len(hint.encode("utf-8")) > 256
+                for hint in self.recovery_hints
+            )
+        ):
+            raise ValueError("tool recovery hints are invalid")
+        if (
+            isinstance(self.cache_ttl_seconds, bool)
+            or not isinstance(self.cache_ttl_seconds, int)
+            or not 0 <= self.cache_ttl_seconds <= 86_400
+            or self.cache_ttl_seconds > 0
+            and self.idempotency is not IdempotencyClass.READ_ONLY
+        ):
+            raise ValueError("tool cache TTL is invalid")
         if (
             not isinstance(self.required_model_modalities, frozenset)
             or not self.required_model_modalities <= _MODEL_MODALITIES
@@ -483,7 +519,10 @@ class ToolSpec:
     @property
     def references(self) -> frozenset[str]:
         return frozenset(
-            {normalize_reference(self.tool_id), *(normalize_reference(a) for a in self.aliases)}
+            {
+                normalize_reference(self.tool_id),
+                *(normalize_reference(a) for a in self.aliases),
+            }
         )
 
     @property
@@ -508,6 +547,9 @@ class ToolSpec:
             "priority_bias": self.priority_bias,
             "intent_tags": sorted(self.intent_tags),
             "routing_facets": sorted(self.routing_facets),
+            "workflow_skill_ids": sorted(self.workflow_skill_ids),
+            "recovery_hints": list(self.recovery_hints),
+            "cache_ttl_seconds": self.cache_ttl_seconds,
             "required_packs": sorted(self.required_packs),
             "required_connectors": sorted(self.required_connectors),
             "required_model_modalities": sorted(self.required_model_modalities),
@@ -539,12 +581,9 @@ class RuntimeAvailability:
     selected_model_capabilities: Mapping[str, frozenset[str]] | None = None
 
     def __post_init__(self) -> None:
-        if (
-            self.selected_model_modalities is not None
-            and (
-                not isinstance(self.selected_model_modalities, frozenset)
-                or not self.selected_model_modalities <= _MODEL_MODALITIES
-            )
+        if self.selected_model_modalities is not None and (
+            not isinstance(self.selected_model_modalities, frozenset)
+            or not self.selected_model_modalities <= _MODEL_MODALITIES
         ):
             raise ValueError("selected model modalities are invalid")
         if self.selected_model_capabilities is not None:
@@ -621,7 +660,9 @@ class ExecutionPolicy:
             "profile": self.profile.value,
             "sandbox": self.sandbox.value,
             "approval_mode": self.approval_mode.value,
-            "admin_hard_denies": sorted(normalize_reference(v) for v in self.admin_hard_denies),
+            "admin_hard_denies": sorted(
+                normalize_reference(v) for v in self.admin_hard_denies
+            ),
             "enforce_admin_hard_denies": self.enforce_admin_hard_denies,
             "policy_denies": sorted(normalize_reference(v) for v in self.policy_denies),
             "allow_sandbox_escalation": self.allow_sandbox_escalation,
@@ -704,7 +745,9 @@ class CapabilityPlan:
     selected_model_capabilities: Mapping[str, frozenset[str]] | None = None
 
     def __post_init__(self) -> None:
-        if self.catalog_digest and not re.fullmatch(r"[0-9a-f]{64}", self.catalog_digest):
+        if self.catalog_digest and not re.fullmatch(
+            r"[0-9a-f]{64}", self.catalog_digest
+        ):
             raise ValueError("capability catalog digest is invalid")
         if not _ROUTING_FACET_RE.fullmatch(self.routing_policy_id):
             raise ValueError("capability routing policy ID is invalid")

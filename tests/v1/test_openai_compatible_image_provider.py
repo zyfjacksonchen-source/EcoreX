@@ -72,11 +72,12 @@ def _job(
     client_request_id: str = "openai-image-request-0001",
     width: int = 1024,
     height: int = 1024,
+    model_id: str = "gpt-image-2",
 ) -> ImageJob:
     now = datetime.now(UTC)
     request = ImageSubmitRequest(
         operation=operation,
-        model_id="gpt-image-2",
+        model_id=model_id,
         client_request_id=client_request_id,
         prompt="Create a restrained office illustration",
         width=width,
@@ -106,12 +107,13 @@ def _provider(
     input_store: ImageContentStore | None = None,
     max_concurrency: int = 4,
     max_image_bytes: int = 8 * 1024 * 1024,
+    allowed_models: frozenset[str] = frozenset({"gpt-image-2"}),
 ) -> OpenAICompatibleImageProvider:
     return OpenAICompatibleImageProvider(
         provider_id="ecorex-managed-image",
         origin="https://images.example.invalid",
         allowed_origins=frozenset({"https://images.example.invalid"}),
-        allowed_models=frozenset({"gpt-image-2"}),
+        allowed_models=allowed_models,
         bearer_token=lambda: TOKEN,
         input_store=input_store,
         max_image_bytes=max_image_bytes,
@@ -175,6 +177,70 @@ def test_generation_uses_fixed_inline_images_route_and_exact_model() -> None:
         await client.aclose()
 
     asyncio.run(scenario())
+
+
+def test_pro_model_falls_back_once_only_after_definite_model_unavailable() -> None:
+    async def scenario() -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            model = json.loads(request.content)["model"]
+            if model == "gpt-image-2-pro":
+                return httpx.Response(
+                    404,
+                    json={"error": {"code": "model_not_found"}},
+                )
+            assert model == "gpt-image-2"
+            return _completed()
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        provider = _provider(
+            client,
+            allowed_models=frozenset({"gpt-image-2-pro", "gpt-image-2"}),
+        )
+        result = await provider.submit(
+            _job(model_id="gpt-image-2-pro"),
+            idempotency_key="provider-idempotency-0001",
+        )
+        assert result.state is ProviderState.COMPLETED
+        assert [json.loads(request.content)["model"] for request in requests] == [
+            "gpt-image-2-pro",
+            "gpt-image-2",
+        ]
+        assert requests[0].headers["idempotency-key"] != requests[1].headers[
+            "idempotency-key"
+        ]
+        await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_pro_model_does_not_fallback_after_generic_or_uncertain_failure() -> None:
+    async def scenario(status: int) -> None:
+        calls = 0
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            return httpx.Response(status, json={"error": {"code": "other"}})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        provider = _provider(
+            client,
+            allowed_models=frozenset({"gpt-image-2-pro", "gpt-image-2"}),
+        )
+        error = ProviderUncertain if status == 503 else ProviderRejected
+        with pytest.raises(error):
+            await provider.submit(
+                _job(model_id="gpt-image-2-pro"),
+                idempotency_key="provider-idempotency-0001",
+            )
+        assert calls == 1
+        await client.aclose()
+
+    asyncio.run(scenario(400))
+    asyncio.run(scenario(503))
 
 
 def test_structured_retouch_reads_cas_and_sends_base_reference_and_mask(

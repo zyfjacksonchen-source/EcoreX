@@ -2018,3 +2018,136 @@
   prior Environment inventory whenever safe, while a plan upgrade or another
   explicit administrator decision remains necessary before protected release
   work can begin.
+
+## ADR-114 - Recovery is one language-aware loop over durable Runtime facts
+
+- Status: accepted.
+- Root cause: transport retry alone cannot correct a bad argument, a wrong tool,
+  a repeated action loop or an exhausted task budget. Treating every failure as
+  the same exception either repeats side effects or hides useful partial work.
+- Decision: the existing Agent worker owns one bounded recovery loop. Safe
+  read-only/idempotent tool calls receive exponential backoff and a durable
+  attempt increment; non-idempotent uncertain calls retain human reconciliation.
+  Exhausted calls return a structured, redacted failure plus authorized
+  alternatives to the model so it can correct arguments, vary parameters,
+  switch tools, decompose the task, use an exact frozen-authority cache result,
+  or answer without a tool. Repeated action fingerprints request reflection and
+  then stop the loop. Model rounds, cumulative tokens and finalization reserve
+  are hard guards. A usable result ends as `partial`; no usable result fails.
+- Checkpoint boundary: worker checkpoint schema v3 carries cumulative token
+  usage and is written at each durable phase. Resume accepts v2/v3, rebuilds
+  token totals from append-only provider events and continues from the latest
+  valid execution batch instead of replaying completed work.
+- Consequence: LLM language understanding participates in recovery without
+  becoming authority. It may choose among already admitted actions, but cannot
+  widen permissions, install software, bypass a circuit, invent cached facts or
+  replay an uncertain side effect.
+
+## ADR-115 - v1 capabilities have one authority chain and ImageGen is a linked workflow
+
+- Status: accepted.
+- Root cause: the legacy `runtime-packs` catalog, v1 signed Packs, Skills and
+  free-form intent hints could each appear to own availability or routing.
+  Loading an ImageGen Skill as a second router would also conflict with the
+  planner's frozen capability decision.
+- Decision: Core `ToolSpec` owns capability identity and routing; the frozen
+  capability/permission snapshot owns Turn admission; `ecorex.pack_catalog`
+  owns Pack membership; signed release manifests own executable bytes. The two
+  exact product profiles are `minimal` (projection-only Core), `workspace`
+  (Core plus the reviewed sandbox Pack) and `full_offline` (all reviewed
+  Packs); arbitrary partial production sets fail closed. The old
+  `runtime-packs` directory is explicitly v0.3 compatibility data. Feishu is a
+  managed Connector/extension, while OCR and browser/CDP are signed optional
+  Packs. Neither users nor agents satisfy v1 dependencies with task-time
+  npm/pip installation.
+- Image boundary: the planner remains the only image-intent router. A direct,
+  eligible `imagegen` ToolSpec links to `skill.image-generation`; the worker
+  loads that exact Skill revision from the Turn-frozen Extension snapshot and
+  maps its instructions to the provider request. The Skill grants no tool and
+  contains no provider credentials. Short follow-ups inherit image routing only
+  from a same-Thread completed image Artifact or a bound image attachment;
+  negation and missing context do not route.
+- Consequence: ImageGen keeps Codex-style just-in-time workflow guidance without
+  a competing router or bundled provider implementation, and every executable
+  capability remains explainable from one frozen fact chain.
+
+## ADR-116 - Built-in availability is reconciled from executable bindings
+
+- Status: accepted.
+- Root cause: the low-level product builder correctly recorded
+  `verified_handler_not_installed` before Runtime composition, but the composed
+  Core handlers inherited that stale fact. A tool could therefore have a real
+  handler and still be rejected as unavailable. The same split made Read,
+  TaskList, attachment reads and Pack tools appear uniformly broken.
+- Decision: Runtime composition clears only that exact stale reason for tools
+  whose handler is actually bound. Administrator, permission, network,
+  connector, sandbox and configuration denials are never cleared. Every Core
+  ToolSpec must be backed either by a composed handler or a declared signed
+  Pack; every direct tool must have a live handler. Workspace Read accepts its
+  own paginated root locators. Safe Write/Bash remains the single reviewed
+  `shell` contract and is available in the `workspace` and complete shipped
+  profiles through the sandbox Pack; projection-only legacy slots remain valid.
+- Capability boundary: Feishu remains a Connector/Skill Hub integration and is
+  not advertised as an absent local CLI. Browser/CDP, OCR, Office and Image are
+  shipped only through their signed Pack closure. Users and agents do not
+  install these production dependencies during a task.
+- Consequence: all built-ins share one executable source of truth; a capability
+  can no longer become available merely through a label, nor remain disabled
+  after its trusted implementation has been bound.
+
+## ADR-117 - Production facts converge to v1.0.0 without fabricated services
+
+- Status: accepted.
+- Decision: package, CLI, desktop and release targets are `1.0.0`; `0.3.2`
+  remains only the explicit supported in-place upgrade source. A stable target
+  can never downgrade an installed newer 1.0.x slot without the existing
+  explicit rollback authorization. Public packages expose direct GitHub, the
+  domestic GitHub proxy and the download CDN as three integrity-checked
+  sources.
+- Skill/MCP boundary: production migration idempotently installs one packaged,
+  digest-pinned, read-only seed Skill into the existing CAS and authenticated
+  Skill Hub. No second signature store is added. When no production MCP address
+  exists, Runtime and WebUI explicitly project “MCP 未配置”; deterministic MCP
+  services remain contract-test fixtures rather than claimed production facts.
+- Model boundary: `ecorex-chat` remains Luna/max. Activation is valid only after
+  streamed text, tool request, tool output continuation and final reply pass;
+  one stateless continuation fallback is allowed after a definite compatibility
+  rejection and completed tools are not replayed. e-Mate identity instructions
+  reserve space inside the existing gateway instruction limit.
+
+## ADR-118 - v1.0.0 publication is an operator-owned manual transaction
+
+- Status: accepted.
+- Decision: GitHub Actions may build immutable platform artifacts and execute
+  cross-platform user smokes, but every workflow reachable from the release
+  command has read-only repository permissions and no Release, deployment or
+  update-pointer writer. The local `scripts/release-v1.py` state machine is the
+  only publication authority: it promotes the installer Release, activates
+  production, changes signed update pointers, records rollback material and
+  requires exact interactive confirmation before live mutation.
+- Enforcement: the local Actions transport accepts only five reviewed
+  build/acceptance workflows. The historical promote workflow, its GitHub
+  publication Environments and publication Runner role are removed from the
+  repository contract. CI failure stops preparation; CI can never publish or
+  compensate a production release.
+- Consequence: manual publication retains Windows/macOS real-machine evidence
+  without creating a second cross-platform builder on one Mac. Publication,
+  activation and rollback remain explicit local operator acts.
+
+## ADR-119 - Stable completion requires full real-user browser acceptance
+
+- Status: accepted.
+- Decision: after the signed `0.3.2 → 1.0.0` update, Codex browser automation
+  uses the authenticated local user session and server-side Secret Provider to
+  execute real Luna/max streaming and real image calls. Completion requires an
+  exact 19-tool built-in matrix, two overlapping `gpt-image-2` jobs, Skill Hub
+  seed discovery, explicit MCP-unconfigured state, failure terminal rendering,
+  process folding, interaction round-trip, 120-turn virtualization and public
+  version readback.
+- Credential boundary: real service tokens are authorized for this acceptance
+  but stay in the server Secret Provider or operator environment. Receipts
+  contain only request/job identities, state transitions, counts and digests;
+  no token, authorization header or raw secret is browser evidence.
+- Unconfigured boundary: connector describe/read/write may end only in the
+  explicit expected-unconfigured terminal state. Every other built-in must
+  complete. A missing, silent or hidden terminal state fails the release.

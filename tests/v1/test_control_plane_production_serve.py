@@ -253,6 +253,11 @@ def test_production_provider_migrates_checks_serves_and_drains(tmp_path: Path) -
 
     bundle = provider.compose(config, secrets)
     assert isinstance(bundle.share_repository.object_store, S3ShareObjectStore)
+    seed = bundle.skill_hub_registry.get("official-writing")
+    assert seed.version == "1.0.2"
+    assert bundle.skill_hub_bundle_store.verify(seed.package_sha256).metadata.name == (
+        "official-writing"
+    )
     app = bundle.create_app()
     with TestClient(app) as client:
         assert client.get("/health/live").json() == {"status": "live"}
@@ -272,6 +277,12 @@ def test_production_provider_migrates_checks_serves_and_drains(tmp_path: Path) -
             headers={"Authorization": f"Bearer {_jwt(auth_private)}"},
         )
         assert response.status_code == 204
+        skill_hub = client.get(
+            "/ecorex-agent/client/skill-hub/v1/skills",
+            headers={"Authorization": f"Bearer {_jwt(auth_private)}"},
+        )
+        assert skill_hub.status_code == 200
+        assert skill_hub.json()["items"][0]["slug"] == "official-writing"
         bundle.lifecycle.begin_drain()
         assert client.get("/api/v1/admin/distribution").status_code == 503
         assert client.get("/health/live").status_code == 200

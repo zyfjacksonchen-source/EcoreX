@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 import hashlib
 import inspect
@@ -30,6 +31,7 @@ from ecorex.capabilities import (
     UnknownModelError,
     builtin_capability_registry,
     builtin_model_catalog,
+    intent_inherits_image_context,
     normalize_intent_clauses,
     normalize_intent_text,
     normalize_reference,
@@ -68,6 +70,9 @@ from .tool_executions import (
 
 _MAX_EXPLICIT_TOOL_REFERENCES = 64
 _TurnAdmissionResult = TypeVar("_TurnAdmissionResult")
+_ADMISSION_THREAD_ID: ContextVar[str | None] = ContextVar(
+    "ecorex_admission_thread_id", default=None
+)
 _REFERENCE_NEGATION_PREFIXES = tuple(
     normalize_intent_text(value)
     for value in (
@@ -584,6 +589,7 @@ class RuntimeComposition:
             disabled_tools=dict(disabled_tools or {}),
             online=online,
         )
+        self.availability = self._apply_bound_handler_availability(self.availability)
         self.availability = self._apply_connector_execution_availability(
             self.availability
         )
@@ -651,7 +657,11 @@ class RuntimeComposition:
             connector_catalog_snapshot_id=self.connector_catalog_snapshot.snapshot_id,
         )
 
-    def prepare_turn(self, request: CreateTurnRequest) -> PreparedTurn:
+    def prepare_turn(
+        self, request: CreateTurnRequest, *, thread_id: str | None = None
+    ) -> PreparedTurn:
+        if thread_id is None:
+            thread_id = _ADMISSION_THREAD_ID.get()
         if not self._persist_startup_snapshots:
             raise RuntimeError(
                 "Runtime is in projection-only mode and cannot accept a Turn"
@@ -683,6 +693,7 @@ class RuntimeComposition:
         availability = self._availability_provider()
         if not isinstance(availability, RuntimeAvailability):
             raise TypeError("Runtime availability provider returned an invalid value")
+        availability = self._apply_bound_handler_availability(availability)
         availability = self._apply_connector_execution_availability(availability)
         availability = self._apply_artifact_read_availability(availability)
         availability = self._apply_input_attachment_read_availability(availability)
@@ -740,6 +751,13 @@ class RuntimeComposition:
                 for item in raw_input_attachments
             )
         )
+        inherits_image_context = bool(
+            intent_inherits_image_context(request.input)
+            and (
+                has_bound_image_attachments
+                or self._thread_has_successful_image_context(thread_id)
+            )
+        )
         if self._extension_governance_enabled:
             availability = self.extension_service.apply_availability(
                 availability, extension_snapshot
@@ -776,6 +794,7 @@ class RuntimeComposition:
                             else ()
                         ),
                         *(("vision", "ocr") if has_bound_image_attachments else ()),
+                        *(("imagegen",) if inherits_image_context else ()),
                     )
                 )
             ),
@@ -820,6 +839,8 @@ class RuntimeComposition:
         self,
         request: CreateTurnRequest,
         accept: Callable[[PreparedTurn], _TurnAdmissionResult],
+        *,
+        thread_id: str | None = None,
     ) -> _TurnAdmissionResult:
         """Linearize permission capture with durable Turn acceptance.
 
@@ -831,14 +852,41 @@ class RuntimeComposition:
         if not callable(accept):
             raise TypeError("Turn acceptance callback must be callable")
         with self.permission_mutation_lock:
-            prepared = self.prepare_turn(request)
-            result = accept(prepared)
-            if inspect.isawaitable(result):
-                close = getattr(result, "close", None)
-                if callable(close):
-                    close()
-                raise TypeError("Turn acceptance callback must not return an awaitable")
-            return result
+            token = _ADMISSION_THREAD_ID.set(thread_id)
+            try:
+                prepared = self.prepare_turn(request)
+                result = accept(prepared)
+                if inspect.isawaitable(result):
+                    close = getattr(result, "close", None)
+                    if callable(close):
+                        close()
+                    raise TypeError(
+                        "Turn acceptance callback must not return an awaitable"
+                    )
+                return result
+            finally:
+                _ADMISSION_THREAD_ID.reset(token)
+
+    def _thread_has_successful_image_context(self, thread_id: str | None) -> bool:
+        """Trust only a durable image Artifact result from this Thread."""
+
+        if not isinstance(thread_id, str) or not thread_id:
+            return False
+        with self.snapshot_repository.database.reader() as connection:
+            rows = connection.execute(
+                "SELECT execution.result_json FROM tool_executions AS execution "
+                "JOIN turns AS turn ON turn.turn_id = execution.turn_id "
+                "WHERE turn.thread_id = ? AND turn.status IN ('completed', 'partial') "
+                "AND execution.tool_id = 'imagegen' "
+                "AND execution.status = 'completed' "
+                "ORDER BY execution.updated_at DESC LIMIT 8",
+                (thread_id,),
+            ).fetchall()
+        for row in rows:
+            result = json.loads(str(row["result_json"] or "null"))
+            if isinstance(result, dict) and isinstance(result.get("artifact_id"), str):
+                return bool(result["artifact_id"])
+        return False
 
     def record_permission(
         self, permission: PermissionSnapshot
@@ -1049,6 +1097,18 @@ class RuntimeComposition:
                     disabled.pop(tool_id, None)
         return replace(availability, disabled_tools=disabled)
 
+    def _apply_bound_handler_availability(
+        self,
+        availability: RuntimeAvailability,
+    ) -> RuntimeAvailability:
+        """Clear only stale builder facts for handlers now bound by Runtime."""
+
+        disabled = dict(availability.disabled_tools)
+        for tool_id in self.capability_service.handlers:
+            if disabled.get(tool_id) == "verified_handler_not_installed":
+                disabled.pop(tool_id)
+        return replace(availability, disabled_tools=disabled)
+
     def _apply_artifact_read_availability(
         self,
         availability: RuntimeAvailability,
@@ -1242,12 +1302,9 @@ class RuntimeComposition:
         for reference in structured:
             if reference.startswith("skill:"):
                 extension_id = reference.removeprefix("skill:")
-                if (
-                    contribution_snapshot is None
-                    or not any(
-                        skill.extension_id == extension_id
-                        for skill in contribution_snapshot.skills
-                    )
+                if contribution_snapshot is None or not any(
+                    skill.extension_id == extension_id
+                    for skill in contribution_snapshot.skills
                 ):
                     raise CapabilityIntentError(
                         f"explicit Skill selection is unavailable: {extension_id!r}"
@@ -1450,6 +1507,18 @@ class RuntimeComposition:
             raise ValueError("Turn has no durable Extension snapshot")
         return str(row["extension_snapshot_id"])
 
+    def workflow_instructions(
+        self,
+        extension_snapshot_id: str,
+        workflow_skill_ids: tuple[str, ...],
+    ) -> Mapping[str, Any] | None:
+        """Resolve only product-linked guidance from the frozen Skill snapshot."""
+
+        return self.skill_runtime.workflow_instructions(
+            extension_snapshot_id,
+            workflow_skill_ids,
+        )
+
     def _extension_snapshot_for_scope(self, scope: ToolExecutionScope) -> str:
         if (
             not isinstance(scope, ToolExecutionScope)
@@ -1477,9 +1546,7 @@ class RuntimeComposition:
         if row is None:
             raise ValueError("Skill execution batch is invalid")
         frozen_snapshot_id = str(row["extension_snapshot_id"])
-        frozen = self.extension_service.repository.snapshot_payload(
-            frozen_snapshot_id
-        )
+        frozen = self.extension_service.repository.snapshot_payload(frozen_snapshot_id)
         frozen_generation = frozen.get("extension_generation")
         current_generation = self.extension_service.repository.generation()
         if frozen_generation == current_generation:
@@ -1640,13 +1707,6 @@ class RuntimeComposition:
         contribution_snapshot,
     ) -> RuntimeAvailability:
         disabled = dict(availability.disabled_tools)
-        # These handlers are verified Core code; an empty Skill catalog is a
-        # valid search result, not a missing executable handler.
-        disabled.pop("skill_search", None)
-        disabled.pop("skill_read", None)
-        disabled.pop("skill_run", None)
-        disabled.pop("tool_search", None)
-        disabled.pop("tool_describe", None)
         if self.mcp_supervisor is not None:
             active = {
                 tool_id

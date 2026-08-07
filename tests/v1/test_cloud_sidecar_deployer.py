@@ -1784,6 +1784,64 @@ def test_deploy_does_not_switch_admin_route_before_candidate_health(
     assert events == ["candidate_healthy", "routes_switched"]
 
 
+def test_stage_health_checks_inactive_slot_without_switching_routes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _spec(tmp_path)
+    release = tmp_path / "release"
+    prior = _slot_state("ecorex-cloud-v1.0.0-source", "blue")
+    events: list[tuple[str, object]] = []
+    monkeypatch.setattr(deployment.CloudDeploymentSpec, "validate", lambda _self: None)
+    monkeypatch.setattr(deployment, "_target_preflight", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_validate_attestation", lambda _spec: None)
+    monkeypatch.setattr(
+        deployment,
+        "_deployment_lock",
+        lambda: deployment.contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(deployment, "_transition_journal", lambda: None)
+    monkeypatch.setattr(deployment, "_validate_artifact", lambda _spec: {})
+    monkeypatch.setattr(deployment, "_state", lambda: prior)
+    monkeypatch.setattr(deployment, "_validate_legacy_migration_plan", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_install_release", lambda *_args: release)
+    monkeypatch.setattr(deployment, "_install_deployment_templates", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_write_slot_environment", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_verify_staged_runtime", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_verify_nginx_wiring", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_recovery_schema_check", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(deployment, "_slot_api_units", lambda _slot: ("api-a", "api-b"))
+    monkeypatch.setattr(deployment, "_prepare_slot_runtime_directory", lambda *_args: None)
+    monkeypatch.setattr(
+        deployment,
+        "_systemctl",
+        lambda _spec, action, units: events.append((action, tuple(units))),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_wait_api_health",
+        lambda _spec, slot: events.append(("health", slot)),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_switch_nginx",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("route switch forbidden")),
+    )
+
+    receipt = deployment.stage(spec, confirmation="1" * 64)
+
+    assert receipt["status"] == "staged"
+    assert receipt["target_slot"] == "green"
+    assert receipt["active_release_id"] == prior["active_release_id"]
+    assert receipt["live_routes_changed"] is False
+    assert events == [
+        ("stop", ("api-b", "api-a")),
+        ("start", ("api-a", "api-b")),
+        ("health", "green"),
+        ("is-active", ("api-a", "api-b")),
+        ("stop", ("api-b", "api-a")),
+    ]
+
+
 @pytest.mark.skipif(os.name == "nt", reason="requires production-style symlinks")
 def test_nginx_candidate_switch_restores_legacy_admin_on_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

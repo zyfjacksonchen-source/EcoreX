@@ -47,11 +47,12 @@ export function HomeDashboard({
 }: HomeDashboardProps) {
   const taskActivity = homeTaskActivity(usage?.task_activity ?? {
     completed_today: 0,
+    partial_today: 0,
     waiting: 0,
     terminal_today: 0,
     days: [],
   });
-  const { completed, waiting, terminal, trend } = taskActivity;
+  const { completed, partial, waiting, terminal, trend } = taskActivity;
   const trendMaximum = Math.max(1, ...trend.map((item) => item.terminal));
   const recent = [...threads]
     .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at))
@@ -105,7 +106,7 @@ export function HomeDashboard({
           <span><i aria-hidden="true" />数据来自本机任务与 Token 记录</span>
         </header>
         <div className="ex-home-metrics">
-          <article><small>完成任务数</small><strong>{completed}</strong><span>今日完成</span></article>
+          <article><small>完成任务数</small><strong>{completed}</strong><span>{partial ? `另有 ${partial} 项部分完成` : "今日完成"}</span></article>
           <article><small>等待任务</small><strong>{waiting}</strong><span>{waiting ? "等待小芯处理" : "当前无等待"}</span></article>
           <article><small>Token 消耗量</small><strong>{(usage?.today.total_tokens ?? 0).toLocaleString("zh-CN")}</strong><span>{usage?.complete_across_devices ? "账号统一可核对用量" : "本机可核对用量"}</span></article>
           <article><small>任务成功率</small><strong>{taskActivity.successRate}</strong><span>{terminal ? "按已结束任务计算" : "暂无已结束任务"}</span></article>
@@ -139,7 +140,7 @@ export function HomeDashboard({
           </section>
           <section>
             <h3>工作摘要</h3>
-            <p>{terminal ? `今天已结束 ${terminal} 项任务，成功完成 ${completed} 项。` : "今天还没有已结束的任务。告诉小芯目标即可开始。"}</p>
+            <p>{terminal ? `今天已结束 ${terminal} 项任务，成功完成 ${completed} 项，部分完成 ${partial} 项。` : "今天还没有已结束的任务。告诉小芯目标即可开始。"}</p>
           </section>
         </div>
       </section>

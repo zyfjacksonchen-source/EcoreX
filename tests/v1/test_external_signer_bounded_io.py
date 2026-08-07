@@ -38,7 +38,12 @@ def _signer_for_adapter(
         serialization.PublicFormat.Raw,
     )
     adapter = tmp_path / "adapter.py"
-    adapter.write_text(source, encoding="utf-8", newline="\n")
+    site_packages = next(path for path in sys.path if path.endswith("site-packages"))
+    adapter.write_text(
+        f"import sys\nsys.path.insert(0, {site_packages!r})\n{source}",
+        encoding="utf-8",
+        newline="\n",
+    )
     executable = Path(sys.executable).resolve(strict=True)
     signer = DigestPinnedExternalSigner(
         key_id="bounded-io-test-key",

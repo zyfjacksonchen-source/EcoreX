@@ -3,6 +3,7 @@ import type { TaskActivityProjection } from "../api/contracts.ts";
 export function homeTaskActivity(activity: TaskActivityProjection) {
   return {
     completed: activity.completed_today,
+    partial: activity.partial_today,
     waiting: activity.waiting,
     terminal: activity.terminal_today,
     successRate: activity.terminal_today

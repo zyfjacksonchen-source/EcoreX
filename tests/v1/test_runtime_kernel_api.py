@@ -319,7 +319,7 @@ def test_api_bootstrap_polling_sse_and_mutations(tmp_path):
 
     version = client.get("/api/version")
     assert version.status_code == 200
-    assert version.json()["version"] == "0.3.2"
+    assert version.json()["version"] == "1.0.0"
     assert "core_version" not in version.json()
     update = client.get("/api/update-check", params={"platform": "win32"})
     assert update.status_code == 200

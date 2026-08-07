@@ -60,8 +60,8 @@ export function validateConversationUsageProjection(value: unknown): Conversatio
 
   record(value.task_activity, "task_activity");
   const activity = value.task_activity;
-  fields(activity, ["completed_today", "waiting", "terminal_today", "days"], "task_activity");
-  for (const name of ["completed_today", "waiting", "terminal_today"] as const) {
+  fields(activity, ["completed_today", "partial_today", "waiting", "terminal_today", "days"], "task_activity");
+  for (const name of ["completed_today", "partial_today", "waiting", "terminal_today"] as const) {
     integer(activity[name], `task_activity.${name}`);
   }
   if (!Array.isArray(activity.days) || activity.days.length !== 7) {
@@ -70,12 +70,14 @@ export function validateConversationUsageProjection(value: unknown): Conversatio
   activity.days.forEach((day, index) => {
     const path = `task_activity.days[${index}]`;
     record(day, path);
-    fields(day, ["date", "completed", "terminal"], path);
+    fields(day, ["date", "completed", "partial", "terminal"], path);
     text(day.date, `${path}.date`);
     if (!/^\d{4}-\d{2}-\d{2}$/u.test(day.date as string)) reject(`${path}.date`, "YYYY-MM-DD");
     integer(day.completed, `${path}.completed`);
+    integer(day.partial, `${path}.partial`);
     integer(day.terminal, `${path}.terminal`);
     if (day.completed > day.terminal) reject(`${path}.completed`, "at most terminal");
+    if (day.partial > day.terminal) reject(`${path}.partial`, "at most terminal");
   });
 
   record(value.context, "context");

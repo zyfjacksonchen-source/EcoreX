@@ -7,6 +7,7 @@ import {
   formatFileSize,
   serviceReasonMessage,
   technicalErrorCode,
+  turnTerminalPresentation,
   userFacingError,
 } from "./userLanguage.ts";
 
@@ -18,6 +19,19 @@ test("service reasons are translated without exposing an unknown backend code", 
   assert.equal(
     serviceReasonMessage("vendor_internal_state_v9", "这项功能暂时不可用。"),
     "这项功能暂时不可用。",
+  );
+});
+
+test("turn terminal reasons keep friendly guidance separate from the stable code", () => {
+  assert.deepEqual(turnTerminalPresentation("provider_response_failed"), {
+    message: "模型服务未能完成这次回复，已完成的步骤和结果仍然保留。",
+    suggestion: "可以重试本次任务；e-Mate 不会重复执行已经完成的工具步骤。",
+    technicalCode: "provider_response_failed",
+  });
+  assert.equal(turnTerminalPresentation("completed"), null);
+  assert.equal(
+    turnTerminalPresentation("vendor_private_failure")?.message,
+    "e-Mate 未能完成这次任务，当前进度和结果已经保留。",
   );
 });
 

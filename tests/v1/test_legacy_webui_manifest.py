@@ -17,6 +17,7 @@ from ecorex.release.legacy_webui_publication import (
     PACKAGE_ORIGINS,
     PublicationPaths,
     publish_legacy_webui,
+    stage_legacy_webui,
 )
 
 
@@ -58,7 +59,12 @@ def test_legacy_manifest_is_last_atomic_step_and_uses_verified_bytes(tmp_path):
     manifest = json.loads(output.read_text(encoding="utf-8"))
     assert manifest["product"] == "e-Mate"
     assert manifest["version"] == "0.3.2"
-    assert manifest["download"]["mirrors"][0]["baseUrl"] == (
+    assert [item["kind"] for item in manifest["download"]["mirrors"]] == [
+        "github-release",
+        "github-release-cn-mirror",
+        "asset-cdn",
+    ]
+    assert manifest["download"]["mirrors"][1]["baseUrl"] == (
         "https://gh-proxy.com/https://github.com/zyfjacksonchen-source/"
         "EcoreX-installers/releases/download/v0.3.2"
     )
@@ -230,13 +236,14 @@ def test_user_package_workflow_hands_verified_bytes_to_direct_publisher():
     )
 
     admission = (
+        "github.event_name == 'workflow_dispatch' && "
         "github.repository == 'zyfjacksonchen-source/EcoreX'"
         " && github.ref == 'refs/heads/main'"
-        " && github.sha == vars.ECOREX_V032_RELEASE_COMMIT_SHA"
+        " && github.sha == inputs.candidate_commit_sha"
     )
-    assert workflow.count(admission) == 1
-    assert "EcoreX_0.3.2-webui-windows-x64.zip" in workflow
-    assert "EcoreX_0.3.2-webui-macos-universal.zip" in workflow
+    assert workflow.count(admission) == 2
+    assert "EcoreX_${VERSION}-webui-windows-x64.zip" in workflow
+    assert "EcoreX_${{ inputs.version }}-webui-macos-universal.zip" in workflow
     assert "webui-build-receipt.json" in workflow
     assert "macos-arm64-user-smoke.json" in workflow
     assert "macos-x64-user-smoke.json" in workflow
@@ -247,10 +254,46 @@ def test_user_package_workflow_hands_verified_bytes_to_direct_publisher():
     assert workflow.index("ecorex.release.legacy_webui_manifest") < workflow.index(
         "Upload package handoff and arm64 user evidence"
     )
-    assert PACKAGE_ORIGINS[0] == (
-        "https://gh-proxy.com/https://github.com/zyfjacksonchen-source/"
-        "EcoreX-installers/releases/download/v0.3.2"
+    assert PACKAGE_ORIGINS[0] == "https://mvdcm.ecoremedia.net/ecorex-agent/downloads"
+
+
+def test_v1_stage_preserves_v032_pointer_and_uses_dynamic_package_names(tmp_path):
+    receipt, paths, packages = _publication_fixture(tmp_path)
+    value = json.loads(receipt.read_text(encoding="utf-8"))
+    value["version"] = "1.0.0"
+    renamed = {}
+    for artifact in value["artifacts"]:
+        old = tmp_path / artifact["file_name"]
+        name = artifact["file_name"].replace("0.3.2", "1.0.0")
+        target = tmp_path / name
+        old.replace(target)
+        artifact["file_name"] = name
+        renamed[name] = target.read_bytes()
+    receipt.write_text(json.dumps(value), encoding="utf-8")
+    paths.pointer.write_text(json.dumps({"version": "0.3.2"}), encoding="utf-8")
+    origins = tuple(f"{origin}/downloads" for origin in (
+        "https://mvdcm.ecoremedia.net/ecorex-agent",
+        "https://dl.ecoremedia.net/ecorex-agent",
+    ))
+    readback = _Readback({
+        f"{origin}/{name}": payload
+        for origin in origins
+        for name, payload in renamed.items()
+    })
+
+    result = stage_legacy_webui(
+        receipt,
+        paths=paths,
+        readback=readback,
+        package_origins=origins,
+        enforce_server_fence=False,
     )
+
+    assert result["status"] == "staged"
+    assert result["version"] == "1.0.0"
+    assert result["update_pointer_changed"] is False
+    assert json.loads(paths.pointer.read_text(encoding="utf-8"))["version"] == "0.3.2"
+    assert sorted(path.name for path in paths.downloads.iterdir()) == sorted(renamed)
 
 
 def test_macos_user_smoke_uses_and_restores_a_real_temporary_keychain():

@@ -31,6 +31,7 @@ from ecorex.protocol import (
     CreateTurnRequest,
     ItemKind,
     SteerTurnRequest,
+    TurnStatus,
 )
 from ecorex.runtime import (
     AgentTurnWorker,
@@ -555,7 +556,9 @@ def test_artifact_vision_tool_continuation_carries_bounded_semantic_image(
     recovered = gateway.requests[2]
     assert recovered.previous_response_id is None
     recovered_visual = next(
-        item for item in recovered.ordered_input_items() if item.type == "user_message" and item.images
+        item
+        for item in recovered.ordered_input_items()
+        if item.type == "user_message" and item.images
     )
     assert recovered_visual.images[0].source_sha256 == visual.source_sha256
     assert "_ecorex_model_visual_evidence" not in json.dumps(
@@ -613,6 +616,108 @@ def test_verified_capability_failure_is_failed_and_recoverable(tmp_path) -> None
     )
 
 
+def test_image_workflow_guidance_is_frozen_injected_and_cached(tmp_path) -> None:
+    import hashlib
+
+    _app, kernel, composition, _thread, created = _runtime(
+        tmp_path,
+        input_text="生成一张海报",
+        installed_capability_packs=frozenset({"image"}),
+        capability_handlers={"imagegen": lambda _arguments, _context: {"ok": True}},
+    )
+    gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_image_invalid",
+                    "tool_call_id": "call_image_invalid",
+                    "tool_name": "imagegen",
+                    "arguments": {},
+                }
+            ],
+            [{"seq": 1, "event_type": "response.completed", "response_id": "resp_done"}],
+        ]
+    )
+    calls: list[tuple[str, tuple[str, ...]]] = []
+    instructions = "Use the verified image workflow."
+
+    def resolve(extension_snapshot_id, workflow_skill_ids):
+        calls.append((extension_snapshot_id, workflow_skill_ids))
+        return {
+            "instructions": instructions,
+            "instruction_sha256": hashlib.sha256(instructions.encode()).hexdigest(),
+            "skills": [
+                {
+                    "skill_id": "skill.image-generation",
+                    "extension_id": "builtin.image-generation",
+                    "revision": 1,
+                }
+            ],
+        }
+
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+        workflow_instruction_resolver=resolve,
+    )
+
+    result = asyncio.run(worker.run_once("worker-image-guidance"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert len(gateway.requests) == 2
+    assert all(
+        request.instructions is not None
+        and request.instructions.endswith(instructions)
+        and "Always identify yourself as e-Mate" in request.instructions
+        for request in gateway.requests
+    )
+    assert len(calls) == 1
+    assert calls[0][1] == ("skill.image-generation",)
+    with kernel.database.reader() as connection:
+        loaded = connection.execute(
+            "SELECT COUNT(*) AS count FROM events "
+            "WHERE turn_id=? AND event_type='workflow.guidance_loaded'",
+            (created.turn.turn_id,),
+        ).fetchone()
+    assert loaded["count"] == 2
+
+
+def test_workflow_guidance_reserves_space_for_emate_identity(tmp_path) -> None:
+    import hashlib
+
+    _app, kernel, composition, _thread, _created = _runtime(
+        tmp_path,
+        input_text="生成一张海报",
+        installed_capability_packs=frozenset({"image"}),
+        capability_handlers={"imagegen": lambda _arguments, _context: {"ok": True}},
+    )
+    instructions = "x" * 131_072
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=ScriptedGateway([]),
+        capabilities=composition.capability_service,
+        workflow_instruction_resolver=lambda _snapshot, _skills: {
+            "instructions": instructions,
+            "instruction_sha256": hashlib.sha256(instructions.encode()).hexdigest(),
+            "skills": [],
+        },
+    )
+
+    resolved, metadata = worker._workflow_guidance(
+        extension_snapshot_id="extension-snapshot",
+        direct_tool_ids=("imagegen",),
+    )
+
+    assert resolved is None
+    assert metadata == {
+        "status": "unavailable",
+        "workflow_skill_ids": ["skill.image-generation"],
+    }
+
+
 def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> None:
     app, kernel, composition, thread, created = _runtime(tmp_path, input_text="hello")
     del app
@@ -650,6 +755,9 @@ def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> No
     assert gateway.requests[0].model_id == "ecorex-chat"
     assert gateway.requests[0].model_policy.upstream_model_id == "gpt-5.6-luna"
     assert gateway.requests[0].model_policy.reasoning_effort == "max"
+    assert gateway.requests[0].instructions is not None
+    assert "Always identify yourself as e-Mate" in gateway.requests[0].instructions
+    assert "blindly repeating the same call" in gateway.requests[0].instructions
     assert (
         gateway.requests[0].model_policy.context_management.compact_threshold_tokens
         == 272_000
@@ -964,9 +1072,7 @@ def test_worker_keeps_image_capability_ranked_and_other_tools_discoverable(
     request = gateway.requests[0]
     direct_ids = [item["spec"]["tool_id"] for item in request.direct_tools]
     assert {"read", "tool_search", "tool_describe", "imagegen"}.issubset(direct_ids)
-    assert {"fetch", "vision", "cdp", "shell"}.issubset(
-        set(request.deferred_tool_ids)
-    )
+    assert {"fetch", "vision", "cdp", "shell"}.issubset(set(request.deferred_tool_ids))
 
 
 def test_blocked_image_turn_releases_worker_for_ordinary_turn(tmp_path) -> None:
@@ -1049,7 +1155,9 @@ def test_blocked_image_turn_releases_worker_for_ordinary_turn(tmp_path) -> None:
         )
         assert ordinary_result.outcome is WorkerOutcome.COMPLETED
         assert ordinary_result.turn_id == ordinary_created.turn.turn_id
-        assert kernel.jobs.get(image_created.job.job_id).status.value == "retry_scheduled"
+        assert (
+            kernel.jobs.get(image_created.job.job_id).status.value == "retry_scheduled"
+        )
 
         release_image.set()
         execution_id = worker._execution_id(
@@ -1701,19 +1809,23 @@ def test_empty_tool_continuation_forces_text_without_replaying_tool(tmp_path) ->
     del app
     gateway = ScriptedGateway(
         [
-            [{
-                "seq": 1,
-                "event_type": "tool_call.requested",
-                "response_id": "resp_tool",
-                "tool_call_id": "call_read_empty_followup",
-                "tool_name": "read",
-                "arguments": {"path": "report.docx"},
-            }],
-            [{
-                "seq": 1,
-                "event_type": "response.completed",
-                "response_id": "resp_empty",
-            }],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_tool",
+                    "tool_call_id": "call_read_empty_followup",
+                    "tool_name": "read",
+                    "arguments": {"path": "report.docx"},
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "resp_empty",
+                }
+            ],
             [
                 {
                     "seq": 1,
@@ -1724,7 +1836,7 @@ def test_empty_tool_continuation_forces_text_without_replaying_tool(tmp_path) ->
                 {
                     "seq": 2,
                     "event_type": "response.completed",
-                "response_id": "resp_forced_text",
+                    "response_id": "resp_forced_text",
                 },
             ],
         ],
@@ -1751,6 +1863,66 @@ def test_empty_tool_continuation_forces_text_without_replaying_tool(tmp_path) ->
     )
 
 
+def test_round_guardrail_returns_partial_after_completed_tool(tmp_path) -> None:
+    calls = []
+    _app, kernel, composition, thread, created = _runtime(
+        tmp_path,
+        input_text="读取报告并说明结果",
+        capability_handlers={
+            "read": lambda arguments: (
+                calls.append(dict(arguments)) or {"title": "季度报告"}
+            )
+        },
+    )
+    gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_budget_tool",
+                    "tool_call_id": "call_read_budget",
+                    "tool_name": "read",
+                    "arguments": {"path": "report.docx"},
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "resp_budget_empty",
+                    "usage": {
+                        "input_tokens": 70,
+                        "output_tokens": 30,
+                        "total_tokens": 100,
+                    },
+                }
+            ],
+        ],
+        preserve_empty=True,
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+        max_model_rounds=2,
+    )
+
+    result = asyncio.run(worker.run_once("worker-round-guardrail"))
+
+    assert result.outcome is WorkerOutcome.PARTIAL
+    assert result.reason == "budget_exhausted"
+    assert calls == [{"path": "report.docx"}]
+    assert kernel.get_turn(created.turn.turn_id).status is TurnStatus.PARTIAL
+    exhausted = next(
+        event
+        for event in kernel.events.page(thread.thread_id, limit=1_000).events
+        if event.event_type == "agent.budget_exhausted"
+    )
+    assert exhausted.payload["cumulative_tokens"] == 100
+    assert exhausted.payload["partial_result"] is True
+
+
 def test_repeated_empty_tool_continuation_is_failed_not_completed(tmp_path) -> None:
     calls = []
     _app, kernel, composition, _thread, created = _runtime(
@@ -1764,16 +1936,30 @@ def test_repeated_empty_tool_continuation_is_failed_not_completed(tmp_path) -> N
     )
     gateway = ScriptedGateway(
         [
-            [{
-                "seq": 1,
-                "event_type": "tool_call.requested",
-                "response_id": "resp_tool",
-                "tool_call_id": "call_read_repeated_empty",
-                "tool_name": "read",
-                "arguments": {"path": "report.docx"},
-            }],
-            [{"seq": 1, "event_type": "response.completed", "response_id": "resp_empty"}],
-            [{"seq": 1, "event_type": "response.completed", "response_id": "resp_empty_again"}],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_tool",
+                    "tool_call_id": "call_read_repeated_empty",
+                    "tool_name": "read",
+                    "arguments": {"path": "report.docx"},
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "resp_empty",
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "resp_empty_again",
+                }
+            ],
         ],
         preserve_empty=True,
     )
@@ -2154,6 +2340,260 @@ def test_gateway_unavailability_schedules_retry_without_losing_turn(tmp_path) ->
     assert gateway.requests[0].request_id != gateway.requests[1].request_id
     assert "_a1_r0" in gateway.requests[0].request_id
     assert "_a2_r0" in gateway.requests[1].request_id
+
+
+def test_read_only_tool_retries_with_backoff_before_agent_recovery(tmp_path) -> None:
+    calls = []
+    delays = []
+
+    class TemporaryReadFailure(RuntimeError):
+        retryable = True
+
+    def read(arguments):
+        calls.append(dict(arguments))
+        if len(calls) < 3:
+            raise TemporaryReadFailure("upstream detail must stay private")
+        return {"title": "季度报告"}
+
+    async def record_delay(delay: float) -> None:
+        delays.append(delay)
+
+    _app, kernel, composition, thread, created = _runtime(
+        tmp_path,
+        input_text="读取季度报告",
+        capability_handlers={"read": read},
+    )
+    gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_retry_tool",
+                    "tool_call_id": "call_retry_read",
+                    "tool_name": "read",
+                    "arguments": {"path": "report.docx"},
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "resp_retry_done",
+                }
+            ],
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+        retry_sleep=record_delay,
+    )
+
+    result = asyncio.run(worker.run_once("worker-tool-retry"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert len(calls) == 3
+    assert len(delays) == 2
+    assert 0.8 <= delays[0] <= 1.2
+    assert 1.6 <= delays[1] <= 2.4
+    execution_id = worker._execution_id(created.turn.turn_id, "call_retry_read")
+    assert ToolExecutionRepository(kernel.database).get(execution_id).attempt == 3
+    retry_events = [
+        event
+        for event in kernel.events.page(thread.thread_id, limit=1_000).events
+        if event.event_type == "tool.retry_scheduled"
+    ]
+    assert [event.payload["next_attempt"] for event in retry_events] == [2, 3]
+    assert all(
+        "upstream detail" not in json.dumps(event.payload) for event in retry_events
+    )
+
+
+def test_exhausted_safe_tool_reports_structured_failure_to_model(tmp_path) -> None:
+    calls = []
+
+    class TemporaryReadFailure(RuntimeError):
+        retryable = True
+
+    def read(arguments):
+        calls.append(dict(arguments))
+        raise TemporaryReadFailure("private upstream response")
+
+    async def no_wait(_delay: float) -> None:
+        return None
+
+    _app, kernel, composition, thread, _created = _runtime(
+        tmp_path,
+        input_text="读取季度报告",
+        capability_handlers={"read": read},
+    )
+    gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_retry_exhausted",
+                    "tool_call_id": "call_retry_exhausted",
+                    "tool_name": "read",
+                    "arguments": {"path": "report.docx"},
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "resp_after_retry_exhausted",
+                }
+            ],
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+        retry_sleep=no_wait,
+    )
+
+    result = asyncio.run(worker.run_once("worker-tool-retry-exhausted"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert len(calls) == 3
+    recovery = gateway.requests[1].tool_outputs[0].output
+    assert recovery["code"] == "tool_retry_exhausted"
+    assert recovery["failure_attempts"] == 3
+    assert recovery["recovery"]["action"] == "switch_tool"
+    assert "decompose_task" in recovery["recovery"]["available_actions"]
+    assert "private upstream response" not in json.dumps(recovery)
+    exhausted = [
+        event
+        for event in kernel.events.page(thread.thread_id, limit=1_000).events
+        if event.event_type == "tool.retry_exhausted"
+    ]
+    assert len(exhausted) == 1
+    assert exhausted[0].payload["attempts"] == 3
+
+
+def test_repeated_identical_failures_trigger_reflection_then_loop_stop(
+    tmp_path,
+) -> None:
+    _app, kernel, composition, thread, _created = _runtime(
+        tmp_path,
+        input_text="读取报告",
+    )
+    gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": f"resp_invalid_{index}",
+                    "tool_call_id": f"call_invalid_{index}",
+                    "tool_name": "read",
+                    "arguments": {},
+                }
+            ]
+            for index in range(3)
+        ]
+        + [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "resp_after_loop",
+                }
+            ]
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+    )
+
+    result = asyncio.run(worker.run_once("worker-loop-reflection"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    second = gateway.requests[2].tool_outputs[0].output
+    third = gateway.requests[3].tool_outputs[0].output
+    assert second["recovery"]["reflection_required"] is True
+    assert second["recovery"]["reflection_trigger"] == "same_failure_twice"
+    assert third["recovery"]["reflection_trigger"] == "same_failure_three_times"
+    assert third["recovery"]["action"] == "respond_without_tool"
+    assert third["recovery"]["retry_allowed"] is False
+    events = kernel.events.page(thread.thread_id, limit=1_000).events
+    assert any(event.event_type == "agent.reflection_requested" for event in events)
+    assert any(event.event_type == "agent.loop_detected" for event in events)
+    assert any(event.event_type == "agent.reflection_resolved" for event in events)
+
+
+def test_open_tool_circuit_blocks_repeat_dispatch_and_returns_to_model(
+    tmp_path,
+) -> None:
+    calls = []
+
+    class TemporaryReadFailure(RuntimeError):
+        retryable = True
+
+    def read(_arguments):
+        calls.append(1)
+        raise TemporaryReadFailure("offline")
+
+    async def no_wait(_delay: float) -> None:
+        return None
+
+    _app, kernel, composition, thread, _created = _runtime(
+        tmp_path,
+        input_text="读取报告",
+        capability_handlers={"read": read},
+    )
+    gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_circuit_first",
+                    "tool_call_id": "call_circuit_first",
+                    "tool_name": "read",
+                    "arguments": {"path": "report.docx"},
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_circuit_second",
+                    "tool_call_id": "call_circuit_second",
+                    "tool_name": "read",
+                    "arguments": {"path": "other.docx"},
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "resp_circuit_fallback",
+                }
+            ],
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+        retry_sleep=no_wait,
+    )
+
+    result = asyncio.run(worker.run_once("worker-tool-circuit"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert len(calls) == 3
+    assert gateway.requests[2].tool_outputs[0].output["code"] == "tool_circuit_open"
+    events = kernel.events.page(thread.thread_id, limit=1_000).events
+    assert sum(event.event_type == "tool.circuit_opened" for event in events) == 1
 
 
 def test_new_provider_attempt_does_not_append_to_failed_partial_message(

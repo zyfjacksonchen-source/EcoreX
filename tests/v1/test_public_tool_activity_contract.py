@@ -313,6 +313,18 @@ def test_public_projection_policies_are_fixed_and_third_party_is_opaque() -> Non
     _assert_secret_free(opaque)
 
 
+def test_every_builtin_tool_has_a_reviewed_public_activity_policy() -> None:
+    projector = PublicToolActivityProjector()
+    for spec in builtin_tool_specs():
+        activity = projector.requested(
+            spec,
+            tool_call_id=f"call-{spec.tool_id}",
+            arguments={},
+        )
+        assert activity.display_label == spec.display_name
+        assert activity.argument_summary != "正在使用已连接的应用"
+
+
 def test_kernel_and_event_store_reject_raw_tool_public_ingress(tmp_path) -> None:
     app, kernel, composition, _thread, created = _runtime(
         tmp_path,

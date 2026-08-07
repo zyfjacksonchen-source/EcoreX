@@ -141,7 +141,9 @@ def test_event_storage_rejects_replace_autocommit_and_wrong_schema(tmp_path):
 
     wrong = tmp_path / "wrong.db"
     connection = sqlite3.connect(wrong)
-    connection.execute("CREATE TABLE runtime_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    connection.execute(
+        "CREATE TABLE runtime_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
     connection.execute(
         "INSERT INTO runtime_meta(key, value) VALUES ('storage_schema_version', '999')"
     )
@@ -188,7 +190,11 @@ def test_runtime_rejects_incomplete_declared_schema_without_mutating_it(
     connection.close()
     before = hashlib.sha256(path.read_bytes()).hexdigest()
 
-    expected = "events columns" if missing_column == "event" else "job_runtime_contexts columns"
+    expected = (
+        "events columns"
+        if missing_column == "event"
+        else "job_runtime_contexts columns"
+    )
     with pytest.raises(SchemaVersionError, match=expected):
         SQLiteDatabase(path)
 
@@ -205,9 +211,7 @@ def test_runtime_rejects_incomplete_declared_schema_without_mutating_it(
     finally:
         connection.close()
     assert ("extension_snapshot_id" in event_columns) is (missing_column != "event")
-    assert ("extension_snapshot_id" in job_columns) is (
-        missing_column != "job_context"
-    )
+    assert ("extension_snapshot_id" in job_columns) is (missing_column != "job_context")
 
 
 def test_runtime_rejects_nonempty_unversioned_database_without_repair(tmp_path):
@@ -250,7 +254,9 @@ def test_runtime_rejects_nonempty_unversioned_database_without_repair(tmp_path):
 def test_runtime_rejects_core_schema_drift_without_recreating_it(
     tmp_path, corruption, message
 ):
-    path = tmp_path / ("core-drift-" + hashlib.sha256(corruption.encode()).hexdigest()[:8] + ".db")
+    path = tmp_path / (
+        "core-drift-" + hashlib.sha256(corruption.encode()).hexdigest()[:8] + ".db"
+    )
     SQLiteDatabase(path)
     connection = sqlite3.connect(path)
     connection.executescript(corruption)
@@ -319,9 +325,7 @@ def test_runtime_rejects_product_catalog_identity_drift_without_repair(tmp_path)
         ("created_at", BASE + timedelta(seconds=1)),
     ],
 )
-def test_event_idempotency_covers_the_full_requested_envelope(
-    tmp_path, field, changed
-):
+def test_event_idempotency_covers_the_full_requested_envelope(tmp_path, field, changed):
     store = EventStore(tmp_path / f"{field}.db")
     request = {
         "thread_id": "thread",
@@ -380,10 +384,13 @@ def test_lease_fencing_deadline_convergence_and_heartbeat_audit(tmp_path):
         lease_seconds=5,
         now=BASE + timedelta(seconds=3),
     )
-    assert sum(
-        event.event_type == "job.heartbeat"
-        for event in jobs.events.page("t").events
-    ) == 2
+    assert (
+        sum(
+            event.event_type == "job.heartbeat"
+            for event in jobs.events.page("t").events
+        )
+        == 2
+    )
 
     attempt_two = jobs.lease_next(
         "same-worker", now=BASE + timedelta(seconds=9), lease_seconds=10
@@ -458,15 +465,11 @@ def test_active_deadline_failure_commits_before_owner_is_rejected(tmp_path):
 
 def test_scheduler_rotates_equal_priority_threads(tmp_path):
     jobs = DurableJobStore(tmp_path / "runtime.db")
-    first_a = jobs.enqueue(
-        kind="turn", payload={}, idempotency_key="a1", thread_id="a"
-    )
+    first_a = jobs.enqueue(kind="turn", payload={}, idempotency_key="a1", thread_id="a")
     second_a = jobs.enqueue(
         kind="turn", payload={}, idempotency_key="a2", thread_id="a"
     )
-    first_b = jobs.enqueue(
-        kind="turn", payload={}, idempotency_key="b1", thread_id="b"
-    )
+    first_b = jobs.enqueue(kind="turn", payload={}, idempotency_key="b1", thread_id="b")
     leased_a = jobs.lease_next("worker")
     assert leased_a is not None and leased_a.job_id == first_a.job_id
     jobs.start(leased_a.job_id, "worker", leased_a.lease_token)
@@ -505,14 +508,20 @@ def test_thread_message_id_and_terminal_dependents_are_invariant(tmp_path):
     )
     replacement = kernel.replace_turn(
         turn.turn.turn_id,
-        ReplaceTurnRequest(input="replacement", client_message_id="replacement-message"),
+        ReplaceTurnRequest(
+            input="replacement", client_message_id="replacement-message"
+        ),
     )
-    assert kernel.interactions.get(interaction.interaction_id).status.value == "cancelled"
+    assert (
+        kernel.interactions.get(interaction.interaction_id).status.value == "cancelled"
+    )
     with pytest.raises(ConflictError):
         kernel.transition_item(item.item_id, ItemStatus.IN_PROGRESS)
     retry = kernel.replace_turn(
         turn.turn.turn_id,
-        ReplaceTurnRequest(input="replacement", client_message_id="replacement-message"),
+        ReplaceTurnRequest(
+            input="replacement", client_message_id="replacement-message"
+        ),
     )
     assert retry.replacement_turn.turn_id == replacement.replacement_turn.turn_id
 
@@ -583,7 +592,11 @@ def test_hitl_request_response_is_atomic_restart_safe_and_public(tmp_path):
     assert item.status == ItemStatus.COMPLETED
 
 
-def test_finish_turn_job_commits_turn_items_and_job_in_one_terminal_transition(tmp_path):
+@pytest.mark.parametrize("target", [TurnStatus.COMPLETED, TurnStatus.PARTIAL])
+def test_finish_turn_job_commits_turn_items_and_job_in_one_terminal_transition(
+    tmp_path,
+    target,
+):
     kernel = RuntimeKernel(tmp_path / "runtime.db")
     thread = kernel.create_thread()
     created = kernel.create_turn(thread.thread_id, CreateTurnRequest(input="finish"))
@@ -604,15 +617,18 @@ def test_finish_turn_job_commits_turn_items_and_job_in_one_terminal_transition(t
         job_id=leased.job_id,
         worker_id="worker",
         lease_token=leased.lease_token,
-        target=TurnStatus.COMPLETED,
+        target=target,
     )
-    assert result.turn.status == TurnStatus.COMPLETED
+    assert result.turn.status == target
     assert result.job is not None and result.job.status.value == "completed"
-    assert next(
-        value
-        for value in kernel.projection(thread.thread_id).items
-        if value.item_id == item.item_id
-    ).status == ItemStatus.COMPLETED
+    assert (
+        next(
+            value
+            for value in kernel.projection(thread.thread_id).items
+            if value.item_id == item.item_id
+        ).status
+        == ItemStatus.COMPLETED
+    )
 
 
 def test_expired_hitl_fails_all_dependents_before_terminal_turn_event(tmp_path):
@@ -639,9 +655,9 @@ def test_expired_hitl_fails_all_dependents_before_terminal_turn_event(tmp_path):
         idempotency_key="expires",
         expires_at=expires_at,
     )
-    assert kernel.interactions.expire_due(
-        now=expires_at + timedelta(seconds=1)
-    ) == [interaction.interaction_id]
+    assert kernel.interactions.expire_due(now=expires_at + timedelta(seconds=1)) == [
+        interaction.interaction_id
+    ]
     assert kernel.get_turn(created.turn.turn_id).status == TurnStatus.FAILED
     assert kernel.jobs.get(leased.job_id).status.value == "failed"
     item = next(
@@ -650,7 +666,10 @@ def test_expired_hitl_fails_all_dependents_before_terminal_turn_event(tmp_path):
         if value.item_id == open_item.item_id
     )
     assert item.status == ItemStatus.FAILED
-    assert kernel.events.page(thread.thread_id).events[-1].event_type == "turn.status_changed"
+    assert (
+        kernel.events.page(thread.thread_id).events[-1].event_type
+        == "turn.status_changed"
+    )
 
 
 def test_fail_turn_job_atomically_enters_retry_wait(tmp_path):
@@ -675,6 +694,33 @@ def test_fail_turn_job_atomically_enters_retry_wait(tmp_path):
     assert result.job.lease_token is None
 
 
+def test_preserved_external_wait_does_not_consume_or_raise_attempt_budget(tmp_path):
+    kernel = RuntimeKernel(tmp_path / "runtime.db")
+    thread = kernel.create_thread()
+    created = kernel.create_turn(thread.thread_id, CreateTurnRequest(input="image"))
+    kernel.transition_turn(created.turn.turn_id, TurnStatus.PREPARING)
+    leased = kernel.jobs.lease_next("worker")
+    assert leased is not None and leased.attempt == 1 and leased.max_attempts == 3
+    kernel.jobs.start(leased.job_id, "worker", leased.lease_token)
+
+    waiting = kernel.fail_turn_job(
+        job_id=leased.job_id,
+        worker_id="worker",
+        lease_token=leased.lease_token,
+        error="image_execution_pending",
+        retryable=True,
+        preserve_attempt=True,
+    )
+
+    assert waiting.job is not None
+    assert waiting.job.attempt == 1
+    assert waiting.job.max_attempts == 3
+    resumed = kernel.jobs.lease_next("worker-2")
+    assert resumed is not None
+    assert resumed.attempt == 1
+    assert resumed.max_attempts == 3
+
+
 def test_create_thread_client_request_is_idempotent(tmp_path):
     kernel = RuntimeKernel(tmp_path / "runtime.db")
     request = CreateThreadRequest(
@@ -684,9 +730,7 @@ def test_create_thread_client_request_is_idempotent(tmp_path):
     assert kernel.create_thread(request).thread_id == first.thread_id
     with pytest.raises(ConflictError):
         kernel.create_thread(
-            CreateThreadRequest(
-                title="different", client_request_id="request-id"
-            )
+            CreateThreadRequest(title="different", client_request_id="request-id")
         )
 
 
@@ -743,7 +787,11 @@ def test_api_requires_bearer_exact_origin_csrf_and_resyncs_ahead_cursor(tmp_path
         ("/api/v1/turns/{turn_id}/replace", "post", "202"): "ReplaceTurnResponse",
         ("/api/v1/threads/{thread_id}/fork", "post", "201"): "ThreadProjection",
         ("/api/v1/turns/{turn_id}/interrupt", "post", "200"): "TurnMutationResponse",
-        ("/api/v1/threads/{thread_id}/projection", "get", "200"): "ThreadProjectionResponse",
+        (
+            "/api/v1/threads/{thread_id}/projection",
+            "get",
+            "200",
+        ): "ThreadProjectionResponse",
         (
             "/api/v1/interactions/{interaction_id}/connector-login/begin",
             "post",
@@ -770,17 +818,16 @@ def test_api_requires_bearer_exact_origin_csrf_and_resyncs_ahead_cursor(tmp_path
             "application/json"
         ]["schema"]
         assert schema == {"$ref": f"#/components/schemas/{schema_name}"}
-    create_thread_parameters = openapi["paths"]["/api/v1/threads"]["post"][
-        "parameters"
-    ]
+    create_thread_parameters = openapi["paths"]["/api/v1/threads"]["post"]["parameters"]
     assert any(
-        parameter["name"] == "X-EcoreX-CSRF"
-        for parameter in create_thread_parameters
+        parameter["name"] == "X-EcoreX-CSRF" for parameter in create_thread_parameters
     )
-    stream_parameters = openapi["paths"][
-        "/api/v1/threads/{thread_id}/events/stream"
-    ]["get"]["parameters"]
-    follow = next(parameter for parameter in stream_parameters if parameter["name"] == "follow")
+    stream_parameters = openapi["paths"]["/api/v1/threads/{thread_id}/events/stream"][
+        "get"
+    ]["parameters"]
+    follow = next(
+        parameter for parameter in stream_parameters if parameter["name"] == "follow"
+    )
     assert follow["schema"]["default"] is True
 
     unauthenticated = TestClient(
@@ -860,7 +907,10 @@ def test_fork_projection_contains_history_through_boundary(tmp_path):
         client_request_id="fork-request",
     )
     fork = kernel.fork_thread(source.thread_id, request=fork_request)
-    assert kernel.fork_thread(source.thread_id, request=fork_request).thread_id == fork.thread_id
+    assert (
+        kernel.fork_thread(source.thread_id, request=fork_request).thread_id
+        == fork.thread_id
+    )
     projection = kernel.projection(fork.thread_id)
     assert any(turn.input == "inherited" for turn in projection.turns)
     assert any(item.content.get("text") == "inherited" for item in projection.items)

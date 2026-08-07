@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import hashlib
 from pathlib import Path
 import sqlite3
@@ -162,6 +162,11 @@ class ToolExecutionRepository:
             return self._from_row(row), True
 
     def resume_uncertain(self, tool_call_id: str) -> ToolExecutionRecord:
+        return self.record_retry(tool_call_id)
+
+    def record_retry(self, tool_call_id: str) -> ToolExecutionRecord:
+        """Advance the durable attempt immediately before a safe replay."""
+
         with self.database.transaction() as connection:
             row = self._require(connection, tool_call_id)
             if row["status"] != "started":
@@ -591,6 +596,53 @@ class ToolExecutionRepository:
             row = self._require(connection, tool_call_id)
             return self._from_row(row)
 
+    def exact_cached_result(
+        self,
+        *,
+        exclude_tool_call_id: str,
+        capability_snapshot_id: str,
+        policy_snapshot_id: str,
+        tool_id: str,
+        tool_version: str,
+        arguments_sha256: str,
+        ttl_seconds: int,
+    ) -> ToolExecutionRecord | None:
+        """Return one exact, still-authorized read result; never fuzzy-match."""
+
+        if (
+            isinstance(ttl_seconds, bool)
+            or not 1 <= ttl_seconds <= 86_400
+            or len(arguments_sha256) != 64
+        ):
+            return None
+        cutoff = (datetime.now(UTC) - timedelta(seconds=ttl_seconds)).isoformat()
+        with self.database.reader() as connection:
+            row = connection.execute(
+                "SELECT execution.* FROM tool_executions AS execution "
+                "JOIN invocation_admissions AS admission "
+                "ON admission.tool_call_id = execution.tool_call_id "
+                "WHERE execution.tool_call_id != ? "
+                "AND execution.capability_snapshot_id = ? "
+                "AND execution.policy_snapshot_id = ? "
+                "AND execution.tool_id = ? AND admission.tool_version = ? "
+                "AND execution.arguments_sha256 = ? "
+                "AND execution.status = 'completed' "
+                "AND execution.result_json IS NOT NULL "
+                "AND execution.updated_at >= ? "
+                "ORDER BY execution.updated_at DESC, execution.tool_call_id DESC "
+                "LIMIT 1",
+                (
+                    exclude_tool_call_id,
+                    capability_snapshot_id,
+                    policy_snapshot_id,
+                    tool_id,
+                    tool_version,
+                    arguments_sha256,
+                    cutoff,
+                ),
+            ).fetchone()
+        return None if row is None else self._from_row(row)
+
     def completed_for_job(
         self,
         job_id: str,
@@ -811,9 +863,7 @@ class ToolExecutionRepository:
             if (
                 isinstance(result, dict)
                 and isinstance(result.get("extension_snapshot_id"), str)
-                and isinstance(
-                    result.get("extension_contribution_snapshot_id"), str
-                )
+                and isinstance(result.get("extension_contribution_snapshot_id"), str)
                 and self._record_skill_read_shape(
                     record,
                     extension_snapshot_id=str(result["extension_snapshot_id"]),

@@ -272,11 +272,14 @@ class DynamicManagedImageProvider:
     ) -> _ManagedImageProvider:
         if self._provider_factory is not None:
             return self._provider_factory(configuration, origin)
+        upstream_models = {configuration.upstream_model_id}
+        if configuration.upstream_model_id == "gpt-image-2-pro":
+            upstream_models.add("gpt-image-2")
         return OpenAICompatibleImageProvider(
             provider_id=self.provider_id,
             origin=origin,
             allowed_origins=frozenset(self.origins.values()),
-            allowed_models=frozenset({configuration.upstream_model_id}),
+            allowed_models=frozenset(upstream_models),
             bearer_token=lambda value=configuration.api_key: value,
             input_store=self.input_store,
             timeout_seconds=self.timeout_seconds,

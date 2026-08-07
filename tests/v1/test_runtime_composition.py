@@ -15,12 +15,14 @@ from ecorex.capabilities import (
     RuntimeAvailability,
     UnknownModelError,
 )
-from ecorex.protocol import CreateTurnRequest
+from ecorex.protocol import CreateThreadRequest, CreateTurnRequest
 from ecorex.runtime import (
+    AgentTurnWorker,
     RuntimeComposition,
     RuntimeSettings,
     RuntimeSnapshotConflict,
     RuntimeSnapshotRepository,
+    ToolExecutionRepository,
     create_app,
 )
 
@@ -135,7 +137,6 @@ def test_bootstrap_and_turns_are_generated_from_backend_catalogs(tmp_path) -> No
         "cdp",
         "shell",
         "imagegen",
-        "feishu_cli",
         "skill_search",
         "skill_read",
         "skill_run",
@@ -239,6 +240,89 @@ def test_bound_image_attachment_promotes_reader_vision_and_ocr(tmp_path) -> None
         assert decision is not None and decision.eligible
         assert decision.exposure is Exposure.DIRECT
         assert "runtime_context_required" in decision.reason_codes
+
+
+def test_image_followup_requires_durable_success_in_the_same_thread(tmp_path) -> None:
+    app, _client_instance = _client(tmp_path)
+    kernel = app.state.runtime
+    composition = app.state.runtime_composition
+    thread = kernel.create_thread(CreateThreadRequest(title="image context"))
+
+    without_context = composition.prepare_turn(
+        CreateTurnRequest(input="再来一张", client_message_id="no-image-context"),
+        thread_id=thread.thread_id,
+    )
+    without_plan = composition.capability_service.get_plan(
+        without_context.snapshot_context.capability_snapshot_id
+    )
+    assert without_plan.decision("imagegen").exposure is Exposure.DEFERRED
+
+    prepared = composition.prepare_turn(
+        CreateTurnRequest(input="生成一张海报", client_message_id="image-context"),
+        thread_id=thread.thread_id,
+    )
+    created = kernel.create_turn(
+        thread.thread_id,
+        prepared.request,
+        snapshot_context=prepared.snapshot_context,
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=object(),
+        capabilities=composition.capability_service,
+    )
+    context = worker._job_context(created.job.job_id)
+    with kernel.jobs.control_transaction(
+        scope="test_image_context", subject=created.job.job_id
+    ) as connection:
+        batch = kernel.turn_execution_batches.create_in_transaction(
+            connection,
+            turn_id=created.turn.turn_id,
+            first_revision_ordinal=0,
+            last_revision_ordinal=0,
+            snapshot_context=worker._snapshot_context(context),
+        )
+        connection.execute(
+            "UPDATE turns SET status='completed' WHERE turn_id=?",
+            (created.turn.turn_id,),
+        )
+    executions = ToolExecutionRepository(kernel.database)
+    executions.begin(
+        tool_call_id="image-context-call",
+        job_id=created.job.job_id,
+        turn_id=created.turn.turn_id,
+        execution_batch_id=batch.batch_id,
+        capability_snapshot_id=context["capability_snapshot_id"],
+        policy_snapshot_id=context["permission_snapshot_id"],
+        tool_id="imagegen",
+        arguments={"instruction": "海报"},
+        idempotency_key="image-context-call",
+    )
+    executions.complete("image-context-call", {"artifact_id": "artifact-image-1"})
+
+    inherited = composition.prepare_turn(
+        CreateTurnRequest(input="再来一张", client_message_id="has-image-context"),
+        thread_id=thread.thread_id,
+    )
+    inherited_plan = composition.capability_service.get_plan(
+        inherited.snapshot_context.capability_snapshot_id
+    )
+    imagegen = inherited_plan.decision("imagegen")
+    assert imagegen is not None and imagegen.eligible
+    assert imagegen.exposure is Exposure.DIRECT
+    assert "runtime_context_required" in imagegen.reason_codes
+
+    negated = composition.prepare_turn(
+        CreateTurnRequest(
+            input="不要再来一张，改为总结刚才的过程",
+            client_message_id="negated-image-context",
+        ),
+        thread_id=thread.thread_id,
+    )
+    negated_plan = composition.capability_service.get_plan(
+        negated.snapshot_context.capability_snapshot_id
+    )
+    assert negated_plan.decision("imagegen").exposure is Exposure.DEFERRED
 
 
 def test_projection_only_composition_does_not_publish_execution_authority(

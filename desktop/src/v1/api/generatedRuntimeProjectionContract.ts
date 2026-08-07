@@ -90,13 +90,14 @@ export const GENERATED_RUNTIME_PROJECTION_CONTRACT = {
       "retry_wait",
       "finalizing",
       "completed",
+      "partial",
       "failed",
       "cancelled",
       "interrupted",
       "superseded"
     ]
   },
-  "schemaSha256": "a7dc813629b08a33a69f9582dd99746da198e53693ad4ced43a971d10ba50820",
+  "schemaSha256": "f64cdf1a2cc5408d1e1b72edd3b2ad77aead35bff72095203c62b9356888344b",
   "schemaVersion": 1,
   "wireFields": {
     "ConnectorLoginBeginResponse": {

@@ -62,6 +62,17 @@ def catalog(model_id: str) -> httpx.Response:
     )
 
 
+def sse(*events: dict) -> httpx.Response:
+    body = "".join(
+        f"data: {json.dumps(event, separators=(',', ':'))}\n\n" for event in events
+    ) + "data: [DONE]\n\n"
+    return httpx.Response(
+        200,
+        headers={"Content-Type": "text/event-stream"},
+        content=body.encode(),
+    )
+
+
 def test_catalog_visibility_is_not_enough_to_activate() -> None:
     requests: list[str] = []
 
@@ -89,55 +100,133 @@ def test_responses_probe_freezes_endpoint_model_and_no_storage() -> None:
             return catalog("gpt-5.6-luna")
         submitted.append(request)
         body = json.loads(request.content)
-        assert body == {
-            "model": "gpt-5.6-luna",
-            "instructions": "Return exactly ECOREX_ACTIVATION_OK and no other text.",
-            "input": [
+        assert body["model"] == "gpt-5.6-luna"
+        assert body["stream"] is True
+        assert body["reasoning"] == {"effort": "max"}
+        assert body["context_management"] == [
+            {"type": "compaction", "compact_threshold": 272_000}
+        ]
+        if len(submitted) == 1:
+            assert body["store"] is True
+            assert body["tools"][0]["name"] == "ecorex_activation_check"
+            return sse(
                 {
-                    "type": "message",
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": "e-Mate administrator activation probe.",
-                        }
-                    ],
-                }
-            ],
-            "max_output_tokens": 512,
-            "store": False,
-            "reasoning": {"effort": "max"},
-            "context_management": [
-                {"type": "compaction", "compact_threshold": 272_000}
-            ],
-        }
-        return httpx.Response(
-            200,
-            headers={"Content-Type": "application/json"},
-            json={
-                "model": "gpt-5.6-luna-2026-07-01",
-                "output": [
-                    {
-                        "type": "message",
-                        "content": [
-                            {
-                                "type": "output_text",
-                                "text": "ECOREX_ACTIVATION_OK",
-                            }
-                        ],
-                    }
-                ],
+                    "type": "response.created",
+                    "response": {
+                        "id": "resp_activation_tool",
+                        "model": "gpt-5.6-luna-2026-07-01",
+                    },
+                },
+                {
+                    "type": "response.output_item.added",
+                    "item": {
+                        "type": "function_call",
+                        "call_id": "call_activation",
+                        "name": "ecorex_activation_check",
+                        "arguments": '{"value":"ECOREX_ACTIVATION_OK"}',
+                    },
+                },
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_activation_tool",
+                        "model": "gpt-5.6-luna-2026-07-01",
+                    },
+                },
+            )
+        assert body["store"] is False
+        assert body["previous_response_id"] == "resp_activation_tool"
+        assert body["input"] == [
+            {
+                "type": "function_call_output",
+                "call_id": "call_activation",
+                "output": '{"value":"ECOREX_ACTIVATION_OK"}',
+            }
+        ]
+        return sse(
+            {
+                "type": "response.created",
+                "response": {
+                    "id": "resp_activation_final",
+                    "model": "gpt-5.6-luna-2026-07-01",
+                },
+            },
+            {
+                "type": "response.output_text.delta",
+                "delta": "ECOREX_ACTIVATION_",
+            },
+            {"type": "response.output_text.delta", "delta": "OK"},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_activation_final",
+                    "model": "gpt-5.6-luna-2026-07-01",
+                },
             },
         )
 
     result = run_test(handler, configuration())
     assert result.passed
-    assert len(submitted) == 1
+    assert len(submitted) == 2
     assert submitted[0].url.path == "/v1/responses"
     assert submitted[0].headers["accept-encoding"] == "identity"
     assert submitted[0].headers["idempotency-key"] == (
         "ecorex-model-activation-c5240da1035c4bda7783d3d15c741357"
     )
+    assert submitted[1].headers["idempotency-key"] != submitted[0].headers[
+        "idempotency-key"
+    ]
+
+
+def test_responses_probe_uses_one_stateless_recovery_for_chain_rejection() -> None:
+    submissions = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal submissions
+        if request.url.path == "/v1/models":
+            return catalog("gpt-5.6-luna")
+        submissions += 1
+        body = json.loads(request.content)
+        if submissions == 1:
+            return sse(
+                {
+                    "type": "response.created",
+                    "response": {"id": "resp_tool", "model": "gpt-5.6-luna"},
+                },
+                {
+                    "type": "response.output_item.added",
+                    "item": {
+                        "type": "function_call",
+                        "call_id": "call_tool",
+                        "name": "ecorex_activation_check",
+                        "arguments": '{"value":"ECOREX_ACTIVATION_OK"}',
+                    },
+                },
+                {
+                    "type": "response.completed",
+                    "response": {"id": "resp_tool", "model": "gpt-5.6-luna"},
+                },
+            )
+        if submissions == 2:
+            assert body["previous_response_id"] == "resp_tool"
+            return httpx.Response(400, json={"error": {"code": "unsupported"}})
+        assert "previous_response_id" not in body
+        assert "continuity note" in body["input"][0]["content"][0]["text"]
+        return sse(
+            {
+                "type": "response.created",
+                "response": {"id": "resp_final", "model": "gpt-5.6-luna"},
+            },
+            {"type": "response.output_text.delta", "delta": "ECOREX_ACTIVATION_OK"},
+            {
+                "type": "response.completed",
+                "response": {"id": "resp_final", "model": "gpt-5.6-luna"},
+            },
+        )
+
+    result = run_test(handler, configuration())
+    assert result.passed
+    assert submissions == 3
 
 
 def test_openai_compatible_chat_uses_chat_completion_probe() -> None:
