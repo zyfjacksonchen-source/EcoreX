@@ -313,3 +313,33 @@ Starlette's upstream `python_multipart` pending-deprecation notice.
 - Added a focused regression that verifies `imagegen` remains invocable for a
   Turn that selected the signed image-generation/edit model, while a genuine
   live availability loss still tightens the policy and blocks execution.
+
+## 2026-08-07 - v1.0.0 bundled-capability authority decision
+
+- A source and Candidate audit confirmed that v1 has one intended capability
+  authority chain: Core-owned `ToolSpec` and routing, `ecorex.pack_catalog`, the
+  signed `ReleaseManifest`/Pack sidecars, then the frozen availability snapshot.
+  `runtime-packs/` remains v0.3 compatibility data and must not participate in
+  v1 admission, routing or release decisions.
+- The v1 installer deliberately activates Core and the exact six-Pack host set
+  as one rollback unit and rejects arbitrary partial sets. This is retained for
+  v1.0.0 because the release requirement is that every advertised built-in
+  capability is actually executable; changing the already verified Candidate
+  to a partial or task-time-installed set would recreate the observed
+  read/write/shell and capability-visibility failure class.
+- The retained product-owned dependency closure is not permission for an agent
+  to run npm/pip against the user's machine. OCR and browser/CDP remain signed,
+  versioned product Packs. Feishu/Lark remains a managed Connector with OAuth
+  state outside the release and is not an executable Pack. Image generation
+  keeps one Core planner route plus the tiny signed image adapter and one
+  just-in-time workflow Skill; there is no second Skill-owned intent router.
+- The size cost is concentrated in browser and OCR (about 121 MB and 96 MB for
+  the macOS arm64 Pack archives); channels, image and sandbox together are only
+  about 11 KB. If a later release needs a thin online default, it must introduce
+  an explicit signed online profile and an atomic, cached, rollback-capable Pack
+  overlay before omitting heavy Packs. The v1.0.0 `full_offline` Candidate and
+  its exact bytes remain unchanged.
+- The manual v1.0.0 builder's digest-pinned v0.3.2 native/Python inputs are a
+  build-time migration bridge only. v1.0.0 artifacts and lock receipts become
+  the next release base; the compatibility bridge is not a continuing product
+  fact source.
