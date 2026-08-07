@@ -588,6 +588,10 @@ modified.
   the already verified manifest, and recomputes the bounded SBOM digest. Any
   other extra file, link, directory, changed artifact or changed evidence file
   remains fail-closed.
+- The manual builder's full publication directory contains both evidence files,
+  while the downloadable platform ZIP deliberately contains neither and relies
+  on the signed manifest/artifacts alone. Bootstrap accepts both fixed forms,
+  validates evidence when both files are present, and rejects a partial pair.
 - The controlled error mapper now classifies an invalid local-release inventory
   as a verification failure instead of claiming disk space or directory
   permissions are unavailable.

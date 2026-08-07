@@ -332,6 +332,9 @@ func TestBootstrapFailureMessagesRemainActionableAndSafe(t *testing.T) {
 
 func TestLocalReleaseEvidenceMatchesManifestAndSBOM(t *testing.T) {
 	releaseDir := canonicalTestTempDir(t)
+	if err := validateLocalReleaseEvidence(releaseDir, []byte(`{}`), &manifest{}); err != nil {
+		t.Fatalf("signed-only outer package was rejected: %v", err)
+	}
 	sbomBytes := []byte(`{"bomFormat":"CycloneDX"}`)
 	if err := os.WriteFile(filepath.Join(releaseDir, "sbom.cdx.json"), sbomBytes, 0o600); err != nil {
 		t.Fatal(err)

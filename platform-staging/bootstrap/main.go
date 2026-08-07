@@ -663,7 +663,17 @@ func loadLocalRelease(localRelease string, keys map[string]ed25519.PublicKey, fl
 }
 
 func validateLocalReleaseEvidence(releaseDir string, manifestBytes []byte, release *manifest) error {
-	metadataBytes, err := readStableRegularFile(filepath.Join(releaseDir, "release-metadata.json"), maxEvidenceBytes)
+	metadataPath := filepath.Join(releaseDir, "release-metadata.json")
+	sbomPath := filepath.Join(releaseDir, "sbom.cdx.json")
+	_, metadataErr := os.Lstat(metadataPath)
+	_, sbomErr := os.Lstat(sbomPath)
+	if errors.Is(metadataErr, os.ErrNotExist) && errors.Is(sbomErr, os.ErrNotExist) {
+		return nil
+	}
+	if metadataErr != nil || sbomErr != nil {
+		return fmt.Errorf("local release evidence verification failed")
+	}
+	metadataBytes, err := readStableRegularFile(metadataPath, maxEvidenceBytes)
 	if err != nil {
 		return fmt.Errorf("local release evidence verification failed")
 	}
@@ -697,7 +707,7 @@ func validateLocalReleaseEvidence(releaseDir string, manifestBytes []byte, relea
 			return fmt.Errorf("local release evidence verification failed")
 		}
 	}
-	sbomBytes, err := readStableRegularFile(filepath.Join(releaseDir, metadata.SBOM), maxEvidenceBytes)
+	sbomBytes, err := readStableRegularFile(sbomPath, maxEvidenceBytes)
 	if err != nil || sha256Hex(sbomBytes) != metadata.SBOMSHA256 {
 		return fmt.Errorf("local release evidence verification failed")
 	}
