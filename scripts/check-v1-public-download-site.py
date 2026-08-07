@@ -169,20 +169,20 @@ def main() -> int:
         javascript = scripts[0].read_text(encoding="utf-8")
         _require(
             "npm exec" not in javascript
-            and "ecorex-bootstrap" in javascript[
+            and "Install EcoreX WebUI.cmd" in javascript[
                 javascript.index("export function terminalCommand"):
                 javascript.index("function appendTerminalCommand")
             ]
-            and "extension-cas" in javascript
+            and "Install EcoreX WebUI.command" in javascript
             and "targetFromPlatformSignals" in javascript,
-            "public install commands must use native shells and Mac detection must fail safe",
+            "public install commands must run the checked WebUI package and Mac detection must fail safe",
             errors,
         )
         _require(
             "export async function verifyManifestBytes" in javascript
             and "await sha256Hex(payload" in javascript
             and "verifyManifestBytes(index.release.manifest)" in javascript
-            and "The downloaded Bootstrap is the signature authority" in javascript,
+            and "The downloaded WebUI package is the signature authority" in javascript,
             (
                 "public JS must attempt exact manifest-byte SHA-256 verification "
                 "without treating browser CORS as release authority"

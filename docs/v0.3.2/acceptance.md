@@ -119,3 +119,41 @@ Actions/Windows 2022 边界、MSVC 14.44 与 SDK 布局、Microsoft Authenticode
 1.0.0 当前仍是待构建、待签名、待发布目标。跨版本在线更新只有在 1.0.0
 沿用/轮换为 0.3.2 已信任的 release/publication key、三个目标安装包齐备并且
 公开指针原子晋级后才允许对外宣称可用。
+
+## 2026-08-07 WebUI 安装器正式发布与 0.3.0 升级验收
+
+- 正式发布为 GitHub Release `v0.3.2`，release identity 为
+  `release-stable-76e2ba3641d80b7510d1c5e0`，release manifest SHA-256 为
+  `cdf066ce5af763b67f1402a414e633c0b9b10c5d6bf7e3ccd04f70e270911a0f`。
+- Windows x64 WebUI 包为 `276221785` bytes，SHA-256 为
+  `29dbececc3f3d9fb59ee9f01880735abef80e9acd081fca23810f2ba428f3ffa`；
+  macOS universal WebUI 包为 `545850661` bytes，SHA-256 为
+  `a495ad619198e623298bf79e88618f9b397e61993772059eb1d79183037e5754`。
+  GitHub 上传后的服务端 digest 与本机构建摘要完全一致，远端 HEAD 的
+  `Content-Length` 也逐字节匹配。
+- 两个包均不依赖 npm。macOS 包 `unzip -t` 通过并保留安装入口执行位；
+  Windows 与 macOS 安装命令分别调用包内 `.cmd` 和 `.command`。本次是 WebUI
+  发布，不执行 macOS notarization、Developer ID codesign 或 Windows
+  Authenticode。Apple Silicon 链接器生成的 ad-hoc CodeDirectory 没有 Team ID，
+  不构成开发者/发布者签名；包内 Ed25519 仅用于 Runtime/Pack 完整性校验，
+  也不属于操作系统应用签名。
+- 本机真实安装从 `0.3.0` 槽
+  `r-42f28429570c8da946bc7d11534f4b13d8a58995` 更新到 `0.3.2` 槽
+  `r-63981bf272f41d23b7e029d14866fa412e9ccb87`。一次性候选健康探测通过后，正式
+  Runtime 在 `127.0.0.1:8765` 启动；Runtime owner 探针返回 `204` 和
+  `X-EcoreX-Runtime-Owner: verified`。activation receipt 为 `confirmed` 且
+  `data_barrier_crossed=true`，`previous` 和 `known_good` 仍保留 0.3.0 槽。
+- 更新后 Runtime 页面注入身份为 `version=0.3.2` 和上述 release identity；
+  既有会话/消息数据库可读，审计 outbox 继续使用原系统钥匙串密钥。隔离副本中
+  1124 条既有加密审计记录全部通过 AES-GCM 解密校验。
+- 下载站已原子切换到不可变目录
+  `v0.3.2-webui-c817455cb5cb`。公网 `index.html` SHA-256 为
+  `1c6bf087184a026e9fae4c8e498c87bb7b60b1cb5e04fa454d2fee936d557bb7`，
+  content-addressed JS SHA-256 为
+  `c817455cb5cbe7e420b24f239914920838375c843472323390473a2deef384cb`；
+  外网重新下载后摘要一致，页面显示安装器 `v0.3.2`。
+- 下载页静态门禁和聚焦回归为 `6 passed`。生产 cloud/Web 仍分别指向既有
+  v0.3.2 不可变 release，`18871`–`18874` 四个服务均返回 ready，旧服务未停。
+- 旧客户端只信任原 0.3.0 release key，因此公开签名 pointer 继续保留
+  0.3.0，避免伪造旧密钥签名。0.3.0→0.3.2 的公开升级路径是下载页一键终端命令；
+  它下载并校验上述正式 WebUI 包，再执行已通过真实本机验收的同一槽更新流程。

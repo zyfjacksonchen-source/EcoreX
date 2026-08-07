@@ -30,6 +30,32 @@ const TARGETS = [
   ["bootstrap-macos-arm64", "macos", "arm64"],
   ["bootstrap-macos-x64", "macos", "x64"],
 ];
+const WEBUI_RELEASE = Object.freeze({
+  version: "0.3.2",
+  createdAt: "2026-08-07T03:40:00+00:00",
+  releaseId: "release-stable-76e2ba3641d80b7510d1c5e0",
+  buildDigest: "76e2ba3641d80b7510d1c5e0c5163fd7a8a264338a65a642d27a5179356a45f0",
+  manifest: Object.freeze({
+    sha256: "cdf066ce5af763b67f1402a414e633c0b9b10c5d6bf7e3ccd04f70e270911a0f",
+    fileName: "release-manifest.json",
+    sources: Object.freeze([
+      Object.freeze({ kind: "github-cn-mirror", url: "https://ghproxy.net/https://github.com/zyfjacksonchen-source/EcoreX-installers/releases/download/v0.3.2/release-manifest.json" }),
+      Object.freeze({ kind: "github-release", url: "https://github.com/zyfjacksonchen-source/EcoreX-installers/releases/download/v0.3.2/release-manifest.json" }),
+    ]),
+  }),
+  packages: Object.freeze({
+    windows: Object.freeze({
+      fileName: "EcoreX_0.3.2-webui-windows-x64.zip",
+      sizeBytes: 276221785,
+      sha256: "29dbececc3f3d9fb59ee9f01880735abef80e9acd081fca23810f2ba428f3ffa",
+    }),
+    macos: Object.freeze({
+      fileName: "EcoreX_0.3.2-webui-macos-universal.zip",
+      sizeBytes: 545850661,
+      sha256: "a495ad619198e623298bf79e88618f9b397e61993772059eb1d79183037e5754",
+    }),
+  }),
+});
 const SOURCE_ORDER = [
   ["github-cn-mirror", 0],
   ["github-release", 1],
@@ -82,6 +108,46 @@ export function releaseVersion(value) {
 export function stableReleaseSequence(value) {
   const [major, minor, patch] = releaseVersion(value).split(".").map(Number);
   return major * 100_000_000 + minor * 10_000 + patch + 1;
+}
+
+export function normalizeWebUIRelease(raw = WEBUI_RELEASE) {
+  const release = object(raw, "WebUI 发布");
+  releaseVersion(release.version);
+  text(release.releaseId, "WebUI releaseId", /^release-stable-[0-9a-f]{24}$/);
+  text(release.buildDigest, "WebUI buildDigest", SHA256);
+  if (Number.isNaN(Date.parse(release.createdAt))) throw new Error("WebUI 发布时间无效");
+  const manifest = object(release.manifest, "WebUI 清单");
+  text(manifest.sha256, "WebUI 清单摘要", SHA256);
+  const packageValue = (name) => {
+    const value = object(release.packages[name], `WebUI ${name} 包`);
+    text(value.fileName, `${name}.fileName`, SAFE_FILE_NAME);
+    text(value.sha256, `${name}.sha256`, SHA256);
+    if (!Number.isSafeInteger(value.sizeBytes) || value.sizeBytes < 1 || value.sizeBytes > 2 * 1024 * 1024 * 1024) {
+      throw new Error(`${name} 安装包大小无效`);
+    }
+    const direct = `https://github.com/zyfjacksonchen-source/EcoreX-installers/releases/download/v${release.version}/${value.fileName}`;
+    return Object.freeze({ ...value, sources: Object.freeze([
+      Object.freeze({ sourceId: "github-cn", kind: "github-cn-mirror", priority: 0, url: `https://ghproxy.net/${direct}` }),
+      Object.freeze({ sourceId: "github", kind: "github-release", priority: 1, url: direct }),
+    ]) });
+  };
+  const windows = packageValue("windows");
+  const macos = packageValue("macos");
+  return Object.freeze({
+    status: "published",
+    release: Object.freeze({
+      version: release.version,
+      createdAt: release.createdAt,
+      releaseId: release.releaseId,
+      buildDigest: release.buildDigest,
+      manifest,
+      artifacts: Object.freeze([
+        Object.freeze({ artifactId: "bootstrap-windows-x64", platform: "windows", architecture: "x64", ...windows }),
+        Object.freeze({ artifactId: "bootstrap-macos-arm64", platform: "macos", architecture: "arm64", ...macos }),
+        Object.freeze({ artifactId: "bootstrap-macos-x64", platform: "macos", architecture: "x64", ...macos }),
+      ]),
+    }),
+  });
 }
 
 export function sourceList(value, label, fileName) {
@@ -607,10 +673,8 @@ export function terminalCommand(artifact) {
       "Write-Host '[校验] 下载文件已通过完整性检查'",
       "Write-Host '[解压] 正在准备启动组件'",
       "Expand-Archive -LiteralPath $z -DestinationPath $d",
-      "$cas=Join-Path $env:LOCALAPPDATA 'EcoreX\\state\\extension-cas'",
-      "New-Item -ItemType Directory -Force -Path $cas | Out-Null",
       "Write-Host '[启动] 后续 e-Mate 组件会继续显示实时进度'",
-      "& (Join-Path $d 'bin\\ecorex-bootstrap.exe')",
+      "& (Join-Path $d 'Install EcoreX WebUI.cmd')",
     ].join("; ");
     return script;
   }
@@ -628,11 +692,9 @@ export function terminalCommand(artifact) {
     "printf '[校验] 下载文件已通过完整性检查\\n'",
     "printf '[解压] 正在准备启动组件\\n'",
     'ditto -x -k "$z" "$d"',
-    'chmod +x "$d/bin/ecorex-bootstrap"',
-    'mkdir -p "$HOME/Library/Application Support/EcoreX/state/extension-cas"',
-    'chmod 700 "$HOME/Library/Application Support/EcoreX/state/extension-cas"',
+    'chmod +x "$d/Install EcoreX WebUI.command"',
     "printf '[启动] 后续 e-Mate 组件会继续显示实时进度\\n'",
-    '"$d/bin/ecorex-bootstrap"',
+    '"$d/Install EcoreX WebUI.command"',
   ].join(" && ");
   return script;
 }
@@ -744,6 +806,10 @@ async function loadIndex() {
   return normalizePublicIndex(JSON.parse(payload));
 }
 
+async function loadWebUIRelease() {
+  return normalizeWebUIRelease();
+}
+
 function renderFailure(error) {
   const grid = document.querySelector("[data-downloads]");
   if (!grid) return;
@@ -777,10 +843,10 @@ if (typeof document !== "undefined") {
     setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
   });
   setupRobotCarousel();
-  Promise.all([loadIndex(), detectTarget()])
+  Promise.all([loadWebUIRelease(), detectTarget()])
     .then(([index, recommended]) => {
       // Discovery must remain usable when a release origin does not grant
-      // browser CORS. The downloaded Bootstrap is the signature authority.
+      // browser CORS. The downloaded WebUI package is the signature authority.
       renderIndex(index, null, recommended);
       if (index.status === "published") {
         verifyManifestBytes(index.release.manifest)

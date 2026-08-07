@@ -231,8 +231,7 @@ assert.match(windowsCommand, /curl\.exe/u);
 assert.match(windowsCommand, /Write-Host/);
 assert.match(windowsCommand, /Get-FileHash/u);
 assert.match(windowsCommand, /github\.example/u);
-assert.match(windowsCommand, /extension-cas/u);
-assert.match(windowsCommand, /ecorex-bootstrap\.exe/u);
+assert.match(windowsCommand, /Install EcoreX WebUI\.cmd/u);
 const macCommand = contract.terminalCommand({
   platform: "macos",
   sha256: "b".repeat(64),
@@ -246,8 +245,13 @@ assert.match(macCommand, /^d="\$\(mktemp -d\)"/);
 assert.match(macCommand, /curl --fail --location/u);
 assert.match(macCommand, /shasum -a 256 -c/u);
 assert.match(macCommand, /github\.example/u);
-assert.match(macCommand, /extension-cas/u);
-assert.match(macCommand, /ecorex-bootstrap/u);
+assert.match(macCommand, /Install EcoreX WebUI\.command/u);
+
+const webui = contract.normalizeWebUIRelease();
+assert.equal(webui.release.version, "0.3.2");
+assert.equal(webui.release.artifacts.length, 3);
+assert.equal(webui.release.artifacts[1].sha256, webui.release.artifacts[2].sha256);
+assert.match(webui.release.artifacts[0].sources[0].url, /ghproxy\.net/u);
 
 assert.equal(contract.targetFromPlatformSignals({
   source: "MacIntel Mozilla/5.0 (Macintosh)",
