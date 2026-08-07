@@ -69,3 +69,29 @@ Actions/Windows 2022 边界、MSVC 14.44 与 SDK 布局、Microsoft Authenticode
 5. 候选签名、Control Plane rollout 与健康切换。
 
 因此本记录把“流程与候选可部署性”判为通过，但不会把未经提交、签名和受保护 CI 的本地代码直接覆盖企业生产。生产发布需要显式授权提交/推送，并由受保护 workflow 生成不可变候选后再晋级。
+
+## 2026-08-07 手动生产发布
+
+用户随后明确授权跳过 CI，改用手动构建、签名和生产部署。发布输入固定到
+提交 `9cb691050ee893e305c6b6ab2d5a27766e424980`，云端不可变 release 为
+`ecorex-cloud-v0.3.2-9cb691050ee8-manual`，Web release 为
+`20260807083500-v0.3.2-9cb6910`。
+
+- npm 官方 registry 查询成功；`npm ci` 下载 385 个包并完成 esbuild
+  postinstall，`npm audit --audit-level=high` 为 0 vulnerabilities。
+- Web typecheck、生产构建和 222 项 unit/contract 测试通过；实际
+  `npm exec --call` 命令在 Node 22.23.1 / npm 10.9.8 下执行成功。
+- 云端 schema/production contract gate 通过，green 槽位四个服务均为
+  active，`18871`–`18874` 的 `/health/ready` 均返回 200/ready。
+- activation journal 已清除，`/opt/ecorex/cloud/current` 原子切换到上述
+  v0.3.2 release；Nginx 配置检查通过。
+- `/opt/ecorex-web/current` 原子切换到上述 Web release；公网 Web 入口、
+  content-addressed JavaScript asset 和控制面 readiness 均返回 HTTP 200。
+- 迁移期间发现并处理两项既有生产漂移：旧 DeepSeek 上游 ID 与 v0.3.2
+  托管策略不一致，以及公开 bootstrap pointer 的 freshness 签名损坏。
+  原文件均保留备份；pointer 从数据库中的最近可信 preparation 恢复后，
+  由现有 publication signer 重新刷新，未修改公开客户端信任链。
+
+手动 release 使用一次性内存 Ed25519 发布密钥，仅用于本次服务器侧 artifact
+验签；私钥未落盘，也未加入公开客户端 trust chain。公开下载指针继续保留官方
+发布链，等待后续受保护发布流程生成正式跨平台安装包。
