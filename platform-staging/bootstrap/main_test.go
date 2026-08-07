@@ -313,6 +313,10 @@ func TestBootstrapFailureMessagesRemainActionableAndSafe(t *testing.T) {
 			expected:   "校验未通过",
 		},
 		{
+			errorValue: errors.New("local release directory inventory is invalid"),
+			expected:   "校验未通过",
+		},
+		{
 			errorValue: errors.New("installed Runtime did not pass Bootstrap health"),
 			expected:   "本地服务",
 		},
@@ -323,6 +327,77 @@ func TestBootstrapFailureMessagesRemainActionableAndSafe(t *testing.T) {
 			strings.Contains(message, item.errorValue.Error()) {
 			t.Fatalf("unsafe or unactionable failure message: %q", message)
 		}
+	}
+}
+
+func TestLocalReleaseEvidenceMatchesManifestAndSBOM(t *testing.T) {
+	releaseDir := canonicalTestTempDir(t)
+	sbomBytes := []byte(`{"bomFormat":"CycloneDX"}`)
+	if err := os.WriteFile(filepath.Join(releaseDir, "sbom.cdx.json"), sbomBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	item := artifact{
+		ArtifactID: "core-macos-arm64", Platform: "macos", Architecture: "arm64",
+		FileName: "core.zip", SizeBytes: 1, SHA256: fmt.Sprintf("%064x", 2),
+		Signature: signature{Algorithm: "ed25519", KeyID: "release-key", Value: "signature"},
+	}
+	release := &manifest{
+		SchemaVersion: 1, ReleaseID: "release-stable-000000000000000000000001",
+		Version: "1.0.0", Channel: "stable", CreatedAt: "2026-08-07T00:00:00Z",
+		BuildDigest: fmt.Sprintf("%064x", 1), Artifacts: []artifact{item},
+		Signature: signature{Algorithm: "ed25519", KeyID: "release-key", Value: "manifest-signature"},
+	}
+	manifestBytes := []byte(`{"signed":true}`)
+	metadata := localReleaseMetadata{
+		SchemaVersion: 1, ReleaseID: release.ReleaseID, Version: release.Version,
+		Channel: release.Channel, CreatedAt: release.CreatedAt, BuildDigest: release.BuildDigest,
+		Manifest: "release-manifest.json", ManifestSHA256: sha256Hex(manifestBytes),
+		ManifestSignature: release.Signature, SBOM: "sbom.cdx.json", SBOMSHA256: sha256Hex(sbomBytes),
+		Artifacts: []localReleaseMetadataArtifact{{
+			ArtifactID: item.ArtifactID, Kind: "core", Platform: item.Platform,
+			Architecture: item.Architecture, FileName: item.FileName, SizeBytes: item.SizeBytes,
+			SHA256: item.SHA256, Signature: item.Signature,
+		}},
+	}
+	metadataBytes, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(releaseDir, "release-metadata.json"), metadataBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateLocalReleaseEvidence(releaseDir, manifestBytes, release); err != nil {
+		t.Fatalf("valid release evidence was rejected: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(releaseDir, "sbom.cdx.json"), []byte("tampered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateLocalReleaseEvidence(releaseDir, manifestBytes, release); err == nil {
+		t.Fatal("tampered SBOM evidence was accepted")
+	}
+}
+
+func TestPreviewStateReceiptIncludesRedactedObservabilitySummary(t *testing.T) {
+	payload := []byte(`{
+		"created_at":"2026-08-07T15:19:05Z",
+		"database_sha256":"792db9205594b63087c6492e0b51fb04c5b47032b2f4dd964e6f78b5266890e2",
+		"file_count":5,
+		"managed_session_cleared":true,
+		"observability_rows_removed":{"observability_audit_outbox":1381},
+		"schema_version":1,
+		"size_bytes":14168298,
+		"snapshot_id":"cf3eb63768fdaf1a742d06b937ab1eb7",
+		"status":"ready"
+	}`)
+	var receipt previewStateReceipt
+	if err := decodeExact(payload, &receipt); err != nil {
+		t.Fatalf("current preview checkpoint contract was rejected: %v", err)
+	}
+	if receipt.ObservabilityRowsRemoved["observability_audit_outbox"] != 1381 {
+		t.Fatal("redacted observability summary was not projected")
+	}
+	if !receipt.ManagedSessionCleared {
+		t.Fatal("credential-bound managed session was not detached")
 	}
 }
 

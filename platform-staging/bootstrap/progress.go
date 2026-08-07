@@ -465,12 +465,15 @@ func userFacingFailure(errorValue error) string {
 	}
 	message := strings.ToLower(errorValue.Error())
 	switch {
+	case strings.Contains(message, "acceptance checkpoint"):
+		return "新版验收副本未能完成创建，现有版本和数据未被修改。请重新验收。"
 	case strings.Contains(message, "locked") ||
 		strings.Contains(message, "another ecorex"):
 		return "另一个 EcoreX 安装或运行进程仍在工作。请等待它完成后重试。"
 	case strings.Contains(message, "signature") ||
 		strings.Contains(message, "verification") ||
 		strings.Contains(message, "manifest") ||
+		strings.Contains(message, "local release directory inventory") ||
 		strings.Contains(message, "sha"):
 		return "文件校验未通过，未安装不可信内容。请重新下载安装。"
 	case strings.Contains(message, "discovery") ||

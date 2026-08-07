@@ -21,6 +21,14 @@ def _source(root: Path) -> None:
     database.execute("INSERT INTO messages(body) VALUES ('preserved')")
     database.execute("CREATE TABLE observability_audit_outbox(id INTEGER PRIMARY KEY)")
     database.execute("INSERT INTO observability_audit_outbox DEFAULT VALUES")
+    database.execute(
+        "CREATE TABLE managed_session_state("
+        "singleton INTEGER PRIMARY KEY,generation INTEGER NOT NULL,"
+        "active_intent_id TEXT,pending_intent_id TEXT)"
+    )
+    database.execute(
+        "INSERT INTO managed_session_state VALUES(1,7,'active','pending')"
+    )
     database.commit()
     database.close()
     (state / "artifacts" / "blob.bin").write_bytes(b"artifact")
@@ -43,6 +51,7 @@ def test_preview_checkpoint_is_independent_and_sqlite_consistent(
     assert receipt["observability_rows_removed"] == {
         "observability_audit_outbox": 1
     }
+    assert receipt["managed_session_cleared"] is True
     assert json.loads((preview / "acceptance-preview.json").read_text()) == receipt
     with sqlite3.connect(preview / "state" / "runtime.sqlite3") as database:
         assert database.execute("SELECT body FROM messages").fetchone() == (
@@ -51,10 +60,18 @@ def test_preview_checkpoint_is_independent_and_sqlite_consistent(
         assert database.execute(
             "SELECT COUNT(*) FROM observability_audit_outbox"
         ).fetchone() == (0,)
+        assert database.execute(
+            "SELECT generation,active_intent_id,pending_intent_id "
+            "FROM managed_session_state"
+        ).fetchone() == (8, None, None)
     with sqlite3.connect(source / "state" / "runtime.sqlite3") as database:
         assert database.execute(
             "SELECT COUNT(*) FROM observability_audit_outbox"
         ).fetchone() == (1,)
+        assert database.execute(
+            "SELECT generation,active_intent_id,pending_intent_id "
+            "FROM managed_session_state"
+        ).fetchone() == (7, "active", "pending")
     source_note = source / "workspace" / "note.txt"
     preview_note = preview / "workspace" / "note.txt"
     assert source_note.stat().st_ino != preview_note.stat().st_ino

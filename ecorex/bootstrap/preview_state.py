@@ -72,7 +72,9 @@ def prepare_preview_state(
         if source_database.exists():
             target_database.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             _copy_database_snapshot(source_database, target_database)
-            observability_rows_removed = _clear_derived_observability(target_database)
+            observability_rows_removed, managed_session_cleared = (
+                _clear_preview_bound_state(target_database)
+            )
             size = target_database.stat().st_size
             counters["files"] += 1
             counters["bytes"] += size
@@ -81,6 +83,7 @@ def prepare_preview_state(
         else:
             database_sha256 = hashlib.sha256(b"").hexdigest()
             observability_rows_removed = {}
+            managed_session_cleared = False
 
         _replace_data_roots(preview, staging, snapshot_id)
         receipt = {
@@ -91,6 +94,7 @@ def prepare_preview_state(
             "file_count": counters["files"],
             "size_bytes": counters["bytes"],
             "observability_rows_removed": observability_rows_removed,
+            "managed_session_cleared": managed_session_cleared,
             "created_at": (
                 datetime.now(UTC)
                 .replace(microsecond=0)
@@ -105,8 +109,8 @@ def prepare_preview_state(
         raise
 
 
-def _clear_derived_observability(database_path: Path) -> dict[str, int]:
-    """Keep preview from replaying live telemetry encrypted by the OS vault."""
+def _clear_preview_bound_state(database_path: Path) -> tuple[dict[str, int], bool]:
+    """Detach copied state that depends on credentials excluded from preview."""
 
     connection = sqlite3.connect(database_path)
     try:
@@ -123,17 +127,32 @@ def _clear_derived_observability(database_path: Path) -> dict[str, int]:
             table: int(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
             for table in tables
         }
+        session_cleared = False
+        if "managed_session_state" in present:
+            session = connection.execute(
+                "SELECT active_intent_id,pending_intent_id "
+                "FROM managed_session_state WHERE singleton=1"
+            ).fetchone()
+            session_cleared = bool(session and (session[0] or session[1]))
         connection.execute("BEGIN IMMEDIATE")
         try:
             for table in tables:
                 connection.execute(f'DELETE FROM "{table}"')
+            if session_cleared:
+                connection.execute(
+                    "UPDATE managed_session_state SET generation=generation+1, "
+                    "active_intent_id=NULL, pending_intent_id=NULL WHERE singleton=1"
+                )
             connection.commit()
         except BaseException:
             connection.rollback()
             raise
         if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise PreviewStateError("Runtime acceptance database is invalid")
-        return {table: count for table, count in removed.items() if count}
+        return (
+            {table: count for table, count in removed.items() if count},
+            session_cleared,
+        )
     finally:
         connection.close()
 

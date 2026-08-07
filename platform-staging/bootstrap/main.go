@@ -33,6 +33,7 @@ import (
 const (
 	maxIndexBytes      = 256 * 1024
 	maxManifestBytes   = 1024 * 1024
+	maxEvidenceBytes   = 16 * 1024 * 1024
 	maxBootstrapBytes  = 10 * 1024 * 1024
 	maxCoreBytes       = 150 * 1024 * 1024
 	maxPackBytes       = 500 * 1024 * 1024
@@ -47,6 +48,7 @@ var (
 	sha256Pattern       = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	stableSemverPattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})$`)
 	semverPattern       = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
+	artifactKindPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,63}$`)
 	errProductLocked    = errors.New("another EcoreX install or Runtime is active")
 )
 
@@ -206,6 +208,33 @@ type manifest struct {
 	Signature     signature  `json:"signature"`
 }
 
+type localReleaseMetadataArtifact struct {
+	ArtifactID   string    `json:"artifact_id"`
+	Kind         string    `json:"kind"`
+	Platform     string    `json:"platform"`
+	Architecture string    `json:"architecture"`
+	FileName     string    `json:"file_name"`
+	SizeBytes    int64     `json:"size_bytes"`
+	SHA256       string    `json:"sha256"`
+	Signature    signature `json:"signature"`
+}
+
+type localReleaseMetadata struct {
+	SchemaVersion              int                            `json:"schema_version"`
+	ReleaseID                  string                         `json:"release_id"`
+	Version                    string                         `json:"version"`
+	Channel                    string                         `json:"channel"`
+	CreatedAt                  string                         `json:"created_at"`
+	BuildDigest                string                         `json:"build_digest"`
+	Manifest                   string                         `json:"manifest"`
+	ManifestSHA256             string                         `json:"manifest_sha256"`
+	ManifestSignature          signature                      `json:"manifest_signature"`
+	SBOM                       string                         `json:"sbom"`
+	SBOMSHA256                 string                         `json:"sbom_sha256"`
+	Artifacts                  []localReleaseMetadataArtifact `json:"artifacts"`
+	PythonDependencyLockSHA256 string                         `json:"python_dependency_lock_sha256,omitempty"`
+}
+
 // Field order is deliberately lexical to match Python sort_keys=True.
 type canonicalManifest struct {
 	Artifacts     []canonicalArtifact `json:"artifacts"`
@@ -243,13 +272,15 @@ type installResult struct {
 }
 
 type previewStateReceipt struct {
-	SchemaVersion  int    `json:"schema_version"`
-	Status         string `json:"status"`
-	SnapshotID     string `json:"snapshot_id"`
-	DatabaseSHA256 string `json:"database_sha256"`
-	FileCount      int64  `json:"file_count"`
-	SizeBytes      int64  `json:"size_bytes"`
-	CreatedAt      string `json:"created_at"`
+	SchemaVersion            int              `json:"schema_version"`
+	Status                   string           `json:"status"`
+	SnapshotID               string           `json:"snapshot_id"`
+	DatabaseSHA256           string           `json:"database_sha256"`
+	FileCount                int64            `json:"file_count"`
+	SizeBytes                int64            `json:"size_bytes"`
+	ObservabilityRowsRemoved map[string]int64 `json:"observability_rows_removed"`
+	ManagedSessionCleared    bool             `json:"managed_session_cleared"`
+	CreatedAt                string           `json:"created_at"`
 }
 
 type runtimeOwnerReceipt struct {
@@ -587,6 +618,9 @@ func loadLocalRelease(localRelease string, keys map[string]ed25519.PublicKey, fl
 		}
 		selected = append(selected, item)
 	}
+	if err := validateLocalReleaseEvidence(releaseDir, manifestBytes, &release); err != nil {
+		return "", "", nil, manifest{}, nil, err
+	}
 	required := map[string]bool{}
 	for _, item := range selected {
 		required[item.FileName] = true
@@ -608,7 +642,9 @@ func loadLocalRelease(localRelease string, keys map[string]ed25519.PublicKey, fl
 	}
 	observed := map[string]bool{}
 	for _, entry := range entries {
-		if entry.Name() == "release-manifest.json" && !entry.IsDir() {
+		if (entry.Name() == "release-manifest.json" ||
+			entry.Name() == "release-metadata.json" ||
+			entry.Name() == "sbom.cdx.json") && !entry.IsDir() {
 			continue
 		}
 		item, signed := byFileName[entry.Name()]
@@ -624,6 +660,48 @@ func loadLocalRelease(localRelease string, keys map[string]ed25519.PublicKey, fl
 		}
 	}
 	return releaseDir, manifestPath, manifestBytes, release, selected, nil
+}
+
+func validateLocalReleaseEvidence(releaseDir string, manifestBytes []byte, release *manifest) error {
+	metadataBytes, err := readStableRegularFile(filepath.Join(releaseDir, "release-metadata.json"), maxEvidenceBytes)
+	if err != nil {
+		return fmt.Errorf("local release evidence verification failed")
+	}
+	var metadata localReleaseMetadata
+	if decodeExact(metadataBytes, &metadata) != nil ||
+		metadata.SchemaVersion != 1 ||
+		metadata.ReleaseID != release.ReleaseID ||
+		metadata.Version != release.Version ||
+		metadata.Channel != release.Channel ||
+		metadata.CreatedAt != release.CreatedAt ||
+		metadata.BuildDigest != release.BuildDigest ||
+		metadata.Manifest != "release-manifest.json" ||
+		metadata.ManifestSHA256 != sha256Hex(manifestBytes) ||
+		metadata.ManifestSignature != release.Signature ||
+		metadata.SBOM != "sbom.cdx.json" ||
+		!sha256Pattern.MatchString(metadata.SBOMSHA256) ||
+		len(metadata.Artifacts) != len(release.Artifacts) ||
+		(metadata.PythonDependencyLockSHA256 != "" && !sha256Pattern.MatchString(metadata.PythonDependencyLockSHA256)) {
+		return fmt.Errorf("local release evidence verification failed")
+	}
+	for position, item := range release.Artifacts {
+		record := metadata.Artifacts[position]
+		if record.ArtifactID != item.ArtifactID ||
+			!artifactKindPattern.MatchString(record.Kind) ||
+			record.Platform != item.Platform ||
+			record.Architecture != item.Architecture ||
+			record.FileName != item.FileName ||
+			record.SizeBytes != item.SizeBytes ||
+			record.SHA256 != item.SHA256 ||
+			record.Signature != item.Signature {
+			return fmt.Errorf("local release evidence verification failed")
+		}
+	}
+	sbomBytes, err := readStableRegularFile(filepath.Join(releaseDir, metadata.SBOM), maxEvidenceBytes)
+	if err != nil || sha256Hex(sbomBytes) != metadata.SBOMSHA256 {
+		return fmt.Errorf("local release evidence verification failed")
+	}
+	return nil
 }
 
 func localManifestDiscovery(value *manifest) indexRelease {
@@ -2649,6 +2727,11 @@ func preparePreviewState(coreRoot, sourceRoot, previewRoot string) error {
 	}
 	if _, err := parseCanonicalUTCSecond(receipt.CreatedAt); err != nil {
 		return fmt.Errorf("isolated Runtime acceptance checkpoint is invalid")
+	}
+	for table, rows := range receipt.ObservabilityRowsRemoved {
+		if !safeID.MatchString(table) || rows < 1 {
+			return fmt.Errorf("isolated Runtime acceptance checkpoint is invalid")
+		}
 	}
 	return nil
 }

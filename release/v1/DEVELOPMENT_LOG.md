@@ -573,3 +573,49 @@ runner commands (`pip` and `node`); installing the digest-locked Bootstrap
 packaging tools into the disposable Python 3.11 tree and supplying the pinned
 Node path produced the clean full rerun above. No user or system environment was
 modified.
+
+## 2026-08-07 - Local release evidence contract repaired
+
+- Exact-commit candidate preview exposed a release-contract conflict rather
+  than the reported storage failure: the release builder always emits
+  `release-metadata.json` and `sbom.cdx.json`, while Bootstrap's authenticated
+  local-release inventory rejected every file not listed as a signed runtime
+  artifact. The same directory produced by the builder therefore could not be
+  consumed by `--local-release` or `--preview-local-release`.
+- Bootstrap now admits only those two fixed evidence names in addition to the
+  signed manifest/artifacts. Before admission it exact-decodes release metadata,
+  binds its identity, manifest digest/signature and ordered artifact records to
+  the already verified manifest, and recomputes the bounded SBOM digest. Any
+  other extra file, link, directory, changed artifact or changed evidence file
+  remains fail-closed.
+- The controlled error mapper now classifies an invalid local-release inventory
+  as a verification failure instead of claiming disk space or directory
+  permissions are unavailable.
+- The next executable preview reached the data-checkpoint stage and exposed a
+  second strict-contract drift: Python correctly returned the redacted
+  `observability_rows_removed` summary introduced by the no-Keychain preview,
+  but Bootstrap's exact receipt schema had not projected it. Bootstrap now
+  accepts and validates non-empty safe table/count entries, and reports an
+  acceptance-checkpoint failure as such rather than as a generic Runtime start
+  failure.
+- Full Product Runtime startup then found a copied managed-session pointer whose
+  credential was intentionally absent from the preview's in-memory vault. The
+  checkpoint now advances and detaches only the copied active/pending managed
+  session pointers, records `managed_session_cleared`, and leaves the live
+  database unchanged. Conversations, projects, artifacts and other user state
+  remain in the preview; authentication is explicitly unavailable there.
+- The underlying active-session read path also leaked a vault `KeyError` when
+  an OS credential had disappeared while its durable session record remained.
+  Active reads now project that condition as controlled `SessionUnavailable`;
+  the pending-install recovery path alone retains missing-material detection so
+  it can abort the incomplete two-phase install deterministically.
+
+Focused verification at this checkpoint:
+
+```text
+Go Bootstrap: go test -mod=readonly ./... passed
+Static local-release fail-closed contract: 1 passed
+Preview/session focused Python slice: 18 passed
+Ruff focused check: passed
+Diff whitespace check: passed
+```

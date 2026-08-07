@@ -20,6 +20,7 @@ from ecorex.session import (
     Ed25519SessionLeaseVerifier,
     ManagedSessionLeaseClaims,
     ManagedSessionService,
+    SessionUnavailable,
     SessionLeaseSignature,
     SignedManagedSessionLease,
     token_digest,
@@ -90,6 +91,20 @@ class LocalArtifactLauncher:
 
     def launch(self, action, target) -> None:
         self.calls.append((action.value, target.kind, target.value))
+
+
+def test_missing_active_vault_material_is_a_controlled_unavailable_session(
+    tmp_path,
+) -> None:
+    private, public = _keys()
+    now = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    vault = Vault()
+    service = _service(tmp_path / "runtime.db", public, MutableClock(now), vault)
+    _install(service, _lease(private, now=now))
+    vault.values.clear()
+
+    with pytest.raises(SessionUnavailable, match="credential is unavailable"):
+        service.read_snapshot()
 
 
 def test_unauthenticated_managed_runtime_closes_gateway_without_worker(

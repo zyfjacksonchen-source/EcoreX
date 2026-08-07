@@ -367,7 +367,8 @@ class ManagedSessionService:
         if pending is not None:
             try:
                 access_token, refresh_token = self._read_credentials(
-                    pending.credential_ref
+                    pending.credential_ref,
+                    missing_is_unavailable=False,
                 )
             except KeyError:
                 if self._abort(pending, "vault_material_missing"):
@@ -491,11 +492,20 @@ class ManagedSessionService:
         )
         require_verified(verdict)
 
-    def _read_credentials(self, credential_ref: str) -> tuple[str, str]:
+    def _read_credentials(
+        self,
+        credential_ref: str,
+        *,
+        missing_is_unavailable: bool = True,
+    ) -> tuple[str, str]:
         try:
             material = self.vault.get(credential_ref)
         except KeyError:
-            raise
+            if not missing_is_unavailable:
+                raise
+            raise SessionUnavailable(
+                "managed session credential is unavailable"
+            ) from None
         except Exception:
             raise SessionVaultError(
                 "managed session credential vault is unavailable"
