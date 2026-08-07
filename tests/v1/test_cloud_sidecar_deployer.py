@@ -285,7 +285,7 @@ def test_artifact_manifest_is_bound_to_expected_source_and_lock(tmp_path: Path) 
         )
 
 
-def test_v030_accepts_only_the_retired_v10_internal_release_line(
+def test_v03x_accepts_only_the_retired_v10_internal_release_line(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(deployment, "PRODUCT_VERSION", "0.3.0")
@@ -294,6 +294,8 @@ def test_v030_accepts_only_the_retired_v10_internal_release_line(
     deployment._validate_artifact(spec, historical_release=True)
     assert deployment._historical_product_version_is_compatible("1.0.0")
     assert not deployment._historical_product_version_is_compatible("1.0.18")
+    monkeypatch.setattr(deployment, "PRODUCT_VERSION", "0.3.2")
+    assert deployment._historical_product_version_is_compatible("1.0.0")
 
 
 def test_transition_release_uses_its_signed_source_commit_not_target_spec(

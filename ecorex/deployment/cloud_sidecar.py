@@ -582,7 +582,9 @@ def _historical_product_version_is_compatible(value: object) -> bool:
     current = str(PRODUCT_VERSION)
     parsed = _product_version_key(version)
     return parsed <= _product_version_key(current) or (
-        current == "0.3.0" and parsed[:2] == (1, 0) and parsed[2] <= 17
+        _product_version_key(current)[:2] == (0, 3)
+        and parsed[:2] == (1, 0)
+        and parsed[2] <= 17
     )
 
 
