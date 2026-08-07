@@ -742,18 +742,18 @@ class BootstrapCompanionInstaller:
             transaction_id=transaction_id,
         )
         if existing_record is not None:
+            existing_entry = _record_entry_path(
+                existing_record,
+                desktop,
+                self.platform,
+            )
             if (
                 existing_record["state"] in {"prepared", "committed"}
                 and existing_record["release_id"] == manifest.release_id
-                and _entry_digest(
-                    _record_entry_path(
-                        existing_record,
-                        desktop,
-                        self.platform,
-                    ),
-                    self.platform,
+                and _entry_matches_receipt(
+                    existing_entry,
+                    existing_record["new_receipt"],
                 )
-                == existing_record["new_digest"]
             ):
                 if existing_record["state"] == "committed":
                     self._remove_superseded_receipt_entry(
@@ -774,11 +774,7 @@ class BootstrapCompanionInstaller:
                         existing_record,
                         desktop=desktop,
                     )
-                return _record_entry_path(
-                    existing_record,
-                    desktop,
-                    self.platform,
-                )
+                return existing_entry
             if existing_record["state"] in {
                 "preparing",
                 "prepared",
@@ -793,6 +789,13 @@ class BootstrapCompanionInstaller:
                     existing_record,
                     desktop=desktop,
                 )
+            elif (
+                existing_record["state"] == "committed"
+                and existing_record["release_id"] == manifest.release_id
+            ):
+                # The user may remove a committed shortcut. Reuse this repair
+                # transaction to recreate it without touching user-owned files.
+                pass
             else:
                 raise BootstrapCompanionError(
                     "Bootstrap desktop activation transaction was already resolved"

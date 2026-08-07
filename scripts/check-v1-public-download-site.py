@@ -133,11 +133,12 @@ def main() -> int:
     _require(
         "<title>e-Mate 下载与安装</title>" in html
         and "<strong>选择系统</strong>" in html
-        and "<strong>复制 npm 命令</strong>" in html
+        and "<strong>复制安装命令</strong>" in html
         and "<strong>粘贴并执行</strong>" in html
         and "点击对应卡片中的“复制命令”。" in html
-        and "npm 会从国内 GitHub 镜像下载" in html
-        and "安装完成后自动打开 e-Mate 并创建桌面快捷方式。" in html,
+        and "不需要预装 npm" in html
+        and "安装完成后自动打开 e-Mate 并创建桌面快捷方式。" in html
+        and "命令会从国内 GitHub 镜像下载" in html,
         "public HTML must present the terminal copy-and-run installation flow",
         errors,
     )
@@ -166,6 +167,17 @@ def main() -> int:
 
     if len(scripts) == 1:
         javascript = scripts[0].read_text(encoding="utf-8")
+        _require(
+            "npm exec" not in javascript
+            and "ecorex-bootstrap" in javascript[
+                javascript.index("export function terminalCommand"):
+                javascript.index("function appendTerminalCommand")
+            ]
+            and "extension-cas" in javascript
+            and "targetFromPlatformSignals" in javascript,
+            "public install commands must use native shells and Mac detection must fail safe",
+            errors,
+        )
         _require(
             "export async function verifyManifestBytes" in javascript
             and "await sha256Hex(payload" in javascript

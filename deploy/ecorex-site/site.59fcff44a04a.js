@@ -432,14 +432,43 @@ function setTheme(theme) {
   if (icon) icon.textContent = theme === "dark" ? "☀" : "◐";
 }
 
-function detectTarget() {
-  const source = `${navigator.platform || ""} ${navigator.userAgent || ""}`.toLowerCase();
+export function targetFromPlatformSignals({ source = "", architecture = "", renderer = "" }) {
+  source = String(source).toLowerCase();
+  architecture = String(architecture).toLowerCase();
+  renderer = String(renderer).toLowerCase();
   if (/mac|iphone|ipad|ipod/.test(source)) {
-    if (/arm64|aarch64|apple silicon/.test(source)) return "bootstrap-macos-arm64";
-    if (/x86_64|x86-64|intel mac/.test(source)) return "bootstrap-macos-x64";
+    if (
+      /(?:^|\W)(?:arm|arm64|aarch64)(?:\W|$)|apple silicon/.test(`${source} ${architecture}`)
+      || /apple (?:m[1-9]|a[1-9][0-9])|apple gpu/.test(renderer)
+    ) return "bootstrap-macos-arm64";
+    if (/x86_64|x86-64|amd64/.test(`${source} ${architecture}`)) {
+      return "bootstrap-macos-x64";
+    }
+    // Safari reports MacIntel on Apple Silicon for compatibility. An
+    // ambiguous Mac must not be labelled Intel and given the wrong command.
     return null;
   }
   return /win/.test(source) ? "bootstrap-windows-x64" : null;
+}
+
+async function detectTarget() {
+  const source = `${navigator.platform || ""} ${navigator.userAgent || ""}`;
+  let architecture = "";
+  try {
+    const hints = await navigator.userAgentData?.getHighEntropyValues?.(["architecture"]);
+    architecture = hints?.architecture || "";
+  } catch {
+    // Architecture hints are optional and deliberately unavailable in Safari.
+  }
+  let renderer = "";
+  try {
+    const context = document.createElement("canvas").getContext("webgl");
+    const extension = context?.getExtension("WEBGL_debug_renderer_info");
+    renderer = extension ? context.getParameter(extension.UNMASKED_RENDERER_WEBGL) : "";
+  } catch {
+    // WebGL may be disabled; ambiguous Macs remain unlabelled instead of wrong.
+  }
+  return targetFromPlatformSignals({ source, architecture, renderer });
 }
 
 export function wrappedCarouselIndex(index, itemCount) {
@@ -578,10 +607,12 @@ export function terminalCommand(artifact) {
       "Write-Host '[校验] 下载文件已通过完整性检查'",
       "Write-Host '[解压] 正在准备启动组件'",
       "Expand-Archive -LiteralPath $z -DestinationPath $d",
+      "$cas=Join-Path $env:LOCALAPPDATA 'EcoreX\\state\\extension-cas'",
+      "New-Item -ItemType Directory -Force -Path $cas | Out-Null",
       "Write-Host '[启动] 后续 e-Mate 组件会继续显示实时进度'",
       "& (Join-Path $d 'bin\\ecorex-bootstrap.exe')",
     ].join("; ");
-    return `npm exec --call ${powershellLiteral(`powershell.exe -NoProfile -NonInteractive -Command "${script}"`)}`;
+    return script;
   }
   const urls = sourceUrls.map(shellLiteral).join(" ");
   const digest = shellLiteral(artifact.sha256);
@@ -592,16 +623,18 @@ export function terminalCommand(artifact) {
     "ok=0",
     "i=0",
     "printf '\\ne-Mate 安装准备\\n'",
-    "for u in \"${urls[@]}\"; do i=$((i+1)); rm -f \"$z\"; printf '[下载] 下载源 %s/%s，将显示百分比、速度和剩余时间\\n' \"$i\" \"${#urls[@]}\"; if curl --fail --location --retry 4 --retry-all-errors --connect-timeout 15 --output \"$z\" \"$u\" && printf '%s  %s\\n' " + digest + " \"$z\" | shasum -a 256 -c -; then ok=1; break; fi; printf '[切换] 当前下载源未完成，正在尝试下一来源\\n'; done",
+    "for u in \"${urls[@]}\"; do i=$((i+1)); [ ! -e \"$z\" ] || unlink \"$z\"; printf '[下载] 下载源 %s/%s，将显示百分比、速度和剩余时间\\n' \"$i\" \"${#urls[@]}\"; if curl --fail --location --retry 4 --retry-all-errors --connect-timeout 15 --output \"$z\" \"$u\" && printf '%s  %s\\n' " + digest + " \"$z\" | shasum -a 256 -c -; then ok=1; break; fi; printf '[切换] 当前下载源未完成，正在尝试下一来源\\n'; done",
     "test \"$ok\" -eq 1",
     "printf '[校验] 下载文件已通过完整性检查\\n'",
     "printf '[解压] 正在准备启动组件\\n'",
     'ditto -x -k "$z" "$d"',
     'chmod +x "$d/bin/ecorex-bootstrap"',
+    'mkdir -p "$HOME/Library/Application Support/EcoreX/state/extension-cas"',
+    'chmod 700 "$HOME/Library/Application Support/EcoreX/state/extension-cas"',
     "printf '[启动] 后续 e-Mate 组件会继续显示实时进度\\n'",
     '"$d/bin/ecorex-bootstrap"',
   ].join(" && ");
-  return `npm exec --call ${shellLiteral(script)}`;
+  return script;
 }
 
 function appendTerminalCommand(article, artifact) {
@@ -641,7 +674,7 @@ function renderArtifactCard(grid, release, artifact, recommended) {
   if (recommended) article.append(createElement("span", "recommend-badge", "当前设备"));
   article.append(createElement("span", "platform-icon", icon));
   article.append(createElement("h3", "", title));
-  article.append(createElement("small", "card-version", `v${release.version}`));
+  article.append(createElement("small", "card-version", `安装器 v${release.version}`));
   article.append(createElement("p", "", body));
   article.append(createElement(
     "p",
@@ -653,7 +686,7 @@ function renderArtifactCard(grid, release, artifact, recommended) {
   grid.append(article);
 }
 
-function renderIndex(index, manifestCheck = null) {
+function renderIndex(index, manifestCheck = null, recommended = null) {
   const grid = document.querySelector("[data-downloads]");
   if (!grid) return;
   grid.replaceChildren();
@@ -677,8 +710,6 @@ function renderIndex(index, manifestCheck = null) {
   document.querySelectorAll("[data-version]").forEach((node) => {
     node.textContent = release.version;
   });
-  const siteVersion = document.querySelector("[data-site-version]");
-  if (siteVersion) siteVersion.textContent = `v${release.version}`;
   const updated = document.querySelector("[data-updated]");
   if (updated) updated.textContent = release.createdAt.slice(0, 10);
   const manifestLink = document.querySelector("[data-manifest-link]");
@@ -686,7 +717,6 @@ function renderIndex(index, manifestCheck = null) {
     manifestLink.href = release.manifest.sources[0].url;
     manifestLink.hidden = false;
   }
-  const recommended = detectTarget();
   const ordered = [...release.artifacts].sort((left, right) => (
     left.artifactId === recommended ? -1 : right.artifactId === recommended ? 1 : 0
   ));
@@ -747,11 +777,11 @@ if (typeof document !== "undefined") {
     setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
   });
   setupRobotCarousel();
-  loadIndex()
-    .then((index) => {
+  Promise.all([loadIndex(), detectTarget()])
+    .then(([index, recommended]) => {
       // Discovery must remain usable when a release origin does not grant
       // browser CORS. The downloaded Bootstrap is the signature authority.
-      renderIndex(index, null);
+      renderIndex(index, null, recommended);
       if (index.status === "published") {
         verifyManifestBytes(index.release.manifest)
           .then((manifestCheck) => {

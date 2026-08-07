@@ -1318,6 +1318,7 @@ func ensureRuntimeDataDirectories(root string) error {
 	}
 	directories := []string{
 		filepath.Join(rootAbsolute, "state"),
+		filepath.Join(rootAbsolute, "state", "extension-cas"),
 		filepath.Join(rootAbsolute, "workspace"),
 	}
 	for _, directory := range directories {

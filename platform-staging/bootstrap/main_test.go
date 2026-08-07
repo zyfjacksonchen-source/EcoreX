@@ -185,7 +185,7 @@ func TestRuntimeDataDirectoriesAreProvisionedBeforeFirstHealth(t *testing.T) {
 	if err := ensureRuntimeDataDirectories(root); err != nil {
 		t.Fatalf("Runtime data directories were not provisioned: %v", err)
 	}
-	for _, name := range []string{"state", "workspace"} {
+	for _, name := range []string{"state", filepath.Join("state", "extension-cas"), "workspace"} {
 		path := filepath.Join(root, name)
 		metadata, err := os.Lstat(path)
 		resolved, resolveErr := filepath.EvalSymlinks(path)

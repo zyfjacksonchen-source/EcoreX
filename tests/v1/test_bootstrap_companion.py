@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 
 from cryptography.hazmat.primitives import serialization
@@ -893,6 +894,45 @@ def test_macos_fallback_app_and_receipt_owned_removal(tmp_path: Path) -> None:
     assert installer.remove_desktop_entry() is True
     assert not fallback.exists()
     assert (user_app / "user.txt").read_text(encoding="utf-8") == "preserve"
+
+
+def test_committed_macos_app_can_be_repaired_after_it_is_removed(
+    tmp_path: Path,
+) -> None:
+    release_key = Ed25519PrivateKey.generate()
+    publication_key = Ed25519PrivateKey.generate()
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    root = tmp_path / "install"
+    built, verifier, fetcher = _built_bootstrap(
+        tmp_path,
+        platform="macos",
+        architecture="arm64",
+        release_key=release_key,
+        publication_key=publication_key,
+        suffix="repair-missing-app",
+    )
+    installer = BootstrapCompanionInstaller(
+        root,
+        platform="macos",
+        architecture="arm64",
+        verifier=verifier,
+        fetcher=fetcher,
+        desktop_directory=desktop,
+    )
+    transaction_id = "9" * 32
+    transaction = root / "transactions" / transaction_id
+    _prepare(installer, built, transaction_id)
+    installer.commit_activation(transaction_id)
+    entry = desktop / "e-Mate.app"
+    shutil.rmtree(entry)
+
+    repaired = installer.prepare_activation(built.manifest, transaction)
+    installer.commit_activation(transaction_id)
+
+    assert repaired.is_file()
+    assert entry.is_dir()
+    assert installer.remove_desktop_entry() is True
 
 
 def test_rollback_reenters_after_backup_restore_crash(

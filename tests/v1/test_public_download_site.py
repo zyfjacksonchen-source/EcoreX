@@ -44,15 +44,17 @@ def test_public_download_site_makes_one_click_terminal_install_primary() -> None
     assert 'aria-label="e-Mate v0.3.2"' in html
     assert 'class="brand-mark"' in html
     assert 'class="brand-logo"' not in html
-    assert '<span class="brand-version" data-site-version>v0.3.1</span>' in html
+    assert '<span class="brand-version" data-site-version>v0.3.2</span>' in html
     assert ">EcoreX<" not in html
     assert 'aria-label="EcoreX' not in html
     assert "<strong>选择系统</strong>" in html
-    assert "<strong>复制 npm 命令</strong>" in html
+    assert "<strong>复制安装命令</strong>" in html
     assert "<strong>粘贴并执行</strong>" in html
     assert "点击对应卡片中的“复制命令”。" in html
-    assert "npm 会从国内 GitHub 镜像下载" in html
+    assert "不需要预装 npm" in html
+    assert "<span>安装器版本</span>" in html
     assert "安装完成后自动打开 e-Mate 并创建桌面快捷方式。" in html
+    assert "命令会从国内 GitHub 镜像下载" in html
     assert all(
         technical_term not in html
         for technical_term in ("Bootstrap", "SHA-256", "Ed25519")
@@ -62,6 +64,7 @@ def test_public_download_site_makes_one_click_terminal_install_primary() -> None
     assert 'createElement("button", "", "复制命令")' in javascript
     assert "await copyText(command);" in javascript
     assert "appendTerminalCommand(article, artifact);" in javascript
+    assert '`安装器 v${release.version}`' in javascript
     assert 'createElement("a", "download-link", "下载 EcoreX")' not in javascript
     assert 'createElement("details", "download-help")' not in javascript
 
@@ -222,14 +225,14 @@ const windowsCommand = contract.terminalCommand({
     { url: "https://github.example/EcoreX.zip" },
   ],
 });
-assert.match(windowsCommand, /^npm exec --call /);
-assert.match(windowsCommand, /powershell\.exe -NoProfile -NonInteractive/);
-assert.match(windowsCommand, /curl\.exe/);
+assert.doesNotMatch(windowsCommand, /npm(?:\.cmd)?\s/u);
+assert.match(windowsCommand, /^\$ErrorActionPreference='Stop'/);
+assert.match(windowsCommand, /curl\.exe/u);
 assert.match(windowsCommand, /Write-Host/);
-assert.match(windowsCommand, /速度和剩余时间/);
-assert.match(windowsCommand, /Get-FileHash/);
-assert.match(windowsCommand, /github\.example/);
-assert.match(windowsCommand, /ecorex-bootstrap\.exe/);
+assert.match(windowsCommand, /Get-FileHash/u);
+assert.match(windowsCommand, /github\.example/u);
+assert.match(windowsCommand, /extension-cas/u);
+assert.match(windowsCommand, /ecorex-bootstrap\.exe/u);
 const macCommand = contract.terminalCommand({
   platform: "macos",
   sha256: "b".repeat(64),
@@ -238,12 +241,29 @@ const macCommand = contract.terminalCommand({
     { url: "https://github.example/EcoreX.zip" },
   ],
 });
-assert.match(macCommand, /^npm exec --call /);
-assert.match(macCommand, /curl --fail --location/);
-assert.match(macCommand, /速度和剩余时间/);
-assert.match(macCommand, /shasum -a 256 -c/);
-assert.match(macCommand, /github\.example/);
-assert.match(macCommand, /ecorex-bootstrap/);
+assert.doesNotMatch(macCommand, /npm\s/u);
+assert.match(macCommand, /^d="\$\(mktemp -d\)"/);
+assert.match(macCommand, /curl --fail --location/u);
+assert.match(macCommand, /shasum -a 256 -c/u);
+assert.match(macCommand, /github\.example/u);
+assert.match(macCommand, /extension-cas/u);
+assert.match(macCommand, /ecorex-bootstrap/u);
+
+assert.equal(contract.targetFromPlatformSignals({
+  source: "MacIntel Mozilla/5.0 (Macintosh)",
+  renderer: "Apple A18 Pro",
+}), "bootstrap-macos-arm64");
+assert.equal(contract.targetFromPlatformSignals({
+  source: "MacIntel Mozilla/5.0 (Macintosh)",
+  architecture: "arm",
+}), "bootstrap-macos-arm64");
+assert.equal(contract.targetFromPlatformSignals({
+  source: "MacIntel Mozilla/5.0 (Macintosh; Intel Mac OS X)",
+  architecture: "x86_64",
+}), "bootstrap-macos-x64");
+assert.equal(contract.targetFromPlatformSignals({
+  source: "MacIntel Mozilla/5.0 (Macintosh)",
+}), null);
 
 const oneSource = contract.sourceList(
   [

@@ -95,3 +95,27 @@ Actions/Windows 2022 边界、MSVC 14.44 与 SDK 布局、Microsoft Authenticode
 手动 release 使用一次性内存 Ed25519 发布密钥，仅用于本次服务器侧 artifact
 验签；私钥未落盘，也未加入公开客户端 trust chain。公开下载指针继续保留官方
 发布链，等待后续受保护发布流程生成正式跨平台安装包。
+
+## 2026-08-07 安装与跨版本更新修复
+
+- 生产下载入口撤回了错误的纯网页快捷方式，恢复为无 npm 依赖的原生
+  PowerShell/macOS shell 安装命令；命令预建 `state/extension-cas`，避免旧
+  Bootstrap 在 Runtime 组合阶段失败。
+- Bootstrap 现在会创建 `state/extension-cas`；Go 测试通过。Companion 修复了
+  已提交桌面入口被删除后无法自修复的问题：缺失或不匹配的旧入口不再触发摘要
+  异常，修复事务会重建产品入口且不覆盖用户拥有的同名文件。
+- 本机错误 `e-Mate.webloc` 已移到废纸篓，签名安装槽重建出
+  `e-Mate.app`；`http://127.0.0.1:8765/` 与 `/api/version` 均返回 200，
+  更新状态已回到 `idle`。
+- 误生成的 1.0.7 云 release 与下载 artifact 已从生产删除；没有运行进程、
+  systemd、Nginx、Git tag 或当前指针依赖它。生产 Cloud/Web/下载指针仍分别为
+  v0.3.2、v0.3.2 和兼容安装 hotfix，四个云服务均返回 ready。
+- 新增 0.3.2→1.0.0 跨版本门禁：Windows x64、macOS arm64、macOS x64 均
+  验证下载、激活、重启请求和新版本启动收敛；浏览器 handoff 等待 1.0.0
+  Runtime 健康后使用 `location.replace` 打开最新版页面。
+- 聚焦回归：Python `39 passed, 8 skipped`；浏览器 handoff Node test 通过；
+  Bootstrap Go tests 通过；公开下载站 `5 passed, 1 skipped`。
+
+1.0.0 当前仍是待构建、待签名、待发布目标。跨版本在线更新只有在 1.0.0
+沿用/轮换为 0.3.2 已信任的 release/publication key、三个目标安装包齐备并且
+公开指针原子晋级后才允许对外宣称可用。

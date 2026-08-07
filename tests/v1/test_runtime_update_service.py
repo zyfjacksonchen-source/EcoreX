@@ -70,12 +70,18 @@ def _package(version: str) -> bytes:
     return stream.getvalue()
 
 
-def _manifest(payload: bytes) -> ReleaseManifest:
+def _manifest(
+    payload: bytes,
+    *,
+    version: str = "1.0.1",
+    platform: str = "windows",
+    architecture: str = "x64",
+) -> ReleaseManifest:
     return ReleaseManifest(
         schema_version=1,
-        release_id="release-1.0.1-stable",
-        version="1.0.1",
-        build_digest=hashlib.sha256(b"build-1.0.1").hexdigest(),
+        release_id=f"release-{version}-stable",
+        version=version,
+        build_digest=hashlib.sha256(f"build-{version}".encode()).hexdigest(),
         channel=ReleaseChannel.STABLE,
         created_at="2026-07-10T12:00:00+08:00",
         sources=(
@@ -85,9 +91,9 @@ def _manifest(payload: bytes) -> ReleaseManifest:
         ),
         artifacts=(
             ReleaseArtifact(
-                artifact_id="core-windows-x64",
-                platform="windows",
-                architecture="x64",
+                artifact_id=f"core-{platform}-{architecture}",
+                platform=platform,
+                architecture=architecture,
                 file_name="ecorex-core.zip",
                 size_bytes=len(payload),
                 sha256=hashlib.sha256(payload).hexdigest(),
@@ -98,7 +104,14 @@ def _manifest(payload: bytes) -> ReleaseManifest:
     )
 
 
-def _coordinator(tmp_path, payload, **kwargs):
+def _coordinator(
+    tmp_path,
+    payload,
+    *,
+    platform: str = "windows",
+    architecture: str = "x64",
+    **kwargs,
+):
     directories = {}
     for source in ("mirror", "github", "cdn"):
         directory = tmp_path / source
@@ -110,8 +123,8 @@ def _coordinator(tmp_path, payload, **kwargs):
         fetcher=LocalSourceFetcher(directories),
         verifier=AcceptingVerifier(),
         health_checker=lambda slot: (slot / "payload/runtime/version.txt").is_file(),
-        host_platform="windows",
-        host_architecture="x64",
+        host_platform=platform,
+        host_architecture=architecture,
         bootstrap_health_confirmation=False,
         **kwargs,
     )
@@ -173,6 +186,58 @@ def test_background_prepare_waits_for_user_then_activation_requests_restart(tmp_
     ).snapshot(can_activate=True)
     assert after_restart.state == "idle"
     assert after_restart.target_version is None
+
+
+@pytest.mark.parametrize(
+    ("platform", "architecture"),
+    (("windows", "x64"), ("macos", "arm64"), ("macos", "x64")),
+)
+def test_v032_can_activate_v100_and_restart_into_the_new_runtime(
+    tmp_path,
+    platform: str,
+    architecture: str,
+) -> None:
+    payload = _package("1.0.0")
+    manifest = _manifest(
+        payload,
+        version="1.0.0",
+        platform=platform,
+        architecture=architecture,
+    )
+    restarts: list[str] = []
+    service = RuntimeUpdateService(
+        tmp_path / "runtime.db",
+        coordinator=_coordinator(
+            tmp_path,
+            payload,
+            platform=platform,
+            architecture=architecture,
+        ),
+        feed=Feed(manifest),
+        artifact_id=f"core-{platform}-{architecture}",
+        current_version="0.3.2",
+        channel=ReleaseChannel.STABLE,
+        platform=platform,
+        architecture=architecture,
+        restart_requester=restarts.append,
+    )
+
+    prepared = asyncio.run(service.check_now())
+    response = asyncio.run(
+        service.activate(
+            transaction_id=prepared.transaction_id,
+            client_request_id=f"activate-v100-{platform}-{architecture}",
+        )
+    )
+
+    assert prepared.target_version == "1.0.0"
+    assert response.restart_scheduled is True
+    assert response.update.requires_refresh is True
+    assert restarts == [prepared.transaction_id]
+    assert UpdateStateRepository(
+        tmp_path / "runtime.db",
+        current_version="1.0.0",
+    ).snapshot(can_activate=True).state == "idle"
 
 
 @pytest.mark.parametrize(
