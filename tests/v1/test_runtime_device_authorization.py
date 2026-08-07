@@ -171,6 +171,7 @@ def _create_product_runtime(
         web_manifest_path=tmp_path / "web-manifest.json",
         trusted_public_keys={"release-test-key": b"k" * 32},
         managed_session_service=session,
+        connector_vault=session.vault,
         device_authorization_service=device,
         session_reload_requester=lambda identity: reloads.append(identity) or True,
         first_install_registration_recorder=registration_recorder,

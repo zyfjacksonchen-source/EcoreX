@@ -11,11 +11,13 @@ import os
 from pathlib import Path
 import secrets
 import shutil
+import sqlite3
 import stat
 import sys
 from typing import Any
 
 from ecorex.runtime.storage_migrations import _copy_database_snapshot
+from ecorex.observability.recovery import OBSERVABILITY_TABLES
 from ecorex.update.download_cache import copy_regular_cow
 
 
@@ -70,6 +72,7 @@ def prepare_preview_state(
         if source_database.exists():
             target_database.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             _copy_database_snapshot(source_database, target_database)
+            observability_rows_removed = _clear_derived_observability(target_database)
             size = target_database.stat().st_size
             counters["files"] += 1
             counters["bytes"] += size
@@ -77,6 +80,7 @@ def prepare_preview_state(
             database_sha256 = _sha256_file(target_database)
         else:
             database_sha256 = hashlib.sha256(b"").hexdigest()
+            observability_rows_removed = {}
 
         _replace_data_roots(preview, staging, snapshot_id)
         receipt = {
@@ -86,6 +90,7 @@ def prepare_preview_state(
             "database_sha256": database_sha256,
             "file_count": counters["files"],
             "size_bytes": counters["bytes"],
+            "observability_rows_removed": observability_rows_removed,
             "created_at": (
                 datetime.now(UTC)
                 .replace(microsecond=0)
@@ -98,6 +103,39 @@ def prepare_preview_state(
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
+
+
+def _clear_derived_observability(database_path: Path) -> dict[str, int]:
+    """Keep preview from replaying live telemetry encrypted by the OS vault."""
+
+    connection = sqlite3.connect(database_path)
+    try:
+        present = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        tables = tuple(
+            table for table in OBSERVABILITY_TABLES if table in present
+        )
+        removed = {
+            table: int(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
+            for table in tables
+        }
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            for table in tables:
+                connection.execute(f'DELETE FROM "{table}"')
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise PreviewStateError("Runtime acceptance database is invalid")
+        return {table: count for table, count in removed.items() if count}
+    finally:
+        connection.close()
 
 
 def _copy_tree(

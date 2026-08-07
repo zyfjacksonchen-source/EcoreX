@@ -363,12 +363,15 @@ class RuntimeUpdateService:
         signal_source: UpdateSignalSource | None = None,
         restart_requester: RestartRequester | None = None,
         poll_interval_seconds: float = 300,
+        automatic_prepare: bool = True,
         initialize: bool = True,
     ) -> None:
         if not artifact_id:
             raise ValueError("update artifact_id is required")
         if not 5 <= poll_interval_seconds <= 86_400:
             raise ValueError("update poll interval must be between 5 seconds and one day")
+        if not isinstance(automatic_prepare, bool):
+            raise TypeError("automatic_prepare must be boolean")
         self.coordinator = coordinator
         self.feed = feed
         self.artifact_id = artifact_id
@@ -379,6 +382,7 @@ class RuntimeUpdateService:
         self.signal_source = signal_source
         self.restart_requester = restart_requester
         self.poll_interval_seconds = poll_interval_seconds
+        self.automatic_prepare = automatic_prepare
         self.repository = UpdateStateRepository(
             database,
             current_version=current_version,
@@ -529,42 +533,105 @@ class RuntimeUpdateService:
                     event_type="update.available",
                     **identity,
                 )
-                await _run_blocking(
-                    self.repository.set,
-                    state="downloading",
-                    event_type="update.download_started",
-                    **identity,
-                )
-                await self._report_state("downloading")
-                authorization_provider = getattr(
-                    self.feed, "rollback_authorization", None
-                )
-                rollback_authorization = (
-                    await _run_blocking(authorization_provider, manifest)
-                    if callable(authorization_provider)
-                    else None
-                )
-                prepared = await _run_blocking(
-                    self.coordinator.prepare_update,
-                    manifest,
-                    self.artifact_id,
-                    rollback_authorization=rollback_authorization,
-                )
-                await self._record_prepared(prepared)
+                if self.automatic_prepare:
+                    await self._prepare_manifest(manifest, identity)
+                else:
+                    await self._report_state("available")
             except Exception as error:
-                current = await _run_blocking(self.snapshot)
-                await _run_blocking(
-                    self.repository.set,
-                    state="failed",
-                    event_type="update.prepare_failed",
-                    target_version=current.target_version,
-                    release_id=current.release_id,
-                    build_digest=current.build_digest,
-                    transaction_id=current.transaction_id,
-                    error_code=_error_code(error),
-                )
-                await self._report_state("failed")
+                await self._record_prepare_failure(error)
             return await _run_blocking(self.snapshot)
+
+    async def prepare_now(self) -> UpdateSnapshot:
+        """Download and stage only after an explicit local user decision."""
+
+        if self._closed:
+            raise UpdateServiceError("Runtime update service is closed")
+        async with self._operation:
+            current = await _run_blocking(self.snapshot)
+            if current.state in {"downloading", "awaiting_user", "activating"}:
+                return current
+            if current.state != "available":
+                raise UpdateStateConflict("no discovered update is awaiting download")
+            try:
+                manifest = await _run_blocking(
+                    self.feed.latest,
+                    channel=self.channel,
+                    platform=self.platform,
+                    architecture=self.architecture,
+                    current_version=self.current_version,
+                    update_state=current.state,
+                )
+                if manifest is None or (
+                    manifest.version,
+                    manifest.release_id,
+                    manifest.build_digest,
+                ) != (
+                    current.target_version,
+                    current.release_id,
+                    current.build_digest,
+                ):
+                    raise UpdateStateConflict(
+                        "discovered update is no longer authorized by the active rollout"
+                    )
+                artifact = manifest.artifact(self.artifact_id)
+                if (
+                    artifact.platform != self.platform
+                    or artifact.architecture != self.architecture
+                ):
+                    raise UpdateServiceError(
+                        "release feed selected the wrong platform artifact"
+                    )
+                await self._prepare_manifest(
+                    manifest,
+                    {
+                        "target_version": current.target_version,
+                        "release_id": current.release_id,
+                        "build_digest": current.build_digest,
+                    },
+                )
+            except Exception as error:
+                await self._record_prepare_failure(error)
+            return await _run_blocking(self.snapshot)
+
+    async def _prepare_manifest(
+        self,
+        manifest: ReleaseManifest,
+        identity: dict[str, str | None],
+    ) -> None:
+        await _run_blocking(
+            self.repository.set,
+            state="downloading",
+            event_type="update.download_started",
+            **identity,
+        )
+        await self._report_state("downloading")
+        authorization_provider = getattr(self.feed, "rollback_authorization", None)
+        rollback_authorization = (
+            await _run_blocking(authorization_provider, manifest)
+            if callable(authorization_provider)
+            else None
+        )
+        prepared = await _run_blocking(
+            self.coordinator.prepare_update,
+            manifest,
+            self.artifact_id,
+            rollback_authorization=rollback_authorization,
+        )
+        await self._record_prepared(prepared)
+
+    async def _record_prepare_failure(self, error: Exception) -> None:
+        current = await _run_blocking(self.snapshot)
+        await _run_blocking(
+            self.repository.set,
+            state="failed",
+            event_type="update.prepare_failed",
+            target_version=current.target_version,
+            release_id=current.release_id,
+            build_digest=current.build_digest,
+            transaction_id=current.transaction_id,
+            error_code=_error_code(error),
+        )
+        await self._report_state("failed")
 
     async def activate(
         self,

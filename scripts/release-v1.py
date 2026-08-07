@@ -669,7 +669,6 @@ def _source_versions(commit: str) -> dict[str, str]:
         match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']\s*$', version_source, re.M)
         package = json.loads(_git_bytes(commit, "desktop/package.json"))
         lock = json.loads(_git_bytes(commit, "desktop/package-lock.json"))
-        cli = _git_bytes(commit, "cli/VERSION").decode("utf-8").strip()
     except (UnicodeError, json.JSONDecodeError):
         raise ReleaseCommandError("release_version_source_invalid") from None
     if match is None or not isinstance(package, dict) or not isinstance(lock, dict):
@@ -683,7 +682,6 @@ def _source_versions(commit: str) -> dict[str, str]:
             if isinstance(lock.get("packages"), dict)
             else ""
         ),
-        "cli": cli,
     }
 
 

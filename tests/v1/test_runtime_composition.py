@@ -15,6 +15,7 @@ from ecorex.capabilities import (
     RuntimeAvailability,
     UnknownModelError,
 )
+from ecorex.connectors import InMemoryCredentialVault
 from ecorex.protocol import CreateThreadRequest, CreateTurnRequest
 from ecorex.runtime import (
     AgentTurnWorker,
@@ -59,6 +60,10 @@ def _headers(*, mutation: bool = False):
 
 def test_bootstrap_and_turns_are_generated_from_backend_catalogs(tmp_path) -> None:
     app, client = _client(tmp_path)
+    assert isinstance(
+        app.state.connector_composition.service.vault,
+        InMemoryCredentialVault,
+    )
     bootstrap = client.get("/api/v1/bootstrap", headers=_headers()).json()
 
     assert bootstrap["models"]["snapshot_id"].startswith("models_")

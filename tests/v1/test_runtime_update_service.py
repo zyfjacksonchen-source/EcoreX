@@ -188,6 +188,34 @@ def test_background_prepare_waits_for_user_then_activation_requests_restart(tmp_
     assert after_restart.target_version is None
 
 
+def test_product_update_waits_for_user_before_downloading(tmp_path) -> None:
+    payload = _package("1.0.1")
+    service = RuntimeUpdateService(
+        tmp_path / "runtime.db",
+        coordinator=_coordinator(tmp_path, payload),
+        feed=Feed(_manifest(payload)),
+        artifact_id="core-windows-x64",
+        current_version="1.0.0",
+        channel=ReleaseChannel.STABLE,
+        platform="windows",
+        architecture="x64",
+        restart_requester=lambda _transaction_id: None,
+        automatic_prepare=False,
+    )
+
+    discovered = asyncio.run(service.check_now())
+
+    assert discovered.state == "available"
+    assert discovered.transaction_id is None
+    assert service.coordinator.slots.pointers().current is None
+
+    prepared = asyncio.run(service.prepare_now())
+
+    assert prepared.state == "awaiting_user"
+    assert prepared.can_activate is True
+    assert prepared.transaction_id
+
+
 @pytest.mark.parametrize(
     ("platform", "architecture"),
     (("windows", "x64"), ("macos", "arm64"), ("macos", "x64")),
@@ -673,6 +701,7 @@ class FakeRuntimeUpdateService:
         self.started = 0
         self.stopped = 0
         self.checks = 0
+        self.prepares = 0
         self.activations = []
         self.value = UpdateSnapshot(
             current_version="1.0.0",
@@ -695,6 +724,17 @@ class FakeRuntimeUpdateService:
 
     async def check_now(self):
         self.checks += 1
+        return self.value
+
+    async def prepare_now(self):
+        self.prepares += 1
+        self.value = self.value.model_copy(
+            update={
+                "state": "awaiting_user",
+                "transaction_id": "transaction-1",
+                "can_activate": True,
+            }
+        )
         return self.value
 
     async def activate(self, *, transaction_id, client_request_id):
@@ -768,3 +808,41 @@ def test_runtime_update_api_is_authenticated_confirmed_and_lifecycle_owned(tmp_p
         assert service.activations == [("transaction-1", "activate-api")]
 
     assert service.stopped == 1
+
+
+def test_runtime_update_check_prepares_only_after_discovery(tmp_path) -> None:
+    service = FakeRuntimeUpdateService()
+    service.value = service.value.model_copy(
+        update={
+            "state": "available",
+            "transaction_id": None,
+            "can_activate": False,
+        }
+    )
+    token = "r" * 43
+    csrf = "c" * 43
+    app = create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "runtime-api-user-update.db",
+            product_version="1.0.0",
+            runtime_bearer_token=token,
+            csrf_token=csrf,
+            webui_origins=("http://testserver",),
+            update_service=service,
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/update/check",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Origin": "http://testserver",
+                "X-EcoreX-CSRF": csrf,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["update"]["state"] == "awaiting_user"
+    assert service.checks == 0
+    assert service.prepares == 1

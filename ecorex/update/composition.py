@@ -59,6 +59,7 @@ class ProductUpdateSettings:
     migration_prepare: Callable[[Path, str], bool] | None = None
     rollforward_guard: Callable[[Path], bool] | None = None
     poll_interval_seconds: float = 300
+    automatic_prepare: bool = True
     download_cache_max_bytes: int = DEFAULT_DOWNLOAD_CACHE_MAX_BYTES
     download_cache_max_age_seconds: float = DEFAULT_DOWNLOAD_CACHE_MAX_AGE_SECONDS
     download_cache_quarantine_age_seconds: float = (
@@ -133,6 +134,8 @@ class ProductUpdateSettings:
             self.pack_content_verifier
         ):
             raise ValueError("pack_content_verifier must be callable")
+        if not isinstance(self.automatic_prepare, bool):
+            raise TypeError("automatic_prepare must be boolean")
         if (self.payload_security_preparer is None) != (
             self.payload_security_attester is None
         ):
@@ -332,6 +335,7 @@ def build_product_update_composition(
             signal_source=signal_source,
             restart_requester=callback,
             poll_interval_seconds=settings.poll_interval_seconds,
+            automatic_prepare=settings.automatic_prepare,
             initialize=initialize,
         )
         return ProductUpdateComposition(

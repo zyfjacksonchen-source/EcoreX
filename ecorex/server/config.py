@@ -54,6 +54,7 @@ from ecorex.integration.dependency_pack_process import (
 from ecorex.integration.pack_python import resolve_pack_python
 from ecorex.connectors import (
     CredentialVault,
+    InMemoryCredentialVault,
     ManagedConnectorGatewayAdapter,
     production_credential_vault,
 )
@@ -983,7 +984,11 @@ def load_product_runtime(
     # Full Runtime startup validates every immutable capability binding and
     # platform vault implementation before it can cross the data barrier.
     try:
-        vault = vault_factory()
+        vault = (
+            InMemoryCredentialVault()
+            if acceptance_preview
+            else vault_factory()
+        )
     except Exception:
         raise ProductRuntimeConfigurationError(
             "Platform credential vault is unavailable",
@@ -1559,6 +1564,7 @@ def _build_update(
                 transaction_id,
             ),
             poll_interval_seconds=config.update.poll_interval_seconds,
+            automatic_prepare=False,
             pack_content_verifier=verify_product_capability_pack,
             payload_security_preparer=(
                 sandbox_security.prepare if sandbox_security is not None else None

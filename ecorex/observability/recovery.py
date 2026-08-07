@@ -24,7 +24,7 @@ from .audit import AuditIntegrityError
 
 
 _UNREADABLE_PAYLOAD_ERROR: Final = "stored audit payload authentication failed"
-_TABLES: Final = (
+OBSERVABILITY_TABLES: Final = (
     "observability_audit_outbox",
     "observability_audit_daily",
     "observability_audit_cursors",
@@ -178,7 +178,7 @@ def _present_tables(connection: sqlite3.Connection) -> tuple[str, ...]:
         "SELECT name FROM sqlite_master WHERE type = 'table'"
     ).fetchall()
     observed = {str(row[0]) for row in rows}
-    return tuple(table for table in _TABLES if table in observed)
+    return tuple(table for table in OBSERVABILITY_TABLES if table in observed)
 
 
 def _row_counts(
@@ -216,6 +216,7 @@ def _sha256_file(path: Path) -> str:
 
 
 __all__ = [
+    "OBSERVABILITY_TABLES",
     "ObservabilityRecoveryReceipt",
     "is_unreadable_observability_error",
     "quarantine_unreadable_observability",

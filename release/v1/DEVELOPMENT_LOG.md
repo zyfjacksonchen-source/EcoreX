@@ -478,3 +478,98 @@ The platform opener requests a distinct browser instance on macOS. Windows keeps
 the normal default-browser opener for now; Runtime roots, ports and origin storage
 are still independent there. No public update pointer or production install was
 changed by this implementation slice.
+
+### Real dual-port smoke test and credential boundary correction
+
+- The signed macOS candidate from commit `19bd299` was started on
+  `127.0.0.1:18765` while the installed 0.3.2 Runtime remained active on
+  `127.0.0.1:8765`. The live slot pointer did not change, the preview checkpoint
+  completed, and the browser rendered the persistent candidate banner with no
+  console warnings or errors. The candidate was stopped immediately when the
+  user requested that no further macOS Keychain prompts appear; this was a smoke
+  test, not final acceptance.
+- That run exposed an implicit credential-boundary defect: constructing the
+  low-level Runtime API without a vault silently discovered the production OS
+  vault, and acceptance-preview composition also invoked the platform-vault
+  factory. Direct/test Runtime composition now uses an in-memory vault when
+  unmanaged and a rejecting vault when managed. Normal product composition is
+  unchanged and must explicitly inject its platform vault.
+- Acceptance preview always receives a process-local in-memory vault and never
+  calls the platform-vault factory. It therefore cannot read or write macOS
+  Keychain credentials and begins unauthenticated unless a future explicit,
+  ephemeral preview credential channel is provided. Avoiding surprise OS
+  credential prompts takes precedence over copying the live login state.
+- Regression coverage asserts both boundaries: the direct Runtime owns an
+  in-memory vault, and the preview product still composes when its supplied
+  platform-vault factory is a function that must never be called.
+
+Focused verification after the correction:
+
+```text
+Runtime composition, agent worker, preview entrypoint and managed product: 4 passed
+```
+
+## 2026-08-07 - Stable CowAgent-derived command contract and user-driven update
+
+- Reviewed CowAgent's `run.sh`, Click entrypoint and process commands at commit
+  `46a9b8762443d6adb0b020326b11854b1588c44a`. Kept its useful fixed lifecycle
+  vocabulary, visible progress, module-entry fallback and self-restart ordering.
+  Rejected its source checkout installer, `git pull`, runtime dependency install
+  and global Git proxy mutation because they make host tools mutable product
+  dependencies and cannot provide signed exact-byte rollback.
+- Froze the e-Mate v1 surface in
+  `release/v1/CLI_AND_MANUAL_UPDATE_CONTRACT.md`. Ordinary users have one
+  extracted platform installer entry and the WebUI; they do not install a CLI,
+  Python, npm, Playwright or Pack dependencies. Bootstrap remains the sole
+  process/install authority.
+- Removed `cli/VERSION` from the v1 release preflight. `ecorex/_version.py` is
+  the product version authority; desktop package/lock versions are required
+  projections. The excluded legacy `cli/` tree is historical source only and
+  cannot define v1 commands, packaging or releases.
+- Product update composition now stops after signed discovery and reports
+  `available`. Download/staging starts only after the user's banner/settings
+  action, using the existing endpoint and signed CoreDelta/full fallback. The
+  banner shows an honest indeterminate progress bar because the protocol has no
+  byte counter; no fake percentage is projected.
+- The user action reserves the new-version window synchronously, then downloads,
+  verifies, stages and activates. After target health is observed it navigates
+  that window to the updated Runtime; popup blocking falls back to the current
+  document. Failure closes the placeholder window, preserves the active slot
+  and shows a controlled error.
+- Acceptance preview no longer touches the OS credential vault. Its copied
+  SQLite checkpoint excludes only derived observability tables that are bound
+  to the live vault key, while source state, conversations, projects and
+  artifacts remain untouched. Preview observability uses its isolated local
+  key, so no macOS Keychain prompt is required.
+
+Focused verification at this checkpoint:
+
+```text
+Ruff: passed
+Python Runtime/update/preview slice: 103 passed, 10 skipped
+TypeScript typecheck: passed
+Update state/handoff tests: 7 passed
+Update WebUI contract tests: 2 passed
+```
+
+Final local gate rerun after the user-driven update and non-platform vault
+fixes:
+
+```text
+Python 3.11.9 full suite: 2703 passed, 55 skipped
+Web Runtime/unit/contract suite: 227 passed
+Playwright Chromium E2E: 51 passed
+Go Bootstrap: go test ./... passed
+Production Web build and signed-bundle structural gate: passed
+Ruff, compile, TypeScript and generated Runtime contracts: passed
+Message/tool continuation/reasoning backend facts: 93 passed
+Web durable-event reducer/timeline/error disclosure: 28 passed
+```
+
+The 55 Python skips are existing explicit platform/privilege/external-service
+conditions. Seven warnings are upstream deprecations plus the intentional
+duplicate-member tamper fixture. The first full run exposed only missing test
+runner commands (`pip` and `node`); installing the digest-locked Bootstrap
+packaging tools into the disposable Python 3.11 tree and supplying the pinned
+Node path produced the clean full rerun above. No user or system environment was
+modified.

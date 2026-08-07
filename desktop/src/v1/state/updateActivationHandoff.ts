@@ -8,6 +8,7 @@ interface UpdateHandoffOptions {
   initialDelayMs: number;
   currentUrl: string;
   replace: (url: string) => void;
+  openUpdatedRuntime?: (url: string) => boolean;
   timeoutMs?: number;
   pollIntervalMs?: number;
 }
@@ -39,7 +40,9 @@ export async function handOffToUpdatedRuntime(options: UpdateHandoffOptions): Pr
   }
   const next = new URL(options.currentUrl);
   next.searchParams.set("emate_updated", options.targetVersion || "latest");
-  // Replace the old document in-place so Back cannot reopen a stale WebUI.
-  options.replace(next.toString());
+  if (!options.openUpdatedRuntime?.(next.toString())) {
+    // Popup blocking falls back to the reliable in-place handoff.
+    options.replace(next.toString());
+  }
   return ready;
 }

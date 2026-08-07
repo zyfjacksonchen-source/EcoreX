@@ -522,6 +522,7 @@ def test_product_settings_inject_cloud_authoritative_session(tmp_path):
     settings = replace(
         _settings(tmp_path, signed),
         managed_session_service=service,
+        connector_vault=service.vault,
         allow_unmanaged_session_for_testing=False,
     )
     app = create_product_app(settings)

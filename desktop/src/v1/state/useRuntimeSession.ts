@@ -1447,22 +1447,47 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
 
   const activateUpdate = useCallback(async () => {
     if (updateBusy) return false;
-    const update = stateRef.current.bootstrap?.update;
-    if (!update?.transaction_id || !update.can_activate) {
-      setUpdateError("新版尚未准备好，暂时不能启用。");
+    let update = stateRef.current.bootstrap?.update;
+    if (!update || !["available", "awaiting_user"].includes(update.state)) {
+      setUpdateError("新版尚未准备好，请重新检查更新。");
       return false;
     }
-    const pending = pendingUpdateActivation.current;
-    const activation = pending?.transactionId === update.transaction_id
-      ? pending
-      : {
-          transactionId: update.transaction_id,
-          clientRequestId: `update_${crypto.randomUUID().replaceAll("-", "")}`,
-        };
-    pendingUpdateActivation.current = activation;
+    let updatedWindow: Window | null = null;
+    try {
+      updatedWindow = window.open(
+        "about:blank",
+        `emate-updated-runtime-${crypto.randomUUID()}`,
+      );
+      if (updatedWindow) {
+        updatedWindow.document.title = "e-Mate 正在更新";
+        updatedWindow.document.body.textContent = "正在下载、校验并安装新版 e-Mate…";
+      }
+    } catch {
+      updatedWindow = null;
+    }
     setUpdateBusy(true);
     setUpdateError(null);
     try {
+      if (update.state === "available") {
+        const prepared = await client.checkUpdate();
+        applyUpdateSnapshot(prepared.update);
+        update = prepared.update;
+      }
+      if (!update.transaction_id || !update.can_activate) {
+        throw new Error(
+          update.state === "failed"
+            ? "更新下载或校验失败，当前版本未受影响，请稍后重试。"
+            : "新版尚未完成校验，暂时不能安装。",
+        );
+      }
+      const pending = pendingUpdateActivation.current;
+      const activation = pending?.transactionId === update.transaction_id
+        ? pending
+        : {
+            transactionId: update.transaction_id,
+            clientRequestId: `update_${crypto.randomUUID().replaceAll("-", "")}`,
+          };
+      pendingUpdateActivation.current = activation;
       const response = await client.activateUpdate(
         activation.transactionId,
         activation.clientRequestId,
@@ -1477,10 +1502,18 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
           initialDelayMs: response.reload_after_ms,
           currentUrl: window.location.href,
           replace: (url) => window.location.replace(url),
+          openUpdatedRuntime: updatedWindow
+            ? (url) => {
+                if (!updatedWindow || updatedWindow.closed) return false;
+                updatedWindow.location.replace(url);
+                return true;
+              }
+            : undefined,
         });
       }
       return true;
     } catch (error) {
+      if (updatedWindow && !updatedWindow.closed) updatedWindow.close();
       setUpdateError(errorMessage(error));
       return false;
     } finally {

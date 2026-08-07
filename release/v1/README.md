@@ -36,3 +36,6 @@ behavioral probe is unavailable, the stage emits a typed failure receipt and
 the Candidate does not sign or publish anything. Core and all six required
 Packs are downloaded and activated as one verified slot; see
 `docs/v1.0/capability-pack-platform-staging.md`.
+
+The stable WebUI-only install, update and manual operator command surface is
+defined in [CLI_AND_MANUAL_UPDATE_CONTRACT.md](CLI_AND_MANUAL_UPDATE_CONTRACT.md).

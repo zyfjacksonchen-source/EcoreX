@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   hasPendingRuntimeUpdate,
+  isRuntimeUpdateInstalling,
   isVerifiedRuntimeUpdateReady,
   runtimeUpdateStatusText,
 } from "./updatePresentation.ts";
@@ -55,10 +56,29 @@ test("only a verified prepared update is eligible for the notification banner", 
 test("settings exposes truthful background and verified phases", () => {
   assert.match(
     runtimeUpdateStatusText({ ...current, state: "downloading", target_version: "1.0.8" }),
-    /后台下载并校验/u,
+    /下载并校验/u,
   );
   assert.match(
     runtimeUpdateStatusText({ ...current, state: "awaiting_user", target_version: "1.0.8" }),
     /已下载并通过校验/u,
+  );
+});
+
+test("install progress is visible only while a pending update is active", () => {
+  assert.equal(
+    isRuntimeUpdateInstalling({ ...current, state: "available", target_version: "1.0.8" }),
+    false,
+  );
+  assert.equal(
+    isRuntimeUpdateInstalling({ ...current, state: "available", target_version: "1.0.8" }, true),
+    true,
+  );
+  assert.equal(
+    isRuntimeUpdateInstalling({ ...current, state: "downloading", target_version: "1.0.8" }),
+    true,
+  );
+  assert.equal(
+    isRuntimeUpdateInstalling({ ...current, state: "failed", target_version: "1.0.8" }, true),
+    false,
   );
 });

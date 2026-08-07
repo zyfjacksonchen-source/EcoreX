@@ -929,7 +929,10 @@ def test_acceptance_preview_keeps_model_and_image_but_disables_background_mutato
         }
 
     product = _stage_product(tmp_path, config_mutator=configure)
-    vault = InMemoryCredentialVault()
+
+    def reject_platform_vault() -> InMemoryCredentialVault:
+        raise AssertionError("acceptance preview must not access the platform vault")
+
     composition = load_product_runtime(
         payload_root=product["payload"],
         host="127.0.0.1",
@@ -938,7 +941,7 @@ def test_acceptance_preview_keeps_model_and_image_but_disables_background_mutato
             "ECOREX_BOOTSTRAPPED": "1",
             "ECOREX_RUNTIME_ACCEPTANCE_PREVIEW": "1",
         },
-        vault_factory=lambda: vault,
+        vault_factory=reject_platform_vault,
         host_platform=product["platform"],
         host_architecture=product["architecture"],
     )
@@ -962,7 +965,7 @@ def test_acceptance_preview_keeps_model_and_image_but_disables_background_mutato
                 "ECOREX_BOOTSTRAPPED": "1",
                 "ECOREX_RUNTIME_ACCEPTANCE_PREVIEW": "attacker",
             },
-            vault_factory=lambda: vault,
+            vault_factory=reject_platform_vault,
             host_platform=product["platform"],
             host_architecture=product["architecture"],
         )

@@ -31,6 +31,12 @@ import {
   THEME_PREFERENCE_KEY,
   type ThemePreference,
 } from "./state/themePreference.ts";
+import {
+  hasPendingRuntimeUpdate,
+  isRuntimeUpdateInstalling,
+  isVerifiedRuntimeUpdateReady,
+  runtimeUpdateStatusText,
+} from "./state/updatePresentation.ts";
 import { serviceReasonMessage } from "./state/userLanguage.ts";
 import "./styles/primitives.css";
 import "./styles/layout.css";
@@ -381,14 +387,12 @@ export function AppV1() {
     bootstrap?.retouch_service.reason,
     "精准修图暂时不可用，请稍后重试。",
   );
-  const updateReady = Boolean(
-    update?.target_version
-    && update.target_version !== update.current_version
-    && update.state === "awaiting_user"
-    && update.can_activate,
-  );
-  const updateMessage = updateReady
-    ? `e-Mate ${update?.target_version ?? "新版"} 已下载并通过校验。`
+  const updatePending = hasPendingRuntimeUpdate(update) && update?.state !== "failed";
+  const updateReady = isVerifiedRuntimeUpdateReady(update);
+  const updateInstalling = isRuntimeUpdateInstalling(update, runtime.updateBusy);
+  const updateActionable = update?.state === "available" || updateReady;
+  const updateMessage = updatePending
+    ? runtimeUpdateStatusText(update, runtime.updateBusy)
     : null;
   const updateBannerKey = updateMessage && update
     ? (update.release_id && update.build_digest
@@ -781,20 +785,32 @@ export function AppV1() {
             ) : null}
             {updateBannerVisible ? (
               <section className="ex-update-banner" aria-live="polite">
-                <span>{updateMessage}</span>
-                {updateReady ? (
+                <div className="ex-update-copy">
+                  <span>{updateMessage}</span>
+                  {updateInstalling ? (
+                    <progress aria-label="新版下载与安装进度" />
+                  ) : null}
+                </div>
+                {updateActionable ? (
                   <button
                     className="ex-button is-primary"
                     type="button"
                     disabled={runtime.updateBusy}
+                    aria-busy={runtime.updateBusy}
                     onClick={() => void runtime.activateUpdate()}
                   >
-                    {runtime.updateBusy ? "正在切换版本" : "立即更新"}
+                    {runtime.updateBusy
+                      ? "正在下载并安装"
+                      : update?.state === "available"
+                        ? "下载并安装"
+                        : "立即安装"}
                   </button>
                 ) : null}
-                <IconButton label="关闭更新提示" onClick={dismissUpdateBanner}>
-                  <X aria-hidden="true" />
-                </IconButton>
+                {!updateInstalling ? (
+                  <IconButton label="关闭更新提示" onClick={dismissUpdateBanner}>
+                    <X aria-hidden="true" />
+                  </IconButton>
+                ) : null}
               </section>
             ) : null}
 

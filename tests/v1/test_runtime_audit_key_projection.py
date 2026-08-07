@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from ecorex.connectors import InMemoryCredentialVault, RejectingCredentialVault
 from ecorex.observability import AuditOutbox, AuditPayloadCipher
 from ecorex.runtime import RuntimeKernel, RuntimeSettings
 from ecorex.runtime import api as runtime_api
@@ -113,3 +114,26 @@ def test_projection_only_os_vault_never_creates_missing_secret(tmp_path, monkeyp
             create=False,
         )
     assert vault.put_calls == 0
+
+
+@pytest.mark.parametrize("vault_factory", [InMemoryCredentialVault, RejectingCredentialVault])
+def test_non_platform_vault_uses_a_restart_safe_local_key_on_macos(
+    tmp_path, monkeypatch, vault_factory
+) -> None:
+    settings = _settings(tmp_path)
+    kernel = RuntimeKernel(settings.database_path)
+    monkeypatch.setattr(runtime_api.sys, "platform", "darwin")
+
+    first = runtime_api._resolve_audit_encryption_key(
+        settings,
+        kernel=kernel,
+        credential_vault=vault_factory(),
+    )
+    second = runtime_api._resolve_audit_encryption_key(
+        settings,
+        kernel=kernel,
+        credential_vault=vault_factory(),
+    )
+
+    assert first == second
+    assert len(list(tmp_path.glob(".*.audit-key"))) == 1

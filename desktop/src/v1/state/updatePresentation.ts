@@ -22,6 +22,20 @@ export function isVerifiedRuntimeUpdateReady(
     && update.can_activate;
 }
 
+export function isRuntimeUpdateInstalling(
+  update: UpdateSnapshot | null | undefined,
+  busy = false,
+): boolean {
+  return Boolean(
+    hasPendingRuntimeUpdate(update)
+    && (
+      update?.state === "downloading"
+      || update?.state === "activating"
+      || (busy && ["available", "awaiting_user"].includes(update?.state ?? ""))
+    ),
+  );
+}
+
 export function runtimeUpdateStatusText(
   update: UpdateSnapshot | null | undefined,
   busy = false,
@@ -32,15 +46,15 @@ export function runtimeUpdateStatusText(
   }
   switch (update.state) {
     case "available":
-      return `已发现 e-Mate ${update.target_version}，即将后台下载`;
+      return `已发现 e-Mate ${update.target_version}，点击后优先增量下载并安装`;
     case "downloading":
-      return `正在后台下载并校验 e-Mate ${update.target_version}`;
+      return `正在下载并校验 e-Mate ${update.target_version}，已缓存的相同文件会直接复用`;
     case "awaiting_user":
       return update.can_activate
         ? `e-Mate ${update.target_version} 已下载并通过校验`
         : `e-Mate ${update.target_version} 正在完成安装准备`;
     case "activating":
-      return `正在切换到 e-Mate ${update.target_version}`;
+      return `安装完成，正在打开 e-Mate ${update.target_version}`;
     case "failed":
       return "更新准备失败，当前版本不受影响，可重新检查";
     default:

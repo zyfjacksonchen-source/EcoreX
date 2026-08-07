@@ -24,6 +24,7 @@ import {
 } from "../state/extensions.ts";
 import { userFacingError } from "../state/userLanguage.ts";
 import {
+  isRuntimeUpdateInstalling,
   isVerifiedRuntimeUpdateReady,
   runtimeUpdateStatusText,
 } from "../state/updatePresentation.ts";
@@ -132,9 +133,8 @@ export function SettingsDialog({
   const passwordRequestId = useRef<string | null>(null);
   const extensionSummary = extensionCatalogSummary(extensions);
   const updateReady = isVerifiedRuntimeUpdateReady(bootstrap?.update);
-  const updateInProgress = bootstrap?.update.state === "available"
-    || bootstrap?.update.state === "downloading"
-    || bootstrap?.update.state === "activating";
+  const updateAvailable = bootstrap?.update.state === "available";
+  const updateInstalling = isRuntimeUpdateInstalling(bootstrap?.update, updateBusy);
 
   const refreshMigrationQuarantine = useCallback(async (signal?: AbortSignal) => {
     setMigrationQuarantineLoadState((current) => current === "ready" ? current : "loading");
@@ -782,31 +782,30 @@ export function SettingsDialog({
                   {runtimeUpdateStatusText(bootstrap?.update, updateBusy)}
                 </p>
               </div>
-              {updateReady ? (
+              {updateAvailable || updateReady || updateInstalling ? (
                 <button
                   className="ex-button is-primary ex-permission-change"
                   type="button"
-                  disabled={updateBusy}
+                  disabled={updateBusy || updateInstalling}
+                  aria-busy={updateInstalling}
                   onClick={() => void onActivateUpdate()}
                 >
-                  {updateBusy ? "正在切换版本" : "立即更新"}
+                  {bootstrap?.update.state === "activating"
+                    ? "正在打开新版"
+                    : updateInstalling
+                      ? "正在下载并安装"
+                      : updateAvailable
+                        ? "下载并安装"
+                        : "立即安装"}
                 </button>
               ) : (
                 <button
                   className="ex-button ex-permission-change"
                   type="button"
-                  disabled={!bootstrap || updateBusy || updateInProgress}
+                  disabled={!bootstrap || updateBusy}
                   onClick={() => void onCheckUpdate()}
                 >
-                  {updateBusy
-                    ? "正在检查"
-                    : bootstrap?.update.state === "downloading"
-                      ? "后台下载中"
-                      : bootstrap?.update.state === "available"
-                        ? "等待后台下载"
-                      : bootstrap?.update.state === "activating"
-                        ? "正在切换版本"
-                        : "检查更新"}
+                  {updateBusy ? "正在检查" : "检查更新"}
                 </button>
               )}
             </div>

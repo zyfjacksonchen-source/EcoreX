@@ -766,10 +766,21 @@
   line-height: var(--text-ui-line);
 }
 
-.ex-update-banner > span,
+.ex-update-copy,
 .ex-error-banner > span {
   min-width: 0;
   flex: 1;
+}
+
+.ex-update-copy {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.ex-update-copy progress {
+  width: min(360px, 100%);
+  height: 4px;
+  accent-color: var(--color-accent-strong);
 }
 
 .ex-error-banner {

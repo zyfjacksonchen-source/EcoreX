@@ -49,9 +49,9 @@ from ecorex.connectors import (
     ConnectorAuthKind,
     ConnectorComposition,
     ConnectorError,
+    InMemoryCredentialVault,
     RejectingCredentialVault,
     build_connector_composition,
-    production_credential_vault,
 )
 from ecorex.gateway import (
     GatewayAccountUsageProjection,
@@ -564,6 +564,8 @@ class RuntimeUpdateController(Protocol):
 
     async def check_now(self) -> UpdateSnapshot: ...
 
+    async def prepare_now(self) -> UpdateSnapshot: ...
+
     async def activate(
         self, *, transaction_id: str, client_request_id: str
     ) -> ActivateUpdateResponse: ...
@@ -1005,7 +1007,7 @@ def _local_audit_key(
     *,
     create: bool = True,
 ) -> bytes:
-    """Unsupported-platform development fallback; production uses OS vaults."""
+    """Persist an isolated development/preview key beside its database."""
 
     database = Path(database_path).expanduser().resolve()
     account = hashlib.sha256(account_id.encode("utf-8")).hexdigest()[:16]
@@ -1049,7 +1051,9 @@ def _resolve_audit_encryption_key(
         if len(material) != 32:
             raise ValueError("audit encryption key must contain 32 bytes")
         return material
-    if sys.platform not in {"win32", "darwin"}:
+    if sys.platform not in {"win32", "darwin"} or isinstance(
+        credential_vault, (InMemoryCredentialVault, RejectingCredentialVault)
+    ):
         try:
             return _local_audit_key(
                 settings.database_path,
@@ -1524,10 +1528,14 @@ def create_app(
             oauth_return_uri = "http://127.0.0.1:8765/api/v1/connectors/oauth/callback"
     connector_vault = settings.connector_vault
     if connector_vault is None:
-        try:
-            connector_vault = production_credential_vault()
-        except RuntimeError:
-            connector_vault = RejectingCredentialVault()
+        # Runtime API is also an explicit unmanaged/test composition surface.
+        # Product composition injects its platform vault; never surprise a
+        # direct caller with an OS credential prompt.
+        connector_vault = (
+            RejectingCredentialVault()
+            if settings.require_managed_session
+            else InMemoryCredentialVault()
+        )
     connector_event_sink = RuntimeConnectorEventSink(
         kernel,
         account_id=settings.account_id,
@@ -3479,7 +3487,13 @@ def create_app(
         )
         runtime_execution_gate.assert_permit(runtime_permit)
         try:
-            snapshot = await update_service.check_now()
+            prepare_now = getattr(update_service, "prepare_now", None)
+            snapshot = (
+                await prepare_now()
+                if update_service.snapshot().state == "available"
+                and callable(prepare_now)
+                else await update_service.check_now()
+            )
             runtime_execution_gate.assert_permit(runtime_permit)
         except RuntimeExecutionDenied:
             raise

@@ -19,6 +19,8 @@ def _source(root: Path) -> None:
         "CREATE TABLE messages(id INTEGER PRIMARY KEY, body TEXT NOT NULL)"
     )
     database.execute("INSERT INTO messages(body) VALUES ('preserved')")
+    database.execute("CREATE TABLE observability_audit_outbox(id INTEGER PRIMARY KEY)")
+    database.execute("INSERT INTO observability_audit_outbox DEFAULT VALUES")
     database.commit()
     database.close()
     (state / "artifacts" / "blob.bin").write_bytes(b"artifact")
@@ -38,11 +40,21 @@ def test_preview_checkpoint_is_independent_and_sqlite_consistent(
 
     assert receipt["status"] == "ready"
     assert receipt["file_count"] == 3
+    assert receipt["observability_rows_removed"] == {
+        "observability_audit_outbox": 1
+    }
     assert json.loads((preview / "acceptance-preview.json").read_text()) == receipt
     with sqlite3.connect(preview / "state" / "runtime.sqlite3") as database:
         assert database.execute("SELECT body FROM messages").fetchone() == (
             "preserved",
         )
+        assert database.execute(
+            "SELECT COUNT(*) FROM observability_audit_outbox"
+        ).fetchone() == (0,)
+    with sqlite3.connect(source / "state" / "runtime.sqlite3") as database:
+        assert database.execute(
+            "SELECT COUNT(*) FROM observability_audit_outbox"
+        ).fetchone() == (1,)
     source_note = source / "workspace" / "note.txt"
     preview_note = preview / "workspace" / "note.txt"
     assert source_note.stat().st_ino != preview_note.stat().st_ino
