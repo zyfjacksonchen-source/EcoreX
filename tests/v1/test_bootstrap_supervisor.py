@@ -622,6 +622,11 @@ def test_acceptance_preview_is_bootstrap_owned_and_reaches_only_the_runtime(
 
     assert result.exit_code == 0
     assert launcher.specs[0].environment["ECOREX_RUNTIME_ACCEPTANCE_PREVIEW"] == "1"
+    acceptance_key = launcher.specs[0].environment[
+        "ECOREX_RUNTIME_ACCEPTANCE_VAULT_KEY"
+    ]
+    assert len(acceptance_key) == 43
+    assert "attacker" not in acceptance_key
 
     with pytest.raises(BootstrapConfigurationError, match="acceptance_preview"):
         _supervisor(

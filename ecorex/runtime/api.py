@@ -2806,6 +2806,11 @@ def create_app(
         if not settings.acceptance_preview:
             return False
         path = request.url.path
+        if request.method == "POST" and path == "/api/v1/session/login":
+            # Password login writes only the copied database and the
+            # Bootstrap-keyed acceptance vault. The resulting controlled
+            # restart never reaches the platform credential store.
+            return False
         if request.method == "GET":
             return path in {
                 "/api/v1/connectors/oauth/callback",

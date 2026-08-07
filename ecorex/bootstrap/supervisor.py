@@ -60,6 +60,8 @@ from .restart import RUNTIME_RELOAD_EXIT_CODE, RUNTIME_RESTART_EXIT_CODE
 
 RUNTIME_OWNER_NONCE_ENV = "ECOREX_RUNTIME_OWNER_NONCE"
 RUNTIME_ACCEPTANCE_PREVIEW_ENV = "ECOREX_RUNTIME_ACCEPTANCE_PREVIEW"
+RUNTIME_ACCEPTANCE_VAULT_KEY_ENV = "ECOREX_RUNTIME_ACCEPTANCE_VAULT_KEY"
+RUNTIME_ACCEPTANCE_VAULT_FILENAME = ".acceptance-credentials.vault"
 _RUNTIME_OWNER_NONCE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 
 
@@ -466,6 +468,19 @@ class BootstrapSupervisor:
         )
         if acceptance_preview:
             environment[RUNTIME_ACCEPTANCE_PREVIEW_ENV] = "1"
+            environment[RUNTIME_ACCEPTANCE_VAULT_KEY_ENV] = secrets.token_urlsafe(32)
+            self._acceptance_vault_path = (
+                self.slots.root / "state" / RUNTIME_ACCEPTANCE_VAULT_FILENAME
+            )
+            try:
+                if os.path.lexists(self._acceptance_vault_path):
+                    self._acceptance_vault_path.unlink()
+            except OSError as exc:
+                raise BootstrapConfigurationError(
+                    "Acceptance credential vault could not be reset"
+                ) from exc
+        else:
+            self._acceptance_vault_path = None
         self._environment = MappingProxyType(environment)
         self._selection_lock = ProductFileLock(
             self.slots.root / "install-update.lock",
@@ -474,6 +489,17 @@ class BootstrapSupervisor:
         self._state_lock = threading.Lock()
         self._active_child: RuntimeChild | None = None
         self._stop_signal: int | None = None
+
+    def close(self) -> None:
+        """Remove acceptance-only encrypted material after supervision ends."""
+
+        if self._acceptance_vault_path is None:
+            return
+        try:
+            self._acceptance_vault_path.unlink(missing_ok=True)
+        except OSError:
+            # AES-GCM material is unusable after this process drops the only key.
+            return
 
     def run(self) -> BootstrapRunResult:
         launched: list[str] = []

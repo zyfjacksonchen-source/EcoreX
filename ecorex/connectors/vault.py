@@ -7,14 +7,20 @@ failure semantics can be tested without touching a developer's real keychain.
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Mapping
 import ctypes
 from ctypes import wintypes
 import json
+import os
+from pathlib import Path
 import re
+import stat
 import sys
 import threading
 from typing import Protocol
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
 _REFERENCE_RE = re.compile(r"^ecorex/[A-Za-z0-9._/-]{1,1000}$")
@@ -169,6 +175,148 @@ class InMemoryCredentialVault:
         reference = _validate_reference(reference)
         with self._lock:
             self._values.pop(reference, None)
+
+
+class EphemeralEncryptedCredentialVault:
+    """Restart-safe acceptance vault whose key lives only in Bootstrap memory."""
+
+    _AAD = b"ecorex-acceptance-credential-vault-v1"
+    _MAX_BYTES = 2 * 1024 * 1024
+
+    def __init__(self, path: str | os.PathLike[str], *, key: bytes) -> None:
+        material = bytes(key)
+        if len(material) != 32:
+            raise ValueError("acceptance credential vault key must be 32 bytes")
+        self._path = Path(os.path.abspath(path))
+        self._cipher = AESGCM(material)
+        self._lock = threading.RLock()
+
+    def put(self, reference: str, material: Mapping[str, str]) -> None:
+        reference = _validate_reference(reference)
+        normalized = _deserialize(_serialize(material))
+        with self._lock:
+            values = self._read()
+            values[reference] = normalized
+            self._write(values)
+
+    def get(self, reference: str) -> Mapping[str, str]:
+        reference = _validate_reference(reference)
+        with self._lock:
+            values = self._read()
+            if reference not in values:
+                raise KeyError(reference)
+            return dict(values[reference])
+
+    def delete(self, reference: str) -> None:
+        reference = _validate_reference(reference)
+        with self._lock:
+            values = self._read()
+            if reference not in values:
+                return
+            del values[reference]
+            if values:
+                self._write(values)
+            else:
+                self._path.unlink(missing_ok=True)
+
+    def _read(self) -> dict[str, dict[str, str]]:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(self._path, flags)
+        except FileNotFoundError:
+            return {}
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > self._MAX_BYTES:
+                raise RuntimeError("acceptance credential vault is invalid")
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                payload = handle.read(self._MAX_BYTES + 1)
+        except Exception:
+            raise RuntimeError("acceptance credential vault read failed") from None
+        finally:
+            os.close(descriptor)
+        try:
+            envelope = json.loads(payload.decode("utf-8"))
+            if set(envelope) != {"schema_version", "nonce", "ciphertext"}:
+                raise ValueError
+            if envelope["schema_version"] != 1:
+                raise ValueError
+            nonce = base64.b64decode(
+                str(envelope["nonce"]), altchars=b"-_", validate=True
+            )
+            ciphertext = base64.b64decode(
+                str(envelope["ciphertext"]), altchars=b"-_", validate=True
+            )
+            plaintext = bytearray(
+                self._cipher.decrypt(nonce, ciphertext, self._AAD)
+            )
+            decoded = json.loads(plaintext.decode("utf-8"))
+            if not isinstance(decoded, dict):
+                raise ValueError
+            values = {
+                _validate_reference(reference): dict(_deserialize(_serialize(material)))
+                for reference, material in decoded.items()
+                if isinstance(reference, str) and isinstance(material, Mapping)
+            }
+            if len(values) != len(decoded):
+                raise ValueError
+            return values
+        except Exception:
+            raise RuntimeError("acceptance credential vault read failed") from None
+        finally:
+            if "plaintext" in locals():
+                for index in range(len(plaintext)):
+                    plaintext[index] = 0
+
+    def _write(self, values: Mapping[str, Mapping[str, str]]) -> None:
+        plaintext = bytearray(
+            json.dumps(
+                values,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        temporary: Path | None = None
+        try:
+            nonce = os.urandom(12)
+            ciphertext = self._cipher.encrypt(nonce, bytes(plaintext), self._AAD)
+            encoded = (
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "nonce": base64.urlsafe_b64encode(nonce).decode("ascii"),
+                        "ciphertext": base64.urlsafe_b64encode(ciphertext).decode("ascii"),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("ascii")
+            if len(encoded) > self._MAX_BYTES:
+                raise RuntimeError("acceptance credential vault exceeds its size limit")
+            self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            temporary = self._path.with_name(
+                f".{self._path.name}.{os.getpid()}.{os.urandom(8).hex()}.tmp"
+            )
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(temporary, flags, 0o600)
+            try:
+                with os.fdopen(descriptor, "wb", closefd=False) as handle:
+                    handle.write(encoded)
+                    handle.flush()
+                    os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.replace(temporary, self._path)
+            temporary = None
+        except Exception:
+            raise RuntimeError("acceptance credential vault write failed") from None
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+            for index in range(len(plaintext)):
+                plaintext[index] = 0
 
 
 class _WindowsCredentialBackend:
@@ -487,6 +635,7 @@ def production_credential_vault() -> CredentialVault:
 __all__ = [
     "BinaryCredentialBackend",
     "CredentialVault",
+    "EphemeralEncryptedCredentialVault",
     "InMemoryCredentialVault",
     "MacOSKeychainCredentialVault",
     "RejectingCredentialVault",

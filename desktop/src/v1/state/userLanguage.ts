@@ -33,6 +33,7 @@ const CODE_MESSAGES: Record<string, string> = {
   session_login_locked: "登录尝试过多，请稍后再试。",
   session_login_rate_limited: "登录尝试过多，请稍后再试。",
   session_login_unavailable: "登录服务暂时不可用，请稍后重试。",
+  acceptance_preview_external_mutation_blocked: "候选验收窗口不会修改正式账号或外部服务，请在正式版本中执行这项操作。",
   invalid_current_password: "当前密码不正确，请重新输入。",
   password_change_conflict: "账户凭据刚刚发生变化，请重新登录后再修改。",
   password_change_unavailable: "密码服务暂时不可用，请稍后重试。",

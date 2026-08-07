@@ -365,6 +365,24 @@ def test_acceptance_preview_is_visible_and_blocks_external_mutations(
             "acceptance_preview_external_mutation_blocked"
         )
 
+        login = client.post(
+            "/api/v1/session/login",
+            json={
+                "identifier": "preview@example.com",
+                "password": "not-a-real-secret",
+                "client_request_id": "preview-login-policy-check",
+            },
+            headers={
+                "Authorization": f"Bearer {bearer}",
+                "Origin": ORIGIN,
+                "X-EcoreX-CSRF": app.state.csrf_token,
+            },
+        )
+        assert login.status_code == 405
+        assert login.json().get("code") != (
+            "acceptance_preview_external_mutation_blocked"
+        )
+
         bootstrap = client.get(
             "/api/v1/bootstrap",
             headers={"Authorization": f"Bearer {bearer}"},

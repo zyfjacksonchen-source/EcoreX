@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from typing import Mapping
 import inspect
+import os
 
 import pytest
 
 from ecorex.connectors import (
+    EphemeralEncryptedCredentialVault,
     MacOSKeychainCredentialVault,
     WindowsCredentialVault,
     production_credential_vault,
@@ -76,3 +78,28 @@ def test_macos_vault_uses_security_framework_without_secret_argv() -> None:
     assert "SecItemCopyMatching" in source
     assert "subprocess" not in source
     assert "add-generic-password" not in source
+
+
+def test_acceptance_vault_survives_restart_without_plaintext(tmp_path) -> None:
+    path = tmp_path / "acceptance.vault"
+    key = os.urandom(32)
+    first = EphemeralEncryptedCredentialVault(path, key=key)
+    first.put(
+        "ecorex/session/test",
+        {"access_token": "TOP-SECRET", "refresh_token": "REFRESH-SECRET"},
+    )
+
+    payload = path.read_bytes()
+    assert b"TOP-SECRET" not in payload
+    assert b"REFRESH-SECRET" not in payload
+    second = EphemeralEncryptedCredentialVault(path, key=key)
+    assert second.get("ecorex/session/test") == {
+        "access_token": "TOP-SECRET",
+        "refresh_token": "REFRESH-SECRET",
+    }
+    with pytest.raises(RuntimeError, match="read failed"):
+        EphemeralEncryptedCredentialVault(path, key=os.urandom(32)).get(
+            "ecorex/session/test"
+        )
+    second.delete("ecorex/session/test")
+    assert not path.exists()

@@ -161,6 +161,7 @@ def _create_product_runtime(
     reloads: list[str],
     registration_recorder=None,
     runtime_ready_recorder=None,
+    acceptance_preview: bool = False,
     runtime_secrets: tuple[str, str] = (RUNTIME_BEARER, CSRF_TOKEN),
 ):
     generated_secrets = iter(runtime_secrets)
@@ -173,6 +174,7 @@ def _create_product_runtime(
         managed_session_service=session,
         connector_vault=session.vault,
         device_authorization_service=device,
+        acceptance_preview=acceptance_preview,
         session_reload_requester=lambda identity: reloads.append(identity) or True,
         first_install_registration_recorder=registration_recorder,
         first_install_runtime_ready_recorder=runtime_ready_recorder,
@@ -295,6 +297,42 @@ def test_password_login_is_exactly_allowlisted_and_process_secrets_rotate(
         },
     )
     assert stale_csrf.status_code == 403
+
+
+def test_acceptance_preview_allows_only_isolated_password_login(tmp_path) -> None:
+    _database, _vault, session, _broker, device = _authorization_services(tmp_path)
+    reloads: list[str] = []
+    app = _create_product_runtime(
+        tmp_path,
+        session=session,
+        device=device,
+        reloads=reloads,
+        acceptance_preview=True,
+    )
+    client = TestClient(app, base_url=ORIGIN)
+
+    logged_in = client.post(
+        "/api/v1/session/login",
+        json={
+            "identifier": "user@example.com",
+            "password": "abcd1234",
+            "client_request_id": "acceptance-password-login-0001",
+        },
+        headers=_headers(mutation=True),
+    )
+    assert logged_in.status_code == 200
+    assert logged_in.json()["restart_scheduled"] is True
+    assert reloads == [f"session-login:{logged_in.json()['generation']}"]
+
+    blocked_device_flow = client.post(
+        "/api/v1/session/device",
+        json={"client_request_id": "acceptance-device-login-0001"},
+        headers=_headers(mutation=True),
+    )
+    assert blocked_device_flow.status_code == 409
+    assert blocked_device_flow.json()["code"] == (
+        "acceptance_preview_external_mutation_blocked"
+    )
 
 
 def _headers(

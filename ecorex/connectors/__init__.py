@@ -52,6 +52,7 @@ from .service import ConnectorOutboxDeliveryHealth, ConnectorService
 from .vault import (
     BinaryCredentialBackend,
     CredentialVault,
+    EphemeralEncryptedCredentialVault,
     InMemoryCredentialVault,
     MacOSKeychainCredentialVault,
     RejectingCredentialVault,
@@ -99,6 +100,7 @@ __all__ = [
     "ConnectorTier",
     "ConnectorUnavailable",
     "CredentialVault",
+    "EphemeralEncryptedCredentialVault",
     "InMemoryCredentialVault",
     "MacOSKeychainCredentialVault",
     "RejectingCredentialVault",

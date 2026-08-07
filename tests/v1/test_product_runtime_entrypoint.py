@@ -22,7 +22,10 @@ from fastapi.testclient import TestClient
 from ecorex import __version__
 from ecorex.bootstrap import RUNTIME_RELOAD_EXIT_CODE
 
-from ecorex.connectors import InMemoryCredentialVault
+from ecorex.connectors import (
+    EphemeralEncryptedCredentialVault,
+    InMemoryCredentialVault,
+)
 from ecorex.observability.audit import AuditIntegrityError
 from ecorex.pack_catalog import (
     CAPABILITY_PACK_PROFILES,
@@ -940,6 +943,7 @@ def test_acceptance_preview_keeps_model_and_image_but_disables_background_mutato
         environment={
             "ECOREX_BOOTSTRAPPED": "1",
             "ECOREX_RUNTIME_ACCEPTANCE_PREVIEW": "1",
+            "ECOREX_RUNTIME_ACCEPTANCE_VAULT_KEY": "A" * 43,
         },
         vault_factory=reject_platform_vault,
         host_platform=product["platform"],
@@ -948,6 +952,10 @@ def test_acceptance_preview_keeps_model_and_image_but_disables_background_mutato
     try:
         settings = composition.server_settings
         assert settings.acceptance_preview is True
+        assert isinstance(
+            composition.managed_session.vault,
+            EphemeralEncryptedCredentialVault,
+        )
         assert settings.model_gateway is not None
         assert settings.image_orchestration_client is not None
         assert settings.managed_session_refresh_service is None
@@ -964,6 +972,7 @@ def test_acceptance_preview_keeps_model_and_image_but_disables_background_mutato
             environment={
                 "ECOREX_BOOTSTRAPPED": "1",
                 "ECOREX_RUNTIME_ACCEPTANCE_PREVIEW": "attacker",
+                "ECOREX_RUNTIME_ACCEPTANCE_VAULT_KEY": "A" * 43,
             },
             vault_factory=reject_platform_vault,
             host_platform=product["platform"],

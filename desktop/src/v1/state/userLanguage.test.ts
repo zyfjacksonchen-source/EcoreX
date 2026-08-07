@@ -36,6 +36,14 @@ test("turn terminal reasons keep friendly guidance separate from the stable code
 });
 
 test("primary error copy and collapsed technical code remain separate", () => {
+  assert.equal(
+    userFacingError(new RuntimeApiError(
+      "blocked",
+      409,
+      "acceptance_preview_external_mutation_blocked",
+    )),
+    "候选验收窗口不会修改正式账号或外部服务，请在正式版本中执行这项操作。",
+  );
   const error = new RuntimeApiError(
     "provider_timeout internal lease failed",
     503,

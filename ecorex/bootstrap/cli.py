@@ -141,6 +141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             return supervisor.run().exit_code
         finally:
+            supervisor.close()
             for signum, handler in prior_handlers.items():
                 signal.signal(signum, handler)
     except BootstrapTrustError:

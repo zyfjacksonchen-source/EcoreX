@@ -35,6 +35,8 @@ from ecorex.bootstrap import (
     CurrentSlotVerifier,
     DelayedRestartRequester,
     RUNTIME_ACCEPTANCE_PREVIEW_ENV,
+    RUNTIME_ACCEPTANCE_VAULT_FILENAME,
+    RUNTIME_ACCEPTANCE_VAULT_KEY_ENV,
     RUNTIME_RELOAD_EXIT_CODE,
     RuntimeEndpoint,
     RUNTIME_OWNER_NONCE_ENV,
@@ -54,7 +56,7 @@ from ecorex.integration.dependency_pack_process import (
 from ecorex.integration.pack_python import resolve_pack_python
 from ecorex.connectors import (
     CredentialVault,
-    InMemoryCredentialVault,
+    EphemeralEncryptedCredentialVault,
     ManagedConnectorGatewayAdapter,
     production_credential_vault,
 )
@@ -804,6 +806,23 @@ def load_product_runtime(
     if preview_value not in {None, "1"}:
         raise ProductRuntimeTrustError("Runtime acceptance mode is invalid")
     acceptance_preview = preview_value == "1"
+    preview_vault_key_value = source_environment.get(
+        RUNTIME_ACCEPTANCE_VAULT_KEY_ENV
+    )
+    preview_vault_key: bytes | None = None
+    if acceptance_preview:
+        if (
+            not isinstance(preview_vault_key_value, str)
+            or re.fullmatch(r"[A-Za-z0-9_-]{43}", preview_vault_key_value) is None
+        ):
+            raise ProductRuntimeTrustError(
+                "Runtime acceptance credential authority is invalid"
+            )
+        preview_vault_key = base64.urlsafe_b64decode(preview_vault_key_value + "=")
+    elif preview_vault_key_value is not None:
+        raise ProductRuntimeTrustError(
+            "Runtime acceptance credential authority is invalid"
+        )
     runtime_owner_nonce = source_environment.get(RUNTIME_OWNER_NONCE_ENV)
     if runtime_owner_nonce is not None and (
         not isinstance(runtime_owner_nonce, str)
@@ -984,11 +1003,14 @@ def load_product_runtime(
     # Full Runtime startup validates every immutable capability binding and
     # platform vault implementation before it can cross the data barrier.
     try:
-        vault = (
-            InMemoryCredentialVault()
-            if acceptance_preview
-            else vault_factory()
-        )
+        if acceptance_preview:
+            assert preview_vault_key is not None
+            vault = EphemeralEncryptedCredentialVault(
+                database_path.parent / RUNTIME_ACCEPTANCE_VAULT_FILENAME,
+                key=preview_vault_key,
+            )
+        else:
+            vault = vault_factory()
     except Exception:
         raise ProductRuntimeConfigurationError(
             "Platform credential vault is unavailable",

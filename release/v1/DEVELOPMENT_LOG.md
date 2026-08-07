@@ -623,3 +623,19 @@ Preview/session focused Python slice: 18 passed
 Ruff focused check: passed
 Diff whitespace check: passed
 ```
+
+# 2026-08-07 — 真实浏览器验收：隔离登录可跨 Runtime 重启
+
+- 真实用户登录首次命中 `acceptance_preview_external_mutation_blocked`，确认预览策略把密码登录与会修改正式账号/外部服务的操作一起拦截。
+- 仅放行精确的 `POST /api/v1/session/login`；设备登录、更新、连接器、MCP、分享与本机打开/定位仍保持预览阻断。
+- 复用现有 AES-GCM 依赖增加验收专用加密凭据仓：密钥仅由 Bootstrap 进程生成并跨受管 Runtime 重启传递，密文只写隔离预览目录，结束时清理；不访问 macOS 钥匙串，也不写正式数据目录。
+- 增加密文不含明文、跨实例读取、错误密钥失败、Bootstrap 所有权、预览放行边界和前端受控中文错误映射检查。
+
+本轮定向验证：
+
+```text
+受影响 Python 回归：120 passed, 10 skipped
+验收预览 Web 契约：1 passed
+用户错误文案单测：4 passed
+Ruff、compileall、diff check、变更生产切片 secret scan：passed
+```
