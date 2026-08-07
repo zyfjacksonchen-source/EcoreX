@@ -1300,9 +1300,7 @@ def load_product_runtime(
             runtime_owner_nonce=runtime_owner_nonce,
             acceptance_preview=acceptance_preview,
             managed_session_service=managed_session,
-            managed_session_refresh_service=(
-                None if acceptance_preview else session_refresh
-            ),
+            managed_session_refresh_service=session_refresh,
             managed_session_refresh_poll_seconds=30.0,
             device_authorization_service=device_authorization,
             device_authorization_poll_seconds=(device_settings.supervisor_poll_seconds),

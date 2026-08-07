@@ -917,7 +917,7 @@ def test_product_healthy_entry_converges_external_authorities_once(
         second.close_unstarted()
 
 
-def test_acceptance_preview_keeps_model_and_image_but_disables_background_mutators(
+def test_acceptance_preview_keeps_session_model_and_image_but_disables_business_mutators(
     tmp_path: Path,
 ) -> None:
     def configure(raw: dict) -> None:
@@ -958,7 +958,11 @@ def test_acceptance_preview_keeps_model_and_image_but_disables_background_mutato
         )
         assert settings.model_gateway is not None
         assert settings.image_orchestration_client is not None
-        assert settings.managed_session_refresh_service is None
+        assert settings.managed_session_refresh_service is not None
+        assert (
+            create_product_app(settings).state.managed_session_refresh_supervisor
+            is not None
+        )
         assert settings.update_service is None
         assert settings.share_publisher is None
         assert settings.first_install_registration_recorder is None

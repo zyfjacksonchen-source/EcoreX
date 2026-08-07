@@ -2311,7 +2311,7 @@ def create_app(
     app.state.device_authorization_service = settings.device_authorization_service
     app.state.device_authorization_supervisor = device_authorization_supervisor
     session_refresh_supervisor: ManagedSessionRefreshSupervisor | None = None
-    if session_refresh_service is not None and not settings.acceptance_preview:
+    if session_refresh_service is not None:
         session_refresh_supervisor = ManagedSessionRefreshSupervisor(
             session_refresh_service,
             poll_seconds=settings.managed_session_refresh_poll_seconds,

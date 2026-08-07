@@ -641,3 +641,20 @@ Ruff、compileall、diff check、变更生产切片 secret scan：passed
 ```
 
 真实外层 macOS 用户包的登录—重启验收随后暴露第二个边界：首进程以未登录占位账号创建的审计密文，在登录后的账号绑定进程中被当作另一正式账号的密文，因而在 `runtime_registration` 阶段按设计失败。验收预览现在使用一个 Bootstrap 生命周期固定的审计引用；正式模式仍按账号隔离。该引用的密钥仍只存在于验收加密凭据仓中，预览结束即失效。
+
+# 2026-08-08 — 真实会话续接：Gateway 契约与验收令牌刷新
+
+- 浏览器真实登录、受管 Runtime 重启和候选加密凭据恢复通过；Luna/max 的普通消息产生连续、无重复事件，并按 Runtime 指令回答为 e-Mate。
+- 第一条真实消息先暴露生产 Gateway 与 v1 Runtime 的契约漂移：Gateway 的 `ModelGatewayRequest` 尚未接收 `instructions`，Nginx 回读为 HTTP 422。生产侧先保留原始三文件和不可变源目录，再以独立目标目录应用最小三点兼容补丁（请求字段、Responses 转发、Chat developer message），重启后健康检查、模型目录和契约回读通过。该临时补丁只用于解除验收阻断，最终发布前仍须由正式 v1 云制品替换。
+- 工具调用首轮通过后，续接轮在访问令牌到期时返回 401。根因不是工具实现，而是验收预览把独立登录会话的令牌刷新与更新、分享等业务写入一起禁用了。验收预览现在保留会话刷新服务和 supervisor；更新、分享、OAuth、MCP 外部写入、正式凭据仓与正式数据库仍保持隔离。
+- 已暂停生产稳定线中不可下载的 1.0.7 rollout；操作前在线 SQLite 备份、操作后 `rollout.paused` 信号、无 active stable rollout 和正式 0.3.2 客户端回到 `idle` 均已回读。
+
+本轮定向验证：
+
+```text
+会话刷新与验收预览回归：5 passed
+产品 Runtime/预览/设备会话切片：88 passed, 10 skipped
+Ruff、diff check：passed
+真实 Luna 回复：completed；31 个事件连续且无重复
+生产 Gateway：ready；v1 instructions 契约已回读
+```
