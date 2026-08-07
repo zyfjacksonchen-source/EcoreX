@@ -449,6 +449,7 @@ def test_invocation_reuses_bound_core_availability_not_raw_pack_facts(tmp_path) 
                 # This is the low-level pack builder's pre-composition fact.
                 # Product composition binds the trusted handler afterwards.
                 "connector_search": "verified_handler_not_installed",
+                "tool_search": "verified_handler_not_installed",
             },
         )
     )
@@ -456,7 +457,7 @@ def test_invocation_reuses_bound_core_availability_not_raw_pack_facts(tmp_path) 
     prepared = composition.prepare_turn(
         CreateTurnRequest(
             input="搜索可用连接器",
-            explicit_tool_ids=["connector_search"],
+            explicit_tool_ids=["connector_search", "tool_search"],
             client_message_id="bound-invocation-availability",
         )
     )
@@ -470,6 +471,15 @@ def test_invocation_reuses_bound_core_availability_not_raw_pack_facts(tmp_path) 
     assert not any(
         reason.startswith("current_availability:disabled:connector_search")
         for reason in governance.reason_codes
+    )
+    tool_search = composition.capability_service.invocation_governance(
+        prepared.snapshot_context.capability_snapshot_id,
+        "tool_search",
+    )
+    assert tool_search.allowed is True
+    assert not any(
+        reason.startswith("current_availability:disabled:tool_search")
+        for reason in tool_search.reason_codes
     )
 
 

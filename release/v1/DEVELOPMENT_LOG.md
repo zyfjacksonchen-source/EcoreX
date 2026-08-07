@@ -658,3 +658,29 @@ Ruff、diff check：passed
 真实 Luna 回复：completed；31 个事件连续且无重复
 生产 Gateway：ready；v1 instructions 契约已回读
 ```
+
+# 2026-08-08 — 真实系统能力链：即时治理使用组合后可用性
+
+- 刷新后的新候选版用真实账户重新登录成功，托管会话跨受管 Runtime
+  重启恢复正常；全量 Python 门禁为 `2707 passed, 55 skipped`，供应链
+  发布校验通过。
+- 首条 `tool_search → shell → read` 浏览器任务没有再出现令牌 401，而是
+  暴露了另一个共享根因：Turn 规划已经清除了 Core 在低层 Pack 构建期
+  产生的 `verified_handler_not_installed` 旧事实，但即时调用治理重新读取
+  原始可用性时漏掉了同一层规范化，导致已经投影给模型的 `tool_search`
+  和 `task_list` 在执行前被拒绝。
+- `current_invocation_availability()` 现在与 Turn 规划复用同一个已绑定处理器
+  规范化步骤；没有改变管理员拒绝、离线、沙箱或外部能力不可用事实。
+  契约测试同时覆盖连接器 Core handler 与 `tool_search`，防止规划和执行
+  再次分叉。
+- 本次 shell 最终错误 `shell_cwd_outside_workspace` 来自验收提示指定了
+  `/tmp`，它正确证明沙箱未被“完全访问”绕过；后续真实复测改为用户选择
+  的项目工作区，不以放宽工作区边界掩盖问题。
+
+本轮定向验证：
+
+```text
+Runtime composition：17 passed
+Ruff focused check、diff check：passed
+真实失败终态：shell_cwd_outside_workspace（受控沙箱边界）
+```

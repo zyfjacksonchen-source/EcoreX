@@ -980,6 +980,7 @@ class RuntimeComposition:
         availability = self._availability_provider()
         if not isinstance(availability, RuntimeAvailability):
             raise TypeError("Runtime availability provider returned an invalid value")
+        availability = self._apply_bound_handler_availability(availability)
         availability = self._apply_connector_execution_availability(availability)
         availability = self._apply_artifact_read_availability(availability)
         availability = self._apply_input_attachment_read_availability(availability)
