@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import re
 import stat as stat_module
-from typing import Any, Final, Mapping, Protocol, runtime_checkable
+from typing import Any, Final, Iterable, Mapping, Protocol, runtime_checkable
 from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
@@ -211,28 +211,76 @@ class GitHubReleasePublisher:
         *,
         expected_sha256: str,
     ) -> GitHubAssetReceipt:
+        return self.ensure_assets(release, ((path, expected_sha256),))[0]
+
+    def ensure_assets(
+        self,
+        release: GitHubReleaseDraft,
+        assets: Iterable[tuple[str | os.PathLike[str], str]],
+    ) -> tuple[GitHubAssetReceipt, ...]:
+        """Resume a batch after reading the remote Draft inventory once."""
+
+        prepared: list[tuple[Path, str, os.stat_result]] = []
+        names: set[str] = set()
+        for path, expected_sha256 in assets:
+            if _SHA256.fullmatch(expected_sha256) is None:
+                raise ValueError("expected asset SHA-256 is invalid")
+            asset_path = Path(path)
+            name = asset_path.name
+            if _SAFE_ASSET.fullmatch(name) is None:
+                raise ValueError("release asset filename is invalid")
+            if name in names:
+                raise GitHubPublicationError("duplicate_local_asset")
+            names.add(name)
+            before = _stable_regular_file(asset_path)
+            if before.st_size < 1:
+                raise GitHubPublicationError("empty_asset")
+            if _hash_stable_file(asset_path, before) != expected_sha256:
+                raise GitHubPublicationError("local_asset_digest_mismatch")
+            prepared.append((asset_path, expected_sha256, before))
+        if not prepared:
+            return ()
+
+        remote: dict[str, GitHubAssetReceipt] = {}
+        for receipt in self.list_assets(release):
+            if receipt.name not in names:
+                continue
+            if receipt.name in remote:
+                raise GitHubPublicationError("duplicate_remote_asset")
+            remote[receipt.name] = receipt
+        results: list[GitHubAssetReceipt] = []
+        for asset_path, expected_sha256, before in prepared:
+            receipt = remote.get(asset_path.name)
+            if receipt is not None:
+                if (
+                    receipt.size_bytes != before.st_size
+                    or receipt.sha256 != expected_sha256
+                ):
+                    raise GitHubPublicationError("remote_asset_conflict")
+                self._validate_asset_url(receipt, release)
+                results.append(receipt)
+                continue
+            results.append(
+                self._upload_asset(
+                    release,
+                    asset_path,
+                    expected_sha256=expected_sha256,
+                    before=before,
+                )
+            )
+        return tuple(results)
+
+    def _upload_asset(
+        self,
+        release: GitHubReleaseDraft,
+        asset_path: Path,
+        *,
+        expected_sha256: str,
+        before: os.stat_result,
+    ) -> GitHubAssetReceipt:
         if _SHA256.fullmatch(expected_sha256) is None:
             raise ValueError("expected asset SHA-256 is invalid")
-        asset_path = Path(path)
         name = asset_path.name
-        if _SAFE_ASSET.fullmatch(name) is None:
-            raise ValueError("release asset filename is invalid")
-        before = _stable_regular_file(asset_path)
-        if before.st_size < 1:
-            raise GitHubPublicationError("empty_asset")
-        local_digest = _hash_stable_file(asset_path, before)
-        if local_digest != expected_sha256:
-            raise GitHubPublicationError("local_asset_digest_mismatch")
-
-        existing = [asset for asset in self.list_assets(release) if asset.name == name]
-        if len(existing) > 1:
-            raise GitHubPublicationError("duplicate_remote_asset")
-        if existing:
-            receipt = existing[0]
-            if receipt.size_bytes == before.st_size and receipt.sha256 == expected_sha256:
-                self._validate_asset_url(receipt, release)
-                return receipt
-            raise GitHubPublicationError("remote_asset_conflict")
         if not release.draft:
             raise GitHubPublicationError("published_release_is_incomplete")
 

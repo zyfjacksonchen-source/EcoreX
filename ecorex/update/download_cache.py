@@ -10,12 +10,15 @@ again before the caller can consume them.
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
+import ctypes
 from dataclasses import dataclass
+import errno
 import os
 from pathlib import Path
 import secrets
 import shutil
 import stat
+import sys
 import time
 from typing import Iterable
 
@@ -412,6 +415,30 @@ def _copy_regular_stable(source: Path, destination: Path) -> None:
     before = _require_regular(source, "verified download source")
     if os.path.lexists(destination):
         raise DownloadCacheError("download cache temporary path already exists")
+    try:
+        cloned = _try_clone_regular(source, destination)
+    except OSError:
+        raise DownloadCacheError("verified download clone failed") from None
+    if cloned:
+        after = _require_regular(destination, "cloned verified download")
+        current = _require_regular(source, "verified download source")
+        if (
+            after.st_size != before.st_size
+            or after.st_nlink != 1
+            or (after.st_dev, after.st_ino) == (before.st_dev, before.st_ino)
+            or current.st_size != before.st_size
+            or current.st_mtime_ns != before.st_mtime_ns
+            or (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino)
+        ):
+            _unlink_regular(destination)
+            raise DownloadCacheError("verified download changed while being cloned")
+        try:
+            with destination.open("rb") as stream:
+                os.fsync(stream.fileno())
+        except OSError:
+            _unlink_regular(destination)
+            raise DownloadCacheError("cloned verified download could not be synced") from None
+        return
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     flags |= getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(destination, flags, 0o600)
@@ -439,6 +466,29 @@ def _copy_regular_stable(source: Path, destination: Path) -> None:
         except FileNotFoundError:
             pass
         raise
+
+
+def _try_clone_regular(source: Path, destination: Path) -> bool:
+    """Use APFS copy-on-write when available; callers retain verified fallback."""
+
+    if sys.platform != "darwin":
+        return False
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        clonefile = libc.clonefile
+    except AttributeError:
+        return False
+    clonefile.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int)
+    clonefile.restype = ctypes.c_int
+    if clonefile(os.fsencode(source), os.fsencode(destination), 0) == 0:
+        return True
+    error = ctypes.get_errno()
+    if (
+        error in {errno.ENOTSUP, errno.EXDEV, errno.EINVAL, errno.ENOSYS, errno.EPERM}
+        and not os.path.lexists(destination)
+    ):
+        return False
+    raise OSError(error, os.strerror(error), destination)
 
 
 def _object_paths(root: Path) -> tuple[Path, ...]:

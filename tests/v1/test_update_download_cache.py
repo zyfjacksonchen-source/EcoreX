@@ -9,6 +9,8 @@ import time
 
 import pytest
 
+import ecorex.update.download_cache as download_cache_module
+
 from ecorex.update import (
     ContentVerificationError,
     InstallCoordinator,
@@ -28,6 +30,33 @@ class _AcceptingVerifier:
         assert payload
         assert signature.key_id == "download-cache-test"
         return True
+
+
+def test_verified_cache_copy_prefers_copy_on_write_clone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.bin"
+    destination = tmp_path / "destination.bin"
+    source.write_bytes(b"immutable dependency bytes")
+    clone_calls = 0
+
+    def clone(first: Path, second: Path) -> bool:
+        nonlocal clone_calls
+        clone_calls += 1
+        second.write_bytes(first.read_bytes())
+        return True
+
+    def reject_stream_copy(*_args, **_kwargs) -> None:
+        raise AssertionError("copy-on-write hit must not stream the file")
+
+    monkeypatch.setattr(download_cache_module, "_try_clone_regular", clone)
+    monkeypatch.setattr(download_cache_module.shutil, "copyfileobj", reject_stream_copy)
+
+    download_cache_module._copy_regular_stable(source, destination)
+
+    assert clone_calls == 1
+    assert destination.read_bytes() == source.read_bytes()
 
 
 class _CountingFetcher:

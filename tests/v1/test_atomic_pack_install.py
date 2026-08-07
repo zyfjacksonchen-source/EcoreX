@@ -52,22 +52,21 @@ PACK_TOOLS = CAPABILITY_PACK_TOOL_IDS
 PACK_SERVICES = CAPABILITY_PACK_SERVICE_IDS
 
 
-def test_verified_pack_copy_streams_without_materializing_the_full_archive(
+def test_verified_pack_transfer_reuses_the_transaction_file_without_copying(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "large-pack.zip"
     destination = tmp_path / "slot" / "large-pack.zip"
     payload = b"bounded-stream-chunk" * (3 * 1024 * 1024 // 20)
     source.write_bytes(payload)
+    source_identity = source.stat().st_ino
 
-    def reject_full_file_read(_path: Path, _maximum: int) -> bytes:
-        raise AssertionError("full-file allocation is forbidden for Pack copy")
+    pack_install_module._transfer_stable(source, destination)
 
-    monkeypatch.setattr(pack_install_module, "_stable_bytes", reject_full_file_read)
-    pack_install_module._copy_stable(source, destination)
-
+    assert not source.exists()
     assert destination.read_bytes() == payload
+    if source_identity:
+        assert destination.stat().st_ino == source_identity
 
 
 class AcceptingTestVerifier:
@@ -381,6 +380,39 @@ def test_cancelled_transaction_reuses_core_and_all_pack_artifacts_from_verified_
     assert second.state is InstallState.AWAITING_USER
     assert tuple(fetcher.artifact_ids) == first_fetches
     assert set(first_fetches) == {artifact.artifact_id for artifact in manifest.artifacts}
+
+
+def test_version_update_does_not_refetch_identical_pack_archives(
+    tmp_path: Path,
+) -> None:
+    first_manifest, first_files = _release("1.0.0")
+    install_root = tmp_path / "install"
+    source_root = tmp_path / "sources"
+    fetcher = CountingFetcher(_fetcher(source_root, first_files))
+    coordinator = _coordinator(install_root, fetcher)
+    first = coordinator.prepare(first_manifest, "core-windows-x64")
+    coordinator.activate(first.transaction_id)
+
+    second_manifest, second_files = _release("1.0.1")
+    for source_id in ("cn", "github", "cdn"):
+        for name, payload in second_files.items():
+            (source_root / source_id / name).write_bytes(payload)
+    fetcher.artifact_ids.clear()
+
+    second = coordinator.prepare(second_manifest, "core-windows-x64")
+
+    assert second.state is InstallState.AWAITING_USER
+    assert set(fetcher.artifact_ids) == {
+        "core-windows-x64",
+        *(
+            f"capability-pack-{pack_id}-windows-x64-manifest"
+            for pack_id in REQUIRED_CAPABILITY_PACK_IDS
+        ),
+    }
+    for pack_id in REQUIRED_CAPABILITY_PACK_IDS:
+        assert (
+            f"capability-pack-{pack_id}-windows-x64" not in fetcher.artifact_ids
+        )
 
 
 def test_partial_signed_pack_set_is_rejected_before_transaction(tmp_path: Path) -> None:

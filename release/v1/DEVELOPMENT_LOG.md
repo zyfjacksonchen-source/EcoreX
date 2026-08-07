@@ -343,3 +343,90 @@ Starlette's upstream `python_multipart` pending-deprecation notice.
   build-time migration bridge only. v1.0.0 artifacts and lock receipts become
   the next release base; the compatibility bridge is not a continuing product
   fact source.
+
+## 2026-08-07 - CowAgent WebUI review and fast manual release lane
+
+- Reviewed the official CowAgent repository at immutable commit
+  `46a9b8762443d6adb0b020326b11854b1588c44a`. Its source-WebUI update command is
+  fast because it stops the service, performs `git pull`, installs Python
+  requirements and restarts. That assumes user-owned Git/Python/pip and has no
+  signed release manifest, atomic product slot or verified rollback, so this
+  code path is not copied into e-Mate.
+- Retained CowAgent's useful lifecycle decisions without importing its Electron
+  shell: immutable assets are completed before a mutable release/feed switch;
+  publishing and promotion are separate; a persistent browser dependency may
+  prefer an acceptable system Chrome/Edge and otherwise install one pinned
+  managed engine; a large optional SDK may be reduced to its reviewed closure,
+  SHA-256 pinned, versioned and atomically installed with mirror fallback.
+- e-Mate v1.0.0 remains the one full-offline baseline. Browser/CDP and OCR stay
+  signed Packs so every advertised built-in works immediately. Feishu remains
+  a Connector rather than a CLI Pack; a later reduced connector closure may
+  use the pinned/atomic CowAgent pattern. Agents never run npm or pip on the
+  user's machine.
+- Patch releases do not need a second updater. The existing signed CoreDelta,
+  exact-base binding, verified download cache, full-Core fallback, slot
+  checkpoint and rollback code are the online update lane. The manual direct
+  Candidate command already accepts `--delta-base-release-dir`; the previous
+  accepted release directory is therefore a required retained input for patch
+  builds. A heavy full baseline is rebuilt only when Bootstrap, dependency
+  lock, platform Runtime or Pack bytes actually change.
+- The current v1 Pack manifest intentionally uses release-versioned canonical
+  filenames. Its content-addressed download cache already avoids re-downloading
+  an unchanged Pack on the client, but GitHub still needs the versioned asset
+  for each signed manifest. Changing Pack filenames or omitting release assets
+  would be a manifest compatibility change, not a safe v1.0.0 optimization;
+  independent content-addressed Pack publication is deferred until an older
+  Runtime can consume the new contract.
+- The shared GitHub publisher now resumes a batch from one remote Draft
+  inventory instead of re-listing the Draft before every asset. Local bytes and
+  SHA-256 identities are checked before the first network mutation, matching
+  remote assets are reused, conflicts remain fail-closed, and only missing
+  assets upload. Manual publication still leaves the release as Draft until
+  CDN/readback and acceptance are complete; no CI or tag-triggered build is
+  introduced.
+- User-side reuse is also digest based, not version-name based. Every Core,
+  delta, Pack archive and Pack sidecar enters the verified download cache only
+  after manifest/artifact signature, size and SHA-256 checks. A later release
+  that carries an unchanged Pack archive therefore performs no network request
+  for that archive even though its release-scoped sidecar and filename change.
+- A verified cache hit now prefers native APFS copy-on-write cloning and always
+  verifies the independently addressed result; unsupported filesystems retain
+  the bounded verified-copy fallback. Pack transaction files are then moved,
+  rather than copied, into the still-private candidate slot. This removes both
+  redundant Pack network transfer and the second 120 MB browser / 96 MB OCR
+  local copy while preserving independent inodes, signed validation, atomic
+  activation and rollback isolation. Hard links and shared writable payloads
+  remain forbidden.
+- Core updates reuse unchanged compressed content through the existing signed,
+  exact-base CoreDelta and reconstruct/verify the final Core before staging.
+  Platform Runtime or dependency-lock changes still require a new full Core;
+  ordinary product/Web patches do not reinstall or fetch unchanged Capability
+  Pack environments. A future physical split of the portable interpreter from
+  product code is only justified if measured Core reconstruction remains the
+  dominant patch cost; it is not a prerequisite for the v1.0.0 baseline.
+- The resulting manual order is fixed: build/verify immutable Candidate once;
+  stage immutable GitHub/CDN assets with resumable digest checks; perform public
+  readback; run the real local-user browser matrix; then atomically switch the
+  signed update pointer as the last operation. A failed stage never advertises
+  incomplete bytes, and retry resumes rather than rebuilding or re-uploading
+  verified work.
+
+Focused verification for the new shared batch boundary:
+
+```text
+python -m pytest -q -p no:cacheprovider tests/v1/test_github_release_publisher.py
+12 passed, 1 warning
+```
+
+The warning is Starlette's existing `python_multipart` pending deprecation.
+
+User-side cache/Pack focused verification:
+
+```text
+python -m pytest -q -p no:cacheprovider \
+  tests/v1/test_update_download_cache.py tests/v1/test_atomic_pack_install.py
+18 passed, 1 warning
+```
+
+The macOS runtime probe confirmed APFS clone success, identical bytes and an
+independent destination inode.

@@ -10,6 +10,7 @@ import pytest
 from ecorex.release import (
     EnvironmentGitHubCredential,
     GitHubPublicationError,
+    GitHubReleaseDraft,
     GitHubReleasePublisher,
     release_tag,
 )
@@ -159,6 +160,58 @@ def test_draft_upload_resume_and_publish_are_digest_fenced(tmp_path: Path) -> No
         for method, url in calls
     ) == 1
     assert "github-installation-token-secret" not in repr(calls)
+
+
+def test_batch_resume_reads_remote_inventory_once(tmp_path: Path) -> None:
+    existing = tmp_path / "existing.zip"
+    missing = tmp_path / "missing.zip"
+    existing.write_bytes(b"existing")
+    missing.write_bytes(b"missing")
+    list_count = 0
+    uploads: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal list_count
+        if request.method == "GET" and request.url.path.endswith(
+            "/releases/77/assets"
+        ):
+            list_count += 1
+            return httpx.Response(
+                200,
+                json=[_asset(existing.name, existing.read_bytes())],
+                headers={"content-type": "application/json"},
+            )
+        if request.method == "POST" and request.url.host == "uploads.github.com":
+            uploads.append(request.url.params["name"])
+            return httpx.Response(
+                201,
+                json=_asset(missing.name, missing.read_bytes(), asset_id=11),
+                headers={"content-type": "application/json"},
+            )
+        raise AssertionError((request.method, request.url))
+
+    publisher = GitHubReleasePublisher(
+        owner="acme",
+        repository="ecorex",
+        credentials=Credential(),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    receipts = publisher.ensure_assets(
+        GitHubReleaseDraft(
+            77,
+            "v1.0.0",
+            "https://uploads.github.com/repos/acme/ecorex/releases/77/assets{?name,label}",
+            True,
+        ),
+        (
+            (existing, hashlib.sha256(existing.read_bytes()).hexdigest()),
+            (missing, hashlib.sha256(missing.read_bytes()).hexdigest()),
+        ),
+    )
+
+    assert [receipt.name for receipt in receipts] == [existing.name, missing.name]
+    assert list_count == 1
+    assert uploads == [missing.name]
 
 
 def test_existing_remote_digest_conflict_never_overwrites_asset(tmp_path: Path) -> None:

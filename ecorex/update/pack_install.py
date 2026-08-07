@@ -14,7 +14,6 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path, PurePosixPath
-import shutil
 import stat
 from typing import Any, Callable, Mapping, Protocol
 
@@ -457,8 +456,8 @@ def install_prepared_pack_set(
         sidecar_source = prepared.package_paths[pair.sidecar.artifact_id]
         artifact_target = directory / pair.artifact.file_name
         sidecar_target = directory / pair.sidecar.file_name
-        _copy_stable(artifact_source, artifact_target)
-        _copy_stable(sidecar_source, sidecar_target)
+        _transfer_stable(artifact_source, artifact_target)
+        _transfer_stable(sidecar_source, sidecar_target)
         records.append(
             {
                 "pack_id": pair.pack_id,
@@ -602,8 +601,8 @@ def _contained_file(root: Path, relative: PurePosixPath) -> Path:
     return current
 
 
-def _copy_stable(source: Path, destination: Path) -> None:
-    """Copy one verified Pack file without allocating its full 500 MiB bound."""
+def _transfer_stable(source: Path, destination: Path) -> None:
+    """Move one transaction-owned verified Pack into its atomic candidate slot."""
 
     _reject_link(source)
     try:
@@ -615,47 +614,24 @@ def _copy_stable(source: Path, destination: Path) -> None:
         ):
             raise OSError
         destination.parent.mkdir(parents=True, exist_ok=True)
-        written = 0
-        with source.open("rb") as input_stream, destination.open("xb") as output_stream:
-            opened = os.fstat(input_stream.fileno())
-            while chunk := input_stream.read(1024 * 1024):
-                written += len(chunk)
-                if written > before.st_size or written > MAX_ARTIFACT_BYTES:
-                    raise PackInstallError(
-                        "Capability Pack file exceeded its bounded copy size"
-                    )
-                output_stream.write(chunk)
-            output_stream.flush()
-            os.fsync(output_stream.fileno())
-            after = os.fstat(input_stream.fileno())
-        current = source.lstat()
-    except PackInstallError:
-        try:
-            destination.unlink()
-        except FileNotFoundError:
-            pass
-        raise
+        if os.path.lexists(destination):
+            raise OSError
+        os.replace(source, destination)
+        _reject_link(destination)
+        after = destination.lstat()
     except OSError:
-        try:
-            destination.unlink()
-        except FileNotFoundError:
-            pass
-        raise PackInstallError("Capability Pack file is unreadable") from None
+        raise PackInstallError("Capability Pack file transfer failed") from None
     identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
     if (
-        (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+        (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
         != identity
-        or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-        != identity
-        or (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns)
-        != identity
-        or written != before.st_size
+        or after.st_nlink != 1
     ):
         try:
             destination.unlink()
         except FileNotFoundError:
             pass
-        raise PackInstallError("Capability Pack file changed during bounded copy")
+        raise PackInstallError("Capability Pack file changed during transfer")
     if os.name != "nt":
         destination.chmod(0o600)
 

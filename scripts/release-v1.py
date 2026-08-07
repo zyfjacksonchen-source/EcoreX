@@ -1104,10 +1104,10 @@ def _upload_assets(
         unique[path.name] = path
     publisher, client = _draft_publisher()
     try:
-        receipts = [
-            publisher.ensure_asset(draft, path, expected_sha256=sha256_file(path))
-            for path in unique.values()
-        ]
+        receipts = publisher.ensure_assets(
+            draft,
+            ((path, sha256_file(path)) for path in unique.values()),
+        )
         return [
             {
                 "asset_id": item.asset_id,
