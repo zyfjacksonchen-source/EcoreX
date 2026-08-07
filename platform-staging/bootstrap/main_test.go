@@ -1005,6 +1005,27 @@ func TestSuperviseArgumentsCarryGenericLegacyContract(t *testing.T) {
 	}
 }
 
+func TestPreviewSuperviseArgumentsUseIndependentEndpointAndMode(t *testing.T) {
+	arguments := superviseArgumentsAt(
+		"/tmp/ecorex-preview",
+		[]string{"release-key=/tmp/release.pub"},
+		legacySelection{},
+		18765,
+		true,
+	)
+	joined := strings.Join(arguments, "\x00")
+	for _, required := range []string{
+		"--install-root\x00/tmp/ecorex-preview",
+		"--trusted-public-key\x00release-key=/tmp/release.pub",
+		"--host\x00127.0.0.1\x00--port\x0018765",
+		"--acceptance-preview",
+	} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("preview arguments omitted %q: %#v", required, arguments)
+		}
+	}
+}
+
 func TestBoundedBufferFailsAtTheConfiguredLimit(t *testing.T) {
 	buffer := boundedBuffer{limit: 4}
 	if _, err := buffer.Write([]byte("1234")); err != nil {

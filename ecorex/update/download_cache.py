@@ -468,6 +468,12 @@ def _copy_regular_stable(source: Path, destination: Path) -> None:
         raise
 
 
+def copy_regular_cow(source: Path, destination: Path) -> None:
+    """Create an independent stable copy, preferring APFS copy-on-write."""
+
+    _copy_regular_stable(Path(source), Path(destination))
+
+
 def _try_clone_regular(source: Path, destination: Path) -> bool:
     """Use APFS copy-on-write when available; callers retain verified fallback."""
 
@@ -565,4 +571,5 @@ __all__ = [
     "DownloadCacheError",
     "VerifiedDownloadCache",
     "VerifiedDownloadLease",
+    "copy_regular_cow",
 ]

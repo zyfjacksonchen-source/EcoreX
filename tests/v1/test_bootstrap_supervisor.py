@@ -604,6 +604,34 @@ def test_default_launcher_uses_no_shell_and_a_sanitized_environment(
         )
 
 
+def test_acceptance_preview_is_bootstrap_owned_and_reaches_only_the_runtime(
+    tmp_path: Path,
+    signing_key: Ed25519PrivateKey,
+) -> None:
+    install_root = tmp_path / "install"
+    _stage(install_root, signing_key, "1.0.0", activate=True)
+    launcher = _Launcher([_Child(0)])
+
+    result = _supervisor(
+        install_root,
+        signing_key,
+        launcher,
+        acceptance_preview=True,
+        source_environment={"ECOREX_RUNTIME_ACCEPTANCE_PREVIEW": "attacker"},
+    ).run()
+
+    assert result.exit_code == 0
+    assert launcher.specs[0].environment["ECOREX_RUNTIME_ACCEPTANCE_PREVIEW"] == "1"
+
+    with pytest.raises(BootstrapConfigurationError, match="acceptance_preview"):
+        _supervisor(
+            install_root,
+            signing_key,
+            _Launcher([_Child(0)]),
+            acceptance_preview="yes",
+        )
+
+
 def test_default_resolver_fails_closed_for_ambiguous_or_linked_entrypoint(
     tmp_path: Path,
     signing_key: Ed25519PrivateKey,

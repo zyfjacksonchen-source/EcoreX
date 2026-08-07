@@ -41,6 +41,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--install-root", required=True)
     parser.add_argument("--sandbox-helper")
     parser.add_argument("--sandbox-helper-sha256")
+    parser.add_argument("--desktop-directory")
+    parser.add_argument("--stage-only", action="store_true")
     parser.add_argument(
         "--trusted-public-key",
         action="append",
@@ -120,7 +122,10 @@ def install(
     sandbox_helper: str | None = None,
     sandbox_helper_sha256: str | None = None,
     desktop_directory: str | None = None,
+    stage_only: bool = False,
 ) -> dict[str, object]:
+    if not isinstance(stage_only, bool):
+        raise ValueError("stage_only must be boolean")
     manifest = ReleaseManifest.from_json(
         _regular_bytes(manifest_path, limit=MAX_MANIFEST_BYTES)
     )
@@ -186,9 +191,17 @@ def install(
     )
 
     recovered = coordinator.recover()
+    prepared: PreparedUpdate | None = None
+    activated: ActivationResult | None = None
     if isinstance(recovered, PreparedUpdate):
+        if (
+            recovered.release_id != manifest.release_id
+            or recovered.version != manifest.version
+            or recovered.build_digest != manifest.build_digest
+            or recovered.artifact_id != artifact_id
+        ):
+            raise ValueError("a different verified Runtime update is already prepared")
         prepared = recovered
-        activated = coordinator.activate(prepared.transaction_id)
     elif (
         isinstance(recovered, ActivationResult)
         and recovered.state in {InstallState.HEALTHCHECKING, InstallState.COMPLETED}
@@ -217,7 +230,6 @@ def install(
                 )
                 if prepared.state is not InstallState.AWAITING_USER:
                     raise ValueError("Bootstrap update did not wait for confirmation")
-                activated = coordinator.activate(prepared.transaction_id)
         else:
             prepared = coordinator.prepare_update(
                 manifest,
@@ -226,7 +238,17 @@ def install(
             )
             if prepared.state is not InstallState.AWAITING_USER:
                 raise ValueError("first install did not wait for confirmation")
-            activated = coordinator.activate(prepared.transaction_id)
+    if stage_only and prepared is not None:
+        return {
+            "schema_version": 1,
+            "state": prepared.state.value,
+            "transaction_id": prepared.transaction_id,
+            "slot_id": prepared.slot_id,
+        }
+    if prepared is not None:
+        activated = coordinator.activate(prepared.transaction_id)
+    if activated is None:
+        raise ValueError("Bootstrap update did not produce an activation result")
     if activated.state not in {InstallState.HEALTHCHECKING, InstallState.COMPLETED}:
         raise ValueError("first install did not reach Bootstrap health")
     if not activated.current_slot:
@@ -249,6 +271,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             trusted_public_keys=args.trusted_public_key,
             sandbox_helper=args.sandbox_helper,
             sandbox_helper_sha256=args.sandbox_helper_sha256,
+            desktop_directory=args.desktop_directory,
+            stage_only=args.stage_only,
         )
     except Exception:
         print("EcoreX Bootstrap could not stage the verified Runtime.", file=sys.stderr)

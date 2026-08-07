@@ -430,3 +430,51 @@ python -m pytest -q -p no:cacheprovider \
 
 The macOS runtime probe confirmed APFS clone success, identical bytes and an
 independent destination inode.
+
+## 2026-08-07 - side-by-side Runtime acceptance and short cutover
+
+- Added a manual blue-green acceptance lane for an authenticated local release.
+  The installed Runtime keeps its `127.0.0.1:8765` process and launch lock while
+  the candidate runs from a release/build-addressed preview root on an
+  independent loopback port (default `18765`). On macOS the Bootstrap asks the
+  platform opener for a new browser instance so the candidate is not confused
+  with the current WebUI tab.
+- The candidate receives a bounded, consistent checkpoint of only `state/` and
+  `workspace/`. SQLite uses the existing online-backup boundary; ordinary files
+  prefer APFS copy-on-write and retain a verified independent-copy fallback.
+  Links, special files, overlapping data roots, more than 100,000 files and more
+  than 20 GiB fail closed. The previous valid preview checkpoint is preserved
+  when preparation fails.
+- Preview mode is Bootstrap-owned and cannot be enabled by an inherited Runtime
+  environment variable. The WebUI displays a persistent candidate banner. Login,
+  update activation, Connector/MCP OAuth mutations, external sharing and host
+  open/reveal actions return a controlled `409`; managed session refresh,
+  registration callbacks, update polling and share publishing are absent. Chat,
+  image generation and local tools remain usable against the isolated database
+  and workspace. Saved absolute project roots from the live database are not
+  admitted into the preview authority.
+- The exact verified candidate is also staged into the live install root as an
+  `awaiting_user` transaction without changing the active slot pointer or
+  desktop entry. After acceptance, the ordinary local-release command reuses
+  that transaction and performs only the launch-lock handoff and pointer switch.
+  A different manifest cannot consume the prepared transaction. Existing slot
+  health/rollback logic remains the sole cutover authority.
+- The ordinary manual local-release path now verifies, copies and expands signed
+  artifacts before waiting for the current Runtime launch lock. This removes the
+  long service outage from packaging work without adding a second installer or
+  updater.
+
+Focused verification at implementation time:
+
+```text
+Python acceptance/install/config/API slice: 88 passed, 10 skipped
+Snapshot overlap and checkpoint slice: 9 passed
+WebUI TypeScript + Runtime contracts: 225 passed
+Go Bootstrap: go test ./... passed
+Ruff and git diff checks: passed
+```
+
+The platform opener requests a distinct browser instance on macOS. Windows keeps
+the normal default-browser opener for now; Runtime roots, ports and origin storage
+are still independent there. No public update pointer or production install was
+changed by this implementation slice.

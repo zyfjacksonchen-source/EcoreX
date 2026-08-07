@@ -79,6 +79,7 @@ export interface RuntimeBridgeConfig {
   bearerToken?: string;
   csrfToken?: string;
   version?: string;
+  mode?: "standard" | "acceptance-preview";
 }
 
 export interface TurnModelSelection {

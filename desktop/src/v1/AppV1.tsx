@@ -772,6 +772,13 @@ export function AppV1() {
           </header>
 
           <div className="ex-status-stack">
+            {window.__ECOREX_RUNTIME__?.mode === "acceptance-preview" ? (
+              <section className="ex-update-banner" role="status" data-runtime-mode="acceptance-preview">
+                <span>
+                  这是新版候选验收窗口。消息、生图和本地工具写入隔离副本；登录、更新、外部分享不会影响当前正式版本。
+                </span>
+              </section>
+            ) : null}
             {updateBannerVisible ? (
               <section className="ex-update-banner" aria-live="polite">
                 <span>{updateMessage}</span>

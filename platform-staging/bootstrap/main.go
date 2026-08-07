@@ -242,6 +242,16 @@ type installResult struct {
 	SlotID        string `json:"slot_id"`
 }
 
+type previewStateReceipt struct {
+	SchemaVersion  int    `json:"schema_version"`
+	Status         string `json:"status"`
+	SnapshotID     string `json:"snapshot_id"`
+	DatabaseSHA256 string `json:"database_sha256"`
+	FileCount      int64  `json:"file_count"`
+	SizeBytes      int64  `json:"size_bytes"`
+	CreatedAt      string `json:"created_at"`
+}
+
 type runtimeOwnerReceipt struct {
 	SchemaVersion int    `json:"schema_version"`
 	Nonce         string `json:"nonce"`
@@ -276,6 +286,8 @@ func main() {
 	selfTest := flag.Bool("self-test", false, "verify the packaged bootstrap entrypoint")
 	indexURL := flag.String("index", "", "override the public discovery URL")
 	localRelease := flag.String("local-release", "", "install an authenticated local release directory")
+	previewLocalRelease := flag.String("preview-local-release", "", "open an authenticated local release in an isolated acceptance window")
+	previewPort := flag.Int("preview-port", 18765, "loopback port for the isolated acceptance Runtime")
 	installRootFlag := flag.String("install-root", "", "override the EcoreX data root")
 	launchInstalled := flag.Bool(
 		"launch-installed",
@@ -292,7 +304,7 @@ func main() {
 		return
 	}
 	if *launchInstalled {
-		if *indexURL != "" || *localRelease != "" {
+		if *indexURL != "" || *localRelease != "" || *previewLocalRelease != "" {
 			fail(fmt.Errorf("installed Runtime launch does not accept release discovery overrides"))
 		}
 		if err := runInstalled(*installRootFlag); err != nil {
@@ -301,10 +313,19 @@ func main() {
 		return
 	}
 	if *localRelease != "" {
-		if *indexURL != "" {
+		if *indexURL != "" || *previewLocalRelease != "" {
 			fail(fmt.Errorf("local release install does not accept public discovery overrides"))
 		}
 		if err := runLocalRelease(*localRelease, *installRootFlag); err != nil {
+			fail(err)
+		}
+		return
+	}
+	if *previewLocalRelease != "" {
+		if *indexURL != "" || *previewPort < 1 || *previewPort > 65535 || *previewPort == 8765 {
+			fail(fmt.Errorf("local release preview options are invalid"))
+		}
+		if err := runPreviewLocalRelease(*previewLocalRelease, *installRootFlag, *previewPort); err != nil {
 			fail(err)
 		}
 		return
@@ -315,8 +336,20 @@ func main() {
 }
 
 func runLocalRelease(localRelease, rootOverride string) error {
+	return runLocalReleaseMode(localRelease, rootOverride, false, 8765)
+}
+
+func runPreviewLocalRelease(localRelease, rootOverride string, port int) error {
+	return runLocalReleaseMode(localRelease, rootOverride, true, port)
+}
+
+func runLocalReleaseMode(localRelease, rootOverride string, preview bool, port int) error {
 	progress := newBootstrapProgress(os.Stderr)
-	progress.Stage("准备", "正在验证本地 e-Mate WebUI 发布包")
+	if preview {
+		progress.Stage("准备", "正在验证新版候选并创建隔离验收窗口")
+	} else {
+		progress.Stage("准备", "正在验证本地 e-Mate WebUI 发布包")
+	}
 	configuration, _, keys, _, err := loadConfig()
 	if err != nil {
 		return err
@@ -325,29 +358,32 @@ func runLocalRelease(localRelease, rootOverride string) error {
 	if err != nil {
 		return err
 	}
-	root, err := installRoot(rootOverride)
+	liveRoot, err := installRoot(rootOverride)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(root, 0o700); err != nil {
+	if err := os.MkdirAll(liveRoot, 0o700); err != nil {
 		return fmt.Errorf("install root is unavailable")
 	}
-	lock, err := acquireProductLock(filepath.Join(root, "bootstrap-launch.lock"))
-	if err != nil {
-		if !errors.Is(err, errProductLocked) {
-			return err
+	root := liveRoot
+	var previewLock *productLock
+	if preview {
+		root = filepath.Join(
+			liveRoot,
+			"acceptance-preview",
+			release.ReleaseID+"-"+release.BuildDigest[:16],
+		)
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			return fmt.Errorf("acceptance preview root is unavailable")
 		}
-		progress.Stage("等待", "正在等待旧版 e-Mate 安全退出")
-		lock, err = acquireLocalInstallLock(
-			filepath.Join(root, "bootstrap-launch.lock"),
-			5*time.Minute,
-			250*time.Millisecond,
+		previewLock, err = acquireProductLock(
+			filepath.Join(liveRoot, "acceptance-preview.lock"),
 		)
 		if err != nil {
 			return err
 		}
+		defer previewLock.close()
 	}
-	defer lock.close()
 	if err := ensureBootstrapStateDirectory(root); err != nil {
 		return err
 	}
@@ -358,9 +394,12 @@ func runLocalRelease(localRelease, rootOverride string) error {
 	if err != nil {
 		return err
 	}
-	legacy, err := selectLegacyMigration(root)
-	if err != nil {
-		return err
+	legacy := legacySelection{}
+	if !preview {
+		legacy, err = selectLegacyMigration(root)
+		if err != nil {
+			return err
+		}
 	}
 	work := filepath.Join(root, "bootstrap-work", release.ReleaseID)
 	if err := os.MkdirAll(work, 0o700); err != nil {
@@ -386,11 +425,71 @@ func runLocalRelease(localRelease, rootOverride string) error {
 	if err := extractCore(filepath.Join(artifactsDir, core.FileName), coreRoot); err != nil {
 		return err
 	}
+	if preview {
+		progress.Stage("检查点", "正在复制当前会话与工作区到独立验收副本")
+		if err := preparePreviewState(coreRoot, liveRoot, root); err != nil {
+			return err
+		}
+	}
 	trustedDefinitions, err := persistTrust(root, configuration.ReleasePublicKeys, keys)
 	if err != nil {
 		return err
 	}
-	result, err := installLocal(coreRoot, root, stagedManifest, artifactsDir, trustedDefinitions, bootstrapHelper, configuration.SandboxHelperSHA256)
+	desktopDirectory := ""
+	if preview {
+		desktopDirectory = filepath.Join(root, "preview-desktop")
+		progress.Stage("预置", "正在将已验证候选槽位预置到正式安装根")
+		if err := ensureBootstrapStateDirectory(liveRoot); err != nil {
+			return err
+		}
+		if err := ensureRuntimeDataDirectories(liveRoot); err != nil {
+			return err
+		}
+		liveBootstrapHelper, err := stageSandboxHelper(
+			liveRoot, configuration.SandboxHelperSHA256,
+		)
+		if err != nil {
+			return err
+		}
+		liveTrust, err := persistTrust(
+			liveRoot, configuration.ReleasePublicKeys, keys,
+		)
+		if err != nil {
+			return err
+		}
+		if _, err := installLocal(
+			coreRoot,
+			liveRoot,
+			stagedManifest,
+			artifactsDir,
+			liveTrust,
+			liveBootstrapHelper,
+			configuration.SandboxHelperSHA256,
+			"",
+			true,
+		); err != nil {
+			return err
+		}
+	} else {
+		lockPath := filepath.Join(liveRoot, "bootstrap-launch.lock")
+		lock, lockErr := acquireProductLock(lockPath)
+		if lockErr != nil {
+			if !errors.Is(lockErr, errProductLocked) {
+				return lockErr
+			}
+			progress.Stage("切换", "候选已准备完成，正在等待旧版 e-Mate 安全退出")
+			lock, lockErr = acquireLocalInstallLock(
+				lockPath,
+				5*time.Minute,
+				250*time.Millisecond,
+			)
+			if lockErr != nil {
+				return lockErr
+			}
+		}
+		defer lock.close()
+	}
+	result, err := installLocal(coreRoot, root, stagedManifest, artifactsDir, trustedDefinitions, bootstrapHelper, configuration.SandboxHelperSHA256, desktopDirectory, false)
 	if err != nil {
 		return err
 	}
@@ -405,6 +504,16 @@ func runLocalRelease(localRelease, rootOverride string) error {
 	ownerNonce, err := issueRuntimeOwnerReceipt(root)
 	if err != nil {
 		return err
+	}
+	if preview {
+		webUIURL := fmt.Sprintf("http://127.0.0.1:%d/", port)
+		go func() {
+			_ = waitForRuntimeAndOpenAt(root, webUIURL, 5*time.Minute, openPreviewWebUI)
+		}()
+		progress.Stage("验收", "旧版仍在运行；新版候选将于独立窗口打开")
+		return superviseAt(
+			python, root, trustedDefinitions, legacy, ownerNonce, port, true,
+		)
 	}
 	go func() {
 		_ = waitForRuntimeAndOpen(root, 5*time.Minute)
@@ -523,11 +632,11 @@ func localManifestDiscovery(value *manifest) indexRelease {
 		sources[position] = indexSource{SourceID: item.SourceID, Kind: item.Kind, Priority: item.Priority, URL: strings.TrimRight(item.BaseURL, "/") + "/release-manifest.json"}
 	}
 	return indexRelease{
-		ReleaseID: value.ReleaseID,
-		Version: value.Version,
-		Channel: value.Channel,
+		ReleaseID:   value.ReleaseID,
+		Version:     value.Version,
+		Channel:     value.Channel,
 		BuildDigest: value.BuildDigest,
-		Manifest: indexManifest{Signature: value.Signature, Sources: sources},
+		Manifest:    indexManifest{Signature: value.Signature, Sources: sources},
 	}
 }
 
@@ -789,6 +898,8 @@ func run(indexOverride, rootOverride string) error {
 		trustedDefinitions,
 		bootstrapHelper,
 		configuration.SandboxHelperSHA256,
+		"",
+		false,
 	)
 	installActivity.End()
 	if err != nil {
@@ -817,8 +928,19 @@ func run(indexOverride, rootOverride string) error {
 }
 
 func waitForRuntimeAndOpen(root string, timeout time.Duration) error {
+	return waitForRuntimeAndOpenAt(root, productWebUIURL, timeout, openWebUI)
+}
+
+func waitForRuntimeAndOpenAt(
+	root, webUIURL string,
+	timeout time.Duration,
+	opener func(string) error,
+) error {
 	if timeout <= 0 || timeout > 15*time.Minute {
 		return fmt.Errorf("Runtime launch wait is invalid")
+	}
+	if opener == nil {
+		return fmt.Errorf("WebUI opener is unavailable")
 	}
 	deadline := time.Now().Add(timeout)
 	client := &http.Client{
@@ -837,11 +959,11 @@ func waitForRuntimeAndOpen(root string, timeout time.Duration) error {
 	}
 	defer client.CloseIdleConnections()
 	for {
-		if runtimeUIReadyAt(client, root, productWebUIURL) {
-			if err := openWebUI(productWebUIURL); err != nil {
+		if runtimeUIReadyAt(client, root, webUIURL) {
+			if err := opener(webUIURL); err != nil {
 				return fmt.Errorf("EcoreX WebUI could not be opened")
 			}
-			if err := recordBrowserOpen(root, productWebUIURL); err != nil {
+			if err := recordBrowserOpen(root, webUIURL); err != nil {
 				return err
 			}
 			return nil
@@ -2446,7 +2568,7 @@ func persistTrust(root string, encoded map[string]string, keys map[string]ed2551
 	return definitions, nil
 }
 
-func installLocal(coreRoot, root, manifestPath, artifactsDir string, trusted []string, sandboxHelper string, sandboxHelperSHA256 string) (installResult, error) {
+func installLocal(coreRoot, root, manifestPath, artifactsDir string, trusted []string, sandboxHelper string, sandboxHelperSHA256 string, desktopDirectory string, stageOnly bool) (installResult, error) {
 	python := filepath.Join(coreRoot, "bin", "pack-python", "bin", "python3")
 	if runtime.GOOS == "windows" {
 		python = filepath.Join(coreRoot, "bin", "pack-python", "python.exe")
@@ -2454,6 +2576,12 @@ func installLocal(coreRoot, root, manifestPath, artifactsDir string, trusted []s
 	arguments := []string{"-I", "-B", "-m", "ecorex.bootstrap.install_local", "--manifest", manifestPath, "--artifacts", artifactsDir, "--install-root", root}
 	if runtime.GOOS == "windows" {
 		arguments = append(arguments, "--sandbox-helper", sandboxHelper, "--sandbox-helper-sha256", sandboxHelperSHA256)
+	}
+	if desktopDirectory != "" {
+		arguments = append(arguments, "--desktop-directory", desktopDirectory)
+	}
+	if stageOnly {
+		arguments = append(arguments, "--stage-only")
 	}
 	for _, definition := range trusted {
 		arguments = append(arguments, "--trusted-public-key", definition)
@@ -2471,10 +2599,58 @@ func installLocal(coreRoot, root, manifestPath, artifactsDir string, trusted []s
 		return installResult{}, fmt.Errorf("verified Runtime could not stage the first install")
 	}
 	var result installResult
-	if err := decodeExact(stdout.Bytes(), &result); err != nil || result.SchemaVersion != 1 || result.State != "healthchecking" && result.State != "completed" || !safeID.MatchString(result.TransactionID) || !safeID.MatchString(result.SlotID) {
+	if err := decodeExact(stdout.Bytes(), &result); err != nil {
+		return installResult{}, fmt.Errorf("first-install result is invalid")
+	}
+	validState := result.State == "healthchecking" || result.State == "completed" || stageOnly && result.State == "awaiting_user"
+	if result.SchemaVersion != 1 || !validState || !safeID.MatchString(result.TransactionID) || !safeID.MatchString(result.SlotID) {
 		return installResult{}, fmt.Errorf("first-install result is invalid")
 	}
 	return result, nil
+}
+
+func preparePreviewState(coreRoot, sourceRoot, previewRoot string) error {
+	python := filepath.Join(coreRoot, "bin", "pack-python", "bin", "python3")
+	if runtime.GOOS == "windows" {
+		python = filepath.Join(coreRoot, "bin", "pack-python", "python.exe")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(
+		ctx,
+		python,
+		"-I",
+		"-B",
+		"-m",
+		"ecorex.bootstrap.preview_state",
+		"--source-install-root",
+		sourceRoot,
+		"--preview-install-root",
+		previewRoot,
+	)
+	command.Dir = coreRoot
+	command.Env = minimalEnvironment()
+	stdout := boundedBuffer{limit: 64 * 1024}
+	stderr := boundedBuffer{limit: 16 * 1024}
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil || ctx.Err() != nil || stdout.overflow || stderr.overflow || len(stdout.Bytes()) == 0 {
+		return fmt.Errorf("isolated Runtime acceptance checkpoint failed")
+	}
+	var receipt previewStateReceipt
+	if err := decodeExact(stdout.Bytes(), &receipt); err != nil ||
+		receipt.SchemaVersion != 1 ||
+		receipt.Status != "ready" ||
+		len(receipt.SnapshotID) != 32 ||
+		!sha256Pattern.MatchString(receipt.DatabaseSHA256) ||
+		receipt.FileCount < 0 ||
+		receipt.SizeBytes < 0 {
+		return fmt.Errorf("isolated Runtime acceptance checkpoint is invalid")
+	}
+	if _, err := parseCanonicalUTCSecond(receipt.CreatedAt); err != nil {
+		return fmt.Errorf("isolated Runtime acceptance checkpoint is invalid")
+	}
+	return nil
 }
 
 func supervise(
@@ -2484,7 +2660,19 @@ func supervise(
 	legacy legacySelection,
 	ownerNonce string,
 ) error {
-	arguments := superviseArguments(root, trusted, legacy)
+	return superviseAt(python, root, trusted, legacy, ownerNonce, 8765, false)
+}
+
+func superviseAt(
+	python string,
+	root string,
+	trusted []string,
+	legacy legacySelection,
+	ownerNonce string,
+	port int,
+	preview bool,
+) error {
+	arguments := superviseArgumentsAt(root, trusted, legacy, port, preview)
 	command := exec.Command(python, arguments...)
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
@@ -2497,6 +2685,23 @@ func supervise(
 		return fmt.Errorf("installed Runtime did not pass Bootstrap health")
 	}
 	return nil
+}
+
+func superviseArgumentsAt(
+	root string,
+	trusted []string,
+	legacy legacySelection,
+	port int,
+	preview bool,
+) []string {
+	arguments := superviseArguments(root, trusted, legacy)
+	if port != 8765 {
+		arguments = append(arguments, "--host", "127.0.0.1", "--port", strconv.Itoa(port))
+	}
+	if preview {
+		arguments = append(arguments, "--acceptance-preview")
+	}
+	return arguments
 }
 
 func superviseArguments(root string, trusted []string, legacy legacySelection) []string {

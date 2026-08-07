@@ -34,6 +34,7 @@ from ecorex.bootstrap import (
     BootstrapConfigurationError,
     CurrentSlotVerifier,
     DelayedRestartRequester,
+    RUNTIME_ACCEPTANCE_PREVIEW_ENV,
     RUNTIME_RELOAD_EXIT_CODE,
     RuntimeEndpoint,
     RUNTIME_OWNER_NONCE_ENV,
@@ -798,6 +799,10 @@ def load_product_runtime(
         raise ProductRuntimeTrustError(
             "Product Runtime must be launched by the signed Bootstrap"
         )
+    preview_value = source_environment.get(RUNTIME_ACCEPTANCE_PREVIEW_ENV)
+    if preview_value not in {None, "1"}:
+        raise ProductRuntimeTrustError("Runtime acceptance mode is invalid")
+    acceptance_preview = preview_value == "1"
     runtime_owner_nonce = source_environment.get(RUNTIME_OWNER_NONCE_ENV)
     if runtime_owner_nonce is not None and (
         not isinstance(runtime_owner_nonce, str)
@@ -1266,18 +1271,23 @@ def load_product_runtime(
             platform=config.identity.platform,
             architecture=config.identity.architecture,
             runtime_owner_nonce=runtime_owner_nonce,
+            acceptance_preview=acceptance_preview,
             managed_session_service=managed_session,
-            managed_session_refresh_service=session_refresh,
+            managed_session_refresh_service=(
+                None if acceptance_preview else session_refresh
+            ),
             managed_session_refresh_poll_seconds=30.0,
             device_authorization_service=device_authorization,
             device_authorization_poll_seconds=(device_settings.supervisor_poll_seconds),
             close_device_authorization_broker_on_shutdown=True,
             session_reload_requester=reload_callback,
             first_install_registration_recorder=(
-                update.coordinator.record_registration_authority
+                None
+                if acceptance_preview
+                else update.coordinator.record_registration_authority
             ),
             first_install_runtime_ready_recorder=(
-                update.coordinator.mark_runtime_ready
+                None if acceptance_preview else update.coordinator.mark_runtime_ready
             ),
             model_gateway=gateway,
             image_orchestration_client=image_orchestration_client,
@@ -1286,10 +1296,10 @@ def load_product_runtime(
             workspace_roots=workspace_roots,
             output_roots=standard_output_roots(workspace_roots),
             output_default_location="documents",
-            update_service=update.service,
+            update_service=None if acceptance_preview else update.service,
             connector_vault=vault,
             connector_adapters=connector_adapters,
-            share_publisher=share_publisher,
+            share_publisher=None if acceptance_preview else share_publisher,
             share_public_hosts=(
                 config.share.public_hosts if config.share is not None else frozenset()
             ),

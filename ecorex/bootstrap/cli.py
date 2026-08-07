@@ -51,6 +51,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-requested-restarts", type=int, default=3)
     parser.add_argument(
+        "--acceptance-preview",
+        action="store_true",
+        help="run an isolated candidate checkpoint for side-by-side acceptance",
+    )
+    parser.add_argument(
         "--legacy-v030-source",
         help=(
             "installer-selected v0.3 data root; records a one-time copy-on-write "
@@ -79,13 +84,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         keys = _read_public_keys(args.trusted_public_key)
         verifier = Ed25519SignatureVerifier(keys)
         host_platform, host_architecture = detect_host_target()
+        install_root = Path(os.path.abspath(args.install_root))
         bootstrap_companion = BootstrapCompanionInstaller(
-            args.install_root,
+            install_root,
             platform=host_platform,
             architecture=host_architecture,
             verifier=verifier,
+            desktop_directory=(
+                install_root / "preview-desktop"
+                if args.acceptance_preview
+                else None
+            ),
         )
-        install_root = Path(os.path.abspath(args.install_root))
         with ProductFileLock(install_root / "install-update.lock", timeout=10.0):
             bootstrap_companion.converge_activation()
         if args.legacy_v030_source and args.legacy_source:
@@ -117,6 +127,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             endpoint=RuntimeEndpoint(args.host, args.port),
             verifier=verifier,
             max_requested_restarts=args.max_requested_restarts,
+            acceptance_preview=args.acceptance_preview,
             pack_content_verifier=verify_product_capability_pack,
             activation_companion=bootstrap_companion,
         )

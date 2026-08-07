@@ -95,6 +95,7 @@ class ProductServerSettings:
     architecture: str = field(default_factory=platform_module.machine)
     web_manifest_artifact_id: str = "web-manifest"
     runtime_owner_nonce: str | None = field(default=None, repr=False, compare=False)
+    acceptance_preview: bool = False
     secret_factory: SecretFactory | None = field(
         default=None, repr=False, compare=False
     )
@@ -173,6 +174,8 @@ class ProductServerSettings:
     trace_retention_days: int = 7
 
     def __post_init__(self) -> None:
+        if not isinstance(self.acceptance_preview, bool):
+            raise ServerConfigurationError("acceptance preview mode must be boolean")
         if not isinstance(self.host, str) or not _is_loopback_host(self.host):
             raise ServerConfigurationError("production server host must be loopback")
         if (
@@ -400,13 +403,20 @@ def _safe_script_json(value: Mapping[str, str]) -> str:
     )
 
 
-def _runtime_script(bundle: VerifiedWebBundle, bearer_token: str, nonce: str) -> str:
+def _runtime_script(
+    bundle: VerifiedWebBundle,
+    bearer_token: str,
+    nonce: str,
+    *,
+    acceptance_preview: bool = False,
+) -> str:
     configuration = _safe_script_json(
         {
             "apiBase": "/api/v1",
             "bearerToken": bearer_token,
             "releaseId": bundle.release_manifest.release_id,
             "version": bundle.release_manifest.version,
+            "mode": "acceptance-preview" if acceptance_preview else "standard",
         }
     )
     return (
@@ -424,10 +434,17 @@ def _index_response(
     bearer_token: str,
     *,
     template: str | None = None,
+    acceptance_preview: bool = False,
 ) -> Response:
     nonce = secrets.token_urlsafe(24)
     injected = (template or bundle.index_template).replace(
-        RUNTIME_CONFIG_MARKER, _runtime_script(bundle, bearer_token, nonce)
+        RUNTIME_CONFIG_MARKER,
+        _runtime_script(
+            bundle,
+            bearer_token,
+            nonce,
+            acceptance_preview=acceptance_preview,
+        ),
     ).encode("utf-8")
     content = b"" if request.method == "HEAD" else injected
     csp = (
@@ -513,7 +530,11 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         workspace_roots=settings.workspace_roots,
         trusted_core_handlers=settings.capability_handlers,
         pack_runtime=settings.capability_pack_runtime,
-        workspace_root_resolver=ProjectWorkspaceAuthority(settings.database_path),
+        workspace_root_resolver=(
+            (lambda _scope: ())
+            if settings.acceptance_preview
+            else ProjectWorkspaceAuthority(settings.database_path)
+        ),
     )
     expected_pack_services = (
         settings.capability_pack_runtime.installed_service_ids
@@ -590,6 +611,7 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
     runtime_settings = RuntimeSettings(
         database_path=settings.database_path,
         product_version=bundle.release_manifest.version,
+        acceptance_preview=settings.acceptance_preview,
         platform=settings.platform,
         architecture=settings.architecture,
         extension_service=extension_service,
@@ -732,7 +754,12 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         if folded_path == "api" or folded_path.startswith("api/"):
             return _not_found()
         if requested_path == "":
-            return _index_response(request, bundle, bearer_token)
+            return _index_response(
+                request,
+                bundle,
+                bearer_token,
+                acceptance_preview=settings.acceptance_preview,
+            )
         if folded_path.rstrip("/") == "ecorex-agent/skills":
             if skill_hub_template is None:
                 return _not_found()
@@ -741,13 +768,19 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
                 bundle,
                 bearer_token,
                 template=skill_hub_template,
+                acceptance_preview=settings.acceptance_preview,
             )
         if not _safe_request_path(requested_path):
             return _not_found()
         verified = bundle.file(requested_path)
         if verified is not None:
             if requested_path == bundle.web_manifest.entrypoint:
-                return _index_response(request, bundle, bearer_token)
+                return _index_response(
+                    request,
+                    bundle,
+                    bearer_token,
+                    acceptance_preview=settings.acceptance_preview,
+                )
             content = b"" if request.method == "HEAD" else verified.content
             cache_control = (
                 "public, max-age=31536000, immutable"
@@ -763,7 +796,12 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
                 },
             )
         if _is_spa_route(requested_path):
-            return _index_response(request, bundle, bearer_token)
+            return _index_response(
+                request,
+                bundle,
+                bearer_token,
+                acceptance_preview=settings.acceptance_preview,
+            )
         return _not_found()
 
     return app

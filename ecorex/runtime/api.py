@@ -240,6 +240,7 @@ from .composition import (
 class RuntimeSettings:
     database_path: str | Path
     product_version: str = __version__
+    acceptance_preview: bool = False
     account_id: str = "local-user"
     account_display_name: str = "e-Mate User"
     authenticated: bool = True
@@ -1122,6 +1123,8 @@ def create_app(
         raise ValueError("runtime bearer token must contain at least 32 characters")
     if len(settings.csrf_token) < 32:
         raise ValueError("CSRF token must contain at least 32 characters")
+    if not isinstance(settings.acceptance_preview, bool):
+        raise ValueError("acceptance preview mode must be a boolean")
     if not isinstance(settings.enforce_admin_tool_denies, bool):
         raise ValueError("admin tool-deny enforcement must be a boolean")
     if settings.event_poll_interval_seconds <= 0:
@@ -2296,7 +2299,7 @@ def create_app(
     app.state.device_authorization_service = settings.device_authorization_service
     app.state.device_authorization_supervisor = device_authorization_supervisor
     session_refresh_supervisor: ManagedSessionRefreshSupervisor | None = None
-    if session_refresh_service is not None:
+    if session_refresh_service is not None and not settings.acceptance_preview:
         session_refresh_supervisor = ManagedSessionRefreshSupervisor(
             session_refresh_service,
             poll_seconds=settings.managed_session_refresh_poll_seconds,
@@ -2791,6 +2794,31 @@ def create_app(
         )
         return match is not None and is_id(match.group(1), "art")
 
+    def is_preview_external_mutation(request: Request) -> bool:
+        if not settings.acceptance_preview:
+            return False
+        path = request.url.path
+        if request.method == "GET":
+            return path in {
+                "/api/v1/connectors/oauth/callback",
+                "/api/v1/mcp/oauth/callback",
+            }
+        if request.method in {"HEAD", "OPTIONS"}:
+            return False
+        return (
+            path.startswith("/api/v1/session/")
+            or path == "/api/v1/update"
+            or path.startswith("/api/v1/update/")
+            or path.startswith("/api/v1/connectors/")
+            or path.startswith("/api/v1/mcp/oauth/")
+            or path == "/api/v1/shares"
+            or path.startswith("/api/v1/shares/")
+            or re.fullmatch(
+                r"/api/v1/artifacts/[^/]+/actions/(open|reveal)", path
+            )
+            is not None
+        )
+
     @app.middleware("http")
     async def local_origin_and_cache_policy(request: Request, call_next):
         commit_guard = None
@@ -2819,6 +2847,18 @@ def create_app(
             mutation_request = (
                 request.method not in {"GET", "HEAD", "OPTIONS"} or oauth_callback
             )
+            if is_preview_external_mutation(request):
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "detail": (
+                            "候选验收窗口不会修改正式账号、更新状态或外部分享；"
+                            "请在正式版本中执行此操作。"
+                        ),
+                        "code": "acceptance_preview_external_mutation_blocked",
+                    },
+                    headers={"Cache-Control": "no-store"},
+                )
             device_login_mutation = (
                 request.method == "POST"
                 and settings.device_authorization_service is not None

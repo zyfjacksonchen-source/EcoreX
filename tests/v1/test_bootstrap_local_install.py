@@ -314,6 +314,99 @@ def test_signed_bootstrap_handoff_stages_core_and_six_packs_atomically(
         assert len(tuple(pack_root.glob("*.json"))) == 1
 
 
+def test_signed_bootstrap_can_stage_without_switching_then_activate_in_place(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    built, trust = _release(tmp_path)
+    sandbox = _sandbox_test_boundary(tmp_path, monkeypatch)
+    install_root = tmp_path / "install"
+    desktop = tmp_path / "Desktop"
+
+    staged = install_local.install(
+        manifest_path=str(built.manifest_path),
+        artifacts_path=str(built.output_dir),
+        install_root=str(install_root),
+        trusted_public_keys=(trust,),
+        desktop_directory=str(desktop),
+        stage_only=True,
+        **sandbox,
+    )
+
+    assert staged["state"] == "awaiting_user"
+    assert (install_root / "slot-pointers.json").exists() is False
+    activated = install_local.install(
+        manifest_path=str(built.manifest_path),
+        artifacts_path=str(built.output_dir),
+        install_root=str(install_root),
+        trusted_public_keys=(trust,),
+        desktop_directory=str(desktop),
+        **sandbox,
+    )
+    assert activated["state"] == "healthchecking"
+    assert activated["transaction_id"] == staged["transaction_id"]
+    assert activated["slot_id"] == staged["slot_id"]
+
+
+def test_signed_bootstrap_does_not_replace_a_prepared_candidate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import sys
+
+    test_module = sys.modules[__name__]
+    release_private = Ed25519PrivateKey.generate()
+    publication_private = Ed25519PrivateKey.generate()
+    monkeypatch.setattr(release_builder_module, "__version__", "1.0.7")
+    monkeypatch.setattr(test_module, "__version__", "1.0.7")
+    prepared, prepared_trust = _release(
+        tmp_path / "prepared",
+        private=release_private,
+        publication_private=publication_private,
+    )
+    install_root = tmp_path / "install"
+    desktop = tmp_path / "Desktop"
+    sandbox = _sandbox_test_boundary(tmp_path / "prepared", monkeypatch)
+    staged = install_local.install(
+        manifest_path=str(prepared.manifest_path),
+        artifacts_path=str(prepared.output_dir),
+        install_root=str(install_root),
+        trusted_public_keys=(prepared_trust,),
+        desktop_directory=str(desktop),
+        stage_only=True,
+        **sandbox,
+    )
+
+    monkeypatch.setattr(release_builder_module, "__version__", "1.0.8")
+    monkeypatch.setattr(test_module, "__version__", "1.0.8")
+    different, different_trust = _release(
+        tmp_path / "different",
+        private=release_private,
+        publication_private=publication_private,
+    )
+    with pytest.raises(ValueError, match="different verified Runtime"):
+        install_local.install(
+            manifest_path=str(different.manifest_path),
+            artifacts_path=str(different.output_dir),
+            install_root=str(install_root),
+            trusted_public_keys=(different_trust,),
+            desktop_directory=str(desktop),
+            stage_only=True,
+            **_sandbox_test_boundary(tmp_path / "different", monkeypatch),
+        )
+
+    activated = install_local.install(
+        manifest_path=str(prepared.manifest_path),
+        artifacts_path=str(prepared.output_dir),
+        install_root=str(install_root),
+        trusted_public_keys=(prepared_trust,),
+        desktop_directory=str(desktop),
+        **sandbox,
+    )
+    assert activated["transaction_id"] == staged["transaction_id"]
+    assert activated["slot_id"] == staged["slot_id"]
+
+
 def test_signed_bootstrap_handoff_upgrades_an_existing_install(
     tmp_path: Path,
     monkeypatch,

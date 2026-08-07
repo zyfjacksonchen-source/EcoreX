@@ -914,6 +914,60 @@ def test_product_healthy_entry_converges_external_authorities_once(
         second.close_unstarted()
 
 
+def test_acceptance_preview_keeps_model_and_image_but_disables_background_mutators(
+    tmp_path: Path,
+) -> None:
+    def configure(raw: dict) -> None:
+        raw["image_orchestration"] = {
+            "root_url": "https://images.example/api/v1/images",
+            "allowed_hosts": ["images.example"],
+        }
+        raw["share"] = {
+            "endpoint": "https://share.example/api/v1/shares",
+            "allowed_hosts": ["share.example"],
+            "public_hosts": ["share.example"],
+        }
+
+    product = _stage_product(tmp_path, config_mutator=configure)
+    vault = InMemoryCredentialVault()
+    composition = load_product_runtime(
+        payload_root=product["payload"],
+        host="127.0.0.1",
+        port=18765,
+        environment={
+            "ECOREX_BOOTSTRAPPED": "1",
+            "ECOREX_RUNTIME_ACCEPTANCE_PREVIEW": "1",
+        },
+        vault_factory=lambda: vault,
+        host_platform=product["platform"],
+        host_architecture=product["architecture"],
+    )
+    try:
+        settings = composition.server_settings
+        assert settings.acceptance_preview is True
+        assert settings.model_gateway is not None
+        assert settings.image_orchestration_client is not None
+        assert settings.managed_session_refresh_service is None
+        assert settings.update_service is None
+        assert settings.share_publisher is None
+        assert settings.first_install_registration_recorder is None
+        assert settings.first_install_runtime_ready_recorder is None
+    finally:
+        composition.close_unstarted()
+
+    with pytest.raises(ProductRuntimeTrustError, match="acceptance mode"):
+        load_product_runtime(
+            payload_root=product["payload"],
+            environment={
+                "ECOREX_BOOTSTRAPPED": "1",
+                "ECOREX_RUNTIME_ACCEPTANCE_PREVIEW": "attacker",
+            },
+            vault_factory=lambda: vault,
+            host_platform=product["platform"],
+            host_architecture=product["architecture"],
+        )
+
+
 def test_real_signed_slot_builds_product_app_and_uvicorn_config(tmp_path: Path) -> None:
     product = _stage_product(tmp_path)
     vault = InMemoryCredentialVault()

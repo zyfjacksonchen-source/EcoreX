@@ -59,6 +59,7 @@ from .errors import (
 from .restart import RUNTIME_RELOAD_EXIT_CODE, RUNTIME_RESTART_EXIT_CODE
 
 RUNTIME_OWNER_NONCE_ENV = "ECOREX_RUNTIME_OWNER_NONCE"
+RUNTIME_ACCEPTANCE_PREVIEW_ENV = "ECOREX_RUNTIME_ACCEPTANCE_PREVIEW"
 _RUNTIME_OWNER_NONCE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 
 
@@ -391,6 +392,7 @@ class BootstrapSupervisor:
         max_requested_restarts: int = 3,
         lock_timeout: float | None = 10.0,
         source_environment: Mapping[str, str] | None = None,
+        acceptance_preview: bool = False,
         activation_health_probe: ActivationHealthProbe | None = None,
         activation_companion: ActivationCompanion | None = None,
         pack_content_verifier: PackContentVerifier | None = None,
@@ -405,6 +407,8 @@ class BootstrapSupervisor:
             )
         if not callable(executable_resolver):
             raise BootstrapConfigurationError("executable resolver must be callable")
+        if not isinstance(acceptance_preview, bool):
+            raise BootstrapConfigurationError("acceptance_preview must be boolean")
         detected_platform, detected_architecture = detect_host_target()
         self.host_platform = host_platform or detected_platform
         self.host_architecture = host_architecture or detected_architecture
@@ -455,9 +459,14 @@ class BootstrapSupervisor:
         self.launcher = launcher or SubprocessRuntimeLauncher()
         self.executable_resolver = executable_resolver
         self.max_requested_restarts = max_requested_restarts
-        self._environment = _sanitized_environment(
-            os.environ if source_environment is None else source_environment
+        environment = dict(
+            _sanitized_environment(
+                os.environ if source_environment is None else source_environment
+            )
         )
+        if acceptance_preview:
+            environment[RUNTIME_ACCEPTANCE_PREVIEW_ENV] = "1"
+        self._environment = MappingProxyType(environment)
         self._selection_lock = ProductFileLock(
             self.slots.root / "install-update.lock",
             timeout=lock_timeout,

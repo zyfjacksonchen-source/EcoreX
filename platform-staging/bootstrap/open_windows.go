@@ -35,3 +35,7 @@ func openWebUI(location string) error {
 	}
 	return nil
 }
+
+func openPreviewWebUI(location string) error {
+	return openWebUI(location)
+}

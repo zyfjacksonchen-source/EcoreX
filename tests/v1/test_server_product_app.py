@@ -339,6 +339,49 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
     assert asset.headers["etag"]
 
 
+def test_acceptance_preview_is_visible_and_blocks_external_mutations(
+    tmp_path,
+    monkeypatch,
+):
+    signed = _write_signed_bundle(tmp_path)
+    settings = replace(_settings(tmp_path, signed), acceptance_preview=True)
+    monkeypatch.setattr(
+        "ecorex.server.app.ProjectWorkspaceAuthority",
+        lambda _database: (_ for _ in ()).throw(
+            AssertionError("preview must not authorize saved external project roots")
+        ),
+    )
+    app = create_product_app(settings)
+    with TestClient(app, base_url=ORIGIN) as client:
+        index = client.get("/")
+        assert '"mode":"acceptance-preview"' in index.text
+        bearer = app.state.runtime_bearer_token
+        blocked = client.post(
+            "/api/v1/update/check",
+            headers={"Authorization": f"Bearer {bearer}"},
+        )
+        assert blocked.status_code == 409
+        assert blocked.json()["code"] == (
+            "acceptance_preview_external_mutation_blocked"
+        )
+
+        bootstrap = client.get(
+            "/api/v1/bootstrap",
+            headers={"Authorization": f"Bearer {bearer}"},
+        )
+        csrf = bootstrap.json()["csrf_token"]
+        created = client.post(
+            "/api/v1/threads",
+            json={"client_request_id": "preview-local-write"},
+            headers={
+                "Authorization": f"Bearer {bearer}",
+                "Origin": ORIGIN,
+                "X-EcoreX-CSRF": csrf,
+            },
+        )
+        assert created.status_code == 201
+
+
 def test_product_app_labels_runtime_registration_failure(tmp_path, monkeypatch):
     signed = _write_signed_bundle(tmp_path)
 
