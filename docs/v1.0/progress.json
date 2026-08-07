@@ -8,9 +8,9 @@
     "commit": "7ca8deb93415e0e96d02dd4b12233a07d034def1",
     "dirty_worktree_preserved": true
   },
-  "current_milestone": "source_commit_and_candidate",
-  "current_batch": "Commit the WebUI-only builder and long-session fix, rebuild v1.0.0 from that exact commit, rerun independent integrity/package smoke, then manually publish through the local proxy.",
-  "last_verified_batch": "WebUI-only authority is resolved: no Developer ID or notarization is required; inner Ed25519 is ephemeral and macOS uses ad-hoc CodeDirectory. TypeScript, contracts, 224 Web tests, production build, 51 Chromium E2E and 10 repeated long-session runs pass.",
+  "current_milestone": "manual_publication",
+  "current_batch": "Commit final candidate metadata, push source through the local proxy, manually publish v1.0.0 and all three download sources, then perform the installed upgrade and real authenticated browser matrix.",
+  "last_verified_batch": "Final candidate from exact source 23f0422: release-stable-872395fe9dd73296b5a38a4a; 43 signed artifacts, three 380-file Core source matches, textual secret scan, two ad-hoc Bootstrap checks and real isolated v1.0.0 package smoke pass; v0.3.2 was restored.",
   "recovery_document": "docs/v1.0/implementation-log.md",
   "verification_document": "docs/v1.0/verification-ledger.md",
   "milestones": [
@@ -23,13 +23,14 @@
     {"id": "web_terminal_and_long_session", "status": "completed"},
     {"id": "version_and_update_sources", "status": "completed"},
     {"id": "full_verification", "status": "completed"},
-    {"id": "source_commit_and_candidate", "status": "in_progress"},
+    {"id": "source_commit_and_candidate", "status": "completed"},
     {"id": "manual_release_authority", "status": "completed"},
+    {"id": "manual_publication", "status": "in_progress"},
     {"id": "configured_production_acceptance", "status": "pending"}
   ],
   "remaining_local_work": [
-    "Commit and rebuild the final WebUI-only v1.0.0 Candidate from one exact source commit",
-    "Repeat independent inner-signature/source/secret/ad-hoc/package-smoke verification, then upload manually through the local proxy",
+    "Commit the final immutable hashes and push source through the local proxy",
+    "Manually upload the verified candidate to GitHub and the production download origin, then verify all three sources byte-for-byte",
     "Upgrade the installed v0.3.2 slot and execute authenticated real-token browser acceptance for all 19 built-ins, Skill, MCP empty state, concurrent images, long session and update flow"
   ],
   "external_blockers": [],

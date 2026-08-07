@@ -32,11 +32,11 @@ const TARGETS = [
 ];
 const WEBUI_RELEASE = Object.freeze({
   version: "1.0.0",
-  createdAt: "2026-08-07T08:55:22+00:00",
-  releaseId: "release-stable-a76e462467359d41610b3b0d",
-  buildDigest: "a76e462467359d41610b3b0d1efadf63c0405ff2ad2d0918b10d92822b800f2c",
+  createdAt: "2026-08-07T10:24:09+00:00",
+  releaseId: "release-stable-872395fe9dd73296b5a38a4a",
+  buildDigest: "872395fe9dd73296b5a38a4ad077d457f3a4aef3deb030be6af640d3b523ca54",
   manifest: Object.freeze({
-    sha256: "c6cfaefb208cabdbdee51a12a0acdc53172f2aea00b9109fba16c4ab55c3decb",
+    sha256: "2727eb78977e26222aa04bf431b2ffe6f8971fa6dd7af56ea9a63669f998fff6",
     fileName: "release-manifest.json",
     sources: Object.freeze([
       Object.freeze({ kind: "github-cn-mirror", url: "https://gh-proxy.com/https://github.com/zyfjacksonchen-source/EcoreX-installers/releases/download/v1.0.0/release-manifest.json" }),
@@ -47,13 +47,13 @@ const WEBUI_RELEASE = Object.freeze({
   packages: Object.freeze({
     windows: Object.freeze({
       fileName: "EcoreX_1.0.0-webui-windows-x64.zip",
-      sizeBytes: 276220221,
-      sha256: "6eae962e1e0608f0d0eae5fc14d7648df83bb126e4998e7e2348d3f41eaa3be5",
+      sizeBytes: 276220821,
+      sha256: "8ad35a40f09891fe2c51e1fec57d538dec725d76fa75598291d20234d5eee234",
     }),
     macos: Object.freeze({
       fileName: "EcoreX_1.0.0-webui-macos-universal.zip",
-      sizeBytes: 545846366,
-      sha256: "b1142a590ada6eb0c06c3194dc4430dad8f17d3f57766d757b95da4a3739d8ab",
+      sizeBytes: 545847421,
+      sha256: "db6a23c88567aad838ef5b2feca08d99e9090306e63d60bf2aa6210743925a42",
     }),
   }),
 });

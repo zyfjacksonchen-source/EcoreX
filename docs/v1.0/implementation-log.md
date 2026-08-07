@@ -7140,3 +7140,35 @@ The acceptance assertion now compares the same Turn's viewport offset instead
 of raw `scrollTop`, which is not stable under virtualization. The focused case
 passed 10/10 repeated runs; complete Web verification passed 224/224 unit tests
 and 51/51 Chromium scenarios with TypeScript, contracts and production build.
+
+### Final WebUI candidate from exact source
+
+- Source commit: `23f04224a4d7228a692ec1bcb709e7d7404d3fcd`.
+- Release ID: `release-stable-872395fe9dd73296b5a38a4a`; build digest:
+  `872395fe9dd73296b5a38a4ad077d457f3a4aef3deb030be6af640d3b523ca54`.
+- Release manifest SHA-256:
+  `2727eb78977e26222aa04bf431b2ffe6f8971fa6dd7af56ea9a63669f998fff6`.
+- Windows WebUI ZIP SHA-256:
+  `8ad35a40f09891fe2c51e1fec57d538dec725d76fa75598291d20234d5eee234`
+  (276,220,821 bytes).
+- macOS universal WebUI ZIP SHA-256:
+  `db6a23c88567aad838ef5b2feca08d99e9090306e63d60bf2aa6210743925a42`
+  (545,847,421 bytes).
+- Ephemeral release key ID: `ecorex-webui-release-bea15f4cd0b41b73697d`;
+  the receipt records `private_key_persisted: false`, Developer ID false and
+  notarization false.
+
+Independent verification revalidated all 43 signed artifacts, matched each of
+the three Core imports archives to the same 380 tracked source files byte for
+byte, checked executable Pack-Python entries, visited 18,319 nested archive
+members and scanned 15,739 textual members (261,740,924 bytes) for PAT/private
+key material. Both macOS Bootstrap binaries pass strict CodeDirectory
+verification as ad-hoc signatures.
+
+The final macOS outer ZIP then completed a real isolated install and Runtime
+start. `/api/version` returned `1.0.0`, the release contract reported
+`browser-webui` and `os_application_signature: false`, and the generated local
+entry was bound to the isolated install root. Cleanup deleted the temporary
+application Keychain, restored the original desktop entry and restarted the
+installed v0.3.2 Runtime successfully. No GitHub credential entered either
+Keychain.
