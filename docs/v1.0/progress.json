@@ -5,12 +5,12 @@
   "public_target": "1.0.0",
   "baseline": {
     "branch": "codex/ecorex-v0.3.2",
-    "commit": "1cc91fdd8dc4f5cd25f29ed6163957ed4f274b41",
+    "commit": "7ca8deb93415e0e96d02dd4b12233a07d034def1",
     "dirty_worktree_preserved": true
   },
-  "current_milestone": "source_commit_and_candidate",
-  "current_batch": "Push the committed v1.0.0 source, obtain read-only build/acceptance receipts, then publish only through the local interactive state machine and run full real-user browser acceptance.",
-  "last_verified_batch": "Python 2682 passed/55 skipped; Web 224 passed; Chromium E2E 51 passed; production build, generated contracts, static product gates, reproducibility and v1.0.0 Wheel seed inspection passed on 2026-08-07.",
+  "current_milestone": "manual_release_authority",
+  "current_batch": "Restore the existing Windows DPAPI release signer and protected build Runners, or obtain explicit authority for a reviewed release/deployment key rotation; then run the local prepare state machine.",
+  "last_verified_batch": "Remote main equals 7ca8deb93415e0e96d02dd4b12233a07d034def1 through the local proxy. Python 3.11.9, checksum-verified Node 22.23.1/npm, SSH identity and transient GitHub access pass; protected release/deployment signing authority is absent on this Mac and server.",
   "recovery_document": "docs/v1.0/implementation-log.md",
   "verification_document": "docs/v1.0/verification-ledger.md",
   "milestones": [
@@ -23,18 +23,20 @@
     {"id": "web_terminal_and_long_session", "status": "completed"},
     {"id": "version_and_update_sources", "status": "completed"},
     {"id": "full_verification", "status": "completed"},
-    {"id": "source_commit_and_candidate", "status": "in_progress"},
+    {"id": "source_commit_and_candidate", "status": "completed"},
+    {"id": "manual_release_authority", "status": "in_progress"},
     {"id": "configured_production_acceptance", "status": "pending"}
   ],
   "remaining_local_work": [
-    "Push the committed v1.0.0 source without using the exposed user token",
+    "Restore a real release/deployment signer and the required isolated build/sign/live-acceptance Runners without reusing the publication key",
     "Obtain signed Candidate and cross-platform receipts from read-only protected build/acceptance workflows; do not use CI as a publication authority",
     "Upgrade the installed v0.3.2 slot and execute authenticated real-token browser acceptance for all 19 built-ins, Skill, MCP empty state, concurrent images, long session and update flow"
   ],
   "external_blockers": [
-    "No safe GitHub publication credential is currently installed; the token pasted into chat is considered exposed and must be revoked rather than used",
+    "The trusted release private key is Windows DPAPI-bound and unavailable on this Mac; production exposes only the independent publication signer and no deployment signer",
+    "GitHub currently reports zero self-hosted Runners and the stable signing Environment lacks executable/adapter configuration",
+    "Manual publication and Bootstrap configuration/token values are not injected into the operator process",
     "Real paid model and image calls require an operator-configured production endpoint and server-side Secret Provider",
-    "Signing and public activation require release signing authority and explicit final publication confirmation",
     "No production MCP endpoint or authentication method is configured, so production must remain an explicit empty state"
   ]
 }

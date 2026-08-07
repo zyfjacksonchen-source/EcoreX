@@ -7069,3 +7069,37 @@ Focused retirement verification passes 75/75 tests across Candidate,
 repository-readiness, protected deployment, live acceptance and manual release
 contracts. The dependency-lock/workflow inventory and Ruff/compile gates also
 pass with six pinned Actions and no CI publication workflow.
+
+## 2026-08-07 - Transient GitHub credential and manual release authority audit
+
+The replacement GitHub credential was read from the operator-provided DOCX as
+one structurally valid token and used only inside bounded child-process memory.
+It was not placed in Keychain, a Git credential helper, Git configuration, a
+shell profile, the repository or a release receipt. Keychain Access was closed
+without creating an item. Both the source and installer repositories reported
+write authority. The source was fetched and pushed through the active local
+proxy at `127.0.0.1:7993`; remote `main` now exactly equals
+`7ca8deb93415e0e96d02dd4b12233a07d034def1`.
+
+The local manual-release toolchain now has a checksum-verified official Node
+22.23.1 macOS arm64 distribution under the ignored Candidate toolchain root.
+Together with the existing Python 3.11.9 Runtime interpreter it passes the
+release script's exact Python, Node and npm checks. The production SSH identity,
+GitHub credential and local proxy also pass bounded preflight probes.
+
+The authority audit found a real fail-closed boundary before any Candidate was
+dispatched. GitHub currently has zero registered self-hosted Runners. The
+`ecorex-release-signing-stable` Environment contains only the trusted direct
+release public key and key ID; it has no executable/adapter configuration or
+Secret. The production host contains the matching trusted release public key
+and an independent server publication signer, but no release or deployment
+signer command. A bounded scan found no server-side private seed for the direct
+release key. Historical records identify that key as Windows DPAPI protected;
+its private authority is therefore unavailable on this Mac.
+
+No unsigned receipt, replacement signature, reused publication key, synthetic
+Runner or downgraded trust boundary was created. The next legal transition is
+to restore the existing Windows DPAPI signing account and required build
+Runners, or explicitly authorize a reviewed release/deployment key rotation.
+Only after that authority exists may the resumable local `prepare` state
+machine dispatch read-only builders and create an inactive Draft/stage.
