@@ -4,6 +4,7 @@ import {
   Suspense,
   type ReactNode,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -392,7 +393,11 @@ const TurnRow = memo(function TurnRow({
   );
   let headingRendered = false;
   return (
-    <article className="ex-timeline-turn" data-turn-status={entry.turn.status}>
+    <article
+      className="ex-timeline-turn"
+      data-turn-id={entry.turn.turn_id}
+      data-turn-status={entry.turn.status}
+    >
       {modelSwitch ? (
         <div className="ex-model-switch-divider" role="separator"><span>已切换至 {modelSwitch}</span></div>
       ) : null}
@@ -501,15 +506,65 @@ export function Timeline({
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const followLatestRef = useRef(true);
   const followPausedByUserRef = useRef(false);
+  const resumeAtBottomRef = useRef(false);
+  const followedThreadIdRef = useRef<string | null>(null);
+  const pausedAnchorRef = useRef<{ turnId: string; viewportOffset: number } | null>(null);
   const mountRef = useRef<HTMLDivElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const bottomSettleTimer = useRef<number | null>(null);
+  const pausedAnchorTimer = useRef<number | null>(null);
   const contentRevision = items.map((item) => `${item.item_id}:${item.updated_at}:${messageText(item).length}`).join("|");
   const timelineThreadId = timelineTurns[0]?.turn.thread_id ?? null;
+  const clearPausedAnchor = () => {
+    if (scrollParent) {
+      delete scrollParent.dataset.scrollAnchorTurnId;
+      delete scrollParent.dataset.scrollAnchorOffset;
+    }
+    pausedAnchorRef.current = null;
+  };
+  const capturePausedAnchor = () => {
+    if (!scrollParent) return;
+    const viewport = scrollParent.getBoundingClientRect();
+    const anchor = [...scrollParent.querySelectorAll<HTMLElement>(".ex-timeline-turn[data-turn-id]")]
+      .map((row) => ({ row, bounds: row.getBoundingClientRect() }))
+      .filter(({ bounds }) => bounds.bottom > viewport.top && bounds.top < viewport.bottom)
+      .sort((left, right) => (
+        Math.abs((left.bounds.top + left.bounds.bottom) / 2 - (viewport.top + viewport.bottom) / 2)
+        - Math.abs((right.bounds.top + right.bounds.bottom) / 2 - (viewport.top + viewport.bottom) / 2)
+      ))[0];
+    if (anchor?.row.dataset.turnId) {
+      clearPausedAnchor();
+      pausedAnchorRef.current = {
+        turnId: anchor.row.dataset.turnId,
+        viewportOffset: anchor.bounds.top - viewport.top,
+      };
+      scrollParent.dataset.scrollAnchorTurnId = anchor.row.dataset.turnId;
+      scrollParent.dataset.scrollAnchorOffset = String(
+        anchor.bounds.top - viewport.top,
+      );
+    }
+  };
+  const restorePausedAnchor = () => {
+    const anchor = pausedAnchorRef.current;
+    if (!scrollParent || !followPausedByUserRef.current || !anchor) return;
+    const row = [...scrollParent.querySelectorAll<HTMLElement>(".ex-timeline-turn[data-turn-id]")]
+      .find((candidate) => candidate.dataset.turnId === anchor.turnId);
+    if (!row) return;
+    const viewport = scrollParent.getBoundingClientRect();
+    const drift = row.getBoundingClientRect().top - viewport.top - anchor.viewportOffset;
+    if (Math.abs(drift) > 0.5) scrollParent.scrollTop += drift;
+  };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (
+      timelineThreadId === null
+      || timelineThreadId === followedThreadIdRef.current
+    ) return;
+    followedThreadIdRef.current = timelineThreadId;
     followPausedByUserRef.current = false;
     followLatestRef.current = true;
+    resumeAtBottomRef.current = false;
+    clearPausedAnchor();
     setShowJumpToLatest(false);
   }, [timelineThreadId]);
 
@@ -517,6 +572,7 @@ export function Timeline({
     setScrollParent(mountRef.current?.parentElement ?? null);
     return () => {
       if (bottomSettleTimer.current !== null) window.clearTimeout(bottomSettleTimer.current);
+      if (pausedAnchorTimer.current !== null) window.clearTimeout(pausedAnchorTimer.current);
     };
   }, []);
 
@@ -526,11 +582,25 @@ export function Timeline({
       const remaining = scrollParent.scrollHeight - scrollParent.clientHeight - scrollParent.scrollTop;
       return remaining <= TIMELINE_BOTTOM_THRESHOLD_PX;
     };
+    const schedulePausedAnchorCapture = () => {
+      if (pausedAnchorTimer.current !== null || pausedAnchorRef.current !== null) return;
+      pausedAnchorTimer.current = window.setTimeout(() => {
+        pausedAnchorTimer.current = null;
+        if (followPausedByUserRef.current) capturePausedAnchor();
+      }, TIMELINE_SCROLL_SETTLE_MS);
+    };
     const syncFollowState = () => {
       const atBottom = readAtBottom();
-      if (followPausedByUserRef.current) {
+      if (followPausedByUserRef.current && atBottom && resumeAtBottomRef.current) {
+        followPausedByUserRef.current = false;
+        followLatestRef.current = true;
+        resumeAtBottomRef.current = false;
+        clearPausedAnchor();
+        setShowJumpToLatest(false);
+      } else if (followPausedByUserRef.current) {
         followLatestRef.current = false;
         setShowJumpToLatest(true);
+        schedulePausedAnchorCapture();
       } else if (atBottom) {
         followLatestRef.current = true;
         setShowJumpToLatest(false);
@@ -542,20 +612,32 @@ export function Timeline({
       }
     };
     const pauseFollowOnWheel = (event: WheelEvent) => {
-      followPausedByUserRef.current = event.deltaY < 0;
-      if (event.deltaY < 0) {
+      if (event.deltaY < 0 || followPausedByUserRef.current) {
+        resumeAtBottomRef.current = event.deltaY > 0;
+        followPausedByUserRef.current = true;
         followLatestRef.current = false;
+        clearPausedAnchor();
         setShowJumpToLatest(true);
+        schedulePausedAnchorCapture();
       }
     };
     const pauseFollowOnTouch = () => {
       followPausedByUserRef.current = true;
       followLatestRef.current = false;
+      resumeAtBottomRef.current = false;
       setShowJumpToLatest(true);
+      schedulePausedAnchorCapture();
     };
     const releaseTouchFollow = () => {
-      followPausedByUserRef.current = false;
-      syncFollowState();
+      if (readAtBottom()) {
+        followPausedByUserRef.current = false;
+        followLatestRef.current = true;
+        resumeAtBottomRef.current = false;
+        clearPausedAnchor();
+        setShowJumpToLatest(false);
+      } else {
+        schedulePausedAnchorCapture();
+      }
     };
     scrollParent.addEventListener("scroll", syncFollowState, { passive: true });
     scrollParent.addEventListener("wheel", pauseFollowOnWheel, { passive: true });
@@ -563,6 +645,10 @@ export function Timeline({
     scrollParent.addEventListener("touchend", releaseTouchFollow, { passive: true });
     syncFollowState();
     return () => {
+      if (pausedAnchorTimer.current !== null) {
+        window.clearTimeout(pausedAnchorTimer.current);
+        pausedAnchorTimer.current = null;
+      }
       scrollParent.removeEventListener("scroll", syncFollowState);
       scrollParent.removeEventListener("wheel", pauseFollowOnWheel);
       scrollParent.removeEventListener("touchmove", pauseFollowOnTouch);
@@ -570,9 +656,26 @@ export function Timeline({
     };
   }, [scrollParent]);
 
+  useLayoutEffect(() => {
+    if (!scrollParent || !followPausedByUserRef.current) return undefined;
+    restorePausedAnchor();
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      restorePausedAnchor();
+      secondFrame = window.requestAnimationFrame(restorePausedAnchor);
+    });
+    const settle = window.setTimeout(restorePausedAnchor, TIMELINE_SCROLL_SETTLE_MS);
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+      window.clearTimeout(settle);
+    };
+  }, [contentRevision, interactions, scrollParent, timelineTurns.length]);
+
   useEffect(() => {
     if (!followLatestRef.current || timelineTurns.length === 0) return;
     const frame = window.requestAnimationFrame(() => {
+      if (!followLatestRef.current) return;
       virtuosoRef.current?.scrollToIndex({
         index: timelineTurns.length - 1,
         align: "end",
@@ -592,6 +695,8 @@ export function Timeline({
   const jumpToLatest = () => {
     followPausedByUserRef.current = false;
     followLatestRef.current = true;
+    resumeAtBottomRef.current = false;
+    clearPausedAnchor();
     setShowJumpToLatest(false);
     if (timelineTurns.length) {
       virtuosoRef.current?.scrollToIndex({ index: timelineTurns.length - 1, align: "end", behavior: "auto" });
@@ -668,7 +773,8 @@ export function Timeline({
             atBottomThreshold={TIMELINE_BOTTOM_THRESHOLD_PX}
             followOutput={() => followLatestRef.current ? "auto" : false}
             totalListHeightChanged={() => {
-              if (followLatestRef.current) scrollParent.scrollTop = scrollParent.scrollHeight;
+              if (followPausedByUserRef.current) restorePausedAnchor();
+              else if (followLatestRef.current) scrollParent.scrollTop = scrollParent.scrollHeight;
             }}
             components={{ Footer: footer }}
             itemContent={(_index, entry) => (

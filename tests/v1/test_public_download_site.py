@@ -41,10 +41,10 @@ def test_public_download_site_makes_one_click_terminal_install_primary() -> None
     javascript = next(site.glob("site.*.js")).read_text(encoding="utf-8")
 
     assert "<title>e-Mate 下载与安装</title>" in html
-    assert 'aria-label="e-Mate v0.3.2"' in html
+    assert 'aria-label="e-Mate v1.0.0"' in html
     assert 'class="brand-mark"' in html
     assert 'class="brand-logo"' not in html
-    assert '<span class="brand-version" data-site-version>v0.3.2</span>' in html
+    assert '<span class="brand-version" data-site-version>v1.0.0</span>' in html
     assert ">EcoreX<" not in html
     assert 'aria-label="EcoreX' not in html
     assert "<strong>选择系统</strong>" in html
@@ -248,10 +248,12 @@ assert.match(macCommand, /github\.example/u);
 assert.match(macCommand, /Install EcoreX WebUI\.command/u);
 
 const webui = contract.normalizeWebUIRelease();
-assert.equal(webui.release.version, "0.3.2");
+assert.equal(webui.release.version, "1.0.0");
 assert.equal(webui.release.artifacts.length, 3);
 assert.equal(webui.release.artifacts[1].sha256, webui.release.artifacts[2].sha256);
-assert.match(webui.release.artifacts[0].sources[0].url, /ghproxy\.net/u);
+assert.equal(webui.release.artifacts[0].sources.length, 3);
+assert.match(webui.release.artifacts[0].sources[0].url, /gh-proxy\.com/u);
+assert.match(webui.release.artifacts[0].sources[2].url, /dl\.ecoremedia\.net/u);
 
 assert.equal(contract.targetFromPlatformSignals({
   source: "MacIntel Mozilla/5.0 (Macintosh)",

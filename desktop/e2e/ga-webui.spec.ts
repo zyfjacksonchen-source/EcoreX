@@ -1211,6 +1211,8 @@ test("touch artifact exposes one real more target and opens the bottom action sh
 test("timeline exposes a persistent jump-to-latest control after scrolling away from the bottom", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "long-timeline");
   const timeline = guardedPage.locator(".ex-timeline");
+  await expect(timeline.locator('[data-turn-id="turn-long-120"]')).toBeVisible();
+  await expect.poll(() => timeline.locator(".ex-timeline-turn").count()).toBeGreaterThan(0);
   await expect.poll(() => timeline.locator(".ex-timeline-turn").count()).toBeLessThan(60);
   await expect.poll(() => timeline.evaluate((element) => (
     Math.max(0, Math.round(element.scrollHeight - element.clientHeight - element.scrollTop))
@@ -1223,13 +1225,27 @@ test("timeline exposes a persistent jump-to-latest control after scrolling away 
 
   const jumpButton = guardedPage.getByRole("button", { name: "回到底部" });
   await expect(jumpButton).toBeVisible();
-  const pausedScrollTop = await timeline.evaluate((element) => element.scrollTop);
+  await expect(timeline).toHaveAttribute("data-scroll-anchor-turn-id", /.+/);
+  const pausedAnchor = await timeline.evaluate((element) => {
+    const turnId = element.dataset.scrollAnchorTurnId;
+    const viewportOffset = Number(element.dataset.scrollAnchorOffset);
+    return turnId && Number.isFinite(viewportOffset) ? {
+      turnId,
+      viewportOffset: Math.round(viewportOffset),
+    } : null;
+  });
+  expect(pausedAnchor).not.toBeNull();
   await guardedPage.locator(".ex-workspace-bottom .ex-composer textarea").fill("长会话滚动暂停验收");
   await guardedPage.getByRole("button", { name: "发送" }).click();
-  await expect.poll(() => timeline.evaluate(
-    (element, paused) => Math.abs(element.scrollTop - paused),
-    pausedScrollTop,
-  )).toBeLessThanOrEqual(4);
+  await expect.poll(() => timeline.evaluate((element, anchor) => {
+    const viewport = element.getBoundingClientRect();
+    const row = [...element.querySelectorAll<HTMLElement>(".ex-timeline-turn[data-turn-id]")]
+      .find((candidate) => candidate.dataset.turnId === anchor.turnId);
+    if (!row) return Number.POSITIVE_INFINITY;
+    return Math.abs(
+      Math.round(row.getBoundingClientRect().top - viewport.top) - anchor.viewportOffset,
+    );
+  }, pausedAnchor!)).toBeLessThanOrEqual(4);
   await expect(jumpButton).toBeVisible();
   await expect.poll(() => timeline.locator(".ex-timeline-turn").count()).toBeLessThan(60);
   await jumpButton.click();

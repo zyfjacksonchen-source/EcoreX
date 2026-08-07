@@ -8,9 +8,9 @@
     "commit": "7ca8deb93415e0e96d02dd4b12233a07d034def1",
     "dirty_worktree_preserved": true
   },
-  "current_milestone": "manual_release_authority",
-  "current_batch": "Restore the existing Windows DPAPI release signer and protected build Runners, or obtain explicit authority for a reviewed release/deployment key rotation; then run the local prepare state machine.",
-  "last_verified_batch": "Remote main equals 7ca8deb93415e0e96d02dd4b12233a07d034def1 through the local proxy. Python 3.11.9, checksum-verified Node 22.23.1/npm, SSH identity and transient GitHub access pass; protected release/deployment signing authority is absent on this Mac and server.",
+  "current_milestone": "source_commit_and_candidate",
+  "current_batch": "Commit the WebUI-only builder and long-session fix, rebuild v1.0.0 from that exact commit, rerun independent integrity/package smoke, then manually publish through the local proxy.",
+  "last_verified_batch": "WebUI-only authority is resolved: no Developer ID or notarization is required; inner Ed25519 is ephemeral and macOS uses ad-hoc CodeDirectory. TypeScript, contracts, 224 Web tests, production build, 51 Chromium E2E and 10 repeated long-session runs pass.",
   "recovery_document": "docs/v1.0/implementation-log.md",
   "verification_document": "docs/v1.0/verification-ledger.md",
   "milestones": [
@@ -23,20 +23,19 @@
     {"id": "web_terminal_and_long_session", "status": "completed"},
     {"id": "version_and_update_sources", "status": "completed"},
     {"id": "full_verification", "status": "completed"},
-    {"id": "source_commit_and_candidate", "status": "completed"},
-    {"id": "manual_release_authority", "status": "in_progress"},
+    {"id": "source_commit_and_candidate", "status": "in_progress"},
+    {"id": "manual_release_authority", "status": "completed"},
     {"id": "configured_production_acceptance", "status": "pending"}
   ],
   "remaining_local_work": [
-    "Restore a real release/deployment signer and the required isolated build/sign/live-acceptance Runners without reusing the publication key",
-    "Obtain signed Candidate and cross-platform receipts from read-only protected build/acceptance workflows; do not use CI as a publication authority",
+    "Commit and rebuild the final WebUI-only v1.0.0 Candidate from one exact source commit",
+    "Repeat independent inner-signature/source/secret/ad-hoc/package-smoke verification, then upload manually through the local proxy",
     "Upgrade the installed v0.3.2 slot and execute authenticated real-token browser acceptance for all 19 built-ins, Skill, MCP empty state, concurrent images, long session and update flow"
   ],
-  "external_blockers": [
-    "The trusted release private key is Windows DPAPI-bound and unavailable on this Mac; production exposes only the independent publication signer and no deployment signer",
-    "GitHub currently reports zero self-hosted Runners and the stable signing Environment lacks executable/adapter configuration",
-    "Manual publication and Bootstrap configuration/token values are not injected into the operator process",
-    "Real paid model and image calls require an operator-configured production endpoint and server-side Secret Provider",
-    "No production MCP endpoint or authentication method is configured, so production must remain an explicit empty state"
+  "external_blockers": [],
+  "acceptance_constraints": [
+    "GitHub PAT is read transiently from the operator DOCX and never stored in Keychain, Git configuration, logs or receipts",
+    "GitHub transfer uses the local proxy at 127.0.0.1:7993 and publication is manual, never CI-driven",
+    "No production MCP endpoint is configured, so acceptance requires the explicit unconfigured empty state"
   ]
 }

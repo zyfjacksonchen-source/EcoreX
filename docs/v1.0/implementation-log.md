@@ -7103,3 +7103,40 @@ to restore the existing Windows DPAPI signing account and required build
 Runners, or explicitly authorize a reviewed release/deployment key rotation.
 Only after that authority exists may the resumable local `prepare` state
 machine dispatch read-only builders and create an inactive Draft/stage.
+
+## 2026-08-07 - WebUI-only manual release authority resolution
+
+The operator narrowed v1.0.0 distribution to the browser WebUI Runtime. The
+release therefore contains Bootstrap, Core, signed capability Packs and static
+Web assets only. It does not contain an app bundle, DMG, PKG or native desktop
+UI, and it does not require Apple Developer ID signing or notarization. The
+previous Windows DPAPI signer and protected Runner finding remains a truthful
+audit of the retired full-platform path, but it is not a blocker for this
+explicit WebUI-only manual release.
+
+The smallest valid release path reuses the digest-pinned v0.3.2 native/Python
+dependency closure, overlays product code and Web assets from one exact v1.0.0
+source commit, rebuilds Bootstrap with the pinned Go toolchain, and signs the
+inner manifest and artifacts with a one-build Ed25519 key kept only in process
+memory. The public key is embedded into that release's Runtime configuration.
+The private key is never persisted. macOS Bootstrap binaries retain an ad-hoc
+CodeDirectory for local integrity; this is not a developer identity or
+notarization claim. The outer ZIP contract explicitly reports
+`os_application_signature: false`.
+
+The manual builder fails closed on base-package digests, exact source identity,
+archive traversal/symlinks/bounds, Pack/Python rebinding, Bootstrap tests and
+self-test, inner signatures, Web bundle identity, target inventory and native
+shell exclusion. It does not upload or publish. A previous candidate completed
+independent signature/source/secret checks and a real-home isolated package
+smoke, proving the path; it will be rebuilt from the final long-session source
+commit before publication.
+
+The long-session race was fixed at the shared follow boundary. An upward wheel
+is now an explicit pause, its visible Turn becomes a stable visual anchor after
+the virtual list settles, content/height changes restore that anchor, and only
+an intentional downward return or the visible jump control resumes following.
+The acceptance assertion now compares the same Turn's viewport offset instead
+of raw `scrollTop`, which is not stable under virtualization. The focused case
+passed 10/10 repeated runs; complete Web verification passed 224/224 unit tests
+and 51/51 Chromium scenarios with TypeScript, contracts and production build.

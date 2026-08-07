@@ -84,8 +84,8 @@ location = /ecorex-agent/public-bootstrap-index.json {
     add_header X-Content-Type-Options "nosniff" always;
 }
 
-# v0.2.9.2 WebUI clients discover v0.3.2 through this separately staged,
-# atomically replaced compatibility pointer.
+# Older WebUI clients discover the current compatible stable release through
+# this separately staged, atomically replaced compatibility pointer.
 location = /ecorex-agent/manifest.json {
     alias /srv/ecorex-agent-download/legacy-pointer/manifest.json;
     default_type application/json;
