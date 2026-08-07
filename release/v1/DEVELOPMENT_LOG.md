@@ -639,3 +639,5 @@ Diff whitespace check: passed
 用户错误文案单测：4 passed
 Ruff、compileall、diff check、变更生产切片 secret scan：passed
 ```
+
+真实外层 macOS 用户包的登录—重启验收随后暴露第二个边界：首进程以未登录占位账号创建的审计密文，在登录后的账号绑定进程中被当作另一正式账号的密文，因而在 `runtime_registration` 阶段按设计失败。验收预览现在使用一个 Bootstrap 生命周期固定的审计引用；正式模式仍按账号隔离。该引用的密钥仍只存在于验收加密凭据仓中，预览结束即失效。

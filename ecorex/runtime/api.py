@@ -1051,8 +1051,11 @@ def _resolve_audit_encryption_key(
         if len(material) != 32:
             raise ValueError("audit encryption key must contain 32 bytes")
         return material
-    if sys.platform not in {"win32", "darwin"} or isinstance(
-        credential_vault, (InMemoryCredentialVault, RejectingCredentialVault)
+    if not settings.acceptance_preview and (
+        sys.platform not in {"win32", "darwin"}
+        or isinstance(
+            credential_vault, (InMemoryCredentialVault, RejectingCredentialVault)
+        )
     ):
         try:
             return _local_audit_key(
@@ -1067,9 +1070,10 @@ def _resolve_audit_encryption_key(
                 ) from None
             return os.urandom(32)
 
-    reference = (
-        "ecorex/observability/audit/"
-        + hashlib.sha256(settings.account_id.encode("utf-8")).hexdigest()[:32]
+    reference = "ecorex/observability/audit/" + (
+        "acceptance-preview"
+        if settings.acceptance_preview
+        else hashlib.sha256(settings.account_id.encode("utf-8")).hexdigest()[:32]
     )
     try:
         stored = credential_vault.get(reference)

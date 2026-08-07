@@ -4,7 +4,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-from ecorex.connectors import InMemoryCredentialVault, RejectingCredentialVault
+from ecorex.connectors import (
+    EphemeralEncryptedCredentialVault,
+    InMemoryCredentialVault,
+    RejectingCredentialVault,
+)
 from ecorex.observability import AuditOutbox, AuditPayloadCipher
 from ecorex.runtime import RuntimeKernel, RuntimeSettings
 from ecorex.runtime import api as runtime_api
@@ -137,3 +141,28 @@ def test_non_platform_vault_uses_a_restart_safe_local_key_on_macos(
 
     assert first == second
     assert len(list(tmp_path.glob(".*.audit-key"))) == 1
+
+
+def test_acceptance_audit_key_survives_login_account_rebind(tmp_path, monkeypatch) -> None:
+    settings = _settings(tmp_path)
+    settings.acceptance_preview = True
+    kernel = RuntimeKernel(settings.database_path)
+    path = tmp_path / ".acceptance-credentials.vault"
+    key = b"v" * 32
+    monkeypatch.setattr(runtime_api.sys, "platform", "darwin")
+
+    first = runtime_api._resolve_audit_encryption_key(
+        settings,
+        kernel=kernel,
+        credential_vault=EphemeralEncryptedCredentialVault(path, key=key),
+    )
+    _persist_encrypted_audit_row(kernel, settings.account_id)
+    settings.account_id = "authenticated-preview-account"
+    second = runtime_api._resolve_audit_encryption_key(
+        settings,
+        kernel=kernel,
+        credential_vault=EphemeralEncryptedCredentialVault(path, key=key),
+    )
+
+    assert first == second
+    assert list(tmp_path.glob(".*.audit-key")) == []
