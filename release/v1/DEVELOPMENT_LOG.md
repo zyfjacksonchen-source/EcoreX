@@ -1425,3 +1425,48 @@ Bootstrap SIGTERM 进程树退出：passed
 生产数据库 quick_check 与只读数量基线：passed
 外部写入、部署、Release、latest：not run
 ```
+
+# 2026-08-09 — 2.0.0 macOS x64 未签名本地候选
+
+- 在 CI 尚未触发的情况下，继续复用 `08b9bf80befe7840e394449afe0bc0eaedcff657`
+  的同一签名 Runtime seed，只抽取并暂存 `macos-x64` Bootstrap；没有重签 Runtime，
+  没有生成或持久化私钥。当前 HEAD 相对该产品提交只增加发布/验收脚本和日志，
+  Renderer 仍是 `303c5bc4af1e2dcb432b7b2a704ce95defae2ed7`。
+- 现有 `desktop/node_modules` 原先是指向旧候选的 pnpm 目录链接，首次构建缺少当前
+  Rolldown 原生绑定。按未改动的 `package-lock.json` 执行一次 `npm ci` 重建该忽略
+  目录；锁文件和源码均未改变。ChatGPT 自带签名 Node 因 macOS Library Validation
+  不能加载 npm 原生模块，最终使用项目已锁定的 Node `22.23.1` 工具链；这属于本机
+  工具身份边界，不是产品回归。
+- electron-builder 首次获取固定 Electron x64 archive 时 GitHub 连接超时；有界重试
+  后从官方 `v33.2.0` Release 下载，并用同 Release 的 `SHASUMS256.txt` 验证 SHA-256
+  一致，再只重跑 builder。正式 CI 仍会独立下载并构建，不复用本机缓存。
+- x64 `.app` 主程序和随包 `emate-backend` 均为 Mach-O x86_64；
+  `CFBundleIdentifier=net.ecoremedia.emate`、版本 `2.0.0`。bundle 没有可用签名，
+  `spctl` 按预期返回 rejected/no usable signature；没有启动应用或触发 Gatekeeper。
+- x64 DMG SHA-256 为
+  `55124ee8f3da45604c750cd885f2c73aa3c306ee56028a1159e556aa2994794e`；
+  ZIP SHA-256 为
+  `b1195030f552b5a1a77e3898a70bb83a4373c30a13a62f876f6c68f436c8aba4`；
+  DMG blockmap SHA-256 为
+  `0efd48c1117a7157496dbba42e975f90022ae031c9ec33a72ce34d36b7e01825`；
+  ZIP blockmap SHA-256 为
+  `acbd04ce450f37b010dd953f7e5abeea86700c51d060b0613eff1740a891c7f1`；
+  本架构 `latest-mac.yml` SHA-256 为
+  `cebaf93b4547489871d0b12eeb1fe7ac90e7ea72171946b9a553bdaf40585422`。
+  metadata 中两个文件的 size/SHA-512 已从实际字节回算一致。
+- 展开的 x64 `.app` 扫描 118 个文件、0 品牌违规；ASAR 的 6,010 条路径、0 违规，
+  只有一个 `/dist` Renderer、Electron 壳与小芯/e-Mate 资源。当前本机
+  `latest-mac.yml` 仅代表 x64；正式双架构 `latest-mac.yml` 必须继续由 Actions
+  `feed-gate` 合并，不得手工发布该单架构文件。
+
+本轮定向验证：
+
+```text
+Web content-addressed build + Electron contracts + desktop brand：passed
+macOS x64 DMG/ZIP/blockmap：built
+x64 metadata size/SHA-512：passed
+Bundle ID / version / x86_64 / unsigned state：passed
+expanded app：118 files，0 violation
+ASAR：6,010 paths，0 violation，single Renderer
+启动、Computer Use、发布、latest：not run
+```
