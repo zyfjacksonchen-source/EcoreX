@@ -278,7 +278,7 @@ export function Composer({
   return (
     <div className="ex-composer-region">
       <div className="ex-composer" data-busy={submitting ? "true" : "false"}>
-        <label className="ex-composer-label" htmlFor="ecorex-composer">给 e-Mate 发消息</label>
+        <label className="ex-composer-label" htmlFor="ecorex-composer">给小芯发消息</label>
         {attachments.length || pendingAttachments.length ? (
           <div className="ex-composer-attachments" role="group" aria-label="已添加文件">
             {pendingAttachments.map((pending) => (

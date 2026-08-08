@@ -1546,16 +1546,9 @@
 .ex-assistant-heading > span {
   width: var(--chat-avatar-size);
   height: var(--chat-avatar-size);
-  border-radius: var(--radius-pill);
   display: grid;
   place-items: center;
-  color: var(--color-accent-strong);
-  background: var(--color-accent-soft);
-}
-
-.ex-assistant-heading svg {
-  width: 14px;
-  height: 14px;
+  background: url("../assets/xiaoxin-avatar.png") center / contain no-repeat;
 }
 
 .ex-assistant-heading strong {
@@ -1837,7 +1830,6 @@
 }
 
 .ex-activity-shimmer,
-.ex-thinking-state,
 .ex-reasoning[data-state="thinking"] .ex-reasoning-label {
   color: transparent;
   background: linear-gradient(90deg, var(--color-ink-subtle) 20%, var(--color-ink) 48%, var(--color-ink-subtle) 76%);
@@ -2021,6 +2013,46 @@
   min-height: 40px;
   display: flex;
   align-items: center;
+  gap: var(--space-2);
+}
+
+.ex-thinking-orb-b5 {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  overflow: hidden;
+  flex: none;
+  color: var(--color-ink-muted);
+  contain: strict;
+}
+
+.ex-thinking-orb-stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 28px;
+  height: 28px;
+  transform: scale(0.7142857);
+  transform-origin: 0 0;
+}
+
+.ex-thinking-orb-shape {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: ex-orb-handoff 2.8s linear infinite both;
+}
+
+.ex-thinking-orb-shape.is-a { animation-delay: 0s; }
+.ex-thinking-orb-shape.is-c { animation-delay: -1.4s; }
+.ex-thinking-orb-shape.is-b {
+  animation-name: ex-orb-breathe;
+  animation-duration: 3.6s;
 }
 
 .ex-reasoning > button,
@@ -2153,17 +2185,49 @@
 @keyframes ex-image-sweep { to { transform: translateX(100%); } }
 @keyframes ex-image-glow { to { opacity: 0.45; transform: scale(1.25); } }
 @keyframes ex-task-spin { to { transform: rotate(360deg); } }
+@keyframes ex-orb-handoff {
+  0% {
+    opacity: 0;
+    filter: blur(2.4px);
+    transform: translateX(-11px) scale(0.55);
+    animation-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
+  }
+  22% {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateX(-1px) scale(1);
+    animation-timing-function: linear;
+  }
+  37% { opacity: 1; filter: blur(0); transform: translateX(0) scale(1); }
+  52% {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateX(1px) scale(1);
+    animation-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
+  }
+  70%, 100% { opacity: 0; filter: blur(2.4px); transform: translateX(11px) scale(0.55); }
+}
+@keyframes ex-orb-breathe {
+  0%, 100% { opacity: 0.16; filter: blur(2.4px); transform: scale(1.2); }
+  50% { opacity: 0.32; filter: blur(1.6px); transform: scale(0.98); }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .ex-stream-caret,
   .ex-activity-shimmer,
-  .ex-thinking-state,
   .ex-reasoning[data-state="thinking"] .ex-reasoning-label,
   .ex-activity.is-web-search[data-status="in_progress"] .ex-activity-row > svg:first-child,
   .ex-image-generation-canvas::before,
   .ex-image-generation-glow {
     animation: none;
   }
+  .ex-thinking-orb-shape {
+    opacity: 0.3;
+    filter: blur(1.4px);
+    transform: none;
+    animation: none;
+  }
+  .ex-thinking-orb-shape.is-a { opacity: 1; filter: blur(0); }
   .ex-process-collapsible,
   .ex-process-collapsible > div,
   .ex-process-segment > button svg {

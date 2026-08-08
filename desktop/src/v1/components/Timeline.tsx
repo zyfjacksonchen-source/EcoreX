@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowDown, Bot, ChevronDown, FolderOpen, Workflow, WandSparkles } from "lucide-react";
+import { ArrowDown, ChevronDown, FolderOpen, Workflow, WandSparkles } from "lucide-react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 
 import type {
@@ -113,8 +113,8 @@ function phaseLabel(status: TurnProjection["status"] | undefined): string {
   switch (status) {
     case "queued": return "已排队";
     case "preparing": return "正在准备";
-    case "model_requested": return "正在思考";
-    case "streaming": return "正在组织结果";
+    case "model_requested": return "思考中";
+    case "streaming": return "思考中";
     case "tool_pending": return "正在选择工具";
     case "waiting_human": return "等待你确认";
     case "tool_running": return "正在执行";
@@ -122,6 +122,18 @@ function phaseLabel(status: TurnProjection["status"] | undefined): string {
     case "finalizing": return "正在检查结果";
     default: return "正在处理";
   }
+}
+
+function ThinkingOrb() {
+  return (
+    <span className="ex-thinking-orb-b5" aria-hidden="true">
+      <span className="ex-thinking-orb-stage">
+        <span className="ex-thinking-orb-shape is-a" />
+        <span className="ex-thinking-orb-shape is-b" />
+        <span className="ex-thinking-orb-shape is-c" />
+      </span>
+    </span>
+  );
 }
 
 function processLabel(turn: TurnProjection): string {
@@ -231,7 +243,7 @@ function TimelineBlockView({
   }
   if (item.kind === "reasoning") {
     return (
-      <Suspense fallback={<div className="ex-thinking-state" role="status">{phaseLabel(turn.status)}</div>}>
+      <Suspense fallback={<div className="ex-thinking-state" role="status"><ThinkingOrb />{phaseLabel(turn.status)}</div>}>
         <ReasoningBlock item={item} label={phaseLabel(turn.status)} />
       </Suspense>
     );
@@ -411,7 +423,7 @@ const TurnRow = memo(function TurnRow({
         return (
           <div key={segment.segmentId}>
             {showHeading ? (
-              <div className="ex-assistant-heading"><span><Bot aria-hidden="true" /></span><strong>e-Mate</strong></div>
+              <div className="ex-assistant-heading"><span aria-hidden="true" /><strong>小芯</strong></div>
             ) : null}
             <ProcessSegment
               segment={segment}
@@ -425,6 +437,7 @@ const TurnRow = memo(function TurnRow({
       })}
       {!entry.terminal ? (
         <div className="ex-thinking-state ex-turn-running">
+          <ThinkingOrb />
           <span className="ex-live-status" role="status">{phaseLabel(entry.turn.status)}</span>
           <span aria-hidden="true">{phaseLabel(entry.turn.status)} <OperationElapsed
               timing={entry.turn.timing}
@@ -715,7 +728,7 @@ export function Timeline({
   if (!timelineTurns.length && !visibleArtifacts.length && !isThinking) {
     return (
       <div className="ex-empty-state ex-new-conversation-start">
-        <h1>和 e-Mate 一起开始工作</h1>
+        <h1>和小芯一起开始工作</h1>
         <p>{newConversationProject ? `${newConversationProject.name} 项目会话` : "选择一个开始方式"}</p>
         <div className="ex-new-conversation-options" role="group" aria-label="新会话入口">
           <button className={!newConversationProject ? "is-selected" : ""} type="button" aria-pressed={!newConversationProject} onClick={() => onSelectConversationProject(null)}>
@@ -760,7 +773,7 @@ export function Timeline({
       <div ref={mountRef} className="ex-timeline-inner ex-timeline-virtualized">
         <div className="ex-live-status" aria-live="polite" aria-atomic="true">
           {latestTerminal ? <span key={latestTerminal.turn_id}>
-            {latestTerminal.status === "partial" ? "e-Mate 已返回部分结果" : "e-Mate 已完成回复"}
+            {latestTerminal.status === "partial" ? "小芯已返回部分结果" : "小芯已完成回复"}
           </span> : null}
         </div>
         {scrollParent ? (

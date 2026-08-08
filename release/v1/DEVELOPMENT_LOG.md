@@ -684,3 +684,34 @@ Runtime composition：17 passed
 Ruff focused check、diff check：passed
 真实失败终态：shell_cwd_outside_workspace（受控沙箱边界）
 ```
+
+# 2026-08-08 — 小芯身份、B5 思考动效与透明头像
+
+- 同一真实会话在系统能力任务完成后继续追问，模型无需再次调用工具即可准确
+  回答先前创建文件的路径和内容；回复终态正常显示，证明上下文续接与最终文本
+  投影有效。
+- 真实执行 `skill_search → skill_read`，过程区依次显示两个已完成步骤并返回
+  Skill 内容，确认 Skill Hub 的检索、读取和模型续答链路可用。
+- 浏览器计算样式检查发现原有 shimmer 动画虽在运行，但后置颜色规则让透明文字
+  被覆盖，视觉效果实际不可见。按产品要求复用 AICSS Orbs 的 B5 Routing 参数，
+  在现有思考状态中加入三层 B5 动效，并提供 `prefers-reduced-motion` 静态降级；
+  状态文案统一为“思考中”。
+- 助手展示名统一为“小芯”，Runtime 身份指令也固定为“小芯”，禁止模型自称
+  e-Mate、Claude、Codex、ChatGPT 或底层模型。头像使用用户提供的图 2；生成式
+  去底稿经视觉检查会改变原图细节，因此最终从原始像素做确定性 chroma 去底，
+  得到四角透明、完整保留造型和色彩的 RGBA 资源。
+- 新增浏览器断言覆盖“小芯”标题、头像资源加载、B5 运动变化和减少动态效果模式；
+  不引入新的运行时依赖。旧候选包和云制品因本次代码变更已作废，正式发布前必须
+  基于新提交重新构建和签名。
+
+本轮定向验证：
+
+```text
+Web production build / content-addressed asset gate：passed
+TypeScript：passed
+Playwright 小芯头像与 B5/reduced-motion：2 passed
+Runtime identity/image guidance focused tests：3 passed, 40 deselected
+Ruff focused check、diff check：passed
+真实上下文续接与最终回复：passed
+真实 Skill search/read/续答：passed
+```

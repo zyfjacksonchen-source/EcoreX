@@ -344,7 +344,7 @@ async function runPreflight() {
         check(await page.getByRole("menuitem", { name: "排到下一轮" }).count() === 1, "queue_choice_missing");
         check(await page.getByRole("menuitem", { name: "替换当前任务" }).count() === 1, "replace_choice_missing");
         await page.getByRole("menuitem", { name: "排到下一轮" }).click();
-        await page.getByLabel("给 e-Mate 发消息").fill("下一轮整理附件");
+        await page.getByLabel("给小芯发消息").fill("下一轮整理附件");
         await page.getByRole("button", { name: "发送" }).click();
         await checkedVisible(page.getByText("下一轮整理附件", { exact: true }), "queue_result_missing");
       },

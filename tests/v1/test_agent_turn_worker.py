@@ -671,7 +671,7 @@ def test_image_workflow_guidance_is_frozen_injected_and_cached(tmp_path) -> None
     assert all(
         request.instructions is not None
         and request.instructions.endswith(instructions)
-        and "Always identify yourself as e-Mate" in request.instructions
+        and "Always identify yourself as 小芯" in request.instructions
         for request in gateway.requests
     )
     assert len(calls) == 1
@@ -756,7 +756,7 @@ def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> No
     assert gateway.requests[0].model_policy.upstream_model_id == "gpt-5.6-luna"
     assert gateway.requests[0].model_policy.reasoning_effort == "max"
     assert gateway.requests[0].instructions is not None
-    assert "Always identify yourself as e-Mate" in gateway.requests[0].instructions
+    assert "Always identify yourself as 小芯" in gateway.requests[0].instructions
     assert "blindly repeating the same call" in gateway.requests[0].instructions
     assert (
         gateway.requests[0].model_policy.context_management.compact_threshold_tokens

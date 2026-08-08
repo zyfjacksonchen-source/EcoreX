@@ -316,6 +316,16 @@ test("Composer renders server-reported quota, token usage, and context window", 
   await expect(tooltip).toContainText("额度128次");
 });
 
+test("assistant replies use the Xiaoxin identity and transparent avatar asset", async ({ guardedPage }) => {
+  await openThreadScenario(guardedPage, "artifact");
+  const heading = guardedPage.locator(".ex-assistant-heading").first();
+  await expect(heading).toContainText("小芯");
+  const avatar = heading.locator("span");
+  await expect(avatar).toBeVisible();
+  expect(await avatar.evaluate((element) => getComputedStyle(element).backgroundImage))
+    .toMatch(/xiaoxin-avatar/u);
+});
+
 test("model selection uses the managed provider route and keeps the vendor icon", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "artifact");
   const trigger = guardedPage.getByRole("button", { name: "选择模型" });
@@ -788,6 +798,35 @@ test("reasoning stays visible until replacement and terminal facts clear the fir
   await expect(guardedPage.locator(".ex-message.is-assistant")).toHaveCount(0);
 });
 
+test("thinking state uses the B5 handoff motion and stays readable with reduced motion", async ({ browser }) => {
+  await withGuardedContext(browser, {}, async (page) => {
+    await openThreadScenario(page, "thinking");
+    const thinking = page.locator(".ex-turn-running");
+    await expect(thinking).toBeVisible();
+    await expect(thinking).toContainText("思考中");
+    await expect(thinking.locator(".ex-thinking-orb-shape")).toHaveCount(3);
+    const firstShape = thinking.locator(".ex-thinking-orb-shape.is-a");
+    const first = await firstShape.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { animation: style.animationName, transform: style.transform };
+    });
+    await page.waitForTimeout(150);
+    const secondTransform = await firstShape.evaluate((element) => getComputedStyle(element).transform);
+    expect(first.animation).toBe("ex-orb-handoff");
+    expect(secondTransform).not.toBe(first.transform);
+  });
+
+  await withGuardedContext(browser, { reducedMotion: "reduce" }, async (page) => {
+    await openThreadScenario(page, "thinking");
+    const thinking = page.locator(".ex-turn-running");
+    await expect(thinking).toBeVisible();
+    await expect(thinking).toContainText("思考中");
+    const animation = await thinking.locator(".ex-thinking-orb-shape.is-a")
+      .evaluate((element) => getComputedStyle(element).animationName);
+    expect(animation).toBe("none");
+  });
+});
+
 test("retry state stays actionable and can be interrupted without a stale thinking indicator", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "retry");
   await expect(guardedPage.locator(".ex-turn-running")).toContainText(/等待重试 \d+s/u);
@@ -1024,7 +1063,7 @@ test("320px touch Composer keeps the durable queue action reachable and single-l
       await disposition.click();
       await page.getByRole("menuitem", { name: "排到下一轮" }).click();
       await expect(page.getByRole("button", { name: "排到下一轮" })).toBeVisible();
-      await page.getByLabel("给 e-Mate 发消息").fill("下一轮整理附件");
+      await page.getByLabel("给小芯发消息").fill("下一轮整理附件");
       const send = page.getByRole("button", { name: "发送" });
       await expect(send).toBeInViewport();
       await send.click();
