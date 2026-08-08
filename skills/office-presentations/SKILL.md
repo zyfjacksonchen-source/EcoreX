@@ -16,27 +16,22 @@ quality-gates:
   - render-preview
   - overlap-check
   - visual-inspection
-metadata:
-  cowagent:
-    default_enabled: true
-    requires:
-      modules:
-        - pptx
+metadata: {"default_enabled":true,"requires":{"modules":["pptx"]}}
 ---
 
 # Office Presentations
 
-This is the EcoreX-native compatibility facade for the official Codex
-`Presentations` workflow. Keep the public EcoreX skill ID
+This is the e-Mate-native compatibility facade for the official Codex
+`Presentations` workflow. Keep the public e-Mate skill ID
 `office-presentations` stable, but use the official `Presentations` skill as
 the authoritative workflow when it is available in `<available_skills>`.
 
-If both skills are visible, read this skill first for EcoreX compatibility
+If both skills are visible, read this skill first for e-Mate compatibility
 rules, then read `Presentations` for implementation details, asset-tool usage,
 layout library guidance, and QA commands. If the official skill is not visible,
 follow the equivalent contract below and use the safest available local tools.
 
-Use this skill when the user asks EcoreX to work with presentation decks: create slides, edit a `.ppt`/`.pptx`, summarize a deck, convert notes into slides, polish layout, or prepare a local PowerPoint deliverable.
+Use this skill when the user asks e-Mate to work with presentation decks: create slides, edit a `.ppt`/`.pptx`, summarize a deck, convert notes into slides, polish layout, or prepare a local PowerPoint deliverable.
 
 ## Default Workflow
 
@@ -53,14 +48,14 @@ Use this skill when the user asks EcoreX to work with presentation decks: create
 - No unintended overlap, clipped text, broken charts, or empty placeholder slides.
 - Slide titles should be readable and should not wrap unexpectedly.
 - When no template controls typography, use at least 50pt deck title, 35pt slide titles, 24pt subheads/callouts, and 16pt body text.
-- Run the EcoreX presentation QA evidence builder after authoring or editing. Treat `story-flow`, `layout-bounds`, `font-size-check`, `chart-integrity`, `render-preview`, `overlap-check`, and `visual-inspection` failures as blockers.
+- Run the e-Mate presentation QA evidence builder after authoring or editing. Treat `story-flow`, `layout-bounds`, `font-size-check`, `chart-integrity`, `render-preview`, `overlap-check`, and `visual-inspection` failures as blockers.
 - Treat programmatic overlap warnings as blockers until visually inspected and resolved.
 - Use real images or chart outputs when visuals are needed; do not rely on decorative placeholders.
 - For data-heavy decks, keep source tables or notes available in the workspace.
 - For Google Slides-targeted output, create and verify a local `.pptx` first, then import through the appropriate cloud-document route when available.
 - Final response should link to the final `.pptx` deliverable, not scratch files, unless requested.
 
-## EcoreX Adaptation
+## e-Mate Adaptation
 
 - This is a user-invocable office skill and should appear under the document category in `@skill`.
 - For a new PPTX, call `skill_run` with this exact discovery ID and parameters shaped as `{"operation":"create","file_name":"deck.pptx","title":"...","slides":[{"title":"...","bullets":["..."]}]}`. The Runtime-owned Office Pack creates and structurally validates the file, then publishes the resulting Artifact; do not fall back to `pip` or an untracked shell output.

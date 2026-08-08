@@ -1,9 +1,7 @@
 ---
 name: knowledge-wiki
 description: Manage the personal knowledge wiki. Use when the user shares articles, documents, or asks to organize knowledge; when a conversation produces insights worth preserving as structured knowledge; or when the user asks about the knowledge base.
-metadata:
-  cowagent:
-    always: true
+metadata: {"always":true}
 ---
 
 # Knowledge Wiki

@@ -15,29 +15,23 @@ quality-gates:
   - render-preview
   - visual-inspection
   - export-verify
-metadata:
-  cowagent:
-    default_enabled: true
-    requires:
-      modules:
-        - openpyxl
-        - xlsxwriter
+metadata: {"default_enabled":true,"requires":{"modules":["openpyxl","xlsxwriter"]}}
 ---
 
 # Office Spreadsheets
 
-This is the EcoreX-native compatibility facade for the official Codex
-`Spreadsheets` workflow. Keep the public EcoreX skill ID
+This is the e-Mate-native compatibility facade for the official Codex
+`Spreadsheets` workflow. Keep the public e-Mate skill ID
 `office-spreadsheets` stable, but use the official `Spreadsheets` skill as the
 authoritative workflow when it is available in `<available_skills>`.
 
-If both skills are visible, read this skill first for EcoreX compatibility
+If both skills are visible, read this skill first for e-Mate compatibility
 rules, then read `Spreadsheets` for artifact-tool authoring, formatting,
 formula, render, chart, and export details. If the official skill is not
 visible, follow the equivalent contract below and use the safest available
 local tools.
 
-Use this skill when the user asks EcoreX to work with spreadsheets: Excel workbooks, CSV/TSV files, data cleanup, formulas, analysis tables, charts, dashboards, budgets, trackers, or model-style calculations.
+Use this skill when the user asks e-Mate to work with spreadsheets: Excel workbooks, CSV/TSV files, data cleanup, formulas, analysis tables, charts, dashboards, budgets, trackers, or model-style calculations.
 
 ## Default Workflow
 
@@ -61,7 +55,7 @@ Use this skill when the user asks EcoreX to work with spreadsheets: Excel workbo
 - For Google Sheets-targeted output, create and verify a local `.xlsx` first, then import through the appropriate cloud-document route when available.
 - Final response should link to the final spreadsheet artifact, not scratch files, unless requested.
 
-## EcoreX Adaptation
+## e-Mate Adaptation
 
 - This is a user-invocable office skill and should appear under the document category in `@skill`.
 - For a new XLSX, call `skill_run` with this exact discovery ID and parameters shaped as `{"operation":"create","file_name":"workbook.xlsx","title":"...","sheets":[{"name":"Data","rows":[["Column",1]]}]}`. The Runtime-owned Office Pack creates and structurally validates the file, then publishes the resulting Artifact; do not fall back to `pip` or an untracked shell output.

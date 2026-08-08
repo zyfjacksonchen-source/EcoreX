@@ -161,6 +161,23 @@ jobs:
         run: ${{ matrix.command }}
         working-directory: desktop
 
+      - name: Reject predecessor brand in source and unpacked product
+        run: |
+          python scripts/check-emate-brand.py skills ecorex desktop/src desktop/electron desktop/dist
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess, sys
+          release = Path("desktop/release")
+          roots = [path for path in (release / "win-unpacked",) if path.exists()]
+          roots.extend(sorted(release.glob("mac*/*.app")))
+          if not roots:
+              raise SystemExit("unpacked desktop product missing")
+          subprocess.run(
+              [sys.executable, "scripts/check-emate-brand.py", "--allow-contained-symlinks", *map(str, roots)],
+              check=True,
+          )
+          PY
+
       - name: Record artifact checksums
         run: |
           python - <<'PY'

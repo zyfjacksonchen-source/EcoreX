@@ -14,28 +14,22 @@ quality-gates:
   - table-structure
   - generation-verify
   - visual-diff
-metadata:
-  cowagent:
-    default_enabled: true
-    requires:
-      modules:
-        - pypdf
-        - pdfminer
+metadata: {"default_enabled":true,"requires":{"modules":["pypdf","pdfminer"]}}
 ---
 
 # Office PDF
 
-This is the EcoreX-native compatibility facade for the official Codex `pdf`
-workflow. Keep the public EcoreX skill ID `office-pdf` stable, but use the
+This is the e-Mate-native compatibility facade for the official Codex `pdf`
+workflow. Keep the public e-Mate skill ID `office-pdf` stable, but use the
 official `pdf` skill as the authoritative workflow when it is available in
 `<available_skills>`.
 
-If both skills are visible, read this skill first for EcoreX compatibility
+If both skills are visible, read this skill first for e-Mate compatibility
 rules, then read `pdf` for Poppler rendering, PDF generation, extraction, and
 visual verification details. If the official skill is not visible, follow the
 equivalent contract below and use the safest available local tools.
 
-Use this skill when the user asks EcoreX to read, summarize, extract, compare, create, or verify PDFs. Use it especially when page layout, tables, images, signatures, invoices, contracts, reports, or scanned/office-exported documents matter.
+Use this skill when the user asks e-Mate to read, summarize, extract, compare, create, or verify PDFs. Use it especially when page layout, tables, images, signatures, invoices, contracts, reports, or scanned/office-exported documents matter.
 
 ## Default Workflow
 
@@ -57,13 +51,13 @@ Use this skill when the user asks EcoreX to read, summarize, extract, compare, c
 - If rendering is unavailable, clearly report which visual verification layer could not run and avoid claiming page-level QA passed.
 - Final response should link to final generated PDFs only when the user requested a deliverable.
 
-## EcoreX Adaptation
+## e-Mate Adaptation
 
 - This is a user-invocable office skill and should appear under the document category in `@skill`.
 - For a new PDF, call `skill_run` with this exact discovery ID and parameters shaped as `{"operation":"create","file_name":"report.pdf","title":"...","sections":[{"heading":"...","paragraphs":["..."]}]}`. The Runtime-owned Office Pack creates and structurally validates the file, then publishes the resulting Artifact; do not fall back to `pip` or an untracked shell output.
 - The `office-pdf` capability pack provides PDF and Office parsing modules in packaged desktop builds.
 - Preserve compatibility with existing prompts, shortcuts, and automations that mention `office-pdf`.
 - Prefer official Codex workspace dependencies for PDF extraction, generation, Poppler render, and page-level QA when the host exposes them.
-- The `office-pdf` capability pack remains the EcoreX runtime compatibility pack for legacy parsing/preview.
-- Use the EcoreX PDF QA evidence builder for `text-orientation`, `page-render`, `layout-inspection`, `table-structure`, `generation-verify`, and `visual-diff`; render evidence must come from trusted runtime render output, not caller-provided metadata.
+- The `office-pdf` capability pack remains the e-Mate runtime compatibility pack for legacy parsing/preview.
+- Use the e-Mate PDF QA evidence builder for `text-orientation`, `page-render`, `layout-inspection`, `table-structure`, `generation-verify`, and `visual-diff`; render evidence must come from trusted runtime render output, not caller-provided metadata.
 - If PDF modules or renderers are unavailable, continue with the safest available extraction method and clearly state the missing verification layer.

@@ -1,9 +1,7 @@
 ---
 name: find
 description: Locate files and folders in the workspace or an allowed filesystem profile. Use when the user asks to find a file, locate paths, discover where code/config/docs live, search by filename pattern, or inspect repository structure before reading/editing files.
-metadata:
-  cowagent:
-    always: true
+metadata: {"always":true}
 ---
 
 # Find

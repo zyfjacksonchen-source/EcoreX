@@ -1259,3 +1259,28 @@ Shell Pack 默认超时与真实 pwd：2 passed
 管理 schema 相关回归：134 passed，8 skipped
 Python compile：passed
 ```
+
+# 2026-08-09 — 安装包品牌门禁展开扫描
+
+- 首个 macOS arm64 未签名候选已生成 DMG/ZIP、blockmap 与
+  `latest-mac.yml`，但没有进入验收或发布。安装包展开扫描发现通用门禁会把
+  Framework 的包内符号链接、Rust `Cow<str>` 类型名和 ZIP 压缩随机字节误报；
+  同时也在 Core ZIP 的内置 Skills 中定位到 7 处真实旧品牌/命名空间残留。
+- 门禁现在默认仍拒绝所有链接；仅制品模式允许解析后仍位于同一扫描根内的链接，
+  并逐层读取 ZIP 成员（含内嵌 `python311.zip`），检查路径、UTF-8、UTF-16 和
+  二进制字符串。压缩字节不再直接作为品牌事实；文本中的短品牌仍检查，原生二进制
+  中通用的 copy-on-write `Cow` 类型不再误判。
+- 六个内置 Skill 的旧命名空间已改为扁平 JSON metadata，随包无 PyYAML 的既有
+  parser 仍能保留 `always`、`default_enabled` 与模块需求；Skill README、创建指令
+  和 Office 提示词全部使用 e-Mate/能力中心/`~/.emate`，不再向用户暴露旧产品。
+- GitHub Actions 在构建前扫描源码和 Web，在构建后再次扫描 `win-unpacked` 或
+  `.app`，任何真实旧品牌路径或内容都会阻止哈希与制品上传。
+
+本轮定向验证：
+
+```text
+品牌门禁单测：5 passed
+源码 + Skills + Web：540 files，0 violation
+六个 Skill metadata（正式随包无 PyYAML parser）：preserved
+首个 macOS 候选：因真实 Skills 泄漏被拒绝，必须基于新提交重签 Runtime 后重建
+```

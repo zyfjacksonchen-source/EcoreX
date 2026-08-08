@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import zipfile
 
 import pytest
 
@@ -73,6 +74,31 @@ def test_gate_fails_closed_for_a_symlinked_product_entry(tmp_path: Path) -> None
     violations = gate.check((tmp_path,))
     assert [(item.path, item.rule) for item in violations] == [
         ("product-link", "unsafe-entry")
+    ]
+
+
+def test_artifact_mode_allows_only_contained_links_and_scans_zip_members(
+    tmp_path: Path,
+) -> None:
+    gate = _gate_module()
+    target = tmp_path / "Versions/A/runtime"
+    target.parent.mkdir(parents=True)
+    target.write_text("e-Mate", encoding="utf-8")
+    link = tmp_path / "runtime"
+    try:
+        os.symlink(target.relative_to(tmp_path), link)
+    except OSError:
+        pytest.skip("this account cannot create symbolic links")
+    archive = tmp_path / "release.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+        output.writestr("binary.bin", b"\0Cow\0")
+        output.writestr("assets/leak.txt", "CowAgent")
+        output.writestr("ecorex/migration/compat.py", "CowAgent")
+
+    violations = gate.check((tmp_path,), allow_contained_symlinks=True)
+
+    assert [(item.path, item.rule) for item in violations] == [
+        ("release.zip!/assets/leak.txt", "predecessor-product")
     ]
 
 

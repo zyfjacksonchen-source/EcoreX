@@ -14,28 +14,23 @@ quality-gates:
   - table-geometry
   - visual-inspection
   - redline-preserve
-metadata:
-  cowagent:
-    default_enabled: true
-    requires:
-      modules:
-        - docx
+metadata: {"default_enabled":true,"requires":{"modules":["docx"]}}
 ---
 
 # Office Documents
 
-This is the EcoreX-native compatibility facade for the official Codex
-`documents` workflow. Keep the public EcoreX skill ID `office-documents`
+This is the e-Mate-native compatibility facade for the official Codex
+`documents` workflow. Keep the public e-Mate skill ID `office-documents`
 stable, but use the official `documents` skill as the authoritative workflow
 when it is available in `<available_skills>`.
 
-If both skills are visible, read this skill first for EcoreX compatibility
+If both skills are visible, read this skill first for e-Mate compatibility
 rules, then read `documents` for design presets, deterministic OOXML helpers,
 render-to-PNG visual QA, Google Docs-targeted sanitization, comments, redlines,
 and table geometry details. If the official skill is not visible, follow the
 equivalent contract below and use the safest available local tools.
 
-Use this skill when the user asks EcoreX to work with Word-style office documents: read, summarize, rewrite, create, edit, redline, comment on, or package a `.doc`/`.docx` deliverable.
+Use this skill when the user asks e-Mate to work with Word-style office documents: read, summarize, rewrite, create, edit, redline, comment on, or package a `.doc`/`.docx` deliverable.
 
 ## Default Workflow
 
@@ -59,7 +54,7 @@ Use this skill when the user asks EcoreX to work with Word-style office document
 - If visual rendering is unavailable, clearly report that only structural verification passed; render-docx evidence must come from trusted runtime render output, not caller-provided metadata.
 - Final response should link to the final `.docx` deliverable, not scratch files, unless the user asks for intermediates.
 
-## EcoreX Adaptation
+## e-Mate Adaptation
 
 - This is a user-invocable office skill and should appear under the document category in `@skill`.
 - For a new DOCX, call `skill_run` with this exact discovery ID and parameters shaped as `{"operation":"create","file_name":"report.docx","title":"...","sections":[{"heading":"...","paragraphs":["..."]}]}`. The Runtime-owned Office Pack creates and structurally validates the file, then publishes the resulting Artifact; do not fall back to `pip` or an untracked shell output.
