@@ -278,9 +278,9 @@ async function runPreflight() {
       "new-composer-centered": async () => {
         await gotoApp("artifact");
         await page.getByRole("button", { name: "新建任务" }).click();
-        const chooser = page.locator(".ex-new-conversation-start");
-        await checkedVisible(chooser, "new_composer_missing");
-        check(await chooser.locator(".ex-new-conversation-options > button").count() === 2, "new_conversation_choices_invalid");
+        const composer = page.locator(".ex-home-composer");
+        await checkedVisible(composer, "new_composer_missing");
+        check(await composer.locator(".ex-composer-region").count() === 1, "new_composer_region_invalid");
         check(await page.locator(".ex-workspace-bottom").count() === 0, "new_composer_not_centered");
       },
       "normal-composer-bottom": async () => {
@@ -315,7 +315,9 @@ async function runPreflight() {
         await trigger.click();
         const menu = page.locator(".ex-model-menu");
         check((await menu.textContent())?.includes("按意图自动调用") === true, "image_model_catalog_missing");
-        check(await menu.locator(".ex-model-provider-icon").count() === 5, "model_provider_icons_missing");
+        const modelItemCount = await menu.getByRole("menuitemradio").count();
+        check(modelItemCount > 0, "model_catalog_empty");
+        check(await menu.locator(".ex-model-provider-icon").count() === modelItemCount, "model_provider_icons_missing");
       },
       "image-intent-routing": async () => {
         await openThread("artifact");
@@ -331,9 +333,10 @@ async function runPreflight() {
       "tool-progressive-disclosure": async () => {
         await openThread("artifact");
         await page.getByRole("button", { name: "能力中心", exact: true }).click();
-        const workspace = page.getByRole("region", { name: "技能" });
+        const workspace = page.getByRole("region", { name: "能力中心" });
         await checkedVisible(workspace, "skill_workspace_missing");
-        check((await workspace.textContent())?.includes("技能、MCP、工具组件和能力包") === true, "extension_categories_missing");
+        check((await workspace.textContent())?.includes("发现、安装并管理 e-Mate 的办公能力") === true, "extension_categories_missing");
+        await workspace.getByRole("tab", { name: /已安装/u }).click();
         check(await workspace.locator("details.ex-protected-skills").count() === 1, "protected_skills_disclosure_missing");
       },
       "steer-queue-replace": async () => {
@@ -361,10 +364,12 @@ async function runPreflight() {
         await openThread("artifact");
         const dialog = await settings();
         const section = dialog.getByRole("heading", { name: "权限", exact: true }).locator("..");
-        await section.getByRole("button", { name: "启用完全访问" }).click();
+        await section.getByRole("switch", { name: "关闭完全访问" }).click();
+        await checkedVisible(section.getByText("默认权限", { exact: true }), "default_access_setup_failed");
+        await section.getByRole("switch", { name: "开启完全访问" }).click();
         await section.getByRole("button", { name: "确认启用" }).click();
         await checkedVisible(section.getByText("完全访问", { exact: true }), "full_access_failed");
-        await section.getByRole("button", { name: "恢复默认权限" }).click();
+        await section.getByRole("switch", { name: "关闭完全访问" }).click();
         await checkedVisible(section.getByText("默认权限", { exact: true }), "default_access_restore_failed");
       },
       "artifact-hover-actions": async () => {
@@ -411,17 +416,22 @@ async function runPreflight() {
       },
       "share-role-separation": async () => {
         await openThread("artifact");
-        check(await page.locator(".ex-message.is-user").count() >= 1, "user_role_missing");
-        check(await page.locator(".ex-message.is-assistant").count() >= 1, "assistant_role_missing");
+        await checkedVisible(page.locator(".ex-message.is-user").first(), "user_role_missing");
+        await checkedVisible(page.locator(".ex-message.is-assistant").first(), "assistant_role_missing");
         check(await page.locator(".ex-message-avatar").count() === 0, "chat_avatar_not_removed");
       },
       "project-session": async () => {
         await gotoApp("artifact");
         await page.getByRole("button", { name: "新建任务" }).click();
-        await page.getByRole("button", { name: "选择项目会话" }).click();
+        const projectTrigger = page.getByRole("button", { name: "选择项目会话" });
+        await projectTrigger.click();
         await page.getByRole("menuitemradio", { name: /季度报告/u }).click();
-        await checkedVisible(page.getByText("季度报告 项目会话", { exact: true }), "project_session_selection_failed");
-        await checkedVisible(page.getByText(/将从 季度报告 项目开始/u), "project_context_notice_missing");
+        check(await projectTrigger.getAttribute("aria-pressed") === "true", "project_session_selection_failed");
+        await checkedVisible(projectTrigger.getByText("季度报告", { exact: true }), "project_context_notice_missing");
+        await projectTrigger.click();
+        const selectedProject = page.getByRole("menuitemradio", { name: /季度报告/u });
+        check(await selectedProject.getAttribute("aria-checked") === "true", "project_session_radio_state_missing");
+        await page.keyboard.press("Escape");
       },
       "office-document-flow": async () => {
         await openThread("artifact");
@@ -432,7 +442,7 @@ async function runPreflight() {
       },
       "connector-catalog": async () => {
         await gotoApp("artifact");
-        await page.getByRole("button", { name: "技能", exact: true }).click();
+        await page.getByRole("button", { name: "能力中心", exact: true }).click();
         const workspace = page.locator(".ex-skills-workspace");
         await checkedVisible(workspace, "skills_workspace_missing");
         await workspace.getByRole("tab", { name: /已安装/u }).click();

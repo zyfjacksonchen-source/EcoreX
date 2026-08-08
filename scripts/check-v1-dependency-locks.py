@@ -462,6 +462,11 @@ def _validate_workflows(repo: Path) -> dict[str, object]:
             "npm_ci": 1,
             "node": True,
         },
+        "emate-2.0-desktop-release.yml": {
+            "profiles": {"runtime": 3},
+            "npm_ci": 2,
+            "node": True,
+        },
         "ecorex-v1-online-update.yml": {
             "profiles": {},
             "npm_ci": 0,

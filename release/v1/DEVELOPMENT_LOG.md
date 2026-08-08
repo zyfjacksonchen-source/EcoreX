@@ -1326,3 +1326,102 @@ DMG/ZIP latest-mac SHA-512/size 回读：passed
 Bundle ID / version / icon alpha / arm64 / unsigned state：passed
 Computer Use、Browser、Windows、macOS x64、部署发布：pending
 ```
+
+# 2026-08-09 — e-Mate 2.0 桌面 feed 离线发布门禁
+
+- `.github/workflows/emate-2.0-desktop-release.yml` 现在只在
+  `codex/e-mate-2.0.0` push 或手动 dispatch 时运行；不要求先合并 `main`，权限仍为
+  `contents: read`，没有 Release、部署或更新指针写步骤。Actions 与 Python/Node/Go
+  版本全部复用项目锁定值，checkout 不保留凭据。
+- Windows、macOS arm64、macOS x64 各自生成完整 handoff SHA-256 清单，覆盖安装包、
+  blockmap 和架构 metadata。两个 mac job 分别交付 `latest-mac-arm64.yml` 与
+  `latest-mac-x64.yml`，避免同名覆盖；后置 `feed-gate` 下载 Runtime 加三个桌面
+  artifact，逐项回算 SHA-256、metadata 内 size/SHA-512，并用 Bootstrap trust
+  校验 Runtime manifest Ed25519 签名、每个 Runtime artifact 的内容和签名，最后才
+  生成单一 `latest-mac.yml`。
+- `scripts/prepare-emate-desktop-feed.py` 是同一离线门禁的本地复用入口。Actions 中
+  首次运行不接收公开指针，receipt 必须停在
+  `awaiting-public-bootstrap-index`；验收后的发布操作者必须把既有 Runtime 发布链
+  生成并验证过的 `public-bootstrap-index.json` 作为
+  `--public-bootstrap-index` 重新组装，只有此时 receipt 才是 `activation-ready`。
+  示例输入如下，四个目录均为 Actions artifact 解包后的独立目录：
+
+```bash
+python scripts/prepare-emate-desktop-feed.py \
+  --runtime-root handoff/runtime \
+  --windows-root handoff/windows-x64 \
+  --macos-arm64-root handoff/macos-arm64 \
+  --macos-x64-root handoff/macos-x64 \
+  --nginx-config deploy/e-mate/nginx/update-feed.conf \
+  --public-bootstrap-index handoff/public-bootstrap-index.json \
+  --output handoff/feed-v2.0.0 \
+  --expected-version 2.0.0 \
+  --expected-source-sha '<40 位已验收提交 SHA>'
+```
+
+- 输出 `feed-stage-receipt.json` 固定记录完整文件 inventory、feed build ID、候选目录、
+  Nginx 配置哈希和原子切换合同。部署时先把候选放入独立的
+  `/srv/e-mate-update/releases/<candidate>`，回读文件后才用同文件系统临时软链接原子
+  替换 `/srv/e-mate-update/current`；`latest.yml`、`latest-mac.yml` 与公开 Bootstrap
+  指针因此最后同时可见。切换/回滚 receipt 都必须包含 `operation`、
+  `feed_build_id`、`previous_target`、`new_target`、`manifest_sha256`、
+  `public_readback_sha256`、`completed_at`。回读失败时把 `current` 原子指回
+  `previous_target`，不得推进或保留半切换的 latest。
+- `deploy/e-mate/nginx/update-feed.conf` 使用独立
+  `/srv/e-mate-update/current`，不覆盖生产现有 `/opt/e-mate/current` Web 产品；三个
+  mutable pointer 使用 exact location，其余 feed 使用 `^~ /e-mate/update/` 静态
+  alias。配置禁止 `index.html`/`@spa` fallback，文件不存在必须由 Nginx 返回 404，
+  不再落到现有 `/e-mate/ -> 127.0.0.1:18080` SPA proxy。上线前仍需把该片段 include
+  到 HTTPS server、执行 `nginx -t`，并用缺失文件探针确认 404 后才允许切换。
+- 本轮只改发布 workflow、离线门禁、Nginx 片段、聚焦测试和锁文件 workflow 清单；
+  未修改 Core 或产品 UI，未读取凭据，未进行任何外部写入、部署或 `latest` 切换。
+
+本轮定向验证：
+
+```text
+桌面 feed 签名/合并/篡改/SPA 回退单测：2 passed
+Python Ruff：passed
+workflow dependency/action/toolchain lock：passed
+workflow YAML parse：passed
+生产部署与 latest 切换：not run
+```
+
+# 2026-08-09 — 本地 GA/CDP 与生产发布前只读基线
+
+- 2.0 首页、能力中心、权限开关、项目会话和模型目录已经替换旧验收定位；
+  `desktop/tools/run-local-live-preflight-cdp.mjs` 继续验证真实可操作控件和状态闭环，
+  没有用“元素存在”代替行为断言，也没有修改产品 UI 或 Core。GA thinking fixture
+  只延长事实停留窗口，以稳定观测既有 200 ms sticky replacement 合同。
+- 完整本地 GA/CDP 通过 18 个场景、4 个视口、133 条断言；console、page、failed
+  request 与 external request 计数均为 0。报告仍固定
+  `candidate_bound=false`、`protected_provenance_claimed=false`，本证据只能证明
+  `local-ga-contract-runtime`，不能替代真实企业 Runtime、安装包或账号验收。
+- 使用当前签名 Runtime seed 的独立临时安装根完成首次安装、slot 激活和
+  `bootstrap_health_confirmed`；停止测试时原生 Bootstrap 的 SIGTERM 转发也使整棵
+  supervisor/Runtime 进程树退出，没有遗留 8765 监听。正式产品 Runtime 随后在
+  macOS `SecItemCopyMatching` 等待 Keychain 授权，owner endpoint 尚未建立；没有
+  绕过、删除或读取 Keychain secret。必须在用户确认运行未签名应用后，由
+  Computer Use 进入真实桌面路径；若系统要求登录密码，交还用户本人输入。
+- 对企业服务器只做了固定命令的只读盘点，没有上传、迁移、重启、reload 或指针
+  写入。当前 green cloud 槽运行产品 `0.3.2`；Control Plane 与 Gateway 数据库
+  `quick_check=ok`。上线前对账基线为 41 个管理用户、298 条管理审计、178 条
+  Provider 用量事实、222 条 Gateway 请求、5 条 Gateway model attempt；现网管理
+  schema 为 v4、Gateway schema 为 v3，本次只允许分别增量迁移到已验证的 v6/v4，
+  上述历史数量不得减少。
+- 现网 `/e-mate/` 仍整体反向代理到既有 Web 产品，因此不存在的
+  `/e-mate/update/*` 会返回 971 字节 SPA HTML；独立的
+  `/srv/e-mate-update/current` 静态配置尚未安装。现有 `/opt/e-mate/current`
+  属于另一套 2.1.47 Web 产品，本次 feed 不得覆盖。Nginx 404 门禁、数据库备份、
+  blue/green 迁移、Actions 跨平台构建、GitHub Release、企业 feed 回读和原子
+  `latest` 切换仍全部 pending。
+
+本轮定向验证：
+
+```text
+本地 GA/CDP：18 scenarios、4 viewports、133 assertions，0 browser/network errors
+GA mock 合同：11 passed
+签名 Runtime 首装/健康确认：passed；macOS Keychain 用户授权：pending
+Bootstrap SIGTERM 进程树退出：passed
+生产数据库 quick_check 与只读数量基线：passed
+外部写入、部署、Release、latest：not run
+```

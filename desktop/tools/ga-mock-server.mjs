@@ -1530,7 +1530,7 @@ function scheduleThinkingTerminal(state) {
         previous_presentation: "archived",
       },
     }));
-  }, 600);
+  }, 1_200);
   schedule(state, () => {
     const active = state.projection.turns.find((candidate) => candidate.turn_id === "turn-ga");
     if (!active || active.status !== "model_requested") return;
@@ -1558,7 +1558,7 @@ function scheduleThinkingTerminal(state) {
         terminal_event_id: terminal.event_id,
       },
     }));
-  }, 1_200);
+  }, 2_000);
 }
 
 function scheduleSlowReconnectTerminal(state) {
