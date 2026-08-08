@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import tempfile
 from pathlib import Path
 
@@ -73,3 +74,11 @@ def test_v024_native_facade_metadata_is_visible_in_skill_prompt():
         assert "<ecorex_native_facade>true</ecorex_native_facade>" in prompt
         assert "<quality_gates>" in prompt
         assert f"<callable_tool>{EXPECTED_TOOLS[legacy_id]}</callable_tool>" in prompt
+
+
+def test_v024_native_facade_quality_gates_survive_without_pyyaml(monkeypatch):
+    monkeypatch.setitem(sys.modules, "yaml", None)
+    manager = _load_builtin_only_manager()
+
+    for legacy_id in EXPECTED_FACADES:
+        assert manager.skills[legacy_id].skill.frontmatter["quality-gates"]

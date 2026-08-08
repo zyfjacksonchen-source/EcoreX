@@ -25,23 +25,10 @@ export interface TimelineTurn {
   terminal: boolean;
 }
 
-export interface TimelineSegment {
-  segmentId: string;
-  kind: "anchor" | "process";
-  blocks: TimelineBlock[];
-  defaultOpen: boolean;
-}
-
 function isUserBlock(block: TimelineBlock): boolean {
   return block.kind === "item"
     && block.item.kind === "message"
     && block.item.content.role === "user";
-}
-
-function messageText(block: TimelineBlock): string {
-  if (block.kind !== "item" || block.item.kind !== "message") return "";
-  const value = block.item.content.text ?? block.item.content.content;
-  return typeof value === "string" ? value.trim() : "";
 }
 
 function sequence(block: TimelineBlock): number | null | undefined {
@@ -101,82 +88,4 @@ export function buildTimelineTurns(
       terminal: TERMINAL.has(turn.status),
     };
   });
-}
-
-export function foldTurnProcess(entry: TimelineTurn): TimelineSegment[] {
-  if (!entry.terminal) {
-    return entry.blocks.map((block) => ({
-      segmentId: `live-${block.key}`,
-      kind: "anchor",
-      blocks: [block],
-      defaultOpen: true,
-    }));
-  }
-
-  const assistantMessages = entry.blocks.filter((block) => (
-    !isUserBlock(block) && messageText(block).length > 0
-  ));
-  const longest = assistantMessages.reduce<TimelineBlock | null>((selected, block) => (
-    !selected || messageText(block).replace(/\s+/gu, "").length
-      > messageText(selected).replace(/\s+/gu, "").length
-      ? block
-      : selected
-  ), null);
-  const finalMessage = assistantMessages.at(-1) ?? null;
-  const anchors = new Set(
-    [longest, finalMessage]
-      .filter((block): block is TimelineBlock => block !== null)
-      .map((block) => block.key),
-  );
-  for (const block of entry.blocks) {
-    if (
-      isUserBlock(block)
-      || (block.kind === "item" && block.item.kind === "artifact")
-      || (block.kind === "interaction" && block.interaction.status === "pending")
-    ) anchors.add(block.key);
-  }
-
-  const segments: TimelineSegment[] = [];
-  let pending: TimelineBlock[] = [];
-  let leftAnchor: string | null = null;
-  const anchorOrder = entry.blocks.filter((block) => anchors.has(block.key));
-  let anchorIndex = 0;
-  const flush = () => {
-    if (!pending.length) return;
-    const rightAnchor = anchorOrder[anchorIndex]?.key ?? null;
-    const segmentId = leftAnchor === null
-      ? "completion-process"
-      : rightAnchor === null
-      ? "tail-process"
-      : `process-${leftAnchor}-${rightAnchor}`;
-    const failureWithoutAnswer = assistantMessages.length === 0
-      && entry.turn.status !== "completed"
-      && entry.turn.status !== "partial"
-      && entry.turn.status !== "superseded";
-    segments.push({
-      segmentId,
-      kind: "process",
-      blocks: pending,
-      defaultOpen: failureWithoutAnswer && !segments.some((segment) => segment.kind === "process"),
-    });
-    pending = [];
-  };
-
-  for (const block of entry.blocks) {
-    if (!anchors.has(block.key)) {
-      pending.push(block);
-      continue;
-    }
-    flush();
-    segments.push({
-      segmentId: `anchor-${block.key}`,
-      kind: "anchor",
-      blocks: [block],
-      defaultOpen: true,
-    });
-    leftAnchor = block.key;
-    anchorIndex += 1;
-  }
-  flush();
-  return segments;
 }

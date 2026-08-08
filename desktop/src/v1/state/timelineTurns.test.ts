@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ItemProjection, TurnProjection } from "../api/contracts.ts";
-import { buildTimelineTurns, foldTurnProcess } from "./timelineTurns.ts";
+import { buildTimelineTurns } from "./timelineTurns.ts";
 
 const timestamp = "2026-08-06T00:00:00.000Z";
 const turn: TurnProjection = {
@@ -64,37 +64,4 @@ test("replacement removes archived reasoning atoms from the live timeline", () =
   ], [])[0];
 
   assert.deepEqual(entry?.blocks.map((block) => block.key), ["reasoning-current"]);
-});
-
-test("terminal process folds around the longest and final assistant anchors", () => {
-  const entry = buildTimelineTurns([turn], [
-    item("user", 1, "message", { role: "user", text: "问题" }),
-    item("reasoning-a", 2, "reasoning", { text: "分析", presentation: "visible" }),
-    item("answer-long", 3, "message", { role: "assistant", text: "这是主要且最长的答案" }),
-    item("tool", 4, "tool_call", {}),
-    item("answer-final", 5, "message", { role: "assistant", text: "补充" }),
-  ], [])[0];
-  assert.ok(entry);
-
-  const segments = foldTurnProcess(entry);
-  assert.deepEqual(segments.map((segment) => [segment.kind, segment.segmentId]), [
-    ["anchor", "anchor-user"],
-    ["process", "process-user-answer-long"],
-    ["anchor", "anchor-answer-long"],
-    ["process", "process-answer-long-answer-final"],
-    ["anchor", "anchor-answer-final"],
-  ]);
-  assert.equal(segments[1]?.defaultOpen, false);
-});
-
-test("failed empty replies keep their first process visible", () => {
-  const entry = buildTimelineTurns(
-    [{ ...turn, status: "failed" }],
-    [item("tool", 1, "tool_call", {})],
-    [],
-  )[0];
-  assert.ok(entry);
-  const [segment] = foldTurnProcess(entry);
-  assert.equal(segment?.kind, "process");
-  assert.equal(segment?.defaultOpen, true);
 });

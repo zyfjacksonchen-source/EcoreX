@@ -1,7 +1,7 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { AtSign, ChevronDown, FileText, LoaderCircle, Plus, Send, ShieldCheck, Square, X } from "lucide-react";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { SendDisposition } from "../state/useRuntimeSession.ts";
 import type {
@@ -17,6 +17,7 @@ const loadComposerModelSelector = () => import("./ComposerModelSelector.tsx");
 const ComposerModelSelector = lazy(loadComposerModelSelector);
 
 interface ComposerProps {
+  taskList?: ReactNode;
   prefillRequest?: { key: string; text: string } | null;
   onPrefillConsumed?: () => void;
   draft: string;
@@ -63,6 +64,7 @@ const dispositionLabel: Record<SendDisposition, string> = {
 };
 
 export function Composer({
+  taskList = null,
   prefillRequest = null,
   onPrefillConsumed,
   draft,
@@ -277,6 +279,7 @@ export function Composer({
 
   return (
     <div className="ex-composer-region">
+      {taskList}
       <div className="ex-composer" data-busy={submitting ? "true" : "false"}>
         <label className="ex-composer-label" htmlFor="ecorex-composer">给小芯发消息</label>
         {attachments.length || pendingAttachments.length ? (

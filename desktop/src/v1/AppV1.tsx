@@ -54,6 +54,7 @@ const loadRetouchWorkspace = () => import("./components/RetouchWorkspace.tsx");
 const loadSettingsDialog = () => import("./components/SettingsDialog.tsx");
 const loadShareDialog = () => import("./components/ShareDialog.tsx");
 const loadTimeline = () => import("./components/Timeline.tsx");
+const loadTaskListBlock = () => import("./components/TaskListBlock.tsx");
 
 const ArtifactPreviewDialog = lazy(async () => ({
   default: (await loadArtifactPreviewDialog()).ArtifactPreviewDialog,
@@ -88,6 +89,7 @@ const ShareDialog = lazy(async () => ({
 const Timeline = lazy(async () => ({
   default: (await loadTimeline()).Timeline,
 }));
+const TaskListBlock = lazy(loadTaskListBlock);
 
 function warmFeature(loader: () => Promise<unknown>): void {
   void loader().catch(() => undefined);
@@ -534,9 +536,24 @@ export function AppV1() {
     </DropdownMenu.Root>
   );
 
+  const taskListTurnId = runtime.activeTurn?.turn_id ?? runtime.turns.at(-1)?.turn_id ?? null;
+  const taskListItem = [...runtime.items].reverse().find((item) => (
+    item.kind === "task_list" && item.turn_id === taskListTurnId
+  ));
+  const taskListTurn = taskListItem
+    ? runtime.turns.find((turn) => turn.turn_id === taskListItem.turn_id)
+    : null;
   const composer = (
     <Suspense fallback={<section className="ex-home-loading" role="status">正在准备输入框…</section>}>
       <Composer
+        taskList={taskListItem ? (
+          <Suspense fallback={<div className="ex-runtime-task-list-loading" role="status">正在载入任务清单…</div>}>
+            <TaskListBlock
+              item={taskListItem}
+              interrupted={Boolean(taskListTurn?.status.match(/failed|cancelled|interrupted|superseded/u))}
+            />
+          </Suspense>
+        ) : null}
         prefillRequest={composerPrefill}
         onPrefillConsumed={() => setComposerPrefill(null)}
         draft={composerDraft}

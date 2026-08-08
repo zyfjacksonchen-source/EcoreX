@@ -165,6 +165,7 @@ test("GA harness exposes managed bootstrap, strict CSRF, state reset, and unique
   const reset = await fetch(`${harness.url}/__ga/reset?scenario=artifact`, { method: "POST" });
   assert.equal(reset.status, 200);
   const authenticated = await fetch(`${harness.url}/api/v1/bootstrap`).then((response) => response.json());
+  assert.equal(authenticated.update.current_version, "1.0.0");
   assert.equal(authenticated.login.organization_id, "org-ga");
   assert.deepEqual(authenticated.login.roles, ["member"]);
   assert.equal(authenticated.models.chat[0].model_id, "ecorex-chat");

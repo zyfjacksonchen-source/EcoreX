@@ -22,7 +22,7 @@ const MIME = {
   ".svg": "image/svg+xml; charset=utf-8",
 };
 
-const SCENARIOS = new Set(["empty", "unauthenticated", "thinking", "slow-reconnect", "retry", "hitl", "connector-login", "connector-device", "connector-reauth", "connector-restart", "artifact", "replay", "thread-switch", "many-threads", "long-timeline"]);
+const SCENARIOS = new Set(["empty", "unauthenticated", "thinking", "codex-layout", "slow-reconnect", "retry", "hitl", "connector-login", "connector-device", "connector-reauth", "connector-restart", "artifact", "replay", "thread-switch", "many-threads", "long-timeline"]);
 const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted", "superseded"]);
 const GA_THEMES = new Set(["light", "dark"]);
 const GA_VIEWPORTS = Object.freeze({
@@ -1005,6 +1005,64 @@ function scenarioState(name) {
       "正在核对季度资料。",
     ));
   }
+  if (name === "codex-layout") {
+    activeTurn = turn("turn-ga", "tool_running", "检查当前实现");
+    items[0] = { ...item("item-user-ga", "turn-ga", "user", "检查当前实现"), created_seq: 1 };
+    items.push({
+      ...item(
+        "item-assistant-progress-ga",
+        activeTurn.turn_id,
+        "assistant",
+        "收到，正在核对后端事实投影与现有能力调用链。",
+      ),
+      created_seq: 2,
+    });
+    items.push({
+      item_id: "tool-call-read-ga",
+      thread_id: "thread-ga",
+      turn_id: activeTurn.turn_id,
+      kind: "tool_call",
+      status: "completed",
+      content: {
+        schema_version: 1,
+        tool_call_id: "tool-call-read-ga",
+        tool_id: "read",
+        tool_name: "read",
+        display_label: "读取项目准则",
+        phase: "completed",
+        status: "completed",
+        effects: ["read"],
+        risk: "low",
+        argument_summary: "读取项目准则",
+        result_summary: "读取了项目准则",
+        argument_sha256: "a".repeat(64),
+        result_sha256: "b".repeat(64),
+        artifact_refs: [],
+      },
+      created_seq: 3,
+      inherited: false,
+      created_at: NOW,
+      updated_at: NOW,
+    });
+    items.push({
+      item_id: "task-list-ga",
+      thread_id: "thread-ga",
+      turn_id: activeTurn.turn_id,
+      kind: "task_list",
+      status: "in_progress",
+      content: {
+        items: [
+          { id: "inspect", title: "检查后端事实投影", status: "completed" },
+          { id: "verify", title: "验证系统能力调用", status: "in_progress" },
+          { id: "report", title: "汇总验收结果", status: "pending" },
+        ],
+      },
+      created_seq: 4,
+      inherited: false,
+      created_at: NOW,
+      updated_at: NOW,
+    });
+  }
   if (name === "slow-reconnect") {
     activeTurn = turn("turn-ga", "model_requested", "整理季度资料");
     items.push(reasoningItem(
@@ -1037,7 +1095,7 @@ function scenarioState(name) {
     items,
     jobs: [],
     interactions,
-    watermark: name === "hitl" || name === "connector-login" || name === "connector-device" || name === "connector-reauth" || name === "connector-restart" ? 3 : 2,
+    watermark: name === "codex-layout" ? 4 : name === "hitl" || name === "connector-login" || name === "connector-device" || name === "connector-reauth" || name === "connector-restart" ? 3 : 2,
   };
   base.projections.set(activeThread.thread_id, base.projection);
   base.seq = base.projection.watermark;
@@ -1193,7 +1251,7 @@ function bootstrap(state) {
     connectors: [],
     extensions: extensionCatalog(state),
     update: {
-      current_version: "0.3.2",
+      current_version: "1.0.0",
       state: "idle",
       target_version: null,
       release_id: null,

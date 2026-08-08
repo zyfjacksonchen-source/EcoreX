@@ -42,6 +42,8 @@ test("skill workspace renders only backend-projected actions and reasons", () =>
   assert.match(component, /CATEGORY_ORDER/);
   assert.match(component, /protectedExtension/);
   assert.match(component, /extensionPermissionEffectLabel/);
+  assert.match(component, /ready: "可使用"/u);
+  assert.doesNotMatch(component, /ready: "可运行"/u);
   assert.match(settings, /管理扩展/);
 });
 

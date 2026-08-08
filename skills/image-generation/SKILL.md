@@ -2,6 +2,7 @@
 name: image-generation
 description: Shape and verify image-generation or image-edit workflows that use the native e-Mate imagegen tool.
 compatibility-id: image-generation
+adopts-official-skill: imagegen
 ecorex-native-facade: true
 quality-gates:
   - project-safe-output

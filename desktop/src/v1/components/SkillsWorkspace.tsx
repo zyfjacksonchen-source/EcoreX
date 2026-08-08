@@ -344,7 +344,7 @@ export function SkillsWorkspace({
             <dl>
               <div><dt>当前状态</dt><dd>{extensionStatusLabel(selected.status)}</dd></div>
               <div><dt>健康状态</dt><dd>{extensionHealthLabel(selected.health)}</dd></div>
-              <div><dt>可用状态</dt><dd>{{ ready: "可运行", needs_configuration: "需要配置", missing_runtime: "缺少运行环境", unsupported: "当前设备不支持" }[selected.readiness]}</dd></div>
+              <div><dt>可用状态</dt><dd>{{ ready: "可使用", needs_configuration: "需要配置", missing_runtime: "缺少运行环境", unsupported: "当前设备不支持" }[selected.readiness]}</dd></div>
               <div><dt>版本</dt><dd>{selected.active_version ?? "尚未激活"}</dd></div>
               <div><dt>来源</dt><dd>{extensionSourceLabel(selected.source)}</dd></div>
               <div><dt>信任</dt><dd>{extensionTrustLabel(selected.trust)}</dd></div>

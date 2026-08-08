@@ -37,17 +37,31 @@ def parse_frontmatter(content: str) -> Dict[str, Any]:
         # If YAML parsing fails, fall back to simple parsing
         pass
     
-    # Simple YAML-like parsing (supports key: value format only)
+    # Simple YAML-like parsing (supports top-level scalars and string lists)
     # This is a fallback for when PyYAML is not available
-    for line in frontmatter_text.split('\n'):
-        line = line.strip()
+    active_list = None
+    for raw_line in frontmatter_text.split('\n'):
+        line = raw_line.strip()
         if not line or line.startswith('#'):
             continue
+
+        if active_list and raw_line[:1].isspace() and line.startswith('- '):
+            value = line[2:].strip()
+            if value:
+                frontmatter[active_list].append(value)
+            continue
+
+        active_list = None
         
         if ':' in line:
             key, value = line.split(':', 1)
             key = key.strip()
             value = value.strip()
+
+            if not value:
+                frontmatter[key] = []
+                active_list = key
+                continue
             
             # Try to parse as JSON if it looks like JSON
             if value.startswith('{') or value.startswith('['):

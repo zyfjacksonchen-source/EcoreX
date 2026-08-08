@@ -126,6 +126,12 @@ textarea {
   background: var(--color-workspace-surface);
 }
 
+.ex-workspace-bottom:has(.ex-runtime-task-list.is-composer) {
+  position: relative;
+  z-index: var(--z-sticky);
+  overflow: visible;
+}
+
 .ex-sidebar-brand {
   min-height: 64px;
   padding: 8px 12px 8px 30px;
@@ -623,6 +629,10 @@ textarea {
 
 .ex-thread-running.is-waiting {
   color: var(--color-brand-strong);
+}
+
+.ex-spin {
+  animation: ex-task-spin var(--duration-progress) linear infinite;
 }
 
 .ex-nav-empty {

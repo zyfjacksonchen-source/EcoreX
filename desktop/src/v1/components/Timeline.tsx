@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowDown, ChevronDown, FolderOpen, Workflow, WandSparkles } from "lucide-react";
+import { ArrowDown, FolderOpen, Workflow, WandSparkles } from "lucide-react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 
 import type {
@@ -31,9 +31,7 @@ import {
 } from "../state/timelineArtifacts.ts";
 import {
   buildTimelineTurns,
-  foldTurnProcess,
   type TimelineBlock,
-  type TimelineSegment,
   type TimelineTurn,
 } from "../state/timelineTurns.ts";
 import { InputAttachmentPreview, type InputAttachmentBlobLoader } from "./InputAttachmentPreview.tsx";
@@ -43,7 +41,6 @@ const OfficeMarkdown = lazy(() => import("./OfficeMarkdown.tsx"));
 const TimelineActivity = lazy(() => import("./TimelineActivity.tsx"));
 const NewConversationProjectSelector = lazy(() => import("./NewConversationProjectSelector.tsx"));
 const ReasoningBlock = lazy(() => import("./ReasoningBlock.tsx"));
-const TaskListBlock = lazy(() => import("./TaskListBlock.tsx"));
 const TurnCompletionRow = lazy(() => import("./TurnCompletionRow.tsx"));
 const ArtifactShelf = lazy(async () => ({ default: (await import("./ArtifactShelf.tsx")).ArtifactShelf }));
 
@@ -134,15 +131,6 @@ function ThinkingOrb() {
       </span>
     </span>
   );
-}
-
-function processLabel(turn: TurnProjection): string {
-  if (turn.status === "partial") return "部分完成的过程";
-  if (turn.status === "failed") return "未完成的过程";
-  if (turn.status === "cancelled") return "取消前的过程";
-  if (turn.status === "interrupted") return "中断前的过程";
-  if (turn.status === "superseded") return "已替换的过程";
-  return "完成过程";
 }
 
 const MessageRow = memo(function MessageRow({
@@ -248,16 +236,6 @@ function TimelineBlockView({
       </Suspense>
     );
   }
-  if (item.kind === "task_list") {
-    return (
-      <Suspense fallback={<div className="ex-activity-row" role="status">正在载入任务清单…</div>}>
-        <TaskListBlock
-          item={item}
-          interrupted={Boolean(turn.status.match(/failed|cancelled|interrupted|superseded/u))}
-        />
-      </Suspense>
-    );
-  }
   if (item.kind === "artifact") {
     const projected = artifactFrom(item);
     if (!projected) return null;
@@ -348,49 +326,16 @@ function RetouchResultBlock({
   );
 }
 
-function ProcessSegment({
-  segment,
-  turn,
-  open,
-  onToggle,
-  renderBlock,
-}: {
-  segment: TimelineSegment;
-  turn: TurnProjection;
-  open: boolean;
-  onToggle: () => void;
-  renderBlock: (block: TimelineBlock) => ReactNode;
-}) {
-  if (segment.kind === "anchor") return <>{segment.blocks.map(renderBlock)}</>;
-  return (
-    <section className="ex-process-segment" data-open={open || undefined}>
-      <button className="ex-process-toggle" type="button" aria-expanded={open} onClick={onToggle}>
-        <ChevronDown aria-hidden="true" />
-        <span>{processLabel(turn)}</span>
-        <small>{segment.blocks.length} 项</small>
-      </button>
-      <div className="ex-process-collapsible" aria-hidden={!open}>
-        <div>{segment.blocks.map(renderBlock)}</div>
-      </div>
-    </section>
-  );
-}
-
 interface TurnRowProps extends Omit<BlockProps, "block" | "turn"> {
   entry: TimelineTurn;
   modelSwitch: string | null;
-  openSegments: ReadonlyMap<string, boolean>;
-  onToggleSegment: (key: string, defaultOpen: boolean) => void;
 }
 
 const TurnRow = memo(function TurnRow({
   entry,
   modelSwitch,
-  openSegments,
-  onToggleSegment,
   ...blockProps
 }: TurnRowProps) {
-  const segments = foldTurnProcess(entry);
   const firstAssistant = entry.assistantBlocks.find((block) => (
     block.kind !== "interaction" || block.interaction.status !== "pending"
   ));
@@ -413,25 +358,17 @@ const TurnRow = memo(function TurnRow({
       {modelSwitch ? (
         <div className="ex-model-switch-divider" role="separator"><span>已切换至 {modelSwitch}</span></div>
       ) : null}
-      {segments.map((segment) => {
+      {entry.blocks.map((block) => {
         const showHeading = !headingRendered
           && firstAssistant !== undefined
-          && segment.blocks.some((block) => block.key === firstAssistant.key);
+          && block.key === firstAssistant.key;
         if (showHeading) headingRendered = true;
-        const segmentKey = `${entry.turn.turn_id}:${segment.segmentId}`;
-        const open = openSegments.get(segmentKey) ?? segment.defaultOpen;
         return (
-          <div key={segment.segmentId}>
+          <div key={block.key}>
             {showHeading ? (
               <div className="ex-assistant-heading"><span aria-hidden="true" /><strong>小芯</strong></div>
             ) : null}
-            <ProcessSegment
-              segment={segment}
-              turn={entry.turn}
-              open={open}
-              onToggle={() => onToggleSegment(segmentKey, segment.defaultOpen)}
-              renderBlock={renderBlock}
-            />
+            {renderBlock(block)}
           </div>
         );
       })}
@@ -482,9 +419,13 @@ export function Timeline({
   onLoadAttachment,
   onLoadAttachmentThumbnail,
 }: TimelineProps) {
+  const timelineItems = useMemo(
+    () => items.filter((item) => item.kind !== "task_list"),
+    [items],
+  );
   const timelineTurns = useMemo(
-    () => buildTimelineTurns(turns, items, interactions),
-    [interactions, items, turns],
+    () => buildTimelineTurns(turns, timelineItems, interactions),
+    [interactions, timelineItems, turns],
   );
   const itemArtifacts = useMemo(
     () => items.filter((item) => item.kind === "artifact").map(artifactFrom).filter((artifact): artifact is ArtifactProjection => artifact !== null),
@@ -514,7 +455,6 @@ export function Timeline({
     }
     return switches;
   }, [chatModels, turns]);
-  const [openSegments, setOpenSegments] = useState<Map<string, boolean>>(() => new Map());
   const [scrollParent, setScrollParent] = useState<HTMLElement | null>(null);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const followLatestRef = useRef(true);
@@ -526,7 +466,7 @@ export function Timeline({
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const bottomSettleTimer = useRef<number | null>(null);
   const pausedAnchorTimer = useRef<number | null>(null);
-  const contentRevision = items.map((item) => `${item.item_id}:${item.updated_at}:${messageText(item).length}`).join("|");
+  const contentRevision = timelineItems.map((item) => `${item.item_id}:${item.updated_at}:${messageText(item).length}`).join("|");
   const timelineThreadId = timelineTurns[0]?.turn.thread_id ?? null;
   const clearPausedAnchor = () => {
     if (scrollParent) {
@@ -698,13 +638,6 @@ export function Timeline({
     return () => window.cancelAnimationFrame(frame);
   }, [contentRevision, interactions, scrollParent, timelineTurns.length]);
 
-  const toggleSegment = (key: string, defaultOpen: boolean) => {
-    setOpenSegments((current) => {
-      const next = new Map(current);
-      next.set(key, !(current.get(key) ?? defaultOpen));
-      return next;
-    });
-  };
   const jumpToLatest = () => {
     followPausedByUserRef.current = false;
     followLatestRef.current = true;
@@ -794,8 +727,6 @@ export function Timeline({
               <TurnRow
                 entry={entry}
                 modelSwitch={modelSwitches.get(entry.turn.turn_id) ?? null}
-                openSegments={openSegments}
-                onToggleSegment={toggleSegment}
                 artifactByRevision={artifactByRevision}
                 artifactPreviewUrls={artifactPreviewUrls}
                 onArtifactAction={onArtifactAction}

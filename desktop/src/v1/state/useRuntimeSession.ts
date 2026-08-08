@@ -771,6 +771,11 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
         || event.event_type === "thread.deleted"
         || event.event_type === "turn.accepted"
         || event.event_type === "turn.queued"
+        || (
+          event.event_type === "turn.status_changed"
+          && ["completed", "partial", "failed", "cancelled", "interrupted", "superseded"]
+            .includes(String(event.payload.to))
+        )
       ))) {
         void refreshThreads();
       }

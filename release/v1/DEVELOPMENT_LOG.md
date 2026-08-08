@@ -825,3 +825,59 @@ Agent Worker 全文件：46 passed
 补充定向验证：失败事实与已完成结果可在供应商无状态续接后共同出现，并在 Worker
 重启后保持；工具处理器没有重复调用。指数退避抖动的浮点上界同时收紧到契约规定
 的 `1.2`，避免哈希取到最大字节时出现 `1.2000000000000002`。
+
+# 2026-08-08 — 消息内事实编排与任务清单投影
+
+- WebUI 不再在 Turn 终态后按“最长回复”重新折叠或重排过程。消息、推理、工具、
+  交互和检查点继续严格按 Runtime 的 `created_seq` 投影；前端没有合成新的执行阶段、
+  工具结果或完成状态，后端 Runtime 仍是唯一事实源。
+- `task_list` 仍由 Runtime Item 提供，WebUI 只把同一事实从消息流移到输入框上方的
+  可悬停、聚焦和点击清单；完成数、条目状态与中断状态均取自对应 Item/Turn，局部
+  disclosure 状态只控制显示与隐藏。
+- 复用侧栏已有的 `LoaderCircle` 并补齐共享 `.ex-spin` 动画；任务开始和终止仍由
+  后端 Thread/Turn 投影决定。终态事件到达时仅刷新 Thread 目录，使侧栏运行指示
+  能立即跟随后端终态消失。
+- GA 增加 `codex-layout` 确定性场景，覆盖回复正文先于灰色动作事实、任务清单不在
+  Timeline 重复出现、悬停面板位于输入框上方、侧栏运行指示和减少动态效果。真实
+  应用内浏览器已验证消息顺序、面板层级、运行态开始/结束和 reduced-motion 行为。
+
+本轮定向验证：
+
+```text
+TypeScript noEmit：passed
+Timeline/GA mock tests：13 passed
+Vite production build：passed
+应用内浏览器：消息事实顺序、任务清单悬停、侧栏转圈与终态消失均 passed
+完整真实能力验收：并行审计已于下节收敛
+```
+
+# 2026-08-08 — 商业化开箱能力并行审计与 Skill 元数据修复
+
+- 三条独立只读验收线分别检查 Core 内建能力、商业 Agent 基线和
+  Skill/MCP/图片/Office 扩展链。`builtin_tool_specs()` 的 19 项目录、Turn 冻结
+  快照、组合后处理器和公开投影保持单一后端事实；工作区读取、Shell 沙箱、
+  Tool/Skill/Connector 发现、附件与 Artifact 读取、图片生成/改图、MCP supervisor
+  均有真实实现，没有建立第二套能力层。
+- 本地确定性调用验证覆盖 19 项目录、真实 Shell 子进程、Skill search/read/run、
+  MCP stdio JSON-RPC、图片引用编辑与 Artifact open。外部网页、登录浏览器、生产
+  Connector 和付费图片仍必须在正式候选中用真实凭据验收，源码假实现不能替代。
+- 审计确认 Office Skill 在没有 PyYAML 的随包解释器中会丢失顶层
+  `quality-gates` 列表。共享 frontmatter fallback 现在只增加最小的顶层字符串列表
+  支持；图片工作流同时补回声明的官方 `imagegen` 映射。正式随包 Python 下五个
+  facade 的发现、提示词元数据和无 PyYAML 回归共 `3 passed`。
+- Skill 管理页不再把所有 `ready` 扩展直接翻译成“可运行”；说明型 Skill 与可执行
+  Skill 共用的后端 ready 事实现在显示为“可使用”，避免前端夸大能力。是否实际执行
+  仍由 Runtime 的 Skill manifest、runner 和调用终态决定。
+- 仍需修复的首要产品缺口是 Office：签名 `office.formats` Pack 当前只实现 `probe`，
+  尚未把 create/read/edit/render/validate 连接到 Agent 与 ArtifactService。结构化
+  edit/search、持久 Shell/浏览器会话和 MCP 自助注册是后续商业基线差距；现有
+  Job/Worker 恢复、Artifact CAS、imagegen、MCP supervisor 与权限账本应直接复用。
+
+本轮定向验证：
+
+```text
+Core/GA/Extension Web tests：20 passed
+正式 content-addressed Web build：passed（40 assets，33 chunks）
+Office/Image Skill facade（随包 Python、无 PyYAML）：3 passed
+19 项 Core 能力并行审计：目录与本地处理器链 passed；外部服务待正式候选
+```

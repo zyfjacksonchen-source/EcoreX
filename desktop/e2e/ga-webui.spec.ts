@@ -94,7 +94,7 @@ async function openArtifactScenario(page: Page, theme: "light" | "dark" = "light
 
 async function openThreadScenario(
   page: Page,
-  scenario: "thinking" | "slow-reconnect" | "retry" | "hitl" | "connector-login" | "connector-device" | "connector-reauth" | "connector-restart" | "artifact" | "replay" | "thread-switch" | "many-threads" | "long-timeline",
+  scenario: "thinking" | "codex-layout" | "slow-reconnect" | "retry" | "hitl" | "connector-login" | "connector-device" | "connector-reauth" | "connector-restart" | "artifact" | "replay" | "thread-switch" | "many-threads" | "long-timeline",
   theme: "light" | "dark" = "light",
 ): Promise<void> {
   await page.goto(`/__ga/frame-app?scenario=${scenario}&theme=${theme}`, {
@@ -788,6 +788,8 @@ test("task inspection keeps implementation details collapsed and explicitly star
 
 test("reasoning stays visible until replacement and terminal facts clear the first-turn indicator", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "thinking");
+  const threadSpinner = guardedPage.getByLabel("任务正在进行");
+  await expect(threadSpinner).toBeVisible();
   const first = guardedPage.getByText("正在核对季度资料。", { exact: true });
   await expect(first).toBeVisible({ timeout: 1_000 });
 
@@ -796,6 +798,7 @@ test("reasoning stays visible until replacement and terminal facts clear the fir
   await expect(first).toBeHidden();
   await expect(guardedPage.locator(".ex-thinking-state")).toBeHidden({ timeout: 2_000 });
   await expect(guardedPage.locator(".ex-message.is-assistant")).toHaveCount(0);
+  await expect(threadSpinner).toBeHidden({ timeout: 2_500 });
 });
 
 test("thinking state uses the B5 handoff motion and stays readable with reduced motion", async ({ browser }) => {
@@ -814,6 +817,8 @@ test("thinking state uses the B5 handoff motion and stays readable with reduced 
     const secondTransform = await firstShape.evaluate((element) => getComputedStyle(element).transform);
     expect(first.animation).toBe("ex-orb-handoff");
     expect(secondTransform).not.toBe(first.transform);
+    expect(await page.getByLabel("任务正在进行").evaluate((element) => getComputedStyle(element).animationName))
+      .toBe("ex-task-spin");
   });
 
   await withGuardedContext(browser, { reducedMotion: "reduce" }, async (page) => {
@@ -824,7 +829,34 @@ test("thinking state uses the B5 handoff motion and stays readable with reduced 
     const animation = await thinking.locator(".ex-thinking-orb-shape.is-a")
       .evaluate((element) => getComputedStyle(element).animationName);
     expect(animation).toBe("none");
+    expect(await page.getByLabel("任务正在进行").evaluate((element) => getComputedStyle(element).animationName))
+      .toBe("none");
   });
+});
+
+test("message facts follow backend sequence and the task list hovers above the Composer", async ({ guardedPage }) => {
+  await openThreadScenario(guardedPage, "codex-layout");
+  const body = guardedPage.getByText("收到，正在核对后端事实投影与现有能力调用链。", { exact: true });
+  const action = guardedPage.locator(".ex-activity-row").filter({ hasText: "读取了项目准则" });
+  await expect(body).toBeVisible();
+  await expect(action).toBeVisible();
+  const [bodyBox, actionBox] = await Promise.all([body.boundingBox(), action.boundingBox()]);
+  expect(bodyBox).not.toBeNull();
+  expect(actionBox).not.toBeNull();
+  expect(actionBox!.y).toBeGreaterThan(bodyBox!.y + bodyBox!.height);
+
+  await expect(guardedPage.locator(".ex-timeline .ex-runtime-task-list")).toHaveCount(0);
+  const taskList = guardedPage.locator(".ex-composer-region .ex-runtime-task-list");
+  const taskSummary = taskList.locator("summary");
+  const taskContent = taskList.locator(".ex-runtime-task-list-content");
+  await expect(taskSummary).toContainText("1/3 已完成");
+  await expect(taskContent).toBeHidden();
+  await taskSummary.hover();
+  await expect(taskContent).toBeVisible();
+  await expect(taskContent).toContainText("验证系统能力调用");
+
+  expect(await guardedPage.getByLabel("任务正在进行").evaluate((element) => getComputedStyle(element).animationName))
+    .toBe("ex-task-spin");
 });
 
 test("retry state stays actionable and can be interrupted without a stale thinking indicator", async ({ guardedPage }) => {
