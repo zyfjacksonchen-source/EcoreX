@@ -115,6 +115,96 @@ def _execution_id(turn_id: str, call_id: str) -> str:
     return AgentTurnWorker._execution_id(turn_id, call_id)
 
 
+def test_exact_side_effect_call_is_reused_inside_one_execution_batch(tmp_path) -> None:
+    calls = []
+
+    def handler(arguments, _context):
+        calls.append(dict(arguments))
+        return {"exit_code": 0}
+
+    _app, kernel, composition, thread, created = _shell_runtime(tmp_path, handler)
+    first, final = _shell_scripts(call_id="first-shell")
+    duplicate, _unused = _shell_scripts(call_id="duplicate-shell")
+    gateway = _Gateway([first, duplicate, final])
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+    )
+
+    result = asyncio.run(worker.run_once("same-batch-side-effect-worker"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert calls == [{"command": "opaque-command"}]
+    executions = ToolExecutionRepository(kernel.database)
+    assert (
+        executions.get(_execution_id(created.turn.turn_id, "duplicate-shell")).status
+        == "completed"
+    )
+    reused = next(
+        event
+        for event in kernel.events.page(thread.thread_id, limit=1_000).events
+        if event.event_type == "tool.cache_reused"
+        and event.payload.get("reuse_scope") == "execution_batch"
+    )
+    assert reused.payload["reused_from_tool_call_id"] == _execution_id(
+        created.turn.turn_id, "first-shell"
+    )
+
+
+def test_uncertain_retry_failure_requests_a_new_attempt_card(tmp_path) -> None:
+    calls = 0
+
+    def crashing_handler(_arguments, _context):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("opaque child acknowledgement lost")
+
+    _app, kernel, composition, thread, created = _shell_runtime(
+        tmp_path, crashing_handler
+    )
+    gateway = _Gateway([_shell_scripts(call_id="repeat-crash")[0]])
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+    )
+
+    assert (
+        asyncio.run(worker.run_once("uncertain-attempt-worker")).outcome
+        is WorkerOutcome.WAITING_HUMAN
+    )
+    first = kernel.list_interactions(thread.thread_id).interactions[0]
+    kernel.respond_interaction(
+        first.interaction_id,
+        {"action_id": "retry", "values": {}},
+        client_request_id="retry-first-uncertain-attempt",
+    )
+    assert (
+        asyncio.run(worker.run_once("uncertain-attempt-worker")).outcome
+        is WorkerOutcome.WAITING_HUMAN
+    )
+
+    interactions = kernel.list_interactions(thread.thread_id).interactions
+    assert calls == 2
+    assert len(interactions) == 1
+    assert interactions[0].status.value == "pending"
+    with kernel.database.reader() as connection:
+        rows = tuple(
+            (row["idempotency_key"], row["status"])
+            for row in connection.execute(
+                "SELECT idempotency_key, status FROM interactions WHERE turn_id=? "
+                "ORDER BY created_at",
+                (created.turn.turn_id,),
+            ).fetchall()
+        )
+    assert len(rows) == 2
+    assert rows[0][0].endswith(":uncertain:1")
+    assert rows[0][1] == "resolved"
+    assert rows[1][0].endswith(":uncertain:2")
+    assert rows[1][1] == "pending"
+
+
 def test_full_access_revocation_between_projection_and_dispatch_creates_hitl_not_uncertain(
     tmp_path,
 ) -> None:

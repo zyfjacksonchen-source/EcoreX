@@ -637,7 +637,13 @@ def test_image_workflow_guidance_is_frozen_injected_and_cached(tmp_path) -> None
                     "arguments": {},
                 }
             ],
-            [{"seq": 1, "event_type": "response.completed", "response_id": "resp_done"}],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "resp_done",
+                }
+            ],
         ]
     )
     calls: list[tuple[str, tuple[str, ...]]] = []
@@ -758,6 +764,9 @@ def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> No
     assert gateway.requests[0].instructions is not None
     assert "Always identify yourself as 小芯" in gateway.requests[0].instructions
     assert "blindly repeating the same call" in gateway.requests[0].instructions
+    assert (
+        "tool_search discovers deferred tools only" in gateway.requests[0].instructions
+    )
     assert (
         gateway.requests[0].model_policy.context_management.compact_threshold_tokens
         == 272_000
@@ -2123,6 +2132,112 @@ def test_worker_observes_and_self_repairs_failed_tool_continuation(tmp_path) -> 
     assert "营收稳定增长" not in audit_wire
     assert "quarterly-report.docx" not in audit_wire
     kernel.invariants.audit().raise_if_invalid()
+
+
+def test_stateless_continuation_keeps_every_completed_tool_fact(tmp_path) -> None:
+    calls = []
+    _app, kernel, composition, _thread, _created = _runtime(
+        tmp_path,
+        input_text="读取两份报告后汇总",
+        capability_handlers={
+            "read": lambda arguments: (
+                calls.append(dict(arguments))
+                or {"path": arguments["path"], "content": arguments["path"]}
+            )
+        },
+    )
+    gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_first_read",
+                    "tool_call_id": "call_first_read",
+                    "tool_name": "read",
+                    "arguments": {"path": "first.txt"},
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.failed",
+                    "response_id": "resp_rejected_continuation",
+                    "error_code": "provider_rejected",
+                    "error_message": "provider rejected continuation",
+                    "retryable": False,
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_second_read",
+                    "tool_call_id": "call_second_read",
+                    "tool_name": "read",
+                    "arguments": {"path": "second.txt"},
+                }
+            ],
+            GatewayUnavailable("offline"),
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+        max_model_rounds=4,
+        retry_delay_seconds=0,
+    )
+
+    first_attempt = asyncio.run(worker.run_once("worker-cumulative-continuation"))
+    assert first_attempt.outcome is WorkerOutcome.RETRY_SCHEDULED
+
+    resumed_gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "resp_cumulative_final",
+                }
+            ]
+        ]
+    )
+    resumed_worker = AgentTurnWorker(
+        kernel,
+        gateway=resumed_gateway,
+        capabilities=composition.capability_service,
+        max_model_rounds=4,
+        retry_delay_seconds=0,
+    )
+    result = asyncio.run(
+        resumed_worker.run_once("worker-cumulative-continuation-restarted")
+    )
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert calls == [{"path": "first.txt"}, {"path": "second.txt"}]
+    assert len(gateway.requests) == 4
+    assert gateway.requests[1].previous_response_id == "resp_first_read"
+    for request in gateway.requests[2:]:
+        assert request.previous_response_id is None
+        assert request.tool_outputs == []
+    assert gateway.requests[3].direct_tools == []
+    assert len(resumed_gateway.requests) == 1
+    final_request = resumed_gateway.requests[0]
+    assert final_request.previous_response_id is None
+    assert final_request.tool_outputs == []
+    assert final_request.direct_tools == []
+    continuity_notes = [
+        item.content
+        for item in final_request.input_items
+        if item.type == "assistant_message"
+        and item.content.startswith("[e-Mate Runtime continuity note]")
+    ]
+    assert len(continuity_notes) == 1
+    assert "call_first_read" in continuity_notes[0]
+    assert "first.txt" in continuity_notes[0]
+    assert "call_second_read" in continuity_notes[0]
+    assert "second.txt" in continuity_notes[0]
 
 
 def test_worker_observes_missing_tool_and_recovers_via_discovery(tmp_path) -> None:

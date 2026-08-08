@@ -643,6 +643,94 @@ class ToolExecutionRepository:
             ).fetchone()
         return None if row is None else self._from_row(row)
 
+    def exact_completed_in_batch(
+        self,
+        *,
+        exclude_tool_call_id: str,
+        turn_id: str,
+        execution_batch_id: str,
+        capability_snapshot_id: str,
+        policy_snapshot_id: str,
+        tool_id: str,
+        tool_version: str,
+        arguments_sha256: str,
+    ) -> ToolExecutionRecord | None:
+        """Reuse one exact result inside a model batch, including side effects.
+
+        A provider may issue a fresh call ID for an action it already completed
+        after losing continuation state.  Exact batch/snapshot/argument matching
+        is the durable fence which prevents executing that action twice.
+        """
+
+        identities = (
+            exclude_tool_call_id,
+            turn_id,
+            execution_batch_id,
+            capability_snapshot_id,
+            policy_snapshot_id,
+            tool_id,
+            tool_version,
+        )
+        if (
+            any(
+                not isinstance(value, str) or not value.strip() or len(value) > 256
+                for value in identities
+            )
+            or len(arguments_sha256) != 64
+        ):
+            return None
+        with self.database.reader() as connection:
+            row = connection.execute(
+                "SELECT execution.* FROM tool_executions AS execution "
+                "JOIN invocation_admissions AS admission "
+                "ON admission.tool_call_id = execution.tool_call_id "
+                "WHERE execution.tool_call_id != ? AND execution.turn_id = ? "
+                "AND execution.execution_batch_id = ? "
+                "AND execution.capability_snapshot_id = ? "
+                "AND execution.policy_snapshot_id = ? "
+                "AND execution.tool_id = ? AND admission.tool_version = ? "
+                "AND execution.arguments_sha256 = ? "
+                "AND execution.status = 'completed' "
+                "AND execution.result_json IS NOT NULL "
+                "ORDER BY execution.created_at, execution.tool_call_id LIMIT 1",
+                (
+                    exclude_tool_call_id,
+                    turn_id,
+                    execution_batch_id,
+                    capability_snapshot_id,
+                    policy_snapshot_id,
+                    tool_id,
+                    tool_version,
+                    arguments_sha256,
+                ),
+            ).fetchone()
+        return None if row is None else self._from_row(row)
+
+    def completed_for_turn(
+        self,
+        turn_id: str,
+        *,
+        limit: int = 64,
+    ) -> tuple[ToolExecutionRecord, ...]:
+        """Return the bounded completed transcript used by stateless recovery."""
+
+        if (
+            not isinstance(turn_id, str)
+            or not turn_id.strip()
+            or len(turn_id) > 256
+            or isinstance(limit, bool)
+            or not 1 <= limit <= 256
+        ):
+            raise ValueError("completed tool transcript query is invalid")
+        with self.database.reader() as connection:
+            rows = connection.execute(
+                "SELECT * FROM tool_executions WHERE turn_id = ? "
+                "AND status = 'completed' AND result_json IS NOT NULL "
+                "ORDER BY created_at, tool_call_id LIMIT ?",
+                (turn_id, limit),
+            ).fetchall()
+        return tuple(self._from_row(row) for row in rows)
+
     def completed_for_job(
         self,
         job_id: str,
