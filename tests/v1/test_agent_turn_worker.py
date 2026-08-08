@@ -2240,6 +2240,99 @@ def test_stateless_continuation_keeps_every_completed_tool_fact(tmp_path) -> Non
     assert "second.txt" in continuity_notes[0]
 
 
+def test_stateless_continuation_keeps_failed_recovery_fact_across_restart(
+    tmp_path,
+) -> None:
+    calls = []
+    _app, kernel, composition, _thread, _created = _runtime(
+        tmp_path,
+        input_text="读取报告",
+        capability_handlers={
+            "read": lambda arguments: (
+                calls.append(dict(arguments)) or {"content": "已读取"}
+            )
+        },
+    )
+    gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_completed_read",
+                    "tool_call_id": "call_completed_read",
+                    "tool_name": "read",
+                    "arguments": {"path": "report.txt"},
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.failed",
+                    "response_id": "resp_failed_chain",
+                    "error_code": "provider_rejected",
+                    "error_message": "continuation unsupported",
+                    "retryable": False,
+                }
+            ],
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_invalid_read",
+                    "tool_call_id": "call_invalid_read",
+                    "tool_name": "read",
+                    "arguments": {"max_bytes": 1024},
+                }
+            ],
+            GatewayUnavailable("offline"),
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+        max_model_rounds=6,
+        retry_delay_seconds=0,
+    )
+
+    first = asyncio.run(worker.run_once("worker-failed-recovery-fact"))
+    assert first.outcome is WorkerOutcome.RETRY_SCHEDULED
+
+    resumed_gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "resp_recovery_fact_final",
+                }
+            ]
+        ]
+    )
+    resumed_worker = AgentTurnWorker(
+        kernel,
+        gateway=resumed_gateway,
+        capabilities=composition.capability_service,
+        max_model_rounds=6,
+        retry_delay_seconds=0,
+    )
+
+    result = asyncio.run(resumed_worker.run_once("worker-failed-recovery-resumed"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert calls == [{"path": "report.txt"}]
+    note = next(
+        item.content
+        for item in resumed_gateway.requests[0].input_items
+        if item.type == "assistant_message"
+    )
+    assert "call_completed_read" in note
+    assert "call_invalid_read" in note
+    assert "tool_arguments_invalid" in note
+    assert "recovery_required" in note
+
+
 def test_worker_observes_missing_tool_and_recovers_via_discovery(tmp_path) -> None:
     """A guessed deferred tool is observable and repaired without a dead end."""
 

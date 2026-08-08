@@ -812,3 +812,16 @@ Agent Worker 全文件：46 passed
 无工具终局轮继续请求工具时触发 Runtime 护栏：passed
 云候选：staged only，live_routes_changed=false
 ```
+
+第二轮真实候选 `4ef335b` 进一步证明硬护栏生效：原来的 21 条恢复计划降为
+3 条，任务在 59 秒内完成明确终答，且 `agent.reflection_requested`、
+`agent.loop_detected` 和无工具收口请求均有持久事件。但该终答只得到
+`provider_rejected`，没有得到最近一次 `workspace_read_failed`；候选因此仍被拒绝。
+共同根因是无状态续接摘要只重建 `tool_executions` 中已完成的结果，失败恢复输出
+没有进入同一检查点。现有 `_StatelessContinuationRecovery` 现在附带最多 8 条有界
+失败恢复事实，沿用同一连续性摘要和重启检查点；状态为 `recovery_required` 的内容
+明确标记为失败事实，不能投影为完成。未增加第二套历史或事实源。
+
+补充定向验证：失败事实与已完成结果可在供应商无状态续接后共同出现，并在 Worker
+重启后保持；工具处理器没有重复调用。指数退避抖动的浮点上界同时收紧到契约规定
+的 `1.2`，避免哈希取到最大字节时出现 `1.2000000000000002`。
