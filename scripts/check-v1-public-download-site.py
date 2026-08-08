@@ -132,14 +132,19 @@ def main() -> int:
     )
     _require(
         "<title>e-Mate 下载与安装</title>" in html
-        and "<strong>选择系统</strong>" in html
-        and "<strong>复制安装命令</strong>" in html
-        and "<strong>粘贴并执行</strong>" in html
-        and "点击对应卡片中的“复制命令”。" in html
-        and "不需要预装 npm" in html
-        and "安装完成后自动打开 e-Mate 并创建桌面快捷方式。" in html
-        and "命令会从国内 GitHub 镜像下载" in html,
-        "public HTML must present the terminal copy-and-run installation flow",
+        and "企业智能体桌面工作区" in html
+        and "每次继续" in html
+        and "上次的" in html
+        and "进度" in html
+        and "Agent工作新范式" in html
+        and "从自己干到通过agent快速落地想法。" in html
+        and 'data-primary-download aria-disabled="true"' in html
+        and 'data-platform="macos"' in html
+        and 'data-platform="windows"' in html
+        and "任务不丢线" in html
+        and "成果可追溯" in html
+        and "关键操作可确认" in html,
+        "public HTML must present the e-Mate desktop download flow",
         errors,
     )
     _require(
@@ -168,45 +173,33 @@ def main() -> int:
     if len(scripts) == 1:
         javascript = scripts[0].read_text(encoding="utf-8")
         _require(
-            "npm exec" not in javascript
-            and "Install EcoreX WebUI.cmd" in javascript[
-                javascript.index("export function terminalCommand"):
-                javascript.index("function appendTerminalCommand")
-            ]
-            and "Install EcoreX WebUI.command" in javascript
-            and "targetFromPlatformSignals" in javascript,
-            "public install commands must run the checked WebUI package and Mac detection must fail safe",
+            "export function normalizeDownloadIndex" in javascript
+            and "targetFromPlatformSignals" in javascript
+            and '"windows-x64"' in javascript
+            and '"macos-arm64"' in javascript
+            and '"macos-x64"' in javascript
+            and "/e-mate/update/download-index.json" in javascript,
+            "public download flow must validate the generated desktop index and detect the device",
             errors,
         )
         _require(
-            "export async function verifyManifestBytes" in javascript
-            and "await sha256Hex(payload" in javascript
-            and "verifyManifestBytes(index.release.manifest)" in javascript
-            and "The downloaded WebUI package is the signature authority" in javascript,
-            (
-                "public JS must attempt exact manifest-byte SHA-256 verification "
-                "without treating browser CORS as release authority"
-            ),
+            'data-feature-nav' in html
+            and "featureNav.textContent = `${major}.${minor} 新功能`" in javascript
+            and "releaseLabel.textContent = `当前版本 ${index.version}" in javascript
+            and "WEBUI_RELEASE" not in javascript
+            and "2.0.0" not in html
+            and "2.0.0" not in javascript
+            and "1.0.0" not in html
+            and "1.0.0" not in javascript,
+            "public product versions must come from the desktop feed",
             errors,
         )
         _require(
             "cache: \"no-store\"" in javascript
             and "credentials: \"omit\"" in javascript
+            and "redirect: \"error\"" in javascript
             and "new AbortController()" in javascript,
-            "public discovery fetches must bypass caches/credentials and time out",
-            errors,
-        )
-        _require(
-            'createElement("div", "command-block is-primary")' in javascript
-            and 'createElement("button", "", "复制命令")' in javascript
-            and "await copyText(command);" in javascript
-            and "appendTerminalCommand(article, artifact);" in javascript
-            and 'createElement("a", "download-link", "下载 EcoreX")' not in javascript
-            and 'createElement("details", "download-help")' not in javascript,
-            (
-                "public download cards must make the terminal command the primary action "
-                "and remove direct-download and manual-install paths"
-            ),
+            "public desktop index fetches must bypass caches and credentials and time out",
             errors,
         )
 

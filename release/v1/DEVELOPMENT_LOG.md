@@ -1470,3 +1470,33 @@ expanded app：118 files，0 violation
 ASAR：6,010 paths，0 violation，single Renderer
 启动、Computer Use、发布、latest：not run
 ```
+
+# 2026-08-09 — e-Mate 桌面下载页还原与动态版本索引
+
+- 下载页按用户提供的 1487×1058 视觉稿恢复为左侧转化、右侧产品预览和底部可信
+  事实条的首屏。左上角直接复用桌面端 `emate-logo`；英文 Enterprise 版本胶囊改为
+  “企业智能体桌面工作区”。主标题保留“每次继续，都从上次的进度开始”，下方改为
+  “Agent工作新范式 / 从自己干到通过agent快速落地想法。”。
+- 产品预览不是设计稿内的旧界面：从当前 Renderer 的 light/empty 工作区重新截取，
+  图中导航已经是“定时任务 / 能力中心”，并展示当前小芯首页与输入区。旧下载页的
+  两张 ECoreX 图片、五机器人轮播和不再使用的样式/脚本已删除。
+- `prepare-emate-desktop-feed.py` 在既有四方制品门禁通过后新增生成
+  `download-index.json`，只投影实际版本、发布时间、Windows x64、macOS arm64/x64
+  的文件名、大小和 SHA-256。页面严格校验该索引并自动识别系统/芯片；无法可靠识别
+  Mac 芯片时只提示选择，不会猜测架构。版本导航、当前版本和下载 URL 全部来自索引，
+  页面源码不含固定产品版本。
+- 企业更新 Nginx 为该索引新增独立 `no-store` JSON location，并只向正式下载站域名
+  开放读取；索引与 `latest.yml`、`latest-mac.yml`、公开 Bootstrap 指针一起进入原子
+  feed receipt。没有部署、没有切换 `latest`，本轮浏览器使用的发布索引仅为本地视觉
+  验收夹具，不属于提交或发布制品。
+
+本轮定向验证：
+
+```text
+下载页静态/动态索引与 feed 门禁：7 passed
+Python Ruff 与 git diff --check：passed
+Browser 1487×1058 同尺寸视觉比较：passed
+Browser 390×844 响应式首屏：passed
+macOS arm64 自动推荐、Windows 切换与卡片过滤：passed
+生产部署、公开下载回读、latest 切换：not run
+```

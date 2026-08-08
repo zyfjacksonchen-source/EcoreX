@@ -204,6 +204,20 @@ def test_feed_gate_merges_mac_metadata_and_rejects_tampering(tmp_path: Path) -> 
     merged = (tmp_path / "feed" / "latest-mac.yml").read_text()
     assert merged.count("  - url: e-Mate-") == 4
     assert "arm64.zip" in merged and "x64.zip" in merged
+    download_index = json.loads(
+        (tmp_path / "feed" / "download-index.json").read_text()
+    )
+    assert download_index["version"] == VERSION
+    assert [item["target"] for item in download_index["downloads"]] == [
+        "windows-x64",
+        "macos-arm64",
+        "macos-x64",
+    ]
+    assert all(
+        item["url"].startswith("https://mvdcm.ecoremedia.net/e-mate/update/")
+        for item in download_index["downloads"]
+    )
+    assert "download-index.json" in receipt["activation"]["pointer_files"]
 
     unsafe_nginx = tmp_path / "unsafe-nginx.conf"
     unsafe_nginx.write_text(NGINX.read_text() + "\ntry_files $uri /index.html;\n")

@@ -31,6 +31,9 @@ _SHA512 = re.compile(r"^[A-Za-z0-9+/]{86}==$")
 _SEMVER = re.compile(r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,179}$")
+_RELEASE_DATE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$"
+)
 _MAX_FILES = 500
 _MAX_FILE_BYTES = 16 * 1024 * 1024 * 1024
 
@@ -353,6 +356,55 @@ def _merge_mac(arm64: Mapping[str, Any], x64: Mapping[str, Any]) -> bytes:
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
+def _download_index(
+    version: str,
+    metadata: Mapping[str, Mapping[str, Any]],
+    desktop: Mapping[str, Mapping[str, Path]],
+) -> bytes:
+    released_at = max(str(value["releaseDate"]) for value in metadata.values())
+    if not _RELEASE_DATE.fullmatch(released_at):
+        raise FeedError("desktop release date is invalid")
+    names = {
+        "windows-x64": f"e-Mate-Setup-{version}-x64.exe",
+        "macos-arm64": f"e-Mate-{version}-arm64.dmg",
+        "macos-x64": f"e-Mate-{version}-x64.dmg",
+    }
+    downloads = []
+    for target, platform, architecture in (
+        ("windows-x64", "windows", "x64"),
+        ("macos-arm64", "macos", "arm64"),
+        ("macos-x64", "macos", "x64"),
+    ):
+        name = names[target]
+        path = desktop[target][name]
+        downloads.append(
+            {
+                "target": target,
+                "platform": platform,
+                "architecture": architecture,
+                "file_name": name,
+                "url": f"https://mvdcm.ecoremedia.net/e-mate/update/{name}",
+                "size_bytes": path.stat().st_size,
+                "sha256": _sha256(path),
+            }
+        )
+    return (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "product": "e-Mate",
+                "version": version,
+                "released_at": released_at,
+                "downloads": downloads,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+
 def _validate_nginx(path: Path) -> str:
     try:
         source = path.read_text(encoding="utf-8")
@@ -361,6 +413,7 @@ def _validate_nginx(path: Path) -> str:
     required = (
         "location = /e-mate/update/latest.yml",
         "location = /e-mate/update/latest-mac.yml",
+        "location = /e-mate/update/download-index.json",
         "location = /e-mate/update/public-bootstrap-index.json",
         "location ^~ /e-mate/update/",
         "alias /srv/e-mate-update/current/",
@@ -477,6 +530,16 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         records.append(
             _record(merged, role="pointer", source_artifact="feed-gate", root=staging)
         )
+        download_index = staging / "download-index.json"
+        download_index.write_bytes(_download_index(version, metadata, desktop))
+        records.append(
+            _record(
+                download_index,
+                role="pointer",
+                source_artifact="feed-gate",
+                root=staging,
+            )
+        )
         for target, files in desktop.items():
             for name, source in sorted(files.items()):
                 destination = staging / name
@@ -538,6 +601,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
                 "pointer_files": [
                     "latest.yml",
                     "latest-mac.yml",
+                    "download-index.json",
                     "public-bootstrap-index.json",
                 ],
                 "missing_files_must_return": 404,

@@ -1,232 +1,100 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="Cache-Control" content="no-store" />
     <title>e-Mate 下载与安装</title>
-    <meta
-      name="description"
-      content="e-Mate 面向 Windows 与 macOS 的官方下载与安装入口。"
-    />
+    <meta name="description" content="e-Mate 面向 Windows 与 macOS 的官方下载入口。" />
     <link rel="icon" type="image/png" href="./assets/emate-mark.1a6dbbe3b5fe.png" />
-    <link rel="preload" as="image" href="./assets/emate-team-hero.c7f395a07292.png" />
-    <link rel="stylesheet" href="./styles.8915357b1abd.css" />
+    <link rel="preload" as="image" href="./assets/emate-desktop-workspace.622f3434f88c.png" />
+    <link rel="stylesheet" href="./styles.40d8dfeef412.css" />
   </head>
   <body>
-    <div class="page-shell">
-      <header class="topbar">
-        <a class="brand" href="./" aria-label="e-Mate v1.0.0">
-          <img class="brand-mark" src="./assets/emate-mark.1a6dbbe3b5fe.png" alt="" />
-          <span class="brand-version" data-site-version>v1.0.0</span>
-        </a>
-        <nav class="nav-links" aria-label="页面导航">
-          <a href="#install-guide">如何安装</a>
-          <a href="#download">下载</a>
-          <a href="#workflow">能力介绍</a>
-          <a href="/ecorex-agent/admin/">管理端</a>
-          <button class="icon-button" type="button" data-theme-toggle aria-label="切换明暗模式">
-            <span data-theme-icon>◐</span>
-          </button>
-        </nav>
-      </header>
+    <header class="topbar">
+      <a class="brand" href="#product" aria-label="e-Mate 首页">
+        <img src="./assets/emate-logo.e0bf52b1480f.png" alt="e-Mate" />
+      </a>
+      <nav class="nav-links" aria-label="页面导航">
+        <a href="#product">产品</a>
+        <a href="#features" data-feature-nav>新功能</a>
+        <a class="is-active" href="#download-options">下载</a>
+        <a href="#help">帮助</a>
+      </nav>
+    </header>
 
-      <main>
-        <section class="hero" aria-labelledby="hero-title">
-          <h1 class="sr-only" id="hero-title">e-Mate，陪你把工作真正做完</h1>
-          <div class="robot-carousel" data-robot-carousel>
-            <div
-              class="robot-carousel-viewport"
-              data-carousel-viewport
-              role="group"
-              aria-label="滑动或选择一位 e-Mate 工作伙伴"
-              tabindex="0"
-            >
-              <div class="robot-carousel-track" aria-label="五位 e-Mate 工作伙伴">
-                <button class="robot-choice" type="button" data-robot-index="0" data-position="-2" aria-label="资料整理伙伴" aria-pressed="false">
-                  <figure class="robot-portrait robot-portrait-documents">
-                    <img src="./assets/emate-team-hero.c7f395a07292.png" alt="手拿文件的 e-Mate 机器人" draggable="false" />
-                  </figure>
-                </button>
-                <button class="robot-choice" type="button" data-robot-index="1" data-position="-1" aria-label="数据分析伙伴" aria-pressed="false">
-                  <figure class="robot-portrait robot-portrait-data">
-                    <img src="./assets/emate-team-hero.c7f395a07292.png" alt="手拿数据看板的 e-Mate 机器人" draggable="false" />
-                  </figure>
-                </button>
-                <button class="robot-choice" type="button" data-robot-index="2" data-position="0" aria-label="创意设计伙伴" aria-pressed="true">
-                  <figure class="robot-portrait robot-portrait-creative">
-                    <img src="./assets/emate-team-hero.c7f395a07292.png" alt="手拿画笔和调色板的 e-Mate 机器人" draggable="false" />
-                  </figure>
-                </button>
-                <button class="robot-choice" type="button" data-robot-index="3" data-position="1" aria-label="团队协作伙伴" aria-pressed="false">
-                  <figure class="robot-portrait robot-portrait-collaboration">
-                    <img src="./assets/emate-team-hero.c7f395a07292.png" alt="正在协调团队信息的 e-Mate 机器人" draggable="false" />
-                  </figure>
-                </button>
-                <button class="robot-choice" type="button" data-robot-index="4" data-position="2" aria-label="日常办公伙伴" aria-pressed="false">
-                  <figure class="robot-portrait robot-portrait-office">
-                    <img src="./assets/emate-team-hero.c7f395a07292.png" alt="使用笔记本电脑的 e-Mate 机器人" draggable="false" />
-                  </figure>
-                </button>
-              </div>
-            </div>
-            <div class="robot-copy-stage" aria-live="polite">
-              <article class="robot-slide-copy" data-robot-copy="0" hidden>
-                    <h2>把散乱资料变成清楚的成果</h2>
-                    <p>把文件、笔记和聊天记录交给 e-Mate，它会帮你找重点、做对比、列清单，最后整理成可以直接使用的内容。</p>
-                    <div class="hero-actions">
-                      <a class="button primary" href="#download">开始下载</a>
-                      <a class="button ghost" href="#install-guide">看看怎么安装</a>
-                    </div>
-              </article>
-              <article class="robot-slide-copy" data-robot-copy="1" hidden>
-                    <h2>让表格和数据更好懂</h2>
-                    <p>无论是销售表、项目数据还是调研结果，e-Mate 都能帮你整理、核对并讲清变化，让你更快发现问题和机会。</p>
-                    <div class="hero-actions">
-                      <a class="button primary" href="#download">开始下载</a>
-                      <a class="button ghost" href="#install-guide">看看怎么安装</a>
-                    </div>
-              </article>
-              <article class="robot-slide-copy" data-robot-copy="2">
-                    <h2>把想法变成看得见的创意</h2>
-                    <p>从灵感发散、视觉方向到图片和演示内容，e-Mate 会陪你一步步打磨，让脑海里的想法更快成为作品。</p>
-                    <div class="hero-actions">
-                      <a class="button primary" href="#download">开始下载</a>
-                      <a class="button ghost" href="#install-guide">看看怎么安装</a>
-                    </div>
-              </article>
-              <article class="robot-slide-copy" data-robot-copy="3" hidden>
-                    <h2>把多人协作推进到下一步</h2>
-                    <p>e-Mate 可以帮你汇总大家的进展、找出待办、准备回复，并把重要信息带回当前工作，不再来回翻找。</p>
-                    <div class="hero-actions">
-                      <a class="button primary" href="#download">开始下载</a>
-                      <a class="button ghost" href="#install-guide">看看怎么安装</a>
-                    </div>
-              </article>
-              <article class="robot-slide-copy" data-robot-copy="4" hidden>
-                    <h2>把琐碎工作交给靠谱搭档</h2>
-                    <p>写文档、做调研、整理会议、跟进任务，e-Mate 会记住来龙去脉，帮你少做重复劳动，把时间留给更重要的事。</p>
-                    <div class="hero-actions">
-                      <a class="button primary" href="#download">开始下载</a>
-                      <a class="button ghost" href="#install-guide">看看怎么安装</a>
-                    </div>
-              </article>
-            </div>
-            <div class="robot-carousel-controls" aria-label="切换工作伙伴">
-              <button type="button" data-carousel-prev>上一位</button>
-              <div class="robot-carousel-dots" data-carousel-dots aria-label="选择工作伙伴">
-                <button type="button" aria-label="查看资料整理伙伴"></button>
-                <button type="button" aria-label="查看数据分析伙伴"></button>
-                <button type="button" aria-label="查看创意设计伙伴" aria-current="true"></button>
-                <button type="button" aria-label="查看团队协作伙伴"></button>
-                <button type="button" aria-label="查看日常办公伙伴"></button>
-              </div>
-              <button type="button" data-carousel-next>下一位</button>
-            </div>
+    <main>
+      <section class="hero" id="product" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="product-label">企业智能体桌面工作区</p>
+          <h1 id="hero-title">每次继续，<br />都从<span>上次的</span><br /><span>进度</span>开始</h1>
+          <p class="hero-lead"><strong>Agent工作新范式</strong><span>从自己干到通过agent快速落地想法。</span></p>
+          <div class="hero-download">
+            <a class="primary-download is-disabled" data-primary-download aria-disabled="true">正在识别设备</a>
+            <small data-primary-detail>正在读取最新发布信息</small>
           </div>
-        </section>
+          <div class="platform-switch" data-platform-switch aria-label="选择下载系统">
+            <button type="button" data-platform="macos" aria-pressed="false">macOS</button>
+            <button type="button" data-platform="windows" aria-pressed="false">Windows</button>
+          </div>
+        </div>
 
-        <section class="release-strip" aria-label="发布发现状态">
-          <div>
-            <span>安装器版本</span>
-            <strong data-version>尚未发布</strong>
-          </div>
-          <div>
-            <span>打开方式</span>
-            <strong>桌面快捷方式</strong>
-          </div>
-          <div>
-            <span>支持系统</span>
-            <strong>Windows / macOS</strong>
-          </div>
-          <div>
-            <span>发布日期</span>
-            <strong data-updated>待确认</strong>
-          </div>
-        </section>
+        <div class="product-stage" aria-label="e-Mate 桌面端产品预览">
+          <figure class="desktop-shot">
+            <img
+              src="./assets/emate-desktop-workspace.622f3434f88c.png"
+              alt="e-Mate 当前桌面端工作区，包含定时任务、能力中心和小芯任务输入区"
+            />
+          </figure>
+        </div>
+      </section>
 
-        <section class="install-guide" id="install-guide" aria-label="如何安装 e-Mate">
-          <div class="section-heading">
-            <p class="eyebrow">How to install</p>
-            <h2>Windows / macOS 安装指南</h2>
-          </div>
-          <div class="guide-grid">
-            <article class="guide-panel">
-              <h3>首次安装</h3>
-              <ol class="guide-steps">
-                <li><strong>选择系统</strong><span>Windows 选择 Windows x64。Mac 按芯片选择 Apple Silicon 或 Intel。</span></li>
-                <li><strong>复制安装命令</strong><span>点击对应卡片中的“复制命令”。</span></li>
-                <li><strong>粘贴并执行</strong><span>Windows 在 PowerShell、Mac 在终端中粘贴执行；命令会从国内 GitHub 镜像下载。安装完成后自动打开 e-Mate 并创建桌面快捷方式。不需要预装 npm。</span></li>
-              </ol>
-            </article>
-            <article class="guide-panel">
-              <h3>关闭后重新打开</h3>
-              <ol class="guide-steps">
-                <li><strong>双击桌面 e-Mate</strong><span>关闭网页后，随时可以通过桌面快捷方式重新打开。</span></li>
-                <li><strong>页面地址保持不变</strong><span>项目、会话和产物仍保存在本机，不会因为关闭页面而丢失。</span></li>
-                <li><strong>打不开时重新执行命令</strong><span>再次执行同一系统的安装命令即可修复桌面快捷方式，并保留已有用户数据。</span></li>
-              </ol>
-            </article>
-            <article class="guide-panel">
-              <h3>以后更新</h3>
-              <ol class="guide-steps">
-                <li><strong>后台自动下载</strong><span>e-Mate 检测到新版本后在后台下载，不打断当前任务。</span></li>
-                <li><strong>由你确认激活</strong><span>准备完成后点击“更新并刷新”，才会切换到新版本。</span></li>
-                <li><strong>失败自动回退</strong><span>新版本健康检查失败时自动恢复上一个可用版本。</span></li>
-              </ol>
-            </article>
-          </div>
-          <p class="trust-note">
-            一键安装会自动检查下载文件是否完整，并持续显示下载速度、进度和安装阶段。
-            <a data-manifest-link hidden rel="noopener noreferrer">查看发布信息</a>
-          </p>
-        </section>
+      <section class="proof-strip" aria-label="e-Mate 工作保障">
+        <strong>任务不丢线</strong><span aria-hidden="true">·</span>
+        <strong>成果可追溯</strong><span aria-hidden="true">·</span>
+        <strong>关键操作可确认</strong>
+      </section>
 
-        <section class="downloads" id="download" aria-label="下载 e-Mate">
-          <div class="section-heading">
-            <p class="eyebrow">Install / Update</p>
-            <h2>复制一条命令即可安装</h2>
-          </div>
-          <div class="download-grid" data-downloads>
-            <article class="download-card skeleton">
-              <span class="platform-icon">···</span>
-              <h3>正在读取发布发现信息</h3>
-              <p>请稍候。</p>
-            </article>
-          </div>
-        </section>
+      <section class="feature-section" id="features" aria-labelledby="features-title">
+        <div class="section-heading">
+          <p>让 Agent 真正参与工作</p>
+          <h2 id="features-title">从目标到成果，持续推进</h2>
+        </div>
+        <div class="feature-grid">
+          <article><h3>上下文延续</h3><p>任务、资料和产物留在同一工作区，下次打开直接从上次进度继续。</p></article>
+          <article><h3>真实执行</h3><p>小芯会按目标拆解步骤、调用工具，并把每次执行结果呈现在消息流中。</p></article>
+          <article><h3>企业可管理</h3><p>模型、权限、用量与审计由企业策略统一下发，重要操作始终可核对。</p></article>
+        </div>
+      </section>
 
-        <section class="capability-band" id="workflow" aria-labelledby="capability-title">
-          <div class="capability-intro">
-            <p class="eyebrow">你的工作搭档</p>
-            <h2 id="capability-title">从一个想法，到真正做完，e-Mate 一路陪你推进</h2>
-            <p>你只要说清楚想完成什么，e-Mate 会帮你理出下一步、动手完成内容，并在需要时接上团队和常用工具。</p>
-          </div>
-          <div class="capability-grid">
-            <article>
-              <h3>先帮你理清</h3>
-              <p>目标还很模糊也没关系，e-Mate 会把问题拆开，帮你找到可以马上开始的第一步。</p>
-            </article>
-            <article>
-              <h3>动手做出来</h3>
-              <p>文档、表格、图片和演示内容都能一起推进，你不用在多个软件之间反复搬运。</p>
-            </article>
-            <article>
-              <h3>和团队接上</h3>
-              <p>需要别人配合时，e-Mate 会帮你整理进展、准备沟通内容，让协作更顺畅。</p>
-            </article>
-            <article>
-              <h3>持续跟到完成</h3>
-              <p>它会记住当前任务的来龙去脉，接着上次的进度继续做，减少重复说明和遗漏。</p>
-            </article>
-          </div>
-        </section>
-      </main>
+      <section class="downloads" id="download-options" aria-labelledby="downloads-title">
+        <div class="section-heading">
+          <p>官方下载</p>
+          <h2 id="downloads-title">选择适合这台电脑的版本</h2>
+          <span data-release-label>正在读取最新版本</span>
+        </div>
+        <div class="download-grid" data-downloads aria-live="polite">
+          <article class="download-card is-loading"><h3>正在读取下载信息</h3><p>请稍候。</p></article>
+        </div>
+      </section>
 
-      <footer class="footer">
-        <span>e-Mate</span>
-      </footer>
-    </div>
-    <script type="module" src="./site.bf3f00470ff1.js"></script>
+      <section class="help-section" id="help" aria-labelledby="help-title">
+        <div class="section-heading">
+          <p>安装帮助</p>
+          <h2 id="help-title">下载后即可开始</h2>
+        </div>
+        <div class="help-grid">
+          <article><span>01</span><h3>下载安装包</h3><p>页面会优先推荐当前设备；Mac 芯片无法可靠识别时，请按“关于本机”选择版本。</p></article>
+          <article><span>02</span><h3>首次启动</h3><p>当前候选暂未签名。Windows 选择继续运行；macOS 按系统提示允许打开。</p></article>
+          <article><span>03</span><h3>继续上次任务</h3><p>再次打开 e-Mate，任务上下文、消息和产物会从本机恢复。</p></article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>e-Mate</span>
+      <a href="/ecorex-agent/admin/">企业管理端</a>
+    </footer>
+    <script type="module" src="./site.e2d0d6c3c609.js"></script>
   </body>
 </html>

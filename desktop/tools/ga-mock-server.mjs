@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const HERE = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const DEFAULT_DIST = resolve(HERE, "..", "dist");
 const AXE_CORE = resolve(HERE, "..", "node_modules", "axe-core", "axe.min.js");
+const PRODUCT_VERSION = JSON.parse(readFileSync(resolve(HERE, "..", "package.json"), "utf8")).version;
 const NOW = "2026-07-10T07:34:00.000Z";
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR42mP8z8Dwn4GBgYGJAQoAHgQCAf2Q3xQAAAAASUVORK5CYII=",
@@ -1314,7 +1315,7 @@ function bootstrap(state) {
     connectors: [],
     extensions: extensionCatalog(state),
     update: {
-      current_version: "1.0.0",
+      current_version: PRODUCT_VERSION,
       state: "idle",
       target_version: null,
       release_id: null,

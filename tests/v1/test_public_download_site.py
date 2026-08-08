@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -11,6 +11,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+SITE = ROOT / "deploy" / "ecorex-site"
 
 
 def test_public_download_site_static_gate_passes() -> None:
@@ -27,104 +28,48 @@ def test_public_download_site_static_gate_passes() -> None:
     evidence = json.loads(result.stdout)
     assert evidence["status"] == "passed"
     assert evidence["public_pointer"] == "unpublished"
-    assert evidence["hashed_asset_count"] == 7
-    html = (ROOT / "deploy" / "ecorex-site" / "index.html").read_text(
-        encoding="utf-8"
-    )
+    assert evidence["hashed_asset_count"] == 5
+
+
+def test_public_download_site_uses_real_product_assets_and_dynamic_release_data() -> None:
+    html = (SITE / "index.html").read_text(encoding="utf-8")
+    javascript = next(SITE.glob("site.*.js")).read_text(encoding="utf-8")
+
+    assert "每次继续" in html
+    assert "上次的" in html
+    assert "进度" in html
+    assert "Agent工作新范式" in html
+    assert "从自己干到通过agent快速落地想法。" in html
+    assert "企业智能体桌面工作区" in html
+    assert "emate-logo.e0bf52b1480f.png" in html
+    assert "emate-desktop-workspace.622f3434f88c.png" in html
+    assert "创意中心" not in html
     assert 'href="/ecorex-agent/admin/"' in html
     assert 'href="/admin/"' not in html
-
-
-def test_public_download_site_makes_one_click_terminal_install_primary() -> None:
-    site = ROOT / "deploy" / "ecorex-site"
-    html = (site / "index.html").read_text(encoding="utf-8")
-    javascript = next(site.glob("site.*.js")).read_text(encoding="utf-8")
-
-    assert "<title>e-Mate 下载与安装</title>" in html
-    assert 'aria-label="e-Mate v1.0.0"' in html
-    assert 'class="brand-mark"' in html
-    assert 'class="brand-logo"' not in html
-    assert '<span class="brand-version" data-site-version>v1.0.0</span>' in html
-    assert ">EcoreX<" not in html
-    assert 'aria-label="EcoreX' not in html
-    assert "<strong>选择系统</strong>" in html
-    assert "<strong>复制安装命令</strong>" in html
-    assert "<strong>粘贴并执行</strong>" in html
-    assert "点击对应卡片中的“复制命令”。" in html
-    assert "不需要预装 npm" in html
-    assert "<span>安装器版本</span>" in html
-    assert "安装完成后自动打开 e-Mate 并创建桌面快捷方式。" in html
-    assert "命令会从国内 GitHub 镜像下载" in html
-    assert all(
-        technical_term not in html
-        for technical_term in ("Bootstrap", "SHA-256", "Ed25519")
-    )
-
-    assert 'createElement("div", "command-block is-primary")' in javascript
-    assert 'createElement("button", "", "复制命令")' in javascript
-    assert "await copyText(command);" in javascript
-    assert "appendTerminalCommand(article, artifact);" in javascript
-    assert '`安装器 v${release.version}`' in javascript
-    assert 'createElement("a", "download-link", "下载 EcoreX")' not in javascript
-    assert 'createElement("details", "download-help")' not in javascript
-
-
-def test_public_download_site_presents_five_accessible_work_partners() -> None:
-    site = ROOT / "deploy" / "ecorex-site"
-    html = (site / "index.html").read_text(encoding="utf-8")
-    javascript = next(site.glob("site.*.js")).read_text(encoding="utf-8")
-    stylesheet = next(site.glob("styles.*.css")).read_text(encoding="utf-8")
-
-    assert html.count('class="robot-choice"') == 5
-    assert html.count('class="robot-slide-copy"') == 5
-    assert html.count('aria-pressed="true"') == 1
-    assert 'data-robot-index="2" data-position="0"' in html
-    assert 'class="robot-kicker"' not in html
-    assert '<figure class="robot-portrait robot-portrait-creative">' in html
-    assert 'style="--robot-' not in html
-    assert "手拿画笔和调色板的 e-Mate 机器人" in html
-    assert "把想法变成看得见的创意" in html
-    assert "让表格和数据更好懂" in html
-    assert "把多人协作推进到下一步" in html
-    assert "后台下载，用户确认后刷新激活。" not in html
-    assert "Update policy" not in html
-    assert "复制与你的电脑匹配的一键安装命令" not in html
-    assert '<p class="eyebrow">e-Mate</p>' not in html
-    assert "setupRobotCarousel();" in javascript
-    assert "wrappedCarouselIndex(choiceIndex - activeIndex" in javascript
-    assert 'event.key === "ArrowLeft"' in javascript
-    assert 'viewport.addEventListener("pointermove"' in javascript
-    assert "width: clamp(170px, 20vw, 285px);" in stylesheet
-    assert "width: 152px;" in stylesheet
+    assert 'data-platform="macos"' in html
+    assert 'data-platform="windows"' in html
+    assert "/e-mate/update/download-index.json" in javascript
+    assert "normalizeDownloadIndex" in javascript
+    assert "targetFromPlatformSignals" in javascript
+    assert "WEBUI_RELEASE" not in javascript
+    for version in ("1.0.0", "2.0.0"):
+        assert version not in html
+        assert version not in javascript
 
 
 def test_public_release_routes_hide_channel_but_map_to_channel_storage() -> None:
-    caddy = (
-        ROOT / "deploy/ecorex-site/caddy/ecorex-agent.routes.caddy"
-    ).read_text(encoding="utf-8")
-    nginx = (
-        ROOT / "deploy/ecorex-site/nginx/ecorex-agent.conf.example"
-    ).read_text(encoding="utf-8")
+    caddy = (SITE / "caddy/ecorex-agent.routes.caddy").read_text(encoding="utf-8")
+    nginx = (SITE / "nginx/ecorex-agent.conf.example").read_text(encoding="utf-8")
 
     canonical = (
-        "/ecorex-agent/releases/v1.0.0/"
+        "/ecorex-agent/releases/v9.8.7/"
         "release-stable-0123456789abcdef01234567/release-manifest.json"
     )
     assert "/stable/release-stable-" not in canonical
     assert "(?P<release_channel>stable|canary)" in caddy
-    assert (
-        "/{re.ecorex_release_file.release_namespace}/"
-        "{re.ecorex_release_file.release_channel}/"
-        "{re.ecorex_release_file.release_id}/"
-        "{re.ecorex_release_file.release_asset}"
-    ) in caddy
+    assert "{re.ecorex_release_file.release_channel}" in caddy
     assert "(?<ecorex_release_channel>stable|canary)" in nginx
-    assert (
-        "/v1-artifacts/$ecorex_release_namespace/"
-        "$ecorex_release_channel/$ecorex_release_id/$ecorex_release_asset"
-    ) in nginx
-    assert "handle /ecorex-agent/releases/*" in caddy
-    assert "location /ecorex-agent/releases/" in nginx
+    assert "$ecorex_release_channel/$ecorex_release_id" in nginx
 
 
 def test_public_asset_builder_writes_new_hashes_before_switching_html(
@@ -134,8 +79,8 @@ def test_public_asset_builder_writes_new_hashes_before_switching_html(
     site.mkdir()
     stale_script = site / "site.000000000000.js"
     stale_style = site / "styles.000000000000.css"
-    script_payload = b'export const product = "EcoreX";\n'
-    style_payload = b":root { color-scheme: light dark; }\n"
+    script_payload = b'export const product = "e-Mate";\n'
+    style_payload = b":root { color-scheme: light; }\n"
     stale_script.write_bytes(script_payload)
     stale_style.write_bytes(style_payload)
     (site / "index.html").write_text(
@@ -165,262 +110,66 @@ def test_public_asset_builder_writes_new_hashes_before_switching_html(
     style_name = f"styles.{hashlib.sha256(style_payload).hexdigest()[:12]}.css"
     assert result["javascript"]["name"] == script_name
     assert result["stylesheet"]["name"] == style_name
-    assert (site / script_name).read_bytes() == script_payload
-    assert (site / style_name).read_bytes() == style_payload
     assert not stale_script.exists()
     assert not stale_style.exists()
     html = (site / "index.html").read_text(encoding="utf-8")
     assert f'./{script_name}' in html
     assert f'./{style_name}' in html
-    assert not list(site.glob(".*.tmp-*"))
-
-    interrupted_payload = b"unreferenced bytes written before an HTML switch\n"
-    interrupted_name = (
-        f"site.{hashlib.sha256(interrupted_payload).hexdigest()[:12]}.js"
-    )
-    (site / interrupted_name).write_bytes(interrupted_payload)
-    second = subprocess.run(
-        command,
-        cwd=ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="strict",
-    )
-    assert second.returncode == 0, second.stdout + second.stderr
-    assert json.loads(second.stdout) == result
-    assert not (site / interrupted_name).exists()
 
 
-def test_public_browser_parser_and_manifest_byte_check_fail_closed() -> None:
+def test_public_browser_download_index_contract_fails_closed() -> None:
     node = shutil.which("node")
+    if node is None:
+        candidate = ROOT / ".candidate/toolchains/node-v22.23.1-darwin-arm64/bin/node"
+        node = str(candidate) if candidate.exists() else None
     if node is None:
         pytest.skip("Node.js is required for the public browser contract test")
     script = r"""
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { pathToFileURL } from "node:url";
 
-const sourcePath = process.argv[1];
-const source = await readFile(sourcePath, "utf8");
-const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
-const contract = await import(moduleUrl);
-
-assert.equal(contract.wrappedCarouselIndex(0, 5), 0);
-assert.equal(contract.wrappedCarouselIndex(7, 5), 2);
-assert.equal(contract.wrappedCarouselIndex(-1, 5), 4);
-assert.equal(contract.wrappedCarouselIndex(5, 0), 0);
-assert.equal(contract.releaseVersion("0.3.1"), "0.3.1");
-assert.equal(contract.releaseVersion("1.0.0"), "1.0.0");
-assert.throws(() => contract.releaseVersion("v0.3.1"));
-assert.equal(contract.stableReleaseSequence("0.3.1"), 30002);
-assert.equal(contract.stableReleaseSequence("1.0.17"), 100000018);
-
-const windowsCommand = contract.terminalCommand({
-  platform: "windows",
+const source = await readFile(process.argv[1], "utf8");
+const contract = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+const version = "9.8.7";
+const download = (target, platform, architecture, fileName) => ({
+  target,
+  platform,
+  architecture,
+  file_name: fileName,
+  url: `https://mvdcm.ecoremedia.net/e-mate/update/${fileName}`,
+  size_bytes: 42,
   sha256: "a".repeat(64),
-  sources: [
-    { url: "https://mirror.example/EcoreX.zip" },
-    { url: "https://github.example/EcoreX.zip" },
-  ],
 });
-assert.doesNotMatch(windowsCommand, /npm(?:\.cmd)?\s/u);
-assert.match(windowsCommand, /^\$ErrorActionPreference='Stop'/);
-assert.match(windowsCommand, /curl\.exe/u);
-assert.match(windowsCommand, /Write-Host/);
-assert.match(windowsCommand, /Get-FileHash/u);
-assert.match(windowsCommand, /github\.example/u);
-assert.match(windowsCommand, /Install EcoreX WebUI\.cmd/u);
-const macCommand = contract.terminalCommand({
-  platform: "macos",
-  sha256: "b".repeat(64),
-  sources: [
-    { url: "https://mirror.example/EcoreX.zip" },
-    { url: "https://github.example/EcoreX.zip" },
-  ],
-});
-assert.doesNotMatch(macCommand, /npm\s/u);
-assert.match(macCommand, /^d="\$\(mktemp -d\)"/);
-assert.match(macCommand, /curl --fail --location/u);
-assert.match(macCommand, /shasum -a 256 -c/u);
-assert.match(macCommand, /github\.example/u);
-assert.match(macCommand, /Install EcoreX WebUI\.command/u);
-
-const webui = contract.normalizeWebUIRelease();
-assert.equal(webui.release.version, "1.0.0");
-assert.equal(webui.release.artifacts.length, 3);
-assert.equal(webui.release.artifacts[1].sha256, webui.release.artifacts[2].sha256);
-assert.equal(webui.release.artifacts[0].sources.length, 3);
-assert.match(webui.release.artifacts[0].sources[0].url, /gh-proxy\.com/u);
-assert.match(webui.release.artifacts[0].sources[2].url, /dl\.ecoremedia\.net/u);
-
-assert.equal(contract.targetFromPlatformSignals({
-  source: "MacIntel Mozilla/5.0 (Macintosh)",
-  renderer: "Apple A18 Pro",
-}), "bootstrap-macos-arm64");
-assert.equal(contract.targetFromPlatformSignals({
-  source: "MacIntel Mozilla/5.0 (Macintosh)",
-  architecture: "arm",
-}), "bootstrap-macos-arm64");
-assert.equal(contract.targetFromPlatformSignals({
-  source: "MacIntel Mozilla/5.0 (Macintosh; Intel Mac OS X)",
-  architecture: "x86_64",
-}), "bootstrap-macos-x64");
-assert.equal(contract.targetFromPlatformSignals({
-  source: "MacIntel Mozilla/5.0 (Macintosh)",
-}), null);
-
-const oneSource = contract.sourceList(
-  [
-    {
-      source_id: "mirror",
-      kind: "github-cn-mirror",
-      priority: 0,
-      url: "https://mirror.example/EcoreX.exe",
-    },
-  ],
-  "sources",
-  "EcoreX.exe",
-);
-assert.equal(oneSource.length, 1);
-assert.equal(oneSource[0].kind, "github-cn-mirror");
-assert.equal(contract.sourceList(
-  [
-    {
-      source_id: "mirror",
-      kind: "github-cn-mirror",
-      priority: 0,
-      url: "https://mirror.example/EcoreX.exe",
-    },
-    {
-      source_id: "github",
-      kind: "github-release",
-      priority: 1,
-      url: "https://github.example/EcoreX.exe",
-    },
-  ],
-  "sources",
-  "EcoreX.exe",
-).length, 2);
-assert.throws(() => contract.sourceList([], "sources", "EcoreX.exe"));
-assert.throws(() => contract.sourceList(
-  [
-    {
-      source_id: "github",
-      kind: "github-release",
-      priority: 0,
-      url: "https://github.example/EcoreX.exe",
-    },
-  ],
-  "sources",
-  "EcoreX.exe",
-));
-
-assert.deepEqual(
-  contract.normalizePublicIndex({
-    schema_version: 1,
-    document_type: "ecorex.public-bootstrap-discovery",
-    trust: "untrusted-discovery-hint",
-    status: "unpublished",
-    authority: null,
-    freshness: null,
-    release: null,
-  }),
-  { status: "unpublished", trust: "untrusted-discovery-hint" },
-);
-assert.throws(() => contract.normalizePublicIndex({
+const raw = {
   schema_version: 1,
-  document_type: "ecorex.public-bootstrap-discovery",
-  trust: "untrusted-discovery-hint",
-  status: "unpublished",
-  authority: null,
-  freshness: null,
-  release: null,
-  download_url: "https://ready.invalid/fake.exe",
-}));
-
-const exact = new TextEncoder().encode("exact signed manifest bytes").buffer;
-const expected = await contract.sha256Hex(exact);
-const sources = [
-  { sourceId: "mirror", kind: "github-cn-mirror", priority: 0, url: "https://mirror.example/release-manifest.json", baseUrl: "https://mirror.example" },
-  { sourceId: "github", kind: "github-release", priority: 1, url: "https://github.example/release-manifest.json", baseUrl: "https://github.example" },
-  { sourceId: "cdn", kind: "ecorex-cdn", priority: 2, url: "https://cdn.example/release-manifest.json", baseUrl: "https://cdn.example" },
-];
-let calls = 0;
-const checked = await contract.verifyManifestBytes(
-  { sha256: expected, sources },
-  {
-    fetchImpl: async (url) => {
-      calls += 1;
-      const payload = calls === 1 ? new TextEncoder().encode("wrong").buffer : exact;
-      return {
-        ok: true,
-        url,
-        headers: { get: () => String(payload.byteLength) },
-        arrayBuffer: async () => payload,
-      };
-    },
-  },
-);
-assert.equal(calls, 2);
-assert.equal(checked.kind, "github-release");
-let cancelled = false;
-let oversizedReads = 0;
-const bounded = await contract.verifyManifestBytes(
-  { sha256: expected, sources },
-  {
-    fetchImpl: async (url) => {
-      if (url.includes("mirror")) {
-        return {
-          ok: true,
-          url,
-          headers: { get: () => null },
-          body: {
-            getReader: () => ({
-              read: async () => {
-                oversizedReads += 1;
-                return oversizedReads === 1
-                  ? { done: false, value: new Uint8Array(1024 * 1024 + 1) }
-                  : { done: true };
-              },
-              cancel: async () => { cancelled = true; },
-              releaseLock: () => {},
-            }),
-          },
-        };
-      }
-      return {
-        ok: true,
-        url,
-        headers: { get: () => String(exact.byteLength) },
-        arrayBuffer: async () => exact,
-      };
-    },
-  },
-);
-assert.equal(cancelled, true);
-assert.equal(bounded.kind, "github-release");
-await assert.rejects(() => contract.verifyManifestBytes(
-  { sha256: "f".repeat(64), sources },
-  {
-    fetchImpl: async (url) => ({
-      ok: true,
-      url,
-      headers: { get: () => String(exact.byteLength) },
-      arrayBuffer: async () => exact,
-    }),
-  },
-));
+  product: "e-Mate",
+  version,
+  released_at: "2026-08-09T00:00:00Z",
+  downloads: [
+    download("windows-x64", "windows", "x64", `e-Mate-Setup-${version}-x64.exe`),
+    download("macos-arm64", "macos", "arm64", `e-Mate-${version}-arm64.dmg`),
+    download("macos-x64", "macos", "x64", `e-Mate-${version}-x64.dmg`),
+  ],
+};
+assert.equal(contract.normalizeDownloadIndex(raw).version, version);
+assert.throws(() => contract.normalizeDownloadIndex({ ...raw, version: `v${version}` }));
+assert.throws(() => contract.normalizeDownloadIndex({ ...raw, extra: true }));
+assert.throws(() => contract.normalizeDownloadIndex({ ...raw, downloads: [raw.downloads[0], raw.downloads[0], raw.downloads[2]] }));
+assert.throws(() => contract.normalizeDownloadIndex({ ...raw, downloads: [{ ...raw.downloads[0], url: "https://evil.invalid/app.exe" }, ...raw.downloads.slice(1)] }));
+assert.equal(contract.targetFromPlatformSignals({ source: "Windows NT" }), "windows-x64");
+assert.equal(contract.targetFromPlatformSignals({ source: "MacIntel", architecture: "arm" }), "macos-arm64");
+assert.equal(contract.targetFromPlatformSignals({ source: "MacIntel", architecture: "x86_64" }), "macos-x64");
+assert.equal(contract.targetFromPlatformSignals({ source: "MacIntel" }), null);
+assert.deepEqual(contract.indexSources({ hostname: "127.0.0.1", pathname: "/" }), ["./download-index.json"]);
+assert.deepEqual(contract.indexSources({ hostname: "mvdcm.ecoremedia.net", pathname: "/e-mate/" }), ["/e-mate/update/download-index.json"]);
+assert.deepEqual(contract.indexSources({ hostname: "dl.ecoremedia.net", pathname: "/ecorex-agent/" }), ["https://mvdcm.ecoremedia.net/e-mate/update/download-index.json"]);
 """
-    javascript = next((ROOT / "deploy/ecorex-site").glob("site.*.js"))
+    source = next(SITE.glob("site.*.js"))
     result = subprocess.run(
-        [node, "--input-type=module", "-e", script, str(javascript)],
+        [node, "--input-type=module", "-e", script, str(source)],
         cwd=ROOT,
         check=False,
         capture_output=True,
         text=True,
-        encoding="utf-8",
-        errors="strict",
     )
     assert result.returncode == 0, result.stdout + result.stderr

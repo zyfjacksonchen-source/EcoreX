@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createServer as createHttpServer, get as httpGet } from "node:http";
 import test from "node:test";
 
 import { createGaMockServer } from "./ga-mock-server.mjs";
+
+const PRODUCT_VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
 const MUTATION_HEADERS = {
   "Content-Type": "application/json",
@@ -165,7 +168,7 @@ test("GA harness exposes managed bootstrap, strict CSRF, state reset, and unique
   const reset = await fetch(`${harness.url}/__ga/reset?scenario=artifact`, { method: "POST" });
   assert.equal(reset.status, 200);
   const authenticated = await fetch(`${harness.url}/api/v1/bootstrap`).then((response) => response.json());
-  assert.equal(authenticated.update.current_version, "1.0.0");
+  assert.equal(authenticated.update.current_version, PRODUCT_VERSION);
   assert.equal(authenticated.login.organization_id, "org-ga");
   assert.deepEqual(authenticated.login.roles, ["member"]);
   assert.equal(authenticated.models.chat[0].model_id, "ecorex-chat");
