@@ -119,6 +119,28 @@ def test_manual_webui_macos_core_keeps_both_runtime_entries_executable() -> None
     assert builder["_core_executable_paths"]("windows") == ("bin/ecorex.exe",)
 
 
+def test_manual_webui_core_contains_exact_tracked_builtin_skills(tmp_path: Path) -> None:
+    builder = _builder()
+    core = tmp_path / "core"
+    (core / "skills").mkdir(parents=True)
+    (core / "skills" / "stale.txt").write_text("stale", encoding="utf-8")
+
+    builder["_replace_builtin_skills"](core, ROOT)
+
+    expected = {
+        path.relative_to(ROOT)
+        for path in builder["_tracked_source_files"](ROOT, "skills")
+    }
+    actual = {
+        path.relative_to(core)
+        for path in (core / "skills").rglob("*")
+        if path.is_file()
+    }
+    assert actual == expected
+    assert not (core / "skills" / "stale.txt").exists()
+    assert (core / "skills" / "office-presentations" / "SKILL.md").is_file()
+
+
 def test_manual_update_contract_is_the_only_release_authority() -> None:
     contract = (
         ROOT / "release" / "v1" / "CLI_AND_MANUAL_UPDATE_CONTRACT.md"

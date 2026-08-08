@@ -926,6 +926,10 @@ Ruff、compileall、diff check：passed
 - 平台暂存器现在把仓库内置 Skill 复制到 Core payload；产品启动必须从所选安装槽
   显式提供真实、非链接的 `payload/skills` 根。SkillRuntime 只额外允许已验签的
   `CORE_BUNDLE`，没有放宽 Pack、用户目录或任意文件来源，也没有新增第二套运行时。
+- 首次基于修复提交构建的候选通过了签名与 Bootstrap 自检，但终态包检查发现手动
+  快车道只替换旧 Core 的 `ecorex/`，没有调用平台暂存器，因而仍缺 `skills/`；该
+  候选被拒绝且未启动、未上传。唯一手动构建器现在用 Git 跟踪清单替换 Core 内的
+  整棵 Skill 树，并删除基包可能残留的旧文件，避免源码测试与交付包事实分叉。
 - 真实浏览器同时暴露 Shell 默认 120 秒与 Pack 收尾预算冲突。共享进程适配器现在
   让默认超时和显式超时统一经过既有 5 秒收尾预算；工具级失败仍由同一恢复器处理。
 - 不变 Office Pack 在 16 个候选构建中的 archive SHA 均为

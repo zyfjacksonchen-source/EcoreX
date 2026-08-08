@@ -299,9 +299,9 @@ def _load_base(
     return manifest, artifacts, publication_keys, (destination / "windows-sandbox-host.exe").read_bytes()
 
 
-def _tracked_product_files(source: Path) -> tuple[Path, ...]:
+def _tracked_source_files(source: Path, directory: str) -> tuple[Path, ...]:
     payload = _run(
-        ("git", "ls-files", "-z", "--", "ecorex"),
+        ("git", "ls-files", "-z", "--", directory),
         cwd=source,
         timeout=30,
         code="manual_webui_source_inventory_invalid",
@@ -331,7 +331,7 @@ def _replace_product_imports(archive_path: Path, source: Path) -> None:
                 if member.is_dir() or member.filename.startswith("ecorex/"):
                     continue
                 new.writestr(member, old.read(member), compresslevel=9)
-            for path in _tracked_product_files(source):
+            for path in _tracked_source_files(source, "ecorex"):
                 relative = path.relative_to(source).as_posix()
                 info = zipfile.ZipInfo(relative, FIXED_TIME)
                 info.create_system = 3
@@ -345,6 +345,16 @@ def _replace_product_imports(archive_path: Path, source: Path) -> None:
         _fail("manual_webui_product_overlay_failed")
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _replace_builtin_skills(core: Path, source: Path) -> None:
+    destination = core / "skills"
+    if destination.exists():
+        shutil.rmtree(destination)
+    for path in _tracked_source_files(source, "skills"):
+        target = core / path.relative_to(source)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
 
 
 def _runtime_config(
@@ -401,6 +411,7 @@ def _prepare_stages(
         if len(imports) != 1:
             _fail("manual_webui_pack_python_invalid")
         _replace_product_imports(imports[0], source)
+        _replace_builtin_skills(core, source)
         _runtime_config(
             core,
             platform=platform,
