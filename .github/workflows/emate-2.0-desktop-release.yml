@@ -177,6 +177,14 @@ jobs:
               check=True,
           )
           PY
+          asar_paths="$(mktemp)"
+          find desktop/release -type f \( -path '*/Resources/app.asar' -o -path '*/resources/app.asar' \) -print0 |
+            while IFS= read -r -d '' archive; do
+              "$GITHUB_WORKSPACE/desktop/node_modules/.bin/asar" list "$archive"
+            done > "$asar_paths"
+          test -s "$asar_paths"
+          python scripts/check-emate-brand.py "$asar_paths"
+          rm "$asar_paths"
 
       - name: Record artifact checksums
         run: |

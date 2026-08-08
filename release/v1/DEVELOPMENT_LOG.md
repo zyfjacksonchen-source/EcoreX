@@ -1274,7 +1274,8 @@ Python compile：passed
   parser 仍能保留 `always`、`default_enabled` 与模块需求；Skill README、创建指令
   和 Office 提示词全部使用 e-Mate/能力中心/`~/.emate`，不再向用户暴露旧产品。
 - GitHub Actions 在构建前扫描源码和 Web，在构建后再次扫描 `win-unpacked` 或
-  `.app`，任何真实旧品牌路径或内容都会阻止哈希与制品上传。
+  `.app`，并通过随 `electron-builder` 安装的 ASAR CLI 扫描内部路径；任何真实
+  旧品牌路径或内容都会阻止哈希与制品上传。
 
 本轮定向验证：
 
