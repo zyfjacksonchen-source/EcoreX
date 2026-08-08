@@ -1,5 +1,34 @@
 # e-Mate v1 stable install and update command contract
 
+## Authority and invariant
+
+This file is the sole normative source of truth for producing, publishing and
+activating an e-Mate v1 release. Other release notes, development logs, UI copy
+and operator examples are evidence or explanation only. If they disagree with
+this contract, this contract wins and the operation must fail closed.
+
+The only supported production/update fast lane is:
+
+```text
+new Core delta -> reuse unchanged Packs by SHA-256 -> upload and read back all
+immutable resources -> accept those exact bytes -> atomically switch the stable
+update pointer last
+```
+
+- A product or WebUI change builds one new Core and its signed, exact-base
+  CoreDelta. A full Core is the bounded fallback, not the first update path.
+- An unchanged Pack is never rebuilt, downloaded or installed again merely
+  because the product version changed. Its content-addressed published bytes
+  and the user's verified cache are reused. A release-scoped immutable alias
+  may be added only when an existing manifest contract requires that name.
+- Every Core, delta, Pack, sidecar, manifest and platform archive is immutable,
+  digest-checked after upload and publicly read back before acceptance.
+- The candidate used for browser acceptance is byte-identical to the candidate
+  being published. No rebuild is allowed between acceptance and activation.
+- The stable update pointer is the sole mutable publication fact and is changed
+  once, atomically, as the final operation. Until that succeeds, users continue
+  to see and run the prior known-good release.
+
 This contract freezes the v1.0.0 command surface. It deliberately does not copy
 CowAgent's source checkout, `curl | bash`, `git pull`, runtime `pip install`, or
 global proxy mutation. Those shortcuts make the user's Git, Python, package

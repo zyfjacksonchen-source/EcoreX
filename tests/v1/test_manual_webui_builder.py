@@ -117,3 +117,23 @@ def test_manual_webui_macos_core_keeps_both_runtime_entries_executable() -> None
         "bin/pack-python/bin/python3",
     )
     assert builder["_core_executable_paths"]("windows") == ("bin/ecorex.exe",)
+
+
+def test_manual_update_contract_is_the_only_release_authority() -> None:
+    contract = (
+        ROOT / "release" / "v1" / "CLI_AND_MANUAL_UPDATE_CONTRACT.md"
+    ).read_text(encoding="utf-8")
+    readme = (ROOT / "release" / "v1" / "README.md").read_text(encoding="utf-8")
+
+    for invariant in (
+        "sole normative source of truth",
+        "new Core delta -> reuse unchanged Packs by SHA-256",
+        "publicly read back before acceptance",
+        "stable update pointer is the sole mutable publication fact",
+        "as the final operation",
+    ):
+        assert invariant in contract
+    assert (
+        "sole normative production, update and manual operator source of truth"
+        in readme
+    )

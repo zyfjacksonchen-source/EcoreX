@@ -33,9 +33,12 @@ and behavioral probes. Protected runners must still provide the target native
 toolchain, locked Python profile, digest-bound production Runtime config and
 real Playwright Chromium installation. If any dependency, native build or
 behavioral probe is unavailable, the stage emits a typed failure receipt and
-the Candidate does not sign or publish anything. Core and all six required
-Packs are downloaded and activated as one verified slot; see
+the Candidate does not sign or publish anything. Core and the exact six-Pack
+set are verified and atomically projected as one slot; unchanged Pack bytes may
+come from the content-addressed verified cache rather than the network; see
 `docs/v1.0/capability-pack-platform-staging.md`.
 
-The stable WebUI-only install, update and manual operator command surface is
-defined in [CLI_AND_MANUAL_UPDATE_CONTRACT.md](CLI_AND_MANUAL_UPDATE_CONTRACT.md).
+The sole normative production, update and manual operator source of truth is
+[CLI_AND_MANUAL_UPDATE_CONTRACT.md](CLI_AND_MANUAL_UPDATE_CONTRACT.md). This
+README and every other release document are explanatory only; they cannot
+define a second publication order or mutable update authority.

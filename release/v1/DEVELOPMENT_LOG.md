@@ -431,6 +431,14 @@ python -m pytest -q -p no:cacheprovider \
 The macOS runtime probe confirmed APFS clone success, identical bytes and an
 independent destination inode.
 
+The production/update authority is now explicitly singular: the stable install
+and update command contract is the only normative fact source. It freezes the
+manual fast lane as a new signed Core delta, SHA-256 reuse of unchanged Packs,
+complete immutable-resource upload and public readback, exact-byte acceptance,
+and one final atomic stable-pointer switch. A small executable contract test
+prevents release documentation from silently reintroducing a second order or
+mutable authority.
+
 ## 2026-08-07 - side-by-side Runtime acceptance and short cutover
 
 - Added a manual blue-green acceptance lane for an authenticated local release.
