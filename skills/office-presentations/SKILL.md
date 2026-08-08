@@ -63,6 +63,7 @@ Use this skill when the user asks EcoreX to work with presentation decks: create
 ## EcoreX Adaptation
 
 - This is a user-invocable office skill and should appear under the document category in `@skill`.
+- For a new PPTX, call `skill_run` with this exact discovery ID and parameters shaped as `{"operation":"create","file_name":"deck.pptx","title":"...","slides":[{"title":"...","bullets":["..."]}]}`. The Runtime-owned Office Pack creates and structurally validates the file, then publishes the resulting Artifact; do not fall back to `pip` or an untracked shell output.
 - Preserve compatibility with existing prompts, shortcuts, and automations that mention `office-presentations`.
 - Prefer official Codex workspace dependencies for authoring and render/QA when the host exposes them; do not silently use unrelated global packages for final deck creation.
 - The `office-pdf` capability pack remains a fallback for legacy parsing/preview, but high-quality new deck creation should follow the official `Presentations` artifact-tool workflow.

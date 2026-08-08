@@ -51,6 +51,7 @@ from ecorex.capabilities import (
 )
 from ecorex.integration.dependency_pack_process import (
     PackOCRServiceAdapter,
+    PackOfficeServiceAdapter,
     VerifiedDependencyPackProcessAdapter,
 )
 from ecorex.integration.pack_python import resolve_pack_python
@@ -1169,7 +1170,7 @@ def load_product_runtime(
             cleanup.extend((ocr_process, office_process))
             pack_services = {
                 "ocr.extract": PackOCRServiceAdapter(ocr_process),
-                "office.formats": office_process,
+                "office.formats": PackOfficeServiceAdapter(office_process),
             }
         composition_stage = "device_authorization_broker"
         device_broker = device_broker_factory(device_settings)

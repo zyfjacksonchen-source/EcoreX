@@ -64,6 +64,7 @@ Use this skill when the user asks EcoreX to work with spreadsheets: Excel workbo
 ## EcoreX Adaptation
 
 - This is a user-invocable office skill and should appear under the document category in `@skill`.
+- For a new XLSX, call `skill_run` with this exact discovery ID and parameters shaped as `{"operation":"create","file_name":"workbook.xlsx","title":"...","sheets":[{"name":"Data","rows":[["Column",1]]}]}`. The Runtime-owned Office Pack creates and structurally validates the file, then publishes the resulting Artifact; do not fall back to `pip` or an untracked shell output.
 - Preserve compatibility with existing prompts, shortcuts, and automations that mention `office-spreadsheets`.
 - Prefer official Codex workspace dependencies for authoring, recalculation, render, and export QA when the host exposes them; do not silently swap to unrelated writer libraries for final workbook creation.
 - The `office-pdf` capability pack remains a fallback for legacy parsing/preview and small local edits, but high-quality workbook creation should follow the official `Spreadsheets` artifact-tool workflow.

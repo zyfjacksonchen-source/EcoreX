@@ -648,6 +648,37 @@ def test_skill_run_requires_durable_read_and_rechecks_state(tmp_path: Path) -> N
             )
         )
 
+    class NativeRunner:
+        calls = []
+
+        def supports(self, skill):
+            return skill.extension_id == "local.alpha-workflow"
+
+        async def run(self, skill, parameters, context, *, state_fence):
+            state_fence()
+            self.calls.append((skill.extension_id, parameters, context.tool_id))
+            return {"native": True}
+
+    native_runner = NativeRunner()
+    composition.skill_runtime.bind_native_runner(native_runner)
+    native_result = asyncio.run(
+        composition.capability_service.tool_call(
+            prepared.snapshot_context.capability_snapshot_id,
+            "skill_run",
+            {"discovery_id": discovery_id, "parameters": {"title": "report"}},
+            policy_snapshot_id=prepared.snapshot_context.permission_snapshot_id,
+            execution_scope=scope,
+        )
+    ).value
+    assert native_result == {
+        "schema_version": 1,
+        "discovery_id": discovery_id,
+        "result": {"native": True},
+    }
+    assert native_runner.calls == [
+        ("local.alpha-workflow", {"title": "report"}, "skill_run")
+    ]
+
     projection = service.projection("local.alpha-workflow")
     service.disable(
         projection.extension_id,

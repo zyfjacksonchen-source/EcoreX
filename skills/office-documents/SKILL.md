@@ -62,6 +62,7 @@ Use this skill when the user asks EcoreX to work with Word-style office document
 ## EcoreX Adaptation
 
 - This is a user-invocable office skill and should appear under the document category in `@skill`.
+- For a new DOCX, call `skill_run` with this exact discovery ID and parameters shaped as `{"operation":"create","file_name":"report.docx","title":"...","sections":[{"heading":"...","paragraphs":["..."]}]}`. The Runtime-owned Office Pack creates and structurally validates the file, then publishes the resulting Artifact; do not fall back to `pip` or an untracked shell output.
 - Preserve compatibility with existing prompts, shortcuts, and automations that mention `office-documents`.
 - Prefer official Codex workspace dependencies and helper scripts for DOCX creation, deterministic OOXML edits, render, comment, redline, title sanitization, and accessibility/redaction checks when the host exposes them.
 - The `office-pdf` capability pack remains a fallback for legacy parsing/preview and small local edits, but high-quality document creation should follow the official `documents` render-and-verify workflow.

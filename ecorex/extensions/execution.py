@@ -220,7 +220,13 @@ class SkillRuntime:
         self.controlled_runner = (
             controlled_runner if controlled_runner is not None else service.skill_runner
         )
+        self.native_runner: Any | None = None
         self._snapshots: dict[str, ExtensionContributionSnapshot] = {}
+
+    def bind_native_runner(self, runner: Any) -> None:
+        if self.native_runner is not None and self.native_runner is not runner:
+            raise RuntimeError("native Skill runner is already bound")
+        self.native_runner = runner
 
     def contribution_snapshot(
         self,
@@ -887,18 +893,39 @@ class _SkillRunHandler:
             hashlib.sha256(canonical_result).hexdigest(),
         ):
             raise ExtensionIntegrityError("Skill read result digest is invalid")
-        runner = self.runtime.controlled_runner
-        if runner is None:
-            raise SkillNotExecutable(
-                "Skill has no available controlled executable runner"
-            )
         bundle = await asyncio.to_thread(
             self.runtime.store.verify, skill.artifact_sha256
         )
         files = {record.path: b"" for record in bundle.files}
         if SKILL_RUNTIME_FILE not in files:
+            native_runner = self.runtime.native_runner
+            if native_runner is None or not native_runner.supports(skill):
+                raise SkillNotExecutable(
+                    "Skill has no declared controlled executable entry"
+                )
+
+            def state_fence() -> None:
+                self.runtime._assert_skill_current(snapshot_id, skill)
+
+            state_fence()
+            result = await native_runner.run(
+                skill,
+                dict(arguments.get("parameters") or {}),
+                context,
+                state_fence=state_fence,
+            )
+            state_fence()
+            if not isinstance(result, Mapping):
+                raise ExtensionIntegrityError("native Skill runner result is invalid")
+            return {
+                "schema_version": 1,
+                "discovery_id": discovery_id,
+                "result": dict(result),
+            }
+        runner = self.runtime.controlled_runner
+        if runner is None:
             raise SkillNotExecutable(
-                "Skill has no declared controlled executable entry"
+                "Skill has no available controlled executable runner"
             )
         files[SKILL_RUNTIME_FILE] = await asyncio.to_thread(
             self.runtime.store.read_verified_file,

@@ -60,6 +60,7 @@ Use this skill when the user asks EcoreX to read, summarize, extract, compare, c
 ## EcoreX Adaptation
 
 - This is a user-invocable office skill and should appear under the document category in `@skill`.
+- For a new PDF, call `skill_run` with this exact discovery ID and parameters shaped as `{"operation":"create","file_name":"report.pdf","title":"...","sections":[{"heading":"...","paragraphs":["..."]}]}`. The Runtime-owned Office Pack creates and structurally validates the file, then publishes the resulting Artifact; do not fall back to `pip` or an untracked shell output.
 - The `office-pdf` capability pack provides PDF and Office parsing modules in packaged desktop builds.
 - Preserve compatibility with existing prompts, shortcuts, and automations that mention `office-pdf`.
 - Prefer official Codex workspace dependencies for PDF extraction, generation, Poppler render, and page-level QA when the host exposes them.

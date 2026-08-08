@@ -80,6 +80,7 @@ from ecorex.integration import (
     RuntimeConnectorEventSink,
     RuntimeConnectorResultCoordinator,
     RuntimeImageToolBackend,
+    RuntimeOfficeSkillBackend,
     RuntimeRetouchBridge,
 )
 from ecorex.memory import MemoryService, create_memory_router
@@ -1874,12 +1875,23 @@ def create_app(
         enforce_admin_tool_denies=settings.enforce_admin_tool_denies,
         persist_startup_snapshots=startup_convergence_allowed,
     )
+    office_skill_backend = None
+    office_service = settings.capability_pack_services.get("office.formats")
+    if office_service is not None:
+        office_skill_backend = RuntimeOfficeSkillBackend(
+            service=office_service,
+            artifacts=artifact_service,
+            kernel=kernel,
+            account_id=settings.account_id,
+        )
+        composition.skill_runtime.bind_native_runner(office_skill_backend)
 
     app.state.runtime = kernel
     app.state.runtime_settings = settings
     app.state.runtime_bearer_token = settings.runtime_bearer_token
     app.state.csrf_token = settings.csrf_token
     app.state.runtime_composition = composition
+    app.state.office_skill_backend = office_skill_backend
     app.state.mcp_client_supervisor = composition.mcp_supervisor
     app.state.mcp_oauth_service = mcp_oauth_service
     app.state.permission_authority = permission_authority

@@ -342,6 +342,32 @@ class PackOCRServiceAdapter:
         await self.process.aclose()
 
 
+class PackOfficeServiceAdapter:
+    service_id = "office.formats"
+    contract_version = "1.0.0"
+
+    def __init__(self, process: VerifiedDependencyPackProcessAdapter) -> None:
+        self.process = process
+
+    def create(
+        self,
+        family: str,
+        payload: Mapping[str, Any],
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> Mapping[str, Any]:
+        if family not in {"document", "spreadsheet", "presentation", "pdf"}:
+            raise ValueError("Office family is unsupported")
+        return self.process.invoke(
+            "create",
+            {**dict(payload), "family": family},
+            timeout_seconds=min(30.0, max(1.0, float(timeout_seconds))),
+        )
+
+    async def aclose(self) -> None:
+        await self.process.aclose()
+
+
 def _runtime_environment() -> Mapping[str, str]:
     allowed = {"LANG", "LC_ALL", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "WINDIR"}
     result = {
@@ -439,5 +465,6 @@ def _run_bounded_process(
 __all__ = [
     "DependencyPackProcessError",
     "PackOCRServiceAdapter",
+    "PackOfficeServiceAdapter",
     "VerifiedDependencyPackProcessAdapter",
 ]

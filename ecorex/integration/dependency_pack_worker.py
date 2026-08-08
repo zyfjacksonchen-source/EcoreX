@@ -7,6 +7,7 @@ from io import BytesIO
 import json
 from pathlib import Path
 import sys
+import textwrap
 import time
 from typing import Any, Mapping
 
@@ -82,6 +83,156 @@ def _office_probe(runtime: Path) -> Mapping[str, Any]:
     }
 
 
+def _text(value: Any, *, maximum: int = 4096) -> str:
+    text = str(value or "").strip()
+    if not text or len(text.encode("utf-8")) > maximum:
+        raise ValueError("office text is invalid")
+    return text
+
+
+def _office_create(payload: Mapping[str, Any], runtime: Path) -> Mapping[str, Any]:
+    family = str(payload.get("family") or "")
+    title = _text(payload.get("title") or "e-Mate 办公产物", maximum=512)
+    body = BytesIO()
+    validation: dict[str, Any]
+
+    if family == "document":
+        import docx
+
+        _inside(docx, runtime)
+        document = docx.Document()
+        document.add_heading(title, level=0)
+        sections = payload.get("sections") or []
+        for section in sections:
+            if not isinstance(section, Mapping):
+                raise ValueError("document section is invalid")
+            heading = str(section.get("heading") or "").strip()
+            if heading:
+                document.add_heading(_text(heading, maximum=512), level=1)
+            paragraphs = section.get("paragraphs") or []
+            if not isinstance(paragraphs, list):
+                raise ValueError("document paragraphs are invalid")
+            for paragraph in paragraphs:
+                document.add_paragraph(_text(paragraph))
+        document.save(body)
+        reopened = docx.Document(BytesIO(body.getvalue()))
+        validation = {"paragraph_count": len(reopened.paragraphs)}
+        mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        extension = ".docx"
+    elif family == "spreadsheet":
+        import openpyxl
+
+        _inside(openpyxl, runtime)
+        workbook = openpyxl.Workbook()
+        workbook.remove(workbook.active)
+        sheets = payload.get("sheets") or []
+        if not isinstance(sheets, list) or not sheets:
+            raise ValueError("spreadsheet sheets are invalid")
+        for sheet_payload in sheets:
+            if not isinstance(sheet_payload, Mapping):
+                raise ValueError("spreadsheet sheet is invalid")
+            sheet = workbook.create_sheet(_text(sheet_payload.get("name"), maximum=64))
+            rows = sheet_payload.get("rows") or []
+            if not isinstance(rows, list):
+                raise ValueError("spreadsheet rows are invalid")
+            for row in rows:
+                if not isinstance(row, list):
+                    raise ValueError("spreadsheet row is invalid")
+                sheet.append(row)
+        workbook.save(body)
+        reopened = openpyxl.load_workbook(BytesIO(body.getvalue()), read_only=True)
+        validation = {"sheet_count": len(reopened.sheetnames)}
+        reopened.close()
+        mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        extension = ".xlsx"
+    elif family == "presentation":
+        import pptx
+
+        _inside(pptx, runtime)
+        presentation = pptx.Presentation()
+        slides = payload.get("slides") or []
+        if not isinstance(slides, list) or not slides:
+            raise ValueError("presentation slides are invalid")
+        for index, slide_payload in enumerate(slides):
+            if not isinstance(slide_payload, Mapping):
+                raise ValueError("presentation slide is invalid")
+            slide = presentation.slides.add_slide(
+                presentation.slide_layouts[0 if index == 0 else 1]
+            )
+            slide.shapes.title.text = _text(slide_payload.get("title"), maximum=512)
+            bullets = slide_payload.get("bullets") or []
+            if not isinstance(bullets, list):
+                raise ValueError("presentation bullets are invalid")
+            if index == 0:
+                if len(slide.placeholders) > 1:
+                    slide.placeholders[1].text = "\n".join(_text(item) for item in bullets)
+            else:
+                frame = slide.placeholders[1].text_frame
+                frame.clear()
+                for bullet_index, bullet in enumerate(bullets):
+                    paragraph = frame.paragraphs[0] if bullet_index == 0 else frame.add_paragraph()
+                    paragraph.text = _text(bullet)
+        presentation.save(body)
+        reopened = pptx.Presentation(BytesIO(body.getvalue()))
+        validation = {"slide_count": len(reopened.slides)}
+        mime_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        extension = ".pptx"
+    elif family == "pdf":
+        import pypdf
+        import reportlab
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+        from reportlab.pdfgen import canvas
+
+        for module in (pypdf, reportlab):
+            _inside(module, runtime)
+        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+        writer = canvas.Canvas(body, pagesize=A4)
+        width, height = A4
+        y = height - 64
+        writer.setFont("STSong-Light", 20)
+        writer.drawString(56, y, title)
+        y -= 36
+        writer.setFont("STSong-Light", 11)
+        for section in payload.get("sections") or []:
+            if not isinstance(section, Mapping):
+                raise ValueError("PDF section is invalid")
+            heading = str(section.get("heading") or "").strip()
+            lines = ([heading] if heading else []) + list(section.get("paragraphs") or [])
+            for value in lines:
+                for line in textwrap.wrap(_text(value), width=55, replace_whitespace=False):
+                    if y < 56:
+                        writer.showPage()
+                        writer.setFont("STSong-Light", 11)
+                        y = height - 56
+                    writer.drawString(56, y, line)
+                    y -= 18
+                y -= 6
+        writer.save()
+        reopened = pypdf.PdfReader(BytesIO(body.getvalue()))
+        validation = {"page_count": len(reopened.pages)}
+        mime_type = "application/pdf"
+        extension = ".pdf"
+    else:
+        raise ValueError("office family is unsupported")
+
+    content = body.getvalue()
+    # Base64 and the response envelope must remain under the process adapter's
+    # 8 MiB stdout boundary.
+    if not 1 <= len(content) <= 5 * 1024 * 1024:
+        raise ValueError("office output size is invalid")
+    return {
+        "provider": "python-office-formats-v1",
+        "family": family,
+        "mime_type": mime_type,
+        "extension": extension,
+        "size_bytes": len(content),
+        "content_base64": base64.b64encode(content).decode("ascii"),
+        "validation": validation,
+    }
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         return 2
@@ -102,6 +253,8 @@ def main() -> int:
             result = _ocr(payload, runtime)
         elif pack_id == "office" and operation == "probe":
             result = _office_probe(runtime)
+        elif pack_id == "office" and operation == "create":
+            result = _office_create(payload, runtime)
         else:
             return 4
         sys.stdout.write(

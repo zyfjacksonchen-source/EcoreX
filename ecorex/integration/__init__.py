@@ -32,6 +32,7 @@ from .managed_image import (
     ManagedImageOrchestrationClient,
     ManagedImageResultDescriptor,
 )
+from .office_tools import OfficeSkillError, RuntimeOfficeSkillBackend
 from .retouch import (
     RETOUCH_JOB_KIND,
     RetouchCoordinator,
@@ -83,12 +84,14 @@ __all__ = [
     "ManagedImageOrchestrationClient",
     "ManagedImageResultDescriptor",
     "ManagedImageRetouchAdapter",
+    "OfficeSkillError",
     "ImageGenerationToolHandler",
     "ImageToolError",
     "ImageToolPublicationBusy",
     "ImageToolUnavailable",
     "ImageVisionToolHandler",
     "RuntimeImageToolBackend",
+    "RuntimeOfficeSkillBackend",
     "production_pack_adapter_resolver",
     "RETOUCH_JOB_KIND",
     "RetouchAdapterError",

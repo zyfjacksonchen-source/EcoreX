@@ -19,6 +19,7 @@ from ecorex.capabilities.pack_services import builtin_pack_service_specs
 from ecorex.integration.dependency_pack_process import (
     DependencyPackProcessError,
     PackOCRServiceAdapter,
+    PackOfficeServiceAdapter,
     VerifiedDependencyPackProcessAdapter,
 )
 from ecorex.integration.pack_python import PackPythonIdentity
@@ -174,6 +175,29 @@ def test_office_native_dependency_service_is_executable_without_sys_path_polluti
         }
     finally:
         process.close()
+
+
+def test_office_service_adapter_uses_the_existing_verified_process_contract() -> None:
+    class Process:
+        call = None
+
+        def invoke(self, operation, payload, *, timeout_seconds):
+            self.call = (operation, payload, timeout_seconds)
+            return {"provider": "office"}
+
+    process = Process()
+    result = PackOfficeServiceAdapter(process).create(
+        "document",
+        {"title": "Release notes", "sections": []},
+        timeout_seconds=12.0,
+    )
+
+    assert result == {"provider": "office"}
+    assert process.call == (
+        "create",
+        {"family": "document", "title": "Release notes", "sections": []},
+        12.0,
+    )
 
 
 def test_dependency_pack_snapshot_mutation_fails_closed(tmp_path: Path) -> None:

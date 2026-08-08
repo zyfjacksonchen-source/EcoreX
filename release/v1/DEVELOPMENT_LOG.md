@@ -881,3 +881,34 @@ Core/GA/Extension Web tests：20 passed
 Office/Image Skill facade（随包 Python、无 PyYAML）：3 passed
 19 项 Core 能力并行审计：目录与本地处理器链 passed；外部服务待正式候选
 ```
+
+# 2026-08-08 — Office Skill 原生执行与 Artifact 发布接线
+
+- 没有新增第二套工具目录。四个内置 Office Skill 继续通过既有
+  `skill_search → skill_read → skill_run` 渐进披露链执行；只有精确冻结的
+  `skill.office-documents`、`skill.office-spreadsheets`、
+  `skill.office-presentations` 和 `skill.office-pdf` 修订可进入 Runtime 原生后端。
+- `office.formats` 现在由受管 Pack 适配器提供有界 `create` 操作。DOCX、XLSX、
+  PPTX 和 PDF 分别由签名 Office Pack 内的 python-docx、openpyxl、python-pptx、
+  ReportLab/pypdf 创建并重新打开做结构校验；Core 不导入 Pack 私有依赖，也不使用
+  全局 Python 或 `pip` 兜底。
+- Runtime 对输入参数、文件名、集合大小、单元格类型、MIME、文件签名、base64 和
+  5 MiB 输出上限再次校验。Pack 的 base64 响应仍受既有 8 MiB 进程 stdout 边界
+  约束。相同幂等键和相同请求只执行一次 Pack；同一幂等键若被不同请求复用会明确
+  报冲突，不会返回旧文件。
+- 生成字节通过现有 `ArtifactService` CAS、同一 Runtime 数据库事务、Artifact Item
+  和 `artifact.office.created` 事件原子发布。WebUI 仍只投影后端 Artifact 事实。
+  当前质量证据明确为“结构校验通过、视觉渲染验收未执行”，没有把 create 扩大宣传
+  为尚未实现的 edit/render/视觉 QA。
+- 四个 Skill 指令已加入精确 `skill_run.parameters` 合同，禁止模型回退到未追踪的
+  shell 文件或临时安装依赖。
+
+本轮定向验证：
+
+```text
+Skill/Pack/Artifact 定向回归：47 passed
+Ruff、compileall、diff check：passed
+真实随包依赖：DOCX 3 段、XLSX 1 表、PPTX 1 页、PDF 1 页均创建并重新打开
+幂等发布：重复请求 1 次 Pack 调用、1 个 Artifact；参数冲突 fail closed
+视觉渲染与系统 open：待正式候选浏览器验收
+```
