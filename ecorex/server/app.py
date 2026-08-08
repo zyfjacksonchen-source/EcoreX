@@ -89,6 +89,7 @@ class ProductServerSettings:
     release_manifest_path: str | Path
     web_manifest_path: str | Path
     trusted_public_keys: Mapping[str, bytes]
+    builtin_skill_root: str | Path
     host: str = "127.0.0.1"
     port: int = 8765
     platform: str = field(default_factory=platform_module.system)
@@ -193,6 +194,24 @@ class ProductServerSettings:
             raise ServerConfigurationError(
                 "at least one trusted release public key is required"
             )
+        try:
+            builtin_skill_root = Path(self.builtin_skill_root)
+            metadata = builtin_skill_root.lstat()
+            if (
+                not stat_module.S_ISDIR(metadata.st_mode)
+                or stat_module.S_ISLNK(metadata.st_mode)
+                or bool(
+                    getattr(metadata, "st_file_attributes", 0)
+                    & getattr(stat_module, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+                )
+            ):
+                raise OSError("builtin Skill root is not a real directory")
+            builtin_skill_root = builtin_skill_root.resolve(strict=True)
+        except (OSError, TypeError, ValueError):
+            raise ServerConfigurationError(
+                "built-in Skill root must be a real existing directory"
+            ) from None
+        object.__setattr__(self, "builtin_skill_root", builtin_skill_root)
         if (
             not isinstance(self.platform, str)
             or not _SAFE_ID.fullmatch(self.platform)
@@ -584,7 +603,7 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
             connector_registry=builtin_connector_registry(),
             installed_pack_ids=capability_runtime.installed_pack_ids,
             signature_verifier=Ed25519SignatureVerifier(settings.trusted_public_keys),
-            builtin_skill_root=Path(__file__).resolve().parents[2] / "skills",
+            builtin_skill_root=settings.builtin_skill_root,
             legacy_skill_roots=tuple(root / "skills" for root in settings.workspace_roots),
             skill_runner_factory=lambda store: create_production_controlled_skill_runner(
                 store,

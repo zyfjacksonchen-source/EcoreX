@@ -382,6 +382,16 @@ def _write_core(
         }
         if sandbox_helper is not None:
             entries["bin/ecorex-sandbox-host.exe"] = sandbox_helper
+        skills = Path(__file__).resolve().parents[2] / "skills"
+        entries.update(
+            {
+                f"skills/{path.relative_to(skills).as_posix()}": path.read_bytes()
+                for path in skills.rglob("*")
+                if path.is_file()
+                and "__pycache__" not in path.parts
+                and path.suffix not in {".pyc", ".pyo"}
+            }
+        )
         for name, payload in sorted(entries.items()):
             info = zipfile.ZipInfo(name)
             info.date_time = (1980, 1, 1, 0, 0, 0)

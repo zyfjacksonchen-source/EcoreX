@@ -271,9 +271,10 @@ class SkillRuntime:
             if not isinstance(revision_id, str):
                 raise ExtensionIntegrityError("active Skill has no exact revision")
             manifest = self.service.repository.manifest(revision_id)
-            if manifest.source is not ExtensionSource.LOCAL_BUNDLE:
-                # Builtin/pack Skills need their own verified static CAS adapter;
-                # they are not silently interpreted as local files.
+            if manifest.source not in {
+                ExtensionSource.LOCAL_BUNDLE,
+                ExtensionSource.CORE_BUNDLE,
+            }:
                 continue
             state_revision = item.get("revision")
             if isinstance(state_revision, bool) or not isinstance(state_revision, int):

@@ -37,6 +37,35 @@ ROOT = Path(__file__).resolve().parents[2]
 PACKS = ROOT / "release" / "capability-packs"
 
 
+def test_platform_stage_copies_builtin_skills_into_core_payload(tmp_path: Path) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    core = tmp_path / "core"
+    core.mkdir()
+
+    stager["_stage_builtin_skills"](core)
+
+    source = ROOT / "skills"
+    expected = {
+        path.relative_to(source)
+        for path in source.rglob("*")
+        if path.is_file()
+        and "__pycache__" not in path.parts
+        and path.suffix not in {".pyc", ".pyo"}
+    }
+    staged = {
+        path.relative_to(core / "skills")
+        for path in (core / "skills").rglob("*")
+        if path.is_file()
+    }
+    assert staged == expected
+    assert {
+        "office-documents",
+        "office-spreadsheets",
+        "office-presentations",
+        "office-pdf",
+    } <= {path.parent.name for path in staged if path.name == "SKILL.md"}
+
+
 def test_platform_stager_reserves_stdout_for_its_single_protocol_response() -> None:
     source = (ROOT / "platform-staging" / "stager.py").read_text(encoding="utf-8")
     tree = ast.parse(source)

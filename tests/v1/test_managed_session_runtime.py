@@ -908,6 +908,7 @@ def test_production_gateway_requires_session_and_explicit_test_override(tmp_path
             release_manifest_path=tmp_path / "release.json",
             web_manifest_path=tmp_path / "web.json",
             trusted_public_keys={"release-key": public},
+            builtin_skill_root=tmp_path,
             model_gateway=gateway,
         )
 

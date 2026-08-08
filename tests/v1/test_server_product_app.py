@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
+import shutil
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,8 +14,14 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
-from ecorex.capabilities import Exposure
+from ecorex.capabilities import (
+    Exposure,
+    SandboxLevel,
+    ToolExecutionScope,
+    ToolInvocationContext,
+)
 from ecorex.connectors import InMemoryCredentialVault
+from ecorex.extensions import SkillReadFact, SkillSearchFact
 from ecorex.integration import ImageGenerationToolHandler
 from ecorex.server import (
     BundleIntegrityError,
@@ -210,6 +218,7 @@ def _settings(
         release_manifest_path=signed["release_manifest_path"],
         web_manifest_path=signed["web_manifest_path"],
         trusted_public_keys=signed["public_keys"],
+        builtin_skill_root=Path(__file__).resolve().parents[2] / "skills",
         host="127.0.0.1",
         port=8765,
         secret_factory=secret_factory,
@@ -276,6 +285,7 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
         "vision": "verified_handler_not_installed",
     }
     specs = capability_service.registry.all()
+    assert len(specs) == 19
     handlers = set(capability_service.handlers)
     pack_bound = {spec.tool_id for spec in specs if spec.required_packs}
     assert {spec.tool_id for spec in specs} == handlers | pack_bound
@@ -337,6 +347,105 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
     assert asset.headers["cache-control"] == "public, max-age=31536000, immutable"
     assert asset.headers["x-content-type-options"] == "nosniff"
     assert asset.headers["etag"]
+
+
+def test_installed_payload_builtin_skill_search_read_run_chain(tmp_path: Path) -> None:
+    signed = _write_signed_bundle(tmp_path)
+    builtin_skill_root = tmp_path / "payload" / "skills"
+    shutil.copytree(
+        Path(__file__).resolve().parents[2] / "skills",
+        builtin_skill_root,
+    )
+    app = create_product_app(
+        replace(
+            _settings(tmp_path, signed),
+            builtin_skill_root=builtin_skill_root,
+        )
+    )
+    service = app.state.extension_service
+    runtime = app.state.runtime_composition.skill_runtime
+    snapshot = service.snapshot()
+    scope = ToolExecutionScope(
+        job_id="job-installed-skill",
+        thread_id="thread-installed-skill",
+        turn_id="turn-installed-skill",
+        execution_batch_id="batch-installed-skill",
+    )
+    context = ToolInvocationContext(
+        invocation_id="invoke-installed-skill",
+        capability_snapshot_id="cap-installed-skill",
+        policy_snapshot_id="policy-installed-skill",
+        tool_id="skill_search",
+        idempotency_key=None,
+        approved=True,
+        effective_sandbox=SandboxLevel.WORKSPACE_WRITE,
+        execution_scope=scope,
+    )
+    runtime.snapshot_resolver = lambda _scope: snapshot.snapshot_id
+    runtime.turn_intent_resolver = lambda _scope: "Use office-presentations"
+    handlers = runtime.handlers()
+
+    search_arguments = {"query": "PowerPoint", "limit": 10}
+    search = asyncio.run(handlers["skill_search"](search_arguments, context))
+    assert [item["name"] for item in search["skills"]] == ["office-presentations"]
+    discovery_id = search["skills"][0]["discovery_id"]
+    search_digest = hashlib.sha256(
+        json.dumps(
+            search,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    runtime.search_fact_resolver = lambda *_args: SkillSearchFact(
+        "search-installed-skill",
+        search_arguments,
+        search,
+        search_digest,
+    )
+
+    read_arguments = {"discovery_id": discovery_id}
+    read = asyncio.run(
+        handlers["skill_read"](
+            read_arguments,
+            replace(context, tool_id="skill_read"),
+        )
+    )
+    assert "PowerPoint" in read["instructions"]
+    read_digest = hashlib.sha256(
+        json.dumps(
+            read,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    runtime.read_fact_resolver = lambda *_args: SkillReadFact(
+        "read-installed-skill",
+        read_arguments,
+        read,
+        read_digest,
+    )
+
+    class NativeRunner:
+        def supports(self, skill) -> bool:
+            return skill.extension_id == "skill.office-presentations"
+
+        async def run(self, skill, parameters, context, *, state_fence):
+            state_fence()
+            return {"skill": skill.name, "parameters": dict(parameters)}
+
+    runtime.bind_native_runner(NativeRunner())
+    result = asyncio.run(
+        handlers["skill_run"](
+            {"discovery_id": discovery_id, "parameters": {"title": "Deck"}},
+            replace(context, tool_id="skill_run"),
+        )
+    )
+    assert result["result"] == {
+        "skill": "office-presentations",
+        "parameters": {"title": "Deck"},
+    }
 
 
 def test_acceptance_preview_is_visible_and_blocks_external_mutations(

@@ -912,3 +912,33 @@ Ruff、compileall、diff check：passed
 幂等发布：重复请求 1 次 Pack 调用、1 个 Artifact；参数冲突 fail closed
 视觉渲染与系统 open：待正式候选浏览器验收
 ```
+
+# 2026-08-08 — CowAgent Office 随包原则与安装态 Skill 链修复
+
+- 以 CowAgent `daf231d05b62364f1886398d288446ee66a93caf` 的 WebUI 桌面构建为
+  对照：其将 pypdf、python-docx、openpyxl 和 python-pptx 纳入冻结后端，并为
+  延迟导入和模板数据显式补 PyInstaller 收集规则；重型浏览器类能力仍按需安装。
+  e-Mate 采用同一产品原则，但保持更严格的模块边界：Office 格式依赖只存在于
+  不可变、签名的 Office Capability Pack，Core 与共享 `pack-python` 不复制这些库。
+- 真实 1.0.0 候选的 Office Pack 已安装且健康，格式依赖闭包完整；PPT 会话失败的
+  共同根因是安装后的 Core payload 没有 `skills/`，同时能力快照只接受
+  `LOCAL_BUNDLE`，把已经按 Core 签名根验证并写入 CAS 的 `CORE_BUNDLE` 过滤掉。
+- 平台暂存器现在把仓库内置 Skill 复制到 Core payload；产品启动必须从所选安装槽
+  显式提供真实、非链接的 `payload/skills` 根。SkillRuntime 只额外允许已验签的
+  `CORE_BUNDLE`，没有放宽 Pack、用户目录或任意文件来源，也没有新增第二套运行时。
+- 真实浏览器同时暴露 Shell 默认 120 秒与 Pack 收尾预算冲突。共享进程适配器现在
+  让默认超时和显式超时统一经过既有 5 秒收尾预算；工具级失败仍由同一恢复器处理。
+- 不变 Office Pack 在 16 个候选构建中的 archive SHA 均为
+  `43abf96da24e9d3eb73bab95a7fbcf2a33a769ec48008722df45e0200d0a875c`，
+  证明 Core-only 构建沿用确定性 Pack 字节；正式发布仍必须资源先上传并回读校验，
+  最后原子切换稳定指针。
+
+本轮定向验证：
+
+```text
+平台 Core skills staging + 安装态 skill_search/read/run + Office Artifact：6 passed
+Product 构造器 + LOCAL_BUNDLE 回归：5 passed
+Shell Pack 默认超时与真实 pwd：2 passed
+旧候选真实 PPT 会话：正确返回部分结果且未伪造文件；因 Skill 空快照拒绝发布
+新候选真实 PPT/PPTX 打开：待重新构建后验收
+```

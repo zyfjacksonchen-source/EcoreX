@@ -369,6 +369,7 @@ def _stage(request: Mapping[str, Any]) -> None:
     distributions, interpreter, interpreter_identity = _build_python_closure(
         core, platform, architecture
     )
+    _stage_builtin_skills(core)
     _install_native(native, core, platform)
     config_digest, config_services = _write_runtime_config(
         core, platform, architecture
@@ -414,6 +415,10 @@ def _stage(request: Mapping[str, Any]) -> None:
         architecture=architecture,
         evidence=evidence / "core",
     )
+
+
+def _stage_builtin_skills(core: Path) -> None:
+    _copy_tree(ROOT / "skills", core / "skills", excluded=frozenset({"__pycache__"}))
 
 
 def _build_native(platform: str, architecture: str, evidence: Path) -> Path:

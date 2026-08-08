@@ -1294,6 +1294,7 @@ def load_product_runtime(
             release_manifest_path=selected.slot_path / "release-manifest.json",
             web_manifest_path=web_manifest,
             trusted_public_keys=config.release_public_keys,
+            builtin_skill_root=payload / "skills",
             host=endpoint.host,
             port=endpoint.port,
             platform=config.identity.platform,
