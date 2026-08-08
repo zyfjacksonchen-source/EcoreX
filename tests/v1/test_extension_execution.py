@@ -206,6 +206,21 @@ def test_skill_search_read_snapshot_and_no_path_disclosure(tmp_path: Path) -> No
         f"{next(item.revision_id for item in contribution.skills if item.extension_id == 'local.other-review')}"
     )
     assert "artifact_sha256" not in json.dumps(results[0].to_dict())
+    assert [
+        item.name
+        for item in runtime.search(
+            extension_snapshot.snapshot_id,
+            "PowerPoint Office",
+        )
+    ] == ["Office review", "Other review"]
+    assert [
+        item.name
+        for item in runtime.search(
+            extension_snapshot.snapshot_id,
+            "unmatched terms",
+            explicit_names=("local.other-review",),
+        )
+    ] == ["Other review"]
 
     skill = next(item for item in contribution.skills if item.name == "Office review")
     assert len(skill.references) == 1

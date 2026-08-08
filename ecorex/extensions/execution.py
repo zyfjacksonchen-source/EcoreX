@@ -348,11 +348,11 @@ class SkillRuntime:
         if not 1 <= limit <= 50:
             raise ValueError("Skill search limit must be between 1 and 50")
         snapshot = self._snapshot(extension_snapshot_id)
-        query_tokens = _tokens(query)
+        query_tokens = tuple(dict.fromkeys(_tokens(query)))
         explicit = tuple(
             normalize_reference(value) for value in explicit_names if str(value).strip()
         )
-        ranked: list[tuple[int, str, SkillContribution]] = []
+        ranked: list[tuple[int, int, str, SkillContribution]] = []
         for skill in snapshot.skills:
             self._assert_skill_current(extension_snapshot_id, skill)
             identity = normalize_reference(skill.name)
@@ -366,13 +366,14 @@ class SkillRuntime:
                     *skill.tags,
                 )
             )
-            if query_tokens and not all(token in haystack for token in query_tokens):
+            explicit_match = identity in explicit or extension_identity in explicit
+            matched_tokens = sum(token in haystack for token in query_tokens)
+            if query_tokens and matched_tokens == 0 and not explicit_match:
                 continue
-            explicit_rank = (
-                0 if identity in explicit or extension_identity in explicit else 1
+            ranked.append(
+                (0 if explicit_match else 1, -matched_tokens, identity, skill)
             )
-            ranked.append((explicit_rank, identity, skill))
-        ranked.sort(key=lambda item: (item[0], item[1], item[2].extension_id))
+        ranked.sort(key=lambda item: (item[0], item[1], item[2], item[3].extension_id))
         return tuple(
             SkillSearchResult(
                 _skill_discovery_id(skill),
@@ -380,7 +381,7 @@ class SkillRuntime:
                 skill.description,
                 skill.tags,
             )
-            for _, _, skill in ranked[:limit]
+            for _, _, _, skill in ranked[:limit]
         )
 
     def search_projection(
