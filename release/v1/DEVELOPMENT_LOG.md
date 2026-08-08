@@ -715,3 +715,31 @@ Ruff focused check、diff check：passed
 真实上下文续接与最终回复：passed
 真实 Skill search/read/续答：passed
 ```
+
+# 2026-08-08 — 蓝绿暂存使用隔离数据库副本
+
+- 正式云候选在 `stage` 阶段稳定失败，受控诊断确认有两个共同根因：Control
+  Plane 在新 Skill Hub 种子收敛前先执行只读检查；Gateway 的单节点 SQLite
+  进程锁又被在线绿槽持有。两者都不是可重试故障，增加重试只会重复失败。
+- 暂存流程现在先停止所有非活动槽进程，再用 SQLite 原生在线备份从绿槽数据库
+  取得一致性副本。Control Plane 与 Gateway 的新版迁移、契约检查和蓝槽健康检查
+  只访问副本；Gateway 和 Image 的管理目录也统一指向同一份 Control Plane
+  副本，避免一个暂存流程出现多套管理事实。
+- Control Plane 的备份、Share spool、Skill Hub CAS 和 Bootstrap pointer 均落在
+  加密卷内的一次性目录；暂存期间关闭 Bootstrap freshness 自动发布。图片
+  PostgreSQL 只执行既有只读兼容检查，不在暂存阶段迁移在线库。
+- 无论暂存成功或失败，所有蓝槽进程都先停止，随后删除一次性副本并恢复标准
+  slot 环境；在线数据库、Nginx 路由和 active release 状态不变。路径、符号链接、
+  文件类型、设备边界、权限和环境值继续使用部署器现有的 fail-closed 约束。
+- 之前从 `20067e5` 构建的 Web 与云候选已经失效，不得发布；本修复提交后必须
+  重新生成同一提交绑定的制品、签名、SBOM 和发布收据。
+
+本轮定向验证：
+
+```text
+Cloud sidecar deployer：101 passed, 7 skipped
+云制品/部署/Control Plane/Gateway 联合切片：171 passed, 7 skipped
+SQLite 暂存失败模拟：在线源库不变、一次性副本已清理
+Ruff、compileall、diff check：passed
+生产暂存/激活：尚待新提交云制品实测
+```

@@ -27,7 +27,7 @@ import tempfile
 import time
 import urllib.request
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from ecorex import __version__
@@ -2203,7 +2203,12 @@ def _verify_nginx_wiring(spec: CloudDeploymentSpec) -> None:
         raise CloudDeployError("nginx_route_not_wired")
 
 
-def _write_slot_environment(slot: str, release: Path) -> None:
+def _write_slot_environment(
+    slot: str,
+    release: Path,
+    *,
+    overrides: Mapping[str, Mapping[str, str]] | None = None,
+) -> None:
     _prepare_slot_runtime_directory(slot)
     ports = PORTS[slot]
     values = {
@@ -2229,6 +2234,15 @@ def _write_slot_environment(slot: str, release: Path) -> None:
             "ECOREX_IMAGE_INSTANCE_ID": f"ecorex-image-worker-{slot}",
         },
     }
+    for service, environment in (overrides or {}).items():
+        if service not in values or any(
+            SAFE_ENV_NAME.fullmatch(name) is None
+            or not isinstance(value, str)
+            or any(character in value for character in "\r\n\x00")
+            for name, value in environment.items()
+        ):
+            raise CloudDeployError("slot_environment_override_invalid")
+        values[service].update(environment)
     for service, environment in values.items():
         payload = "".join(f"{name}={value}\n" for name, value in environment.items())
         _atomic_write(
@@ -2326,7 +2340,12 @@ def _run_service_command(
     )
 
 
-def _schema_gate(release: Path, slot: str) -> None:
+def _schema_gate(
+    release: Path,
+    slot: str,
+    *,
+    services: Iterable[str] = _SERVICE_MODULES,
+) -> None:
     """Apply idempotent storage migrations before legacy model import.
 
     The image provider's dynamic model configuration is authoritative in the
@@ -2335,7 +2354,7 @@ def _schema_gate(release: Path, slot: str) -> None:
     deliberately checked in the post-import contract gate below.
     """
 
-    for service in _SERVICE_MODULES:
+    for service in services:
         environment = _service_environment(service, slot)
         _run_service_command(
             _service_command(release, service, "schema", "migrate"),
@@ -2343,6 +2362,184 @@ def _schema_gate(release: Path, slot: str) -> None:
             environment=environment,
             timeout=600,
         )
+
+
+def _stage_database_snapshot(source: Path, target: Path) -> None:
+    """Take one online SQLite snapshot without acquiring the service lock."""
+
+    if (
+        not source.is_absolute()
+        or not target.is_absolute()
+        or not _is_beneath(source, ENCRYPTED_VOLUME_ROOT)
+        or not _is_beneath(target, ENCRYPTED_VOLUME_ROOT)
+        or target.exists()
+        or target.is_symlink()
+    ):
+        raise CloudDeployError("stage_database_path_invalid")
+    if not os.path.lexists(source):
+        return
+    try:
+        metadata = source.lstat()
+        parent = source.parent.lstat()
+        if (
+            source.is_symlink()
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_size <= 0
+            or getattr(metadata, "st_nlink", 1) != 1
+            or source.resolve(strict=True) != source
+            or source.parent.resolve(strict=True) != source.parent
+            or metadata.st_dev != parent.st_dev
+        ):
+            raise OSError
+        source_connection: sqlite3.Connection | None = None
+        destination_connection: sqlite3.Connection | None = None
+        try:
+            source_connection = sqlite3.connect(
+                f"{source.as_uri()}?mode=ro&nofollow=1",
+                uri=True,
+                timeout=30,
+                isolation_level=None,
+            )
+            destination_connection = sqlite3.connect(
+                str(target), timeout=30, isolation_level=None
+            )
+            source_connection.execute("PRAGMA query_only=ON")
+            source_connection.backup(destination_connection, pages=256, sleep=0.01)
+            quick = destination_connection.execute("PRAGMA quick_check").fetchone()
+            if quick != ("ok",):
+                raise sqlite3.DatabaseError
+        finally:
+            if destination_connection is not None:
+                destination_connection.close()
+            if source_connection is not None:
+                source_connection.close()
+        shutil.chown(target, user="ecorex-cloud", group="ecorex-cloud")
+        os.chmod(target, 0o600)
+        with target.open("rb") as stream:
+            os.fsync(stream.fileno())
+        _fsync_directory(target.parent)
+    except (OSError, sqlite3.Error):
+        for suffix in ("", "-wal", "-shm"):
+            with contextlib.suppress(OSError):
+                Path(str(target) + suffix).unlink()
+        raise CloudDeployError("stage_database_snapshot_failed") from None
+
+
+def _new_stage_directory(database: Path, *, prefix: str) -> Path:
+    root = database.parent / ".ecorex-cloud-stage"
+    if not _is_beneath(root, ENCRYPTED_VOLUME_ROOT):
+        raise CloudDeployError("stage_database_path_invalid")
+    directory: Path | None = None
+    try:
+        parent_metadata = database.parent.lstat()
+        if (
+            database.parent.is_symlink()
+            or not stat.S_ISDIR(parent_metadata.st_mode)
+            or database.parent.resolve(strict=True) != database.parent
+        ):
+            raise OSError
+        root.mkdir(exist_ok=True, mode=0o700)
+        metadata = root.lstat()
+        if (
+            root.is_symlink()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or root.resolve(strict=True) != root
+            or metadata.st_dev != parent_metadata.st_dev
+        ):
+            raise OSError
+        shutil.chown(root, user="ecorex-cloud", group="ecorex-cloud")
+        os.chmod(root, 0o700)
+        directory = Path(tempfile.mkdtemp(prefix=prefix, dir=root))
+        directory_metadata = directory.lstat()
+        if (
+            directory.is_symlink()
+            or not stat.S_ISDIR(directory_metadata.st_mode)
+            or directory.resolve(strict=True) != directory
+            or directory_metadata.st_dev != metadata.st_dev
+        ):
+            raise OSError
+        shutil.chown(directory, user="ecorex-cloud", group="ecorex-cloud")
+        os.chmod(directory, 0o700)
+        _fsync_directory(root)
+        return directory
+    except OSError:
+        if directory is not None:
+            shutil.rmtree(directory, ignore_errors=True)
+        raise CloudDeployError("stage_database_directory_invalid") from None
+
+
+def _remove_stage_directory(directory: Path) -> None:
+    root = directory.parent
+    try:
+        metadata = directory.lstat()
+        if (
+            directory.is_symlink()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or directory.resolve(strict=True) != directory
+            or not _is_beneath(directory, root)
+            or root.name != ".ecorex-cloud-stage"
+        ):
+            raise OSError
+        shutil.rmtree(directory)
+        _fsync_directory(root)
+    except FileNotFoundError:
+        return
+    except OSError:
+        raise CloudDeployError("stage_database_cleanup_failed") from None
+
+
+@contextlib.contextmanager
+def _isolated_stage_environment(
+    slot: str,
+) -> Iterator[Mapping[str, Mapping[str, str]]]:
+    """Route inactive services to disposable SQLite copies during staging."""
+
+    control_environment = _service_environment("control-plane", slot)
+    gateway_environment = _service_environment("gateway", slot)
+    try:
+        control_source = Path(control_environment["ECOREX_CP_DATABASE_PATH"])
+        gateway_source = Path(gateway_environment["ECOREX_GATEWAY_DATABASE_PATH"])
+    except KeyError:
+        raise CloudDeployError("stage_database_configuration_invalid") from None
+    directories: list[Path] = []
+    try:
+        control_directory = _new_stage_directory(
+            control_source, prefix=f"{slot}-control-plane-"
+        )
+        directories.append(control_directory)
+        gateway_directory = _new_stage_directory(
+            gateway_source, prefix=f"{slot}-gateway-"
+        )
+        directories.append(gateway_directory)
+        control_target = control_directory / "control-plane.sqlite3"
+        gateway_target = gateway_directory / "gateway.sqlite3"
+        _stage_database_snapshot(control_source, control_target)
+        _stage_database_snapshot(gateway_source, gateway_target)
+        control_path = str(control_target)
+        yield {
+            "control-plane": {
+                "ECOREX_CP_DATABASE_PATH": control_path,
+                "ECOREX_CP_BACKUP_DIRECTORY": str(control_directory / "backups"),
+                "ECOREX_CP_SHARE_SPOOL_DIRECTORY": str(control_directory / "share-spool"),
+                "ECOREX_CP_PUBLIC_BOOTSTRAP_INDEX_PATH": str(
+                    control_directory / "public" / "public-bootstrap-index.json"
+                ),
+                "ECOREX_CP_BOOTSTRAP_FRESHNESS_AUTOMATION_ENABLED": "false",
+            },
+            "gateway": {
+                "ECOREX_GATEWAY_DATABASE_PATH": str(gateway_target),
+                "ECOREX_GATEWAY_ADMIN_MANAGEMENT_DATABASE_PATH": control_path,
+            },
+            "image": {
+                "ECOREX_IMAGE_ADMIN_MANAGEMENT_DATABASE_PATH": control_path,
+            },
+            "image-worker": {
+                "ECOREX_IMAGE_ADMIN_MANAGEMENT_DATABASE_PATH": control_path,
+            },
+        }
+    finally:
+        for directory in reversed(directories):
+            _remove_stage_directory(directory)
 
 
 def _production_contract_gate(release: Path, slot: str) -> None:
@@ -3410,16 +3607,27 @@ def stage(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, Any]:
         _write_slot_environment(target, release)
         _verify_staged_runtime(release)
         _verify_nginx_wiring(spec)
-        _recovery_schema_check(release, target, source=False)
         api_units = _slot_api_units(target)
-        _systemctl(spec, "stop", reversed(api_units))
+        target_units = _slot_units(target)
+        _systemctl(spec, "stop", reversed(target_units))
         try:
-            _prepare_slot_runtime_directory(target)
-            _systemctl(spec, "start", api_units)
-            _wait_api_health(spec, target)
-            _systemctl(spec, "is-active", api_units)
+            with _isolated_stage_environment(target) as overrides:
+                _write_slot_environment(target, release, overrides=overrides)
+                try:
+                    _schema_gate(
+                        release,
+                        target,
+                        services=("control-plane", "gateway"),
+                    )
+                    _recovery_schema_check(release, target, source=False)
+                    _prepare_slot_runtime_directory(target)
+                    _systemctl(spec, "start", api_units)
+                    _wait_api_health(spec, target)
+                    _systemctl(spec, "is-active", api_units)
+                finally:
+                    _systemctl(spec, "stop", reversed(target_units))
         finally:
-            _systemctl(spec, "stop", reversed(api_units))
+            _write_slot_environment(target, release)
         return {
             "schema_version": SCHEMA_VERSION,
             "status": "staged",

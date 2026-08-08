@@ -1805,11 +1805,30 @@ def test_stage_health_checks_inactive_slot_without_switching_routes(
     monkeypatch.setattr(deployment, "_validate_legacy_migration_plan", lambda *_args: None)
     monkeypatch.setattr(deployment, "_install_release", lambda *_args: release)
     monkeypatch.setattr(deployment, "_install_deployment_templates", lambda *_args: None)
-    monkeypatch.setattr(deployment, "_write_slot_environment", lambda *_args: None)
+    monkeypatch.setattr(
+        deployment, "_write_slot_environment", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(deployment, "_verify_staged_runtime", lambda *_args: None)
     monkeypatch.setattr(deployment, "_verify_nginx_wiring", lambda *_args: None)
+    monkeypatch.setattr(
+        deployment,
+        "_isolated_stage_environment",
+        lambda _slot: deployment.contextlib.nullcontext(
+            {"control-plane": {"ECOREX_CP_DATABASE_PATH": "/stage/control.sqlite3"}}
+        ),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_schema_gate",
+        lambda _release, _slot, *, services: events.append(
+            ("migrate", tuple(services))
+        ),
+    )
     monkeypatch.setattr(deployment, "_recovery_schema_check", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(deployment, "_slot_api_units", lambda _slot: ("api-a", "api-b"))
+    monkeypatch.setattr(
+        deployment, "_slot_units", lambda _slot: ("api-a", "api-b", "worker")
+    )
     monkeypatch.setattr(deployment, "_prepare_slot_runtime_directory", lambda *_args: None)
     monkeypatch.setattr(
         deployment,
@@ -1834,12 +1853,71 @@ def test_stage_health_checks_inactive_slot_without_switching_routes(
     assert receipt["active_release_id"] == prior["active_release_id"]
     assert receipt["live_routes_changed"] is False
     assert events == [
-        ("stop", ("api-b", "api-a")),
+        ("stop", ("worker", "api-b", "api-a")),
+        ("migrate", ("control-plane", "gateway")),
         ("start", ("api-a", "api-b")),
         ("health", "green"),
         ("is-active", ("api-a", "api-b")),
-        ("stop", ("api-b", "api-a")),
+        ("stop", ("worker", "api-b", "api-a")),
     ]
+
+
+def test_stage_environment_clones_sqlite_and_removes_disposable_copies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    control = tmp_path / "control-plane" / "live.sqlite3"
+    gateway = tmp_path / "gateway" / "live.sqlite3"
+    for database, value in ((control, "control"), (gateway, "gateway")):
+        database.parent.mkdir()
+        with deployment.sqlite3.connect(database) as connection:
+            connection.execute("CREATE TABLE records(value TEXT NOT NULL)")
+            connection.execute("INSERT INTO records VALUES(?)", (value,))
+
+    monkeypatch.setattr(deployment, "ENCRYPTED_VOLUME_ROOT", tmp_path)
+    monkeypatch.setattr(deployment.shutil, "chown", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(deployment, "_fsync_directory", lambda _path: None)
+    monkeypatch.setattr(
+        deployment,
+        "_service_environment",
+        lambda service, _slot: {
+            "ECOREX_CP_DATABASE_PATH": str(control),
+        }
+        if service == "control-plane"
+        else {"ECOREX_GATEWAY_DATABASE_PATH": str(gateway)},
+    )
+
+    staged_directories: tuple[Path, Path]
+    with pytest.raises(RuntimeError, match="simulated stage failure"):
+        with deployment._isolated_stage_environment("blue") as overrides:
+            staged_control = Path(
+                overrides["control-plane"]["ECOREX_CP_DATABASE_PATH"]
+            )
+            staged_gateway = Path(
+                overrides["gateway"]["ECOREX_GATEWAY_DATABASE_PATH"]
+            )
+            staged_directories = staged_control.parent, staged_gateway.parent
+            assert overrides["gateway"][
+                "ECOREX_GATEWAY_ADMIN_MANAGEMENT_DATABASE_PATH"
+            ] == str(staged_control)
+            assert overrides["image"][
+                "ECOREX_IMAGE_ADMIN_MANAGEMENT_DATABASE_PATH"
+            ] == str(staged_control)
+            with deployment.sqlite3.connect(staged_control) as connection:
+                assert connection.execute("SELECT value FROM records").fetchone() == (
+                    "control",
+                )
+                connection.execute("INSERT INTO records VALUES('stage-only')")
+            with deployment.sqlite3.connect(staged_gateway) as connection:
+                assert connection.execute("SELECT value FROM records").fetchone() == (
+                    "gateway",
+                )
+            with deployment.sqlite3.connect(control) as connection:
+                assert connection.execute("SELECT COUNT(*) FROM records").fetchone() == (
+                    1,
+                )
+            raise RuntimeError("simulated stage failure")
+
+    assert all(not directory.exists() for directory in staged_directories)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires production-style symlinks")
