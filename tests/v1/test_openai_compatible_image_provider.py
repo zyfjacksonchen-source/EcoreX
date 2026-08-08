@@ -204,6 +204,8 @@ def test_pro_model_falls_back_once_only_after_definite_model_unavailable() -> No
             idempotency_key="provider-idempotency-0001",
         )
         assert result.state is ProviderState.COMPLETED
+        assert result.usage is not None
+        assert result.usage.model_id == "gpt-image-2"
         assert [json.loads(request.content)["model"] for request in requests] == [
             "gpt-image-2-pro",
             "gpt-image-2",

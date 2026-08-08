@@ -634,7 +634,7 @@ def test_image_workflow_guidance_is_frozen_injected_and_cached(tmp_path) -> None
                     "response_id": "resp_image_invalid",
                     "tool_call_id": "call_image_invalid",
                     "tool_name": "imagegen",
-                    "arguments": {},
+                    "arguments": {"tasks": []},
                 }
             ],
             [
@@ -763,6 +763,10 @@ def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> No
     assert gateway.requests[0].model_policy.reasoning_effort == "max"
     assert gateway.requests[0].instructions is not None
     assert "Always identify yourself as 小芯" in gateway.requests[0].instructions
+    assert "我是智能体小芯，来自 e-Mate Agent" in gateway.requests[0].instructions
+    assert "professional and rigorous" in gateway.requests[0].instructions
+    assert "Address the user as 同学" in gateway.requests[0].instructions
+    assert "capabilities actually available" in gateway.requests[0].instructions
     assert "blindly repeating the same call" in gateway.requests[0].instructions
     assert (
         "tool_search discovers deferred tools only" in gateway.requests[0].instructions

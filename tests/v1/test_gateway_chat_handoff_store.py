@@ -196,3 +196,80 @@ def test_corrupt_handoff_is_quarantined_without_breaking_other_requests(tmp_path
 
     unrelated = request("unrelated-request")
     assert store.reserve(unrelated, principal(), lease_seconds=60).mode == "execute"
+
+
+def test_tenant_model_attempt_and_terminal_are_immutable_audit_facts(tmp_path) -> None:
+    database = tmp_path / "gateway.sqlite3"
+    GatewaySchemaManager(database).migrate()
+    store = SQLiteGatewayStore(database)
+    tenant = GatewayPrincipal(
+        subject="member-1",
+        account_id="account-1",
+        organization_id="organization-1",
+        allowed_model_ids=frozenset({MODEL_ID}),
+        quota_period="2026-07",
+        request_limit=20,
+    )
+    body = request("audited-request").model_copy(
+        update={
+            "model_policy": ecorex_chat_gateway_policy(MODEL_ID).model_copy(
+                update={"reasoning_effort": "max"}
+            )
+        }
+    )
+    reservation = store.reserve(body, tenant, lease_seconds=60)
+    assert reservation.lease_token
+    store.bind_model_attempt(
+        body,
+        config_id="model-luna",
+        config_revision=9,
+        upstream_model_id="gpt-5.6-luna",
+        provider_protocol="responses",
+        provider_origin_preset="ecorex_chat",
+        ttl_seconds=300,
+    )
+    terminal = GatewayEvent(
+        seq=1,
+        event_type=GatewayEventType.RESPONSE_FAILED,
+        response_id="response-audited",
+        error_code="provider_rejected",
+        error_message="The managed model provider rejected the request.",
+    )
+    store.append_terminal(body.request_id, reservation.lease_token, terminal)
+
+    with sqlite3.connect(database) as connection:
+        request_fact = connection.execute(
+            "SELECT organization_id,terminal_event_type FROM gateway_requests "
+            "WHERE request_id=?",
+            (body.request_id,),
+        ).fetchone()
+        attempt_fact = connection.execute(
+            "SELECT organization_id,thread_id,turn_id,upstream_model_id,"
+            "reasoning_effort FROM gateway_model_attempts WHERE request_id=?",
+            (body.request_id,),
+        ).fetchone()
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            connection.execute(
+                "UPDATE gateway_model_attempts SET reasoning_effort='medium' "
+                "WHERE request_id=?",
+                (body.request_id,),
+            )
+
+    assert request_fact == ("organization-1", GatewayEventType.RESPONSE_FAILED.value)
+    assert attempt_fact == (
+        "organization-1",
+        "thread-1",
+        "turn-1",
+        "gpt-5.6-luna",
+        "max",
+    )
+    changed_tenant = GatewayPrincipal(
+        subject=tenant.subject,
+        account_id=tenant.account_id,
+        organization_id="organization-2",
+        allowed_model_ids=tenant.allowed_model_ids,
+        quota_period=tenant.quota_period,
+        request_limit=tenant.request_limit,
+    )
+    with pytest.raises(GatewayRequestConflict, match="different input"):
+        store.reserve(body, changed_tenant, lease_seconds=60)

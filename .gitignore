@@ -45,6 +45,7 @@ ref/
 .cursor/
 local/
 node_modules/
+desktop/node_modules
 desktop/dist/
 desktop/dist-electron/
 desktop/.vite/
@@ -52,6 +53,7 @@ desktop/.runtime-cache/
 desktop/release/
 desktop/release-local*/
 desktop/release-unsigned-v*/
+desktop/runtime-bundle/
 desktop/runtime/
 deploy/ecorex-site/downloads/
 release-artifacts/
@@ -60,5 +62,9 @@ tmp/ecorex-ui-smoke/
 # cow cli
 dist/
 build/
+!desktop/build/
+desktop/build/*
+!desktop/build/icon.icns
+!desktop/build/icon.ico
 *.egg-info/
 .cow.pid

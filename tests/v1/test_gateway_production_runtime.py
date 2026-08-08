@@ -71,6 +71,7 @@ def _jwt(
     *,
     models: list[str] | None = None,
     account_id: str = "account-1",
+    organization_id: str | None = None,
 ) -> str:
     now = datetime.now(UTC)
     header = {"alg": "EdDSA", "kid": "gateway-key", "typ": "JWT"}
@@ -90,6 +91,8 @@ def _jwt(
     }
     if models is not None:
         claims["allowed_model_ids"] = models
+    if organization_id is not None:
+        claims["organization_id"] = organization_id
     encoded_header = _b64url(
         json.dumps(header, sort_keys=True, separators=(",", ":")).encode()
     )
@@ -266,7 +269,11 @@ class FakeProviderFactory:
 
 def test_shared_verifier_projects_typed_entitlements_and_gateway_requires_them() -> None:
     private, _encoded, public = _key()
-    token = _jwt(private, models=["ecorex-chat", "image-2"])
+    token = _jwt(
+        private,
+        models=["ecorex-chat", "image-2"],
+        organization_id="organization-1",
+    )
     verifier = Ed25519AccessTokenVerifier(
         {"gateway-key": public},
         issuer="https://identity.ecorex.invalid",
@@ -287,6 +294,7 @@ def test_shared_verifier_projects_typed_entitlements_and_gateway_requires_them()
     )
     principal = authenticator.authenticate(token)
     assert principal.allowed_model_ids == frozenset({"ecorex-chat"})
+    assert principal.organization_id == "organization-1"
     with pytest.raises(PermissionError):
         authenticator.authenticate(_jwt(private, models=None))
     with pytest.raises(PermissionError):

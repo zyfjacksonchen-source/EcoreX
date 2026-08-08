@@ -1,11 +1,13 @@
-"""Packaged EcoreX v1 Product Runtime command line."""
+"""Packaged e-Mate Enterprise Product Runtime command line."""
 
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import IntEnum
+import os
+from pathlib import Path
 import sys
 import zoneinfo
 
@@ -16,6 +18,11 @@ from ecorex.observability.audit import AuditIntegrityError
 from ecorex.observability.recovery import (
     is_unreadable_observability_error,
     quarantine_unreadable_observability,
+)
+from ecorex.migration import (
+    LegacyDesktopDataMigrationError,
+    default_emate_data_root,
+    migrate_legacy_desktop_data,
 )
 from ecorex.session import ManagedSessionError
 from ecorex.startup_diagnostics import write_runtime_startup_diagnostic
@@ -65,7 +72,7 @@ def _load_product_runtime_for_cli(**kwargs) -> ProductRuntimeComposition:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = _Parser(prog="ecorex", add_help=True)
+    parser = _Parser(prog="emate", add_help=True)
     commands = parser.add_subparsers(dest="command", required=True)
     serve = commands.add_parser(
         "serve",
@@ -86,6 +93,7 @@ def build_product_runtime_server(
     port: int,
     runtime_loader: Callable[..., ProductRuntimeComposition] = _load_product_runtime_for_cli,
 ) -> ProductRuntimeServer:
+    _migrate_desktop_legacy_data()
     # The native launcher uses Python isolated mode, which intentionally
     # ignores PYTHON* environment variables. Reset the process authority
     # explicitly so Windows and macOS both resolve named zones from the
@@ -176,6 +184,29 @@ def build_product_runtime_server(
     )
 
 
+def _migrate_desktop_legacy_data(
+    environment: Mapping[str, str] | None = None,
+) -> None:
+    values = os.environ if environment is None else environment
+    if values.get("EMATE_DESKTOP") != "1":
+        return
+    raw_target = values.get("EMATE_DATA_DIR")
+    try:
+        target = (
+            Path(raw_target).expanduser() if raw_target else default_emate_data_root()
+        )
+        if not target.is_absolute():
+            raise LegacyDesktopDataMigrationError(
+                "e-Mate desktop data root must be absolute"
+            )
+        migrate_legacy_desktop_data(target)
+    except (LegacyDesktopDataMigrationError, OSError):
+        raise ProductRuntimeConfigurationError(
+            "Product Runtime legacy desktop data migration failed",
+            stage_code="legacy_desktop_data_migration",
+        ) from None
+
+
 def _create_runtime_app(
     composition: ProductRuntimeComposition | ActivationProbeComposition,
 ) -> FastAPI:
@@ -193,7 +224,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command != "serve":
         # argparse currently makes this unreachable; keep the boundary closed
         # if commands are added without a product implementation later.
-        print("EcoreX Product Runtime command is unsupported.", file=sys.stderr)
+        print("e-Mate Product Runtime command is unsupported.", file=sys.stderr)
         return int(ProductRuntimeExitCode.CONFIGURATION)
     try:
         server = build_product_runtime_server(host=args.host, port=args.port)
@@ -201,29 +232,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         return int(ProductRuntimeExitCode.SUCCESS)
     except (ProductRuntimeTrustError, BundleIntegrityError):
         write_runtime_startup_diagnostic("trust_boundary")
-        print("EcoreX refused an untrusted Product Runtime slot.", file=sys.stderr)
+        print("e-Mate refused an untrusted Product Runtime slot.", file=sys.stderr)
         return int(ProductRuntimeExitCode.TRUST_FAILURE)
     except ManagedSessionError:
         write_runtime_startup_diagnostic("managed_session")
-        print("EcoreX Product Runtime configuration is invalid.", file=sys.stderr)
-        print("EcoreX startup stage: managed_session", file=sys.stderr)
+        print("e-Mate Product Runtime configuration is invalid.", file=sys.stderr)
+        print("e-Mate startup stage: managed_session", file=sys.stderr)
         return int(ProductRuntimeExitCode.CONFIGURATION)
     except ProductRuntimeConfigurationError as exc:
         stage = exc.stage_code or "configuration"
         write_runtime_startup_diagnostic(stage)
-        print("EcoreX Product Runtime configuration is invalid.", file=sys.stderr)
+        print("e-Mate Product Runtime configuration is invalid.", file=sys.stderr)
         # Only a validated fixed stage code crosses the process boundary; the
         # error message and native cause remain private because providers may
         # include credentials or paths in exception text.
         print(
-            f"EcoreX startup stage: {stage}",
+            f"e-Mate startup stage: {stage}",
             file=sys.stderr,
         )
         return int(ProductRuntimeExitCode.CONFIGURATION)
     except (ServerConfigurationError, ValueError):
         write_runtime_startup_diagnostic("server_configuration")
-        print("EcoreX Product Runtime configuration is invalid.", file=sys.stderr)
-        print("EcoreX startup stage: server_configuration", file=sys.stderr)
+        print("e-Mate Product Runtime configuration is invalid.", file=sys.stderr)
+        print("e-Mate startup stage: server_configuration", file=sys.stderr)
         return int(ProductRuntimeExitCode.CONFIGURATION)
     except KeyboardInterrupt:
         return 130
@@ -232,14 +263,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         # remaining Uvicorn SystemExit is the native listener boundary (most
         # commonly an occupied port), not an unknown application crash.
         write_runtime_startup_diagnostic("http_server_bind")
-        print("EcoreX Product Runtime configuration is invalid.", file=sys.stderr)
-        print("EcoreX startup stage: http_server_bind", file=sys.stderr)
+        print("e-Mate Product Runtime configuration is invalid.", file=sys.stderr)
+        print("e-Mate startup stage: http_server_bind", file=sys.stderr)
         return int(ProductRuntimeExitCode.CONFIGURATION)
     except Exception:
         write_runtime_startup_diagnostic("software")
         # Do not render exception values: transports and platform vaults may
         # include sensitive implementation details in their native errors.
-        print("EcoreX Product Runtime could not start.", file=sys.stderr)
+        print("e-Mate Product Runtime could not start.", file=sys.stderr)
         return int(ProductRuntimeExitCode.SOFTWARE)
 
 

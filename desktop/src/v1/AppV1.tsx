@@ -3,7 +3,6 @@ import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   AlertCircle,
   ArchiveRestore,
-  Bell,
   Copy,
   Ellipsis,
   Folder,
@@ -130,6 +129,16 @@ function useMediaMatch(query: string): boolean {
 }
 
 const DISMISSED_UPDATE_BANNERS_KEY = "ecorex-dismissed-update-banners";
+const PROFILE_AVATAR_KEY = "emate-profile-avatar";
+const DESKTOP_THREAD_ID = /^thr_[A-Za-z0-9._:-]{1,252}$/u;
+
+declare global {
+  interface Window {
+    eMateDesktop?: {
+      onOpenThread?: (callback: (threadId: string) => void) => () => void;
+    };
+  }
+}
 
 function initialDismissedUpdateBanners(): string[] {
   try {
@@ -139,6 +148,17 @@ function initialDismissedUpdateBanners(): string[] {
       : [];
   } catch {
     return [];
+  }
+}
+
+function initialProfileAvatar(): string | null {
+  try {
+    const value = window.localStorage.getItem(PROFILE_AVATAR_KEY);
+    return value && /^data:image\/(?:png|jpeg|webp);base64,/u.test(value) && value.length <= 700_000
+      ? value
+      : null;
+  } catch {
+    return null;
   }
 }
 
@@ -156,7 +176,9 @@ export function AppV1() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsReturnFocusRef = useRef<HTMLElement | null>(null);
   const [skillsOpen, setSkillsOpen] = useState(false);
-  const [creativeOpen, setCreativeOpen] = useState(false);
+  const [schedulesOpen, setSchedulesOpen] = useState(false);
+  const [openChannelsKey, setOpenChannelsKey] = useState(0);
+  const [profileAvatar, setProfileAvatar] = useState(initialProfileAvatar);
   const [shareOpen, setShareOpen] = useState(false);
   const shareReturnFocusRef = useRef<HTMLElement | null>(null);
   const [replayOpen, setReplayOpen] = useState(false);
@@ -171,6 +193,27 @@ export function AppV1() {
   );
   const [composerPrefill, setComposerPrefill] = useState<{ key: string; text: string } | null>(null);
   const [composerDraft, setComposerDraft] = useState("");
+
+  useEffect(() => window.eMateDesktop?.onOpenThread?.((threadId) => {
+    if (!DESKTOP_THREAD_ID.test(threadId)) return;
+    void runtime.openThread(threadId).then((opened) => {
+      if (!opened) return;
+      setSkillsOpen(false);
+      setSchedulesOpen(false);
+      setSettingsOpen(false);
+      setSidebarOpen(false);
+    });
+  }), [runtime.openThread]);
+
+  const updateProfileAvatar = (value: string | null) => {
+    setProfileAvatar(value);
+    try {
+      if (value) window.localStorage.setItem(PROFILE_AVATAR_KEY, value);
+      else window.localStorage.removeItem(PROFILE_AVATAR_KEY);
+    } catch {
+      // The selected avatar remains active for this session if storage is unavailable.
+    }
+  };
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -579,6 +622,13 @@ export function AppV1() {
           warmFeature(loadSettingsDialog);
           setSettingsOpen(true);
         }}
+        onOpenConnections={() => {
+          warmFeature(loadSkillsWorkspace);
+          setSettingsOpen(false);
+          setSchedulesOpen(false);
+          setOpenChannelsKey((value) => value + 1);
+          setSkillsOpen(true);
+        }}
         onSend={runtime.sendMessage}
         onRefreshCapabilityMentions={() => runtime.refreshCapabilityMentions()}
         onUploadAttachment={runtime.uploadInputAttachment}
@@ -609,15 +659,17 @@ export function AppV1() {
           mutationKey={runtime.threadMutationKey}
           authenticated={Boolean(bootstrap?.login.authenticated)}
           accountDisplayName={bootstrap?.login.display_name ?? null}
+          profileAvatar={profileAvatar}
           skillsActive={skillsOpen}
-          creativeActive={creativeOpen}
-          homeActive={isNewConversation && !skillsOpen && !creativeOpen}
+          schedulesActive={schedulesOpen}
+          homeActive={isNewConversation && !skillsOpen && !schedulesOpen}
           sessionBusy={runtime.sessionBusy}
           sessionError={runtime.sessionError}
           onClose={() => setSidebarOpen(false)}
           onNewTask={(project) => {
             setSkillsOpen(false);
-            setCreativeOpen(false);
+            setSchedulesOpen(false);
+            setSettingsOpen(false);
             runtime.newTask(project ?? null);
             setSidebarOpen(false);
           }}
@@ -627,7 +679,8 @@ export function AppV1() {
             const opened = await runtime.openThread(threadId);
             if (opened) {
               setSkillsOpen(false);
-              setCreativeOpen(false);
+              setSchedulesOpen(false);
+              setSettingsOpen(false);
               setSidebarOpen(false);
             }
             return opened;
@@ -635,12 +688,14 @@ export function AppV1() {
           onOpenSkills={() => {
             warmFeature(loadSkillsWorkspace);
             setSkillsOpen(true);
-            setCreativeOpen(false);
+            setSchedulesOpen(false);
+            setSettingsOpen(false);
             setSidebarOpen(false);
           }}
-          onOpenCreative={() => {
+          onOpenSchedules={() => {
             setSkillsOpen(false);
-            setCreativeOpen(true);
+            setSettingsOpen(false);
+            setSchedulesOpen(true);
             setSidebarOpen(false);
           }}
           onRenameThread={runtime.renameThread}
@@ -654,6 +709,8 @@ export function AppV1() {
           onOpenSettings={() => {
             captureFeatureTrigger(settingsReturnFocusRef);
             warmFeature(loadSettingsDialog);
+            setSkillsOpen(false);
+            setSchedulesOpen(false);
             setSettingsOpen(true);
             setSidebarOpen(false);
           }}
@@ -672,10 +729,11 @@ export function AppV1() {
           />
         ) : null}
 
-        <main className={`ex-workspace${skillsOpen ? " is-skills" : ""}${isNewConversation || creativeOpen ? " is-home" : ""}`} inert={sidebarOpen && mobileNavigation ? true : undefined}>
+        <main className={`ex-workspace${skillsOpen ? " is-skills" : ""}${isNewConversation || schedulesOpen ? " is-home" : ""}`} inert={sidebarOpen && mobileNavigation ? true : undefined}>
           {skillsOpen ? (
             <Suspense fallback={<section className="ex-skills-loading" role="status">正在打开技能…</section>}>
               <SkillsWorkspace
+                openChannelsKey={openChannelsKey}
                 connectorRuntime={{
                   catalog: runtime.connectorCatalog,
                   loadState: runtime.connectorCatalogState,
@@ -747,15 +805,12 @@ export function AppV1() {
             </div>
 
             <div className="ex-header-actions">
-              {isNewConversation || creativeOpen ? (
-                <>
-                  <span
-                    className={`ex-home-runtime-dot is-${connected ? "online" : "retrying"}`}
-                    aria-label={connected ? "运行时已连接" : "运行时正在重连"}
-                    role="status"
-                  />
-                  <IconButton label="通知"><Bell aria-hidden="true" /></IconButton>
-                </>
+              {isNewConversation || schedulesOpen ? (
+                <span
+                  className={`ex-home-runtime-dot is-${connected ? "online" : "retrying"}`}
+                  aria-label={connected ? "运行时已连接" : "运行时正在重连"}
+                  role="status"
+                />
               ) : null}
               <IconButton
                 label={theme === "dark" ? "切换到明亮模式" : "切换到暗色模式"}
@@ -763,7 +818,7 @@ export function AppV1() {
               >
                 {theme === "dark" ? <Moon aria-hidden="true" /> : <Sun aria-hidden="true" />}
               </IconButton>
-              {isNewConversation || creativeOpen ? (
+              {isNewConversation || schedulesOpen ? (
                 <IconButton
                   label="打开设置"
                   onClick={() => {
@@ -869,10 +924,10 @@ export function AppV1() {
           </div>
 
           <section className="ex-timeline" aria-label={isNewConversation ? "e-Mate 首页" : "对话"}>
-            {isNewConversation || creativeOpen ? (
+            {isNewConversation || schedulesOpen ? (
               <Suspense fallback={<section className="ex-home-loading" role="status">正在打开 e-Mate 首页…</section>}>
                 <HomeDashboard
-                  mode={creativeOpen ? "creative" : "home"}
+                  mode={schedulesOpen ? "schedules" : "home"}
                   composer={composer}
                   threads={runtime.threads}
                   projects={runtime.projects}
@@ -885,13 +940,13 @@ export function AppV1() {
                     void runtime.openThread(threadId).then((opened) => {
                       if (!opened) return;
                       setSkillsOpen(false);
-                      setCreativeOpen(false);
+                      setSchedulesOpen(false);
                       setSidebarOpen(false);
                     });
                   }}
                   onTemplate={(text) => {
                     setComposerPrefill({ key: crypto.randomUUID(), text });
-                    setCreativeOpen(false);
+                    setSchedulesOpen(false);
                   }}
                 />
               </Suspense>
@@ -906,6 +961,7 @@ export function AppV1() {
                   activeTurn={runtime.activeTurn}
                   isThinking={runtime.isThinking}
                   artifacts={runtime.artifacts}
+                  imageBatchFailures={runtime.imageBatchFailures}
                   artifactPreviewUrls={runtime.artifactPreviewUrls}
                   onArtifactAction={(artifact, action) => void handleArtifactAction(artifact, action)}
                   onArtifactPreviewVisible={runtime.prefetchArtifactPreview}
@@ -924,7 +980,7 @@ export function AppV1() {
             )}
           </section>
 
-          {!isNewConversation && !creativeOpen ? (
+          {!isNewConversation && !schedulesOpen ? (
             <div className="ex-workspace-bottom">
               {runtime.pendingInteractions.length ? (
                 <Suspense fallback={(
@@ -984,8 +1040,20 @@ export function AppV1() {
             onManageExtensions={() => {
               warmFeature(loadSkillsWorkspace);
               setSettingsOpen(false);
+              setSchedulesOpen(false);
               setSkillsOpen(true);
             }}
+            onManageKnowledge={() => {
+              setComposerPrefill({
+                key: crypto.randomUUID(),
+                text: "请读取我的真实知识目录，列出当前知识内容和可执行的整理操作；任何修改前先让我确认。",
+              });
+              setSkillsOpen(false);
+              setSchedulesOpen(false);
+              closeSettings();
+            }}
+            profileAvatar={profileAvatar}
+            onProfileAvatarChange={updateProfileAvatar}
             memory={runtime.memory}
             memoryLoadState={runtime.memoryLoadState}
             memoryBusy={runtime.memoryBusy}

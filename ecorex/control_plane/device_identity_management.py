@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 from .device_identity import (
     DeviceAccountIdentity,
     DeviceIdentityNotFound,
@@ -49,11 +51,14 @@ class AdminManagementDeviceAccountDirectory:
             raise DeviceIdentityNotFound("device account does not exist") from None
         if user.status != "active":
             raise DeviceIdentityUnauthorized("device account is suspended")
+        organization_id = user.organization_id or f"personal:{user.account_id}"
         models = tuple(
             sorted(
                 {
                     str(item["local_model_id"])
-                    for item in self.repository.active_public_catalog()
+                    for item in self.repository.active_public_catalog(
+                        organization_id=organization_id
+                    )
                     if item.get("local_model_id")
                 }
             )
@@ -70,7 +75,7 @@ class AdminManagementDeviceAccountDirectory:
         connection = self.repository._connect()
         try:
             credential = connection.execute(
-                "SELECT users.status,credentials.credential_version "
+                "SELECT users.status,users.revision,credentials.credential_version "
                 "FROM admin_ops_users users LEFT JOIN "
                 "admin_ops_password_credentials credentials USING(account_id) "
                 "WHERE users.account_id=?",
@@ -84,7 +89,7 @@ class AdminManagementDeviceAccountDirectory:
             raise DeviceIdentityUnauthorized("device account is suspended")
         return DeviceAccountIdentity(
             account_id=user.account_id,
-            organization_id=user.organization_id or f"personal:{user.account_id}",
+            organization_id=organization_id,
             display_name=user.display_name,
             roles=(
                 _PLATFORM_ADMIN_ROLES
@@ -100,12 +105,19 @@ class AdminManagementDeviceAccountDirectory:
                 "image_limit": user.image_limit,
                 "images_remaining": image_remaining,
             },
-            auth_epoch=(
-                int(credential["credential_version"])
-                if credential["credential_version"] is not None
-                else 0
+            auth_epoch=self._auth_epoch(
+                int(credential["revision"]),
+                int(credential["credential_version"] or 0),
             ),
         )
+
+    @staticmethod
+    def _auth_epoch(user_revision: int, credential_revision: int) -> int:
+        material = f"{user_revision}:{credential_revision}".encode("ascii")
+        return int.from_bytes(
+            hashlib.sha256(b"emate-auth-epoch-v1\0" + material).digest()[:8],
+            "big",
+        ) & ((1 << 63) - 1)
 
 
 __all__ = ["AdminManagementDeviceAccountDirectory"]

@@ -466,6 +466,10 @@ class BootstrapSupervisor:
                 os.environ if source_environment is None else source_environment
             )
         )
+        # The signed Bootstrap owns the desktop migration target passed to the
+        # verified Runtime slot; ambient Electron variables are not authority.
+        environment["EMATE_DESKTOP"] = "1"
+        environment["EMATE_DATA_DIR"] = str(self.slots.root)
         if acceptance_preview:
             environment[RUNTIME_ACCEPTANCE_PREVIEW_ENV] = "1"
             environment[RUNTIME_ACCEPTANCE_VAULT_KEY_ENV] = secrets.token_urlsafe(32)

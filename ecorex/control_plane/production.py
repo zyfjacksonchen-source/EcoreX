@@ -2437,8 +2437,8 @@ def _converge_skill_hub_seed(
             tags=bundle.metadata.tags,
             package_sha256=bundle.artifact_sha256,
             package_size_bytes=bundle.total_size_bytes,
-            original_platform="Cow Skill Hub",
-            original_url="https://skills.cowagent.ai/official-writing",
+            original_platform="e-Mate",
+            original_url=None,
         )
         _require_skill_hub_seed(registry, store)
     except Exception:

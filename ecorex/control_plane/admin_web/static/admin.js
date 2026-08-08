@@ -19,6 +19,7 @@
   let rollback = null;
   let users = [];
   let models = [];
+  let tenantPolicy = null;
   let editingUser = null;
   let editingModel = null;
   let userPasswordInputRevision = 0;
@@ -113,6 +114,22 @@
     modelEnabled: byId("model-enabled"),
     modelCancelButton: byId("model-cancel-button"),
     modelSaveButton: byId("model-save-button"),
+    tenantPolicyDialog: byId("tenant-policy-dialog"),
+    tenantPolicyForm: byId("tenant-policy-form"),
+    tenantPolicyOrganization: byId("tenant-policy-organization"),
+    tenantPolicyRevision: byId("tenant-policy-revision"),
+    tenantPolicyStatus: byId("tenant-policy-status"),
+    tenantPolicyCancelButton: byId("tenant-policy-cancel-button"),
+    tenantPolicySaveButton: byId("tenant-policy-save-button"),
+    tenantModelInputs: [
+      byId("tenant-model-luna"),
+      byId("tenant-model-sol"),
+      byId("tenant-model-deepseek"),
+      byId("tenant-model-gemini"),
+      byId("tenant-model-doubao"),
+      byId("tenant-model-image"),
+      byId("tenant-model-image-edit"),
+    ],
     manifestForm: byId("manifest-form"),
     manifestFile: byId("manifest-file"),
     manifestHelp: byId("manifest-help"),
@@ -333,6 +350,34 @@
     return items;
   };
 
+  const normalizeTenantModelPolicy = (value) => {
+    if (!isRecord(value) || Object.hasOwn(value, "api_key")) {
+      throw new Error("Control Plane 返回的租户模型策略无效。");
+    }
+    const allowedModelIds = stringList(value.allowed_model_ids, "allowed_model_ids");
+    const knownModelIds = new Set(elements.tenantModelInputs.map((input) => input.value));
+    if (value.schema_version !== 1
+      || typeof value.configured !== "boolean"
+      || new Set(allowedModelIds).size !== allowedModelIds.length
+      || allowedModelIds.some((modelId) => !knownModelIds.has(modelId))
+      || !allowedModelIds.includes("ecorex-chat")
+      || !allowedModelIds.includes("gpt-image-2")
+      || value.default_chat_model_id !== "ecorex-chat"
+      || value.default_chat_reasoning_effort !== "max"
+      || value.image_primary_model_id !== "gpt-image-2-pro"
+      || value.image_fallback_upstream_model_id !== "gpt-image-2") {
+      throw new Error("Control Plane 返回的租户模型策略不符合企业默认约束。");
+    }
+    return {
+      organization_id: requiredString(value.organization_id, "organization_id"),
+      configured: value.configured,
+      allowed_model_ids: allowedModelIds,
+      revision: boundedInteger(value.revision, "revision"),
+      created_at: optionalString(value.created_at, "created_at"),
+      updated_at: optionalString(value.updated_at, "updated_at"),
+    };
+  };
+
   const normalizeModelTest = (value) => {
     if (!isRecord(value)) throw new Error("Control Plane 返回的模型测试合同无效。");
     const status = requiredString(value.status, "status");
@@ -509,6 +554,16 @@
   const safeSegment = (value) => {
     if (typeof value !== "string" || !SAFE_SEGMENT.test(value)) {
       throw new Error("资源标识不符合 Control Plane 路径合同。");
+    }
+    return encodeURIComponent(value);
+  };
+
+  const organizationSegment = (value) => {
+    if (typeof value !== "string"
+      || value.length < 1
+      || value.length > 128
+      || /[\\/\u0000-\u001f]/u.test(value)) {
+      throw new Error("组织 ID 不符合 Control Plane 路径合同。");
     }
     return encodeURIComponent(value);
   };
@@ -804,6 +859,7 @@
   const clearManagement = () => {
     users = [];
     models = [];
+    tenantPolicy = null;
     editingUser = null;
     editingModel = null;
     elements.userListSummary.textContent = "连接控制面后读取用户。";
@@ -814,7 +870,12 @@
     elements.usageTokens.textContent = "—";
     elements.usageImages.textContent = "—";
     elements.usageCapturedAt.textContent = "—";
-    for (const dialog of [elements.userDialog, elements.usageDialog, elements.modelDialog]) {
+    for (const dialog of [
+      elements.userDialog,
+      elements.usageDialog,
+      elements.modelDialog,
+      elements.tenantPolicyDialog,
+    ]) {
       if (dialog.open) dialog.close("session-cleared");
     }
   };
@@ -1076,6 +1137,21 @@
     elements.usageTokenDelta.focus();
   };
 
+  const openTenantPolicyDialog = async (organizationId) => {
+    tenantPolicy = normalizeTenantModelPolicy(
+      await apiRequest(`/tenants/${organizationSegment(organizationId)}/model-policy`),
+    );
+    elements.tenantPolicyOrganization.value = tenantPolicy.organization_id;
+    elements.tenantPolicyRevision.value = String(tenantPolicy.revision);
+    const allowed = new Set(tenantPolicy.allowed_model_ids);
+    for (const input of elements.tenantModelInputs) input.checked = allowed.has(input.value);
+    elements.tenantPolicyStatus.textContent = tenantPolicy.configured
+      ? `已配置修订 ${tenantPolicy.revision}；保存后立即要求该组织会话刷新。`
+      : "当前使用企业默认全可选目录；保存后创建首个租户策略修订。";
+    elements.tenantPolicyDialog.showModal();
+    elements.tenantModelInputs.find((input) => !input.disabled)?.focus();
+  };
+
   const renderUsers = (projection) => {
     users = projection.items;
     elements.userListSummary.textContent = `显示 ${projection.items.length} 位，共 ${projection.total} 位用户。`;
@@ -1113,6 +1189,17 @@
       adjust.dataset.sessionControl = "";
       adjust.addEventListener("click", () => openUsageDialog(user));
       actions.append(edit, adjust);
+      if (user.organization_id) {
+        const policy = document.createElement("button");
+        policy.type = "button";
+        policy.className = "button compact";
+        policy.textContent = "模型策略";
+        policy.dataset.sessionControl = "";
+        policy.addEventListener("click", () => {
+          void withBusy(policy, "读取中", () => openTenantPolicyDialog(user.organization_id));
+        });
+        actions.append(policy);
+      }
       row.append(actions);
       return row;
     });
@@ -1489,11 +1576,51 @@
     void withBusy(elements.refreshUsageButton, "刷新中", refreshUsage);
   });
 
+  elements.tenantPolicyCancelButton.addEventListener(
+    "click",
+    () => elements.tenantPolicyDialog.close("cancel"),
+  );
+  elements.tenantPolicyForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (busy || !tenantPolicy) return;
+    const organizationId = elements.tenantPolicyOrganization.value;
+    const revision = Number(elements.tenantPolicyRevision.value);
+    const allowedModelIds = elements.tenantModelInputs
+      .filter((input) => input.checked)
+      .map((input) => input.value);
+    if (!Number.isSafeInteger(revision)
+      || revision < 0
+      || !allowedModelIds.includes("ecorex-chat")
+      || !allowedModelIds.includes("gpt-image-2")) {
+      showMessage("error", "租户模型策略不完整，Luna 和生图模型必须保留。");
+      return;
+    }
+    const key = `tenant-policy:${organizationId}:${revision}`;
+    void withBusy(elements.tenantPolicySaveButton, "保存中", async () => {
+      tenantPolicy = normalizeTenantModelPolicy(await apiRequest(
+        `/tenants/${organizationSegment(organizationId)}/model-policy`,
+        {
+          method: "PUT",
+          body: {
+            allowed_model_ids: allowedModelIds,
+            expected_revision: revision,
+            client_request_id: requestId(key),
+          },
+        },
+      ));
+      requestIds.delete(key);
+      elements.tenantPolicyDialog.close("saved");
+      await refreshUsers();
+      showMessage("info", `${organizationId} 的模型策略已对下一次请求生效。`);
+    });
+  });
+
   elements.createModelButton.addEventListener("click", () => openModelDialog());
   elements.modelCancelButton.addEventListener("click", () => elements.modelDialog.close("cancel"));
 
   const modelSlotModalities = {
     "ecorex-chat": "chat",
+    "ecorex-gpt-5.6-sol": "chat",
     "ecorex-deepseek-v4-pro": "chat",
     "ecorex-gemini-3.1-pro": "chat",
     "ecorex-doubao-seed-2.0-pro": "chat",
@@ -1502,6 +1629,7 @@
   };
   const modelSlotProtocols = {
     "ecorex-chat": "responses",
+    "ecorex-gpt-5.6-sol": "responses",
     "ecorex-deepseek-v4-pro": "openai_compatible_chat",
     "ecorex-gemini-3.1-pro": "openai_compatible_chat",
     "ecorex-doubao-seed-2.0-pro": "openai_compatible_chat",

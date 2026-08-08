@@ -1,5 +1,283 @@
 # v1 update-chain development log
 
+## 2026-08-08 — e-Mate Enterprise 2.0.0 implementation goal
+
+- Created `codex/e-mate-2.0.0` from exact source commit
+  `f2490888e2d5a3bc760c62dd37c4abeeb35ebf87`. The accepted e-Mate WebUI is
+  the unchanged `desktop` tree `60c68c95f58f2bd2df8f347827f05a34cda44226`;
+  its last UI-changing commit is `1d2b21f512b077e103353cf4a8090bf4bb218a84`.
+- Inspected the official CowAgent `2.1.5` tag in a temporary checkout. The
+  existing Agent/model implementation is already a hardened descendant of
+  that runtime, so the conversion reuses its Electron/PyInstaller/NSIS/DMG and
+  updater boundaries without importing CowAgent's Renderer or creating a
+  second Agent core.
+- Split implementation into non-overlapping desktop, tenant-management, and
+  legacy-migration/brand-gate workstreams. The backend remains the only source
+  of task, reasoning, tool, checkpoint, audit, and terminal state; the current
+  e-Mate WebUI remains projection-only.
+- Set the product source version to `2.0.0`. Enterprise defaults remain
+  `gpt-5.6-luna` with `max` reasoning and image upstream
+  `gpt-image-2-pro` with bounded `gpt-image-2` fallback. Optional tenant models
+  are Luna, Sol, DeepSeek, Gemini and Doubao; provider credentials are server
+  secrets and are never copied into source, logs, Web payloads, or artifacts.
+- Extended the existing Usage projection rather than introducing another
+  audit surface. It now reconciles administrator counters with immutable
+  provider usage facts and reports per-model totals; the focused Usage panel
+  suite passes (`12 passed`).
+- Platform signing is deliberately deferred for this release. Internal
+  Ed25519/SHA integrity remains mandatory; Windows keeps the updater flow,
+  while unsigned macOS is limited to verified update discovery and manual
+  install until a Developer ID is supplied.
+
+### User-confirmed e-Mate information architecture and closure gates
+
+The following requirements were added to the 2.0.0 release scope on
+2026-08-08 and are release gates, not placeholders:
+
+- Remove the Home “创意中心” entry and replace it with “定时任务”. The entry,
+  list, creation/edit controls, status, and deletion/cancellation actions must
+  use Runtime scheduler facts and form a complete user path.
+- Replace the settings modal with a Codex-style full-window settings workspace.
+  Its navigation is grouped into:
+  - “个人资料”: preserve the existing account/password update flow with
+    immediate session enforcement, and support personal avatar changes.
+  - “常规设置”: include the default conversation save path, permission
+    controls, and the applicable existing general preferences.
+  - “知识” and “记忆”: expose the existing Runtime knowledge and memory
+    capabilities without importing the legacy CowAgent Renderer.
+  - “能力中心/通道”: move the existing connection/channel capability here;
+    do not maintain a second “连接” route.
+- Add an external-connection icon below the composer. Its tooltip explains the
+  action and its click target opens the channel view in Capability Center.
+- Preserve the existing e-Mate share-link flow and its publish/copy/revoke
+  lifecycle.
+- A native task-completion notification is required after a Runtime-confirmed
+  completed terminal event: Windows uses the system notification area and
+  macOS uses Notification Center. Notifications are deduplicated across
+  reconnect/replay, and selecting one focuses the corresponding conversation.
+- No shipped e-Mate control, button, component, route, or module may be an
+  empty placeholder or lead to a path that cannot complete. The final Browser
+  and desktop acceptance runs include keyboard/hover/click checks for every
+  visible navigation and primary/secondary action in these surfaces.
+
+The accepted visual system remains the current `desktop/src/v1` tree recorded
+above. These user-authorized functional changes are applied on that system and
+must not reintroduce CowAgent layout, styles, assets, or a parallel Renderer.
+
+### Permanent upstream-core freeze
+
+The product owner established a hard rule for this release and all subsequent
+development: absent explicit, change-specific approval, CowAgent's core
+architecture, module design, and core implementation are frozen. Product work
+must compose the existing core through its published boundaries. The normative
+Chinese-language rule, allowed extension boundaries, exception procedure, and
+release gate are recorded in `docs/e-mate-development-standards.md`.
+
+### Image concurrency stability exploration
+
+An independent, non-release-blocking measurement track will determine the
+stable one-shot concurrency ceiling for both generation and image editing with
+the enterprise image models. It must reuse the existing orchestrator and retry
+policy without changing the frozen core. The benchmark increases concurrency
+progressively and records throughput, p50/p95 usable-result latency, invalid
+result rate, 429/5xx rate, primary-to-fallback rate, and visual usability. It
+stops on the configured cost/error breaker; credentials and prompt/image
+content are excluded from source, logs, and benchmark receipts. A recommended
+default is accepted only when repeated runs remain below the error/latency
+threshold, rather than from a single peak-throughput run.
+
+A separate read-only capability study evaluates whether the unchanged CowAgent
+core can use existing subagent orchestration to generate or edit multiple
+images in one user operation. This is distinct from provider request
+concurrency. The study must trace current subagent, attachment, image-tool,
+result aggregation, cancellation, quota, and audit contracts and recommend a
+composition-only path when one exists. It must not add a batch engine or alter
+core architecture without separate explicit approval.
+
+#### Image concurrency measurement result
+
+- The existing envelope is eight image workers, eight active jobs per tenant,
+  provider concurrency 16, a 64 MiB image ceiling, and a 4 GiB worker memory
+  budget. The provider's conservative memory calculation is about 3 GiB at
+  eight simultaneous jobs; twelve jobs would require about 4.5 GiB and is
+  outside the declared envelope.
+- A temporary, credential-free harness ran 126 real Orchestrator jobs through
+  the SQLite worker and CAS in three waves at concurrency 1/2/4/6/8. All jobs
+  completed with structurally valid results. At eight lanes, generation reached
+  71.65 jobs/s with 132.4 ms p95 and editing reached 43.48 jobs/s with 198.8 ms
+  p95. These figures measure local orchestration and result validation, not
+  provider latency or visual quality.
+- A 429 injection opened the durable same-scope breaker before the following
+  eight jobs reached the provider, so the client did not amplify the upstream
+  failure. No 5xx or fallback was synthesized during the success measurement.
+- The evidence-backed internal ceiling is eight. Release guidance is generation
+  concurrency 4 normally, 6 during a measured rollout, and 8 only as a short
+  ceiling; editing is 4 normally and 6 as the short ceiling. Values above eight
+  are prohibited without a new capacity envelope and a real 1/2/4/6/8 provider
+  staircase.
+- Enterprise upstream capacity remains unmeasured. The supplied image endpoint
+  is not TLS-capable, while the production provider correctly rejects non-HTTPS
+  credential transport. No bearer token or paid request was sent. A production
+  claim requires an enterprise HTTPS Gateway or VPN proxy followed by repeated
+  latency, 429/5xx, fallback, cost, and human visual-quality acceptance.
+
+#### Multiple-image and subagent capability result
+
+- The Managed Image adapter can execute ordered tasks for both generation and
+  editing, but the frozen Core `imagegen` ToolSpec initially exposed only one
+  instruction. An adapter-only batch implementation therefore was not
+  reachable by a real Agent and could not be claimed as a product capability.
+- Independent image tool calls in one Agent turn remain sequential, and the
+  managed Gateway deliberately disables provider parallel tool calls. Multiple
+  subagents can run mechanically, but their child context does not carry the
+  complete organization, attachment authorization, tenant model policy, or
+  typed Artifact result. The current bridge also retains only the first file.
+  Therefore subagents are not a release-grade multiple-image result path.
+- The durable Managed Image execution pool already supplies bounded
+  concurrency, backpressure, idempotency, recovery, cancellation, and one
+  Artifact per execution. It is the correct reusable substrate, but there is no
+  parent batch facade, ordered Gallery projection, or complete image settlement
+  into the existing Usage facts today.
+- The shortest enterprise implementation is an e-Mate-owned `tasks[]` adapter
+  that derives stable child idempotency keys, submits existing Managed Image
+  jobs, returns ordered typed Artifact/model/fallback/usage facts, and settles
+  every completed child exactly once into the existing Usage authority. It must
+  reuse the current execution pool and provider/account limits, not add another
+  scheduler or batch engine.
+- The product owner subsequently chose the single-Agent bounded call over
+  subagent fan-out and explicitly approved one Core exception: extend only the
+  existing `imagegen` ToolSpec to accept an ordered 2–8 item `tasks[]` contract
+  while preserving the single-image contract. The general schema engine,
+  Gateway parallel-tool setting, Agent/subagent design and provider/worker
+  state machines remain frozen. The exact scope is recorded in
+  `docs/e-mate-development-standards.md`.
+
+### 2.0.0 implementation checkpoint
+
+- The native Bootstrap now owns the complete Runtime process tree. Unix
+  forwards `SIGINT`/`SIGTERM` to the Python supervisor and waits; Windows uses
+  a fail-closed `KILL_ON_JOB_CLOSE` Job Object. Unix signal tests passed and
+  the Windows `amd64` test binary and Bootstrap cross-build both produced valid
+  PE32+ executables.
+- Electron observes only authenticated Runtime facts for task-completion
+  notifications. Completion is deduplicated by thread/turn terminal identity;
+  notification text does not expose the task title on a lock screen, and a
+  click focuses e-Mate and opens the verified thread through the isolated
+  preload bridge. The Electron/notification contract set passed `7/7`.
+- A fresh native signed install reproduced a successful first full Runtime
+  launch. A second diagnostic composed the same production settings against
+  empty storage and returned both `REGISTER_OK` and `CREATE_OK`. The earlier
+  one-off `runtime_registration` failure could not be reproduced after its
+  state had advanced; signed package/source bytes were identical and the
+  completed database showed all 108 tables and initialization facts. In
+  accordance with the upstream-core freeze, no speculative core change was
+  made. A future recurrence requires a temporary re-signed diagnostic overlay
+  that records only an exception class and fixed stage before any fix.
+- The user-authorized Renderer update removed Creative Center, added the
+  Runtime-backed scheduled-task entry path, replaced settings with the
+  full-workspace Profile/General/Knowledge/Memory layout, moved connections to
+  Capability Center channels, added the Composer channel shortcut, preserved
+  sharing, and removed the empty notification control. Avatar data is strictly
+  PNG/JPEG/WebP, at most 512 KiB, clearly device-local, and never uploaded.
+- Renderer verification at this checkpoint: TypeScript passed; focused product,
+  timeline, Electron, and notification contracts passed `27/27`; the two
+  Playwright user paths for scheduled tasks/channels and settings/avatar/output/
+  memory/permission passed `2/2`; the content-addressed Web bundle gate passed
+  with 32 chunks; source/product branding scanned 504 files with zero findings;
+  the Electron brand gate and `git diff --check` passed.
+
+### CowAgent 2.1.5 first-install environment decision
+
+- A read-only comparison used CowAgent tag `2.1.5` at exact commit
+  `e3ac1b952500f60934862c6bf0bd0de91b415ed8`. CowAgent builds a PyInstaller
+  onedir backend on the build host, then runs it directly from Electron
+  Resources at fixed port 9876 with writable state in `~/.cow`; end users do
+  not install Python, pip, or a venv.
+- The useful contracts are already preserved by e-Mate: no system Python,
+  read-only application payload separated from user data, one loopback origin,
+  desktop single instance/tray/restart, and offline packaged dependencies.
+- CowAgent's concrete runtime manager is rejected for e-Mate. It inherits the
+  ambient environment and login-shell PATH, can kill an unknown process merely
+  for owning its port, stores provider keys in local `config.json`, downloads
+  some dependencies on first use, and has no signed slots, known-good rollback,
+  owner proof, or complete process-tree ownership. Reusing it would weaken the
+  existing enterprise Secret, signature, rollback, and lifecycle boundaries.
+- The one product-boundary behavior worth adopting is first-install visibility:
+  CowAgent creates its window before starting the backend, while the current
+  e-Mate shell waits for `backend.start()` and may show no window during a long
+  cold install. e-Mate should show its own lightweight verification/install/
+  start progress and retry/exit actions, while retaining the native Bootstrap
+  and refusing to kill an unverified port owner.
+
+This behavior has now been adopted without the Cow runtime manager: Electron
+creates the e-Mate window immediately, shows a static CSP-constrained startup
+surface, and offers retry/exit only after a fixed backend failure. The same
+window loads the loopback Renderer only after native Bootstrap owner proof;
+the shell never kills an unverified port owner. Desktop identity, update,
+notification, startup/retry and brand contracts pass `7/7`.
+
+### Multi-image Gallery and frozen Core boundary
+
+- The e-Mate Renderer now groups consecutive image Artifact facts in one Turn
+  into an ordered Gallery. It retains the existing pending animation, projects
+  only persisted `pending/ready/failed/deleted` states, supports touch/trackpad
+  scroll snap, previous/next and keyboard arrows, an item indicator, responsive
+  layout, reduced motion, and the existing preview/open/download actions.
+- The e-Mate Managed Image adapter has a tested bounded `tasks[]` composition:
+  stable parent/index/task-hash child identities, ordered partial-failure facts,
+  a shared concurrency semaphore, cancellation propagation, and reuse of the
+  existing durable Journal, Image Job, Artifact, and recovery path. Production
+  composition also settles a completed durable image `job_id` exactly once into
+  the existing Usage authority.
+- On 2026-08-08 the product owner explicitly authorized the narrow ToolSpec
+  exception. The implementation keeps `parallel_tool_calls=false` and routes
+  one Agent call through the existing ToolExecution/ImageExecutionPool,
+  permission, timeout, recovery and audit path. The adapter derives stable
+  batch/task identities, shares the existing bounded image concurrency,
+  publishes one Artifact fact per successful slot, persists partial failures,
+  and returns an ordered `image_gallery` result. The image Skill now instructs
+  the Agent to use one native `tasks[]` call for 2–8 requested results and never
+  delegate image production to subagents.
+- Renderer grouping consumes only the persisted
+  `content.image_batch.{batch_id,parent_execution_id,index,count,task_id}`
+  identity, sorts by backend index and refuses incomplete, duplicated or mixed
+  facts. Consecutive independent image calls are never merged. Completed
+  batches retain touch/trackpad scroll, keyboard/arrow navigation, indicators
+  and the existing preview/open/download actions. Failed slots are projected
+  only after `artifact.image.batch_task_failed` facts agree with the durable
+  `artifact.image.batch_settled` count; SSE displays them live and the existing
+  paged `/events` replay restores them after refresh. They are read-only failure
+  slots, never fabricated Artifact Items.
+
+Focused verification at this checkpoint: six Gallery/failure state tests,
+29 Timeline/product/Electron contracts, TypeScript, production Web build and
+bundle gate, and one Playwright partial-batch refresh path passed. Backend
+batch/Usage/Capability Pack/Worker integration passed 72 focused tests; the
+Agent batch produces ordered partial results through the real execution pool.
+
+### 小芯身份合同补充
+
+- Runtime 的既有模型身份指令现明确区分产品与智能体：e-Mate 是 Agent
+  产品，助手身份固定为“智能体小芯”；不得自称 e-Mate、Claude、Codex、
+  ChatGPT 或底层模型。
+- 中文默认使用专业、严谨的语气并称呼用户为“同学”，除非用户明确要求其他
+  称呼。用户询问能力时，只介绍当前请求实际可用的分析、研究、写作、文件、
+  代码、数据、图片、办公、工具、通道或定时任务能力，不把未安装或被策略禁止
+  的能力宣传为可用。
+- 身份指令继续由 Runtime 注入每轮模型请求，Renderer 不伪造模型身份。身份、
+  风格、称呼和能力边界的 3 项 Worker 聚焦回归通过。
+
+### e-Mate application icon
+
+- Replaced the inherited small mark with an original e-Mate mascot icon: a
+  compact orange/graphite robot, upward execution eyes, and lightning antenna.
+  The design deliberately uses broad shapes rather than the prior eye dot grid
+  and avoids competitor cat, lobster, wave, and letter marks.
+- The source is a 1254 px RGBA PNG with transparent corners and no chroma fringe.
+  Visual checks at 16/32/64 px passed on white, dark, and orange backgrounds.
+  The desktop build now consumes a multi-resolution Windows ICO and macOS ICNS
+  generated from the same source, preventing fallback to Electron branding.
+
 ## 2026-07-20 — v1.0.8 WebUI recovery kickoff
 
 - Re-scoped the release goal to a WebUI-led v1.0.8 recovery while explicitly allowing the minimum runtime / migration / connector linkage needed for old-session restore, one-click connector activation, project-workspace binding, and post-update state correctness.
@@ -950,4 +1228,34 @@ Product 构造器 + LOCAL_BUNDLE 回归：5 passed
 Shell Pack 默认超时与真实 pwd：2 passed
 旧候选真实 PPT 会话：正确返回部分结果且未伪造文件；因 Skill 空快照拒绝发布
 新候选真实 PPT/PPTX 打开：待重新构建后验收
+```
+
+# 2026-08-09 — 图片用量事实与 Usage 对账投影
+
+- 管理库 schema 从 v5 仅新增迁移到 v6；`admin_ops_provider_usage_facts`
+  保留原表、原列、不可修改/删除触发器和旧查询语义，只追加租户、请求模型槽、
+  Provider 报告模型、实际模型、Provider、降级来源/状态、Job/Result 状态字段。
+  迁移在同一 SQLite 独占事务中执行，旧事实不回填、不覆盖，失败可整体回滚。
+- 图片服务继续使用现有 `_AdminManagementImageUsageProvider` 产品边界装饰器；
+  每个 durable `job_id` 只结算一条 immutable fact，submit/recover 重放保持
+  exact-once，批量任务仍按每个 Job 独立记账。租户取结算事务内的用户事实，
+  因此后续用户改租户不会重写历史归属。
+- `DynamicManagedImageProvider` 当前会把底层 Provider 的 `usage.model_id`
+  规范化为本地模型槽，`ProviderResult` 没有明确的 fallback provenance。
+  本轮未获得修改 Provider/Core 合同的授权，因此绝不通过模型 ID 差异推测
+  `gpt-image-2-pro → gpt-image-2`：记录 `requested_model_id`、
+  `provider_reported_model_id` 和 `actual_provider_id`，`actual_model_id`、
+  `fallback_from_model_id`、`fallback_used` 保持 NULL/“未公开”。若后续需要真实
+  降级对账，必须另行明确授权 ProviderResult 增加不可歧义的 provenance 合同。
+- 现有 Usage 面板继续用完整 provider fact ledger 对 lifetime token/image 余额
+  对账；所选日期范围同时投影图片明细，包括租户、Job、请求槽、Provider 报告值、
+  实际模型公开状态、降级公开状态和 Job/Result 状态。旧 v5/简化表事实仍可查询，
+  NULL 降级状态保持 unknown，不转换成 false。
+
+本轮定向验证：
+
+```text
+管理 schema / exact-once / 图片逐 Job / Usage 投影：27 passed
+管理 schema 相关回归：134 passed，8 skipped
+Python compile：passed
 ```

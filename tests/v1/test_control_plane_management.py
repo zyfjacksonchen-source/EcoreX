@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 import httpx
 import pytest
 
+from ecorex.control_plane import management_schema
 from ecorex.control_plane.admin_management_router import (
     create_admin_management_router,
 )
@@ -488,6 +489,23 @@ def test_admin_management_router_applies_roles_and_activates_after_test(
     assert activated.status_code == 200
     assert activated.json()["status"] == "passed"
     assert repository.active_model(modality="chat").revision == 1
+    default_policy = client.get("/api/v1/admin/tenants/org-1/model-policy")
+    assert default_policy.status_code == 200
+    assert default_policy.json()["configured"] is False
+    assert "ecorex-gpt-5.6-sol" in default_policy.json()["allowed_model_ids"]
+    updated_policy = client.put(
+        "/api/v1/admin/tenants/org-1/model-policy",
+        json={
+            "allowed_model_ids": ["ecorex-chat", "gpt-image-2"],
+            "expected_revision": 0,
+            "client_request_id": "request-router-tenant-policy",
+        },
+    )
+    assert updated_policy.status_code == 200
+    assert updated_policy.json()["default_chat_reasoning_effort"] == "max"
+    assert updated_policy.json()["image_primary_model_id"] == "gpt-image-2-pro"
+    assert updated_policy.json()["image_fallback_upstream_model_id"] == "gpt-image-2"
+    assert "api_key" not in updated_policy.text
 
 
 def test_management_schema_rejects_drift(tmp_path: Path) -> None:
@@ -519,12 +537,45 @@ def test_management_schema_migrates_v1_model_origin_presets(tmp_path: Path) -> N
                 "2026-07-16T00:00:00+00:00",
             ),
         )
+        connection.executemany(
+            "INSERT INTO admin_ops_users VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                (
+                    "existing-org-user",
+                    "Existing organization user",
+                    "org@example.test",
+                    "existing-org",
+                    "active",
+                    100,
+                    0,
+                    10,
+                    0,
+                    1,
+                    "2026-07-16T00:00:00+00:00",
+                    "2026-07-16T00:00:00+00:00",
+                ),
+                (
+                    "existing-personal-user",
+                    "Existing personal user",
+                    "personal@example.test",
+                    None,
+                    "active",
+                    100,
+                    0,
+                    10,
+                    0,
+                    1,
+                    "2026-07-16T00:00:00+00:00",
+                    "2026-07-16T00:00:00+00:00",
+                ),
+            ),
+        )
         connection.commit()
     finally:
         connection.close()
 
     receipt = AdminManagementSchemaManager(path).migrate()
-    assert receipt.migration_version == 4
+    assert receipt.migration_version == 6
     connection = sqlite3.connect(path)
     try:
         columns = {
@@ -538,8 +589,100 @@ def test_management_schema_migrates_v1_model_origin_presets(tmp_path: Path) -> N
             "SELECT 1 FROM sqlite_schema WHERE type='table' "
             "AND name='admin_ops_password_credentials'"
         ).fetchone()
+        tenant_policy_table = connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' "
+            "AND name='admin_ops_tenant_model_policies'"
+        ).fetchone()
+        tenant_policies = connection.execute(
+            "SELECT organization_id,default_chat_model_id,"
+            "default_chat_reasoning_effort,image_primary_model_id,"
+            "image_fallback_upstream_model_id,revision "
+            "FROM admin_ops_tenant_model_policies ORDER BY organization_id"
+        ).fetchall()
+        usage_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(admin_ops_provider_usage_facts)"
+            )
+        }
     finally:
         connection.close()
     assert "provider_origin_preset" in columns
     assert usage_table == (1,)
     assert password_table == (1,)
+    assert tenant_policy_table == (1,)
+    assert {
+        "organization_id",
+        "requested_model_id",
+        "provider_reported_model_id",
+        "actual_model_id",
+        "actual_provider_id",
+        "fallback_from_model_id",
+        "fallback_used",
+        "job_status",
+        "result_status",
+    } <= usage_columns
+    assert tenant_policies == [
+        ("existing-org", "ecorex-chat", "max", "gpt-image-2-pro", "gpt-image-2", 1),
+        (
+            "personal:existing-personal-user",
+            "ecorex-chat",
+            "max",
+            "gpt-image-2-pro",
+            "gpt-image-2",
+            1,
+        ),
+    ]
+
+
+def test_management_schema_v6_preserves_v5_provider_facts(tmp_path: Path) -> None:
+    path = tmp_path / "control-plane-v5.db"
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(management_schema.ADMIN_MANAGEMENT_SCHEMA_SQL)
+        connection.executescript(management_schema.ADMIN_MANAGEMENT_SCHEMA_V2_SQL)
+        connection.executescript(management_schema.ADMIN_MANAGEMENT_SCHEMA_V3_SQL)
+        connection.executescript(management_schema.ADMIN_MANAGEMENT_SCHEMA_V4_SQL)
+        connection.executescript(management_schema.ADMIN_MANAGEMENT_SCHEMA_V5_SQL)
+        connection.executemany(
+            "INSERT INTO admin_ops_schema_migrations VALUES(?,?,?,?)",
+            (
+                (1, management_schema._INITIAL_MIGRATION_NAME, management_schema._INITIAL_MIGRATION_CHECKSUM, "2026-07-16T00:00:00+00:00"),
+                (2, management_schema._MIGRATION_V2_NAME, management_schema._MIGRATION_V2_CHECKSUM, "2026-07-16T00:00:00+00:00"),
+                (3, "provider-usage-facts", management_schema._MIGRATION_V3_CHECKSUM, "2026-07-16T00:00:00+00:00"),
+                (4, management_schema._MIGRATION_V4_NAME, management_schema._MIGRATION_V4_CHECKSUM, "2026-07-16T00:00:00+00:00"),
+                (5, management_schema._MIGRATION_V5_NAME, management_schema._MIGRATION_V5_CHECKSUM, "2026-07-16T00:00:00+00:00"),
+            ),
+        )
+        connection.execute(
+            "INSERT INTO admin_ops_users VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "account-v5", "Existing User", "v5@example.test", "org-v5",
+                "active", 0, 0, 10, 1, 1,
+                "2026-07-16T00:00:00+00:00", "2026-07-16T00:00:00+00:00",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO admin_ops_provider_usage_facts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "fact-v5", "image_service", "job-v5", "image", "account-v5",
+                0, 0, 0, 1, "0" * 64,
+                "2026-07-16T00:00:00+00:00", "2026-07-16T00:00:00+00:00",
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    receipt = AdminManagementSchemaManager(path).migrate()
+
+    assert receipt.migration_version == 6
+    connection = sqlite3.connect(path)
+    try:
+        row = connection.execute(
+            "SELECT source_id,image_count,organization_id,actual_model_id,"
+            "fallback_used,result_status FROM admin_ops_provider_usage_facts"
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row == ("job-v5", 1, None, None, None, None)

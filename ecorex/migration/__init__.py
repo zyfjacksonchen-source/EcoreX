@@ -47,6 +47,18 @@ from .legacy_identity_export import (
     LegacyIdentityExportReport,
     export_v0292_legacy_identities,
 )
+from .cowagent_data import (
+    CowAgentDataMigrationError,
+    LegacyDataMigrationResult,
+    LegacyDataRoot,
+    RECEIPT_RELATIVE_PATH as COWAGENT_DATA_RECEIPT_RELATIVE_PATH,
+    default_cowagent_data_roots,
+    default_emate_data_root,
+    migrate_cowagent_data,
+)
+
+LegacyDesktopDataMigrationError = CowAgentDataMigrationError
+migrate_legacy_desktop_data = migrate_cowagent_data
 
 
 def __getattr__(name: str):
@@ -68,8 +80,11 @@ def __getattr__(name: str):
         return getattr(legacy_password_credentials, name)
     raise AttributeError(name)
 
+
 __all__ = [
     "BACKUP_MANIFEST_NAME",
+    "COWAGENT_DATA_RECEIPT_RELATIVE_PATH",
+    "CowAgentDataMigrationError",
     "DuplicateLegacyIdError",
     "DEFAULT_SOURCE_VERSION",
     "INVENTORY_NAME",
@@ -77,6 +92,9 @@ __all__ = [
     "LegacySchemaError",
     "LegacyIdentityExportError",
     "LegacyIdentityExportReport",
+    "LegacyDataMigrationResult",
+    "LegacyDataRoot",
+    "LegacyDesktopDataMigrationError",
     "LegacyAdminManagementImportError",
     "LegacyAdminManagementImportReport",
     "LegacyPasswordCredentialImportError",
@@ -105,6 +123,8 @@ __all__ = [
     "TargetConflictError",
     "V030ToV1Migrator",
     "decrypt_quarantine",
+    "default_cowagent_data_roots",
+    "default_emate_data_root",
     "create_migration_quarantine_router",
     "inventory_source",
     "export_v0292_legacy_identities",
@@ -112,6 +132,8 @@ __all__ = [
     "import_v0292_password_credentials",
     "load_quarantine_key",
     "migrate_legacy_to_v1",
+    "migrate_cowagent_data",
+    "migrate_legacy_desktop_data",
     "migrate_v030_to_v1",
     "MigrationQuarantineService",
     "write_product_migration_plan",

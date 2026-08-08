@@ -15,6 +15,7 @@ const settings = source("../src/v1/components/SettingsDialog.tsx");
 const extensionSession = source("../src/v1/state/useExtensionSession.ts");
 const extensionLabels = source("../src/v1/state/extensions.ts");
 const composer = source("../src/v1/components/Composer.tsx");
+const homeDashboard = source("../src/v1/components/HomeDashboard.tsx");
 const runtimeSession = source("../src/v1/state/useRuntimeSession.ts");
 const modelSelector = source("../src/v1/components/ComposerModelSelector.tsx");
 const timeline = source("../src/v1/components/Timeline.tsx");
@@ -101,12 +102,25 @@ test("workspace chrome keeps the share action right aligned and removes the Comp
   assert.match(features, /\.ex-new-conversation-start\s*>\s*h1\s*\{[\s\S]*?font-size:\s*var\(--text-heading-size\);/u);
 });
 
-test("Creative Center returns to the preserved Composer and only fills an empty draft", () => {
-  assert.match(app, /onTemplate=\{\(text\) => \{[\s\S]*?setComposerPrefill\([\s\S]*?setCreativeOpen\(false\);/u);
+test("scheduled task actions return to the preserved Composer and only fill an empty draft", () => {
+  assert.match(app, /onTemplate=\{\(text\) => \{[\s\S]*?setComposerPrefill\([\s\S]*?setSchedulesOpen\(false\);/u);
+  assert.match(homeDashboard, /Runtime Scheduler[\s\S]*?操作将在当前会话中执行，由 Runtime 返回真实结果/u);
+  assert.doesNotMatch(homeDashboard, /Creative Center|创意中心/u);
   assert.match(app, /draft=\{composerDraft\}[\s\S]*?onDraftChange=\{setComposerDraft\}/u);
   assert.match(composer, /if \(!draft\.trim\(\)\) onDraftChange\(prefillRequest\.text\);/u);
   assert.match(composer, /onPrefillConsumed\?\.\(\);/u);
   assert.match(app, /onPrefillConsumed=\{\(\) => setComposerPrefill\(null\)\}/u);
+});
+
+test("settings and external connections stay on real product contracts", () => {
+  assert.match(settings, /data-testid="settings-workspace"[\s\S]*?settings-profile[\s\S]*?settings-general[\s\S]*?settings-knowledge[\s\S]*?settings-memory/u);
+  assert.match(settings, /仅保存在此设备，不会上传或改变企业账号资料/u);
+  assert.match(settings, /changeSessionPassword\(currentPassword, newPassword, requestId\)/u);
+  assert.match(settings, /onPermissionChange\(profile\)/u);
+  assert.match(composer, /data-testid="composer-connections"[\s\S]*?onClick=\{onOpenConnections\}/u);
+  assert.match(app, /setOpenChannelsKey\(\(value\) => value \+ 1\)[\s\S]*?setSkillsOpen\(true\)/u);
+  assert.match(extensionManager, /data-testid="capability-channels"/u);
+  assert.doesNotMatch(app, /<IconButton label="通知">/u);
 });
 
 test("e-Mate 2.1.47 theme values and brand actions are separate semantic tokens", () => {

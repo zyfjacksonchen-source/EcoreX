@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Server-authoritative usage analytics for the EcoreX operator panel."""
+"""Server-authoritative usage analytics for the e-Mate operator panel."""
 from __future__ import annotations
 
 import json
@@ -13,8 +13,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "1.0.5"
-USAGE_PROJECTION_VERSION = "v0.3.0-usage-1"
+VERSION = "2.0.0"
+USAGE_PROJECTION_VERSION = "e-mate-2.0-usage-1"
 DB_PATH = "/srv/ecorex-agent-admin/data/ecorex-admin.sqlite3"
 CONTROL_PLANE_DB_PATH = os.environ.get(
     "ECOREX_CONTROL_PLANE_DATABASE_PATH",
@@ -400,7 +400,14 @@ def _read_optional_rows(
             ).fetchone()
             if exists is None:
                 continue
-            return [dict(row) for row in connection.execute(query, parameters)]
+            try:
+                return [dict(row) for row in connection.execute(query, parameters)]
+            except sqlite3.OperationalError:
+                # A legacy/co-located panel database may expose an older copy
+                # of an optional table. It is not the authority for newer
+                # reconciliation columns, so continue to the next configured
+                # database instead of breaking the existing panel.
+                continue
         finally:
             connection.close()
     return []
@@ -873,22 +880,68 @@ def build_payload(start: datetime, end: datetime) -> dict:
         ORDER BY lower(COALESCE(email, account_id)), account_id
         """,
     )
+    admin_balance_rows = _read_optional_rows(
+        [CONTROL_PLANE_DB_PATH, DB_PATH],
+        "admin_ops_users",
+        """
+        SELECT account_id, organization_id, token_limit, tokens_used,
+               image_limit, images_used
+        FROM admin_ops_users
+        ORDER BY account_id
+        """,
+    )
+    # Account counters and immutable provider facts commit atomically in the
+    # management repository. Read the complete ledger (not only this chart's
+    # date window) so the existing Usage panel can perform an actual balance
+    # reconciliation instead of comparing a window with lifetime counters.
+    provider_fact_rows = _read_optional_rows(
+        [CONTROL_PLANE_DB_PATH, DB_PATH],
+        "admin_ops_provider_usage_facts",
+        """
+        SELECT *
+        FROM admin_ops_provider_usage_facts
+        ORDER BY account_id, provider_created_at, fact_id
+        """,
+    )
     gateway_request_rows = _read_optional_rows(
         [GATEWAY_DB_PATH, DB_PATH],
         "gateway_requests",
         """
-        SELECT request_id, account_id, model_id, trace_id, status,
-               terminal_event_type, created_at, updated_at
-        FROM gateway_requests
+        SELECT requests.request_id, requests.account_id,
+               requests.organization_id, requests.model_id,
+               COALESCE(attempts.upstream_model_id, requests.model_id) AS actual_model_id,
+               attempts.reasoning_effort, attempts.thread_id, attempts.turn_id,
+               requests.trace_id, requests.status, requests.terminal_event_type,
+               requests.created_at, requests.updated_at
+        FROM gateway_requests AS requests
+        LEFT JOIN gateway_model_attempts AS attempts
+          ON attempts.request_id = requests.request_id
         WHERE (
-            datetime(created_at) >= datetime(?) AND datetime(created_at) < datetime(?)
+            datetime(requests.created_at) >= datetime(?) AND datetime(requests.created_at) < datetime(?)
         ) OR (
-            datetime(updated_at) >= datetime(?) AND datetime(updated_at) < datetime(?)
+            datetime(requests.updated_at) >= datetime(?) AND datetime(requests.updated_at) < datetime(?)
         )
-        ORDER BY datetime(created_at), request_id
+        ORDER BY datetime(requests.created_at), requests.request_id
         """,
         (start.isoformat(), end.isoformat(), start.isoformat(), end.isoformat()),
     )
+    if not gateway_request_rows:
+        gateway_request_rows = _read_optional_rows(
+            [GATEWAY_DB_PATH, DB_PATH],
+            "gateway_requests",
+            """
+            SELECT request_id, account_id, model_id, model_id AS actual_model_id,
+                   trace_id, status, terminal_event_type, created_at, updated_at
+            FROM gateway_requests
+            WHERE (
+                datetime(created_at) >= datetime(?) AND datetime(created_at) < datetime(?)
+            ) OR (
+                datetime(updated_at) >= datetime(?) AND datetime(updated_at) < datetime(?)
+            )
+            ORDER BY datetime(created_at), request_id
+            """,
+            (start.isoformat(), end.isoformat(), start.isoformat(), end.isoformat()),
+        )
     gateway_event_rows = _read_optional_rows(
         [GATEWAY_DB_PATH, DB_PATH],
         "gateway_events",
@@ -983,13 +1036,24 @@ def build_payload(start: datetime, end: datetime) -> dict:
                 {
                     "usageSource": "gateway",
                     "requestId": request_id,
+                    "organizationId": request.get("organization_id") or "",
+                    "localModelId": request.get("model_id") or "",
+                    "actualModelId": request.get("actual_model_id")
+                    or request.get("model_id")
+                    or "",
+                    "reasoningEffort": request.get("reasoning_effort") or "",
+                    "threadId": request.get("thread_id") or "",
+                    "turnId": request.get("turn_id") or "",
+                    "terminalEventType": request.get("terminal_event_type") or "",
                 },
                 ensure_ascii=False,
             ),
             "created_at": event.get("created_at") or request.get("updated_at"),
             "device_id": "",
             "session_id": request.get("trace_id") or "",
-            "model": request.get("model_id") or "",
+            "model": request.get("actual_model_id") or request.get("model_id") or "",
+            "organization_id": request.get("organization_id") or "",
+            "reasoning_effort": request.get("reasoning_effort") or "",
             "provider": "managed_gateway",
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
@@ -1006,6 +1070,92 @@ def build_payload(start: datetime, end: datetime) -> dict:
             str(row.get("id") or ""),
         ),
     )
+    settled_by_account: dict[str, dict[str, int]] = {}
+    for fact in provider_fact_rows:
+        account = str(fact.get("account_id") or "")
+        totals = settled_by_account.setdefault(account, {"tokens": 0, "images": 0})
+        totals["tokens"] += max(0, token_number(fact.get("total_tokens")))
+        totals["images"] += max(0, token_number(fact.get("image_count")))
+    balance_rows = []
+    for user in admin_balance_rows:
+        account = str(user.get("account_id") or "")
+        settled = settled_by_account.get(account, {"tokens": 0, "images": 0})
+        token_delta = token_number(user.get("tokens_used")) - settled["tokens"]
+        image_delta = token_number(user.get("images_used")) - settled["images"]
+        balance_rows.append(
+            {
+                "account_id": account,
+                "organization_id": str(user.get("organization_id") or ""),
+                "recorded_tokens": token_number(user.get("tokens_used")),
+                "settled_tokens": settled["tokens"],
+                "token_delta": token_delta,
+                "recorded_images": token_number(user.get("images_used")),
+                "settled_images": settled["images"],
+                "image_delta": image_delta,
+                "balanced": token_delta == 0 and image_delta == 0,
+            }
+        )
+    image_fact_rows = []
+    for fact in provider_fact_rows:
+        if fact.get("usage_kind") != "image":
+            continue
+        try:
+            created = parse_time(str(fact.get("provider_created_at") or ""))
+        except (TypeError, ValueError):
+            continue
+        if not start <= created < end:
+            continue
+        account = canonical_email(fact.get("account_id"))
+        identity = account_aliases.get(account, account)
+        image_fact_rows.append(
+            {
+                "job_id": str(fact.get("source_id") or ""),
+                "account_id": str(fact.get("account_id") or ""),
+                "user": labels_by_email.get(identity, identity or "未识别用户"),
+                "organization_id": str(fact.get("organization_id") or ""),
+                "requested_model_id": str(fact.get("requested_model_id") or ""),
+                "provider_reported_model_id": str(
+                    fact.get("provider_reported_model_id") or ""
+                ),
+                "actual_model_id": str(fact.get("actual_model_id") or "未公开"),
+                "actual_provider_id": str(fact.get("actual_provider_id") or ""),
+                "fallback_from_model_id": str(
+                    fact.get("fallback_from_model_id") or ""
+                ),
+                "fallback_used": (
+                    None
+                    if fact.get("fallback_used") is None
+                    else bool(fact.get("fallback_used"))
+                ),
+                "job_status": str(fact.get("job_status") or ""),
+                "result_status": str(fact.get("result_status") or ""),
+                "image_count": max(0, token_number(fact.get("image_count"))),
+                "provider_created_at": created.isoformat(),
+            }
+        )
+    image_fact_count = len(image_fact_rows)
+    image_fact_rows = image_fact_rows[:MAX_DATA_RESPONSE_ROWS]
+    model_totals: dict[str, dict] = {}
+    tenant_model_totals: dict[tuple[str, str, str], dict[str, int]] = {}
+    for row in usage_rows:
+        model = str(row.get("model") or "unattributed")
+        totals = model_totals.setdefault(
+            model,
+            {"records": 0, "tokens": 0, "reasoning_efforts": Counter()},
+        )
+        totals["records"] += 1
+        tokens = usage_row_projection(row)["totalTokens"]
+        totals["tokens"] += tokens
+        reasoning = str(row.get("reasoning_effort") or "").strip()
+        if reasoning:
+            totals["reasoning_efforts"][reasoning] += 1
+        organization = str(row.get("organization_id") or "").strip()
+        if organization:
+            tenant_totals = tenant_model_totals.setdefault(
+                (organization, model, reasoning), {"records": 0, "tokens": 0}
+            )
+            tenant_totals["records"] += 1
+            tenant_totals["tokens"] += tokens
     reconciliation = {
         "canonical_record_count": len(usage_rows),
         "replaced_duplicate_count": len(
@@ -1026,6 +1176,38 @@ def build_payload(start: datetime, end: datetime) -> dict:
             for row in usage_rows
             if usage_row_projection(row)["usageSource"] == "unreported"
         ),
+        "account_balance_mismatch_count": sum(
+            1 for row in balance_rows if not row["balanced"]
+        ),
+        "token_balance_delta": sum(int(row["token_delta"]) for row in balance_rows),
+        "image_balance_delta": sum(int(row["image_delta"]) for row in balance_rows),
+        "account_balances": balance_rows,
+        "by_model": [
+            {
+                "model": model,
+                "records": totals["records"],
+                "tokens": totals["tokens"],
+                "reasoning_efforts": [
+                    {"level": level, "records": count}
+                    for level, count in sorted(totals["reasoning_efforts"].items())
+                ],
+            }
+            for model, totals in sorted(model_totals.items())
+        ],
+        "by_tenant_model": [
+            {
+                "organization_id": organization,
+                "model": model,
+                "reasoning_effort": reasoning,
+                **totals,
+            }
+            for (organization, model, reasoning), totals in sorted(
+                tenant_model_totals.items()
+            )
+        ],
+        "image_provider_fact_count": image_fact_count,
+        "image_provider_facts_truncated": image_fact_count > len(image_fact_rows),
+        "image_provider_facts": image_fact_rows,
     }
 
     raw_events = []
@@ -1615,7 +1797,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     server = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"EcoreX usage panel API listening on {HOST}:{PORT}", flush=True)
+    print(f"e-Mate usage panel API listening on {HOST}:{PORT}", flush=True)
     server.serve_forever()
 
 

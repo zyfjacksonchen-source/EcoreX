@@ -301,6 +301,8 @@ def test_admin_dom_and_script_contract_are_csp_safe_and_ephemeral() -> None:
     assert all(label in html for label in (">用户<", ">用量<", ">模型<", ">发布<"))
     assert 'id="user-table-body"' in html
     assert 'id="model-table-body"' in html
+    assert 'value="ecorex-gpt-5.6-sol"' in html
+    assert 'id="tenant-policy-dialog"' in html
     assert 'id="rollout-mode"' in html and 'value="full"' in html
     assert "测试并启用" in html
     assert "__ADMIN_CSS_SRI__" in html and "__ADMIN_JS_SRI__" in html
@@ -359,6 +361,7 @@ def test_admin_dom_and_script_contract_are_csp_safe_and_ephemeral() -> None:
         'apiRequest("/models"',
         "/test-and-activate",
         "/usage-adjustments",
+        "/model-policy",
     ):
         assert contract in script
     assert 'elements.modelApiKey.value = ""' in script

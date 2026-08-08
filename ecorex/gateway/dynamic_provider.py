@@ -77,6 +77,16 @@ class DynamicManagedResponsesProvider:
         key, entry, policy = await self._acquire(configuration)
         authoritative = request.model_copy(update={"model_policy": policy})
         try:
+            await asyncio.to_thread(
+                self.handoff_authority.bind_model_attempt,
+                authoritative,
+                config_id=configuration.config_id,
+                config_revision=configuration.revision,
+                upstream_model_id=configuration.upstream_model_id,
+                provider_protocol=configuration.provider_preset,
+                provider_origin_preset=configuration.provider_origin_preset,
+                ttl_seconds=self.chat_handoff_ttl_seconds,
+            )
             async for event in entry.provider.stream(authoritative, principal):
                 yield event
         finally:

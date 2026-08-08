@@ -95,6 +95,7 @@ class Ed25519GatewayJWTAuthenticator:
             return GatewayPrincipal(
                 subject=claims.subject,
                 account_id=claims.account_id,
+                organization_id=claims.organization_id,
                 allowed_model_ids=allowed,
                 quota_period=entitlement.quota_period,
                 request_limit=entitlement.request_limit,

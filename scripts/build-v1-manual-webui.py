@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the unsigned-OS e-Mate v1 WebUI packages by hand.
+"""Build the signed e-Mate 2.0 Runtime seed for unsigned desktop packages.
 
 This is the narrow successor to the v0.3.2 manual WebUI release.  It reuses
 the already published native/Python dependency closure, replaces product code
@@ -79,9 +79,9 @@ COMMIT = re.compile(r"^[0-9a-f]{40}$")
 FIXED_TIME = (1980, 1, 1, 0, 0, 0)
 MAX_MEMBERS = 50_000
 MAX_EXPANDED = 2 * 1024 * 1024 * 1024
-WINDOWS_PACKAGE = f"EcoreX_{__version__}-webui-windows-x64.zip"
-MACOS_PACKAGE = f"EcoreX_{__version__}-webui-macos-universal.zip"
-RECEIPT_SCHEMA = "emate.manual-webui-build-receipt.v1"
+WINDOWS_PACKAGE = f"e-Mate_{__version__}-runtime-windows-x64.zip"
+MACOS_PACKAGE = f"e-Mate_{__version__}-runtime-macos-universal.zip"
+RECEIPT_SCHEMA = "emate.desktop-runtime-build-receipt.v2"
 
 
 class ManualWebUIBuildError(RuntimeError):
@@ -474,7 +474,7 @@ def _go_bootstraps(
     publication_hash = hashlib.sha256(
         _canonical_json(dict(publication_keys)).rstrip(b"\n")
     ).hexdigest()
-    public_url = "https://dl.ecoremedia.net/ecorex-agent/public-bootstrap-index.json"
+    public_url = "https://mvdcm.ecoremedia.net/e-mate/update/public-bootstrap-index.json"
     public_url_hash = hashlib.sha256(public_url.encode()).hexdigest()
     results: dict[tuple[str, str], Path] = {}
     for platform, architecture in TARGETS:
@@ -595,7 +595,7 @@ def _go_bootstraps(
 def _sources() -> tuple[ReleaseSource, ...]:
     github = (
         "https://github.com/zyfjacksonchen-source/"
-        f"EcoreX-installers/releases/download/v{__version__}"
+        f"EcoreX/releases/download/v{__version__}"
     )
     return (
         ReleaseSource(
@@ -609,7 +609,7 @@ def _sources() -> tuple[ReleaseSource, ...]:
             "cdn",
             SourceKind.ECOREX_CDN,
             2,
-            "https://dl.ecoremedia.net/ecorex-agent/downloads",
+            "https://mvdcm.ecoremedia.net/e-mate/update",
         ),
     )
 
@@ -866,7 +866,7 @@ def _verify_outer(
 
 
 def build(args: argparse.Namespace) -> dict[str, Any]:
-    if __version__ != "1.0.0":
+    if __version__ != "2.0.0":
         _fail("manual_webui_version_invalid")
     source = args.source.resolve(strict=True)
     web_dist = args.web_dist.resolve(strict=True)

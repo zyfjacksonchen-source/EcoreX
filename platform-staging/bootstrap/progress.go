@@ -388,7 +388,7 @@ func (progress *bootstrapProgress) finishActiveLineLocked() {
 func artifactDisplayName(item artifact) string {
 	switch {
 	case strings.HasPrefix(item.ArtifactID, "core-"):
-		return "EcoreX 核心"
+		return "e-Mate 核心"
 	case strings.HasPrefix(item.ArtifactID, "bootstrap-"):
 		return "启动组件"
 	case strings.Contains(item.ArtifactID, "office"):
@@ -413,7 +413,7 @@ func sourceDisplayName(kind string) string {
 	case "github-release":
 		return "GitHub"
 	case "ecorex-cdn":
-		return "EcoreX 备用源"
+		return "e-Mate 备用源"
 	default:
 		return "签名下载源"
 	}
@@ -468,8 +468,8 @@ func userFacingFailure(errorValue error) string {
 	case strings.Contains(message, "acceptance checkpoint"):
 		return "新版验收副本未能完成创建，现有版本和数据未被修改。请重新验收。"
 	case strings.Contains(message, "locked") ||
-		strings.Contains(message, "another ecorex"):
-		return "另一个 EcoreX 安装或运行进程仍在工作。请等待它完成后重试。"
+		strings.Contains(message, "another e-mate"):
+		return "另一个 e-Mate 安装或运行进程仍在工作。请等待它完成后重试。"
 	case strings.Contains(message, "signature") ||
 		strings.Contains(message, "verification") ||
 		strings.Contains(message, "manifest") ||
@@ -484,7 +484,7 @@ func userFacingFailure(errorValue error) string {
 	case strings.Contains(message, "runtime") ||
 		strings.Contains(message, "health") ||
 		strings.Contains(message, "webui"):
-		return "本地服务未能完成启动，现有可用版本已保留。请重新打开 EcoreX。"
+		return "本地服务未能完成启动，现有可用版本已保留。请重新打开 e-Mate。"
 	case strings.Contains(message, "root") ||
 		strings.Contains(message, "workspace") ||
 		strings.Contains(message, "directory") ||

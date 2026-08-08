@@ -1,4 +1,4 @@
-"""EcoreX v1 product runtime package."""
+"""e-Mate Enterprise product runtime package."""
 
 from ._version import __version__
 

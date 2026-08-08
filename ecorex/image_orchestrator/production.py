@@ -54,7 +54,7 @@ from .dynamic_provider import (
     AdminImageModelConfigurationResolver,
     DynamicManagedImageProvider,
 )
-from .models import ImageLimits
+from .models import ImageJob, ImageLimits
 from .postgres_schema import PostgresImageSchemaManager, PostgresImageSchemaReceipt
 from .postgres_store import PostgresImageJobStore
 from .production_auth import (
@@ -64,7 +64,7 @@ from .production_auth import (
 from .s3_cas import BotoS3ObjectTransport, S3ImageContentStore
 from .service import ImageOrchestrationService
 from .service import ImageModelConfigurationResolver
-from .provider import ImageProvider
+from .provider import ImageProvider, ProviderResult, ProviderState
 from .worker import ImageJobWorker, ImageWorkerSupervisor
 
 
@@ -959,6 +959,85 @@ class ImageProductionBundle:
         return create_image_production_app(self, include_api=self.mode != "worker")
 
 
+class _AdminManagementImageUsageProvider:
+    """Settle one durable image Job identity without changing provider Core."""
+
+    def __init__(
+        self,
+        provider: ProductionImageProvider,
+        repository: AdminManagementRepository,
+    ) -> None:
+        self.provider = provider
+        self.repository = repository
+        self.provider_id = provider.provider_id
+
+    async def submit(
+        self, job: ImageJob, *, idempotency_key: str
+    ) -> ProviderResult:
+        return await self._settle(
+            job,
+            await self.provider.submit(job, idempotency_key=idempotency_key),
+        )
+
+    async def recover(
+        self,
+        job: ImageJob,
+        *,
+        idempotency_key: str,
+        provider_request_id: str | None,
+    ) -> ProviderResult:
+        return await self._settle(
+            job,
+            await self.provider.recover(
+                job,
+                idempotency_key=idempotency_key,
+                provider_request_id=provider_request_id,
+            ),
+        )
+
+    async def cancel(
+        self,
+        job: ImageJob,
+        *,
+        idempotency_key: str,
+        provider_request_id: str | None,
+    ) -> None:
+        await self.provider.cancel(
+            job,
+            idempotency_key=idempotency_key,
+            provider_request_id=provider_request_id,
+        )
+
+    async def health(self) -> None:
+        await self.provider.health()
+
+    async def aclose(self) -> None:
+        await self.provider.aclose()
+
+    async def _settle(
+        self, job: ImageJob, result: ProviderResult
+    ) -> ProviderResult:
+        if result.state is ProviderState.COMPLETED:
+            usage = result.usage
+            assert usage is not None
+            requested_model_id = job.request.model_id
+            await asyncio.to_thread(
+                self.repository.record_provider_usage,
+                source_service="image_service",
+                source_id=job.job_id,
+                usage_kind="image",
+                account_id=job.account_id,
+                image_count=usage.output_units,
+                provider_created_at=job.created_at.isoformat(),
+                requested_model_id=requested_model_id,
+                provider_reported_model_id=usage.model_id,
+                actual_provider_id=usage.provider,
+                job_status=job.status.value,
+                result_status=result.state.value,
+            )
+        return result
+
+
 class ImageProductionLifecycle:
     def __init__(
         self,
@@ -1097,8 +1176,8 @@ def create_image_production_app(
                 await lifecycle.force_close()
 
     app = FastAPI(
-        title="EcoreX Image Orchestrator",
-        version="1.0.0",
+        title="e-Mate Image Orchestrator",
+        version="2.0.0",
         docs_url=None,
         redoc_url=None,
         openapi_url="/api/v1/openapi.json" if include_api else None,
@@ -1359,7 +1438,7 @@ class PostgresS3ManagedImageProvider:
                         exact_length=32,
                     ),
                 )
-                provider: ProductionImageProvider = DynamicManagedImageProvider(
+                dynamic_provider = DynamicManagedImageProvider(
                     repository,
                     provider_id=config.provider_id,
                     origins=config.model_provider_origins,
@@ -1373,6 +1452,10 @@ class PostgresS3ManagedImageProvider:
                         config.provider_ca_bundle_sha256,
                     ),
                     input_store=content_store,
+                )
+                provider: ProductionImageProvider = _AdminManagementImageUsageProvider(
+                    dynamic_provider,
+                    repository,
                 )
                 resolver: ImageModelConfigurationResolver | None = (
                     AdminImageModelConfigurationResolver(repository)

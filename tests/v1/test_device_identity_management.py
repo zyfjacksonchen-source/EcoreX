@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+import sqlite3
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import pytest
@@ -27,6 +28,7 @@ from ecorex.control_plane.management_models import (
     CreateAdminUserRequest,
     CreateModelConfigurationRequest,
     UpdateAdminUserRequest,
+    UpdateTenantModelPolicyRequest,
 )
 from ecorex.control_plane.management_schema import AdminManagementSchemaManager
 from ecorex.control_plane.models import ControlPrincipal
@@ -78,13 +80,14 @@ def _create_user(
     account_id: str,
     *,
     password: str | None = None,
+    organization_id: str | None = None,
 ) -> None:
     repository.create_user(
         CreateAdminUserRequest(
             account_id=account_id,
             display_name=account_id,
             email=None,
-            organization_id=None,
+            organization_id=organization_id,
             token_limit=0,
             image_limit=0,
             password=password,
@@ -122,7 +125,7 @@ def test_password_reset_and_suspend_immediately_invalidate_old_refresh(
         idempotency_key="old-password-login-grant-0001",
     )
     assert old_grant.lease is not None
-    assert directory.resolve("member-1").auth_epoch == 1
+    original_epoch = directory.resolve("member-1").auth_epoch
 
     current = repository.get_user("member-1")
     repository.update_user(
@@ -140,7 +143,7 @@ def test_password_reset_and_suspend_immediately_invalidate_old_refresh(
         ),
         actor=ACTOR,
     )
-    assert directory.resolve("member-1").auth_epoch == 2
+    assert directory.resolve("member-1").auth_epoch != original_epoch
     with pytest.raises(DeviceRefreshRequired):
         broker.refresh(
             client_id="ecorex-product",
@@ -183,6 +186,115 @@ def test_password_reset_and_suspend_immediately_invalidate_old_refresh(
             refresh_token=str(new_grant.refresh_token),
             idempotency_key="refresh-after-suspend-0001",
         )
+
+
+def test_tenant_policy_filters_catalog_and_invalidates_existing_access(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "control.db"
+    repository = _repository(path)
+    sol = repository.create_model_configuration(
+        CreateModelConfigurationRequest(
+            local_model_id="ecorex-gpt-5.6-sol",
+            modality="chat",
+            display_name="GPT-5.6 Sol",
+            upstream_model_id="gpt-5.6-sol",
+            provider_preset="responses",
+            enabled=True,
+            api_key="sk-test-sol-directory-key",
+            client_request_id="create-sol-directory-model",
+        ),
+        actor=ACTOR,
+    )
+    assert sol.draft is not None
+    lease = repository.begin_model_test(
+        sol.config_id,
+        sol.draft.revision,
+        actor=ACTOR,
+        client_request_id="test-sol-directory-model",
+    )
+    repository.finish_model_test(
+        lease,
+        ModelConnectionTestResult(passed=True),
+        actor=ACTOR,
+    )
+    _create_user(
+        repository,
+        "member-org",
+        password="member-org-password",
+        organization_id="org-policy",
+    )
+    directory = AdminManagementDeviceAccountDirectory(repository)
+    assert directory.resolve("member-org").model_allowlist == (
+        "ecorex-chat",
+        "ecorex-gpt-5.6-sol",
+    )
+
+    access_private = Ed25519PrivateKey.generate()
+    broker = ManagedDeviceIdentityBroker(
+        path,
+        account_directory=directory,
+        access_signer=Ed25519MemorySigner("access-key", access_private),
+        lease_signer=Ed25519MemorySigner(
+            "lease-key", Ed25519PrivateKey.generate()
+        ),
+        secrets=DeviceIdentitySecrets(b"a" * 32, b"b" * 32),
+        issuer="https://identity.ecorex.test",
+        audience="ecorex-product",
+        verification_url="https://identity.ecorex.test/device",
+        allowed_client_ids=frozenset({"ecorex-product"}),
+        clock=lambda: datetime(2026, 7, 19, 10, 0, tzinfo=UTC),
+    )
+    grant = broker.grant_account(
+        client_id="ecorex-product",
+        account_id="member-org",
+        idempotency_key="tenant-policy-grant-0001",
+    )
+    with sqlite3.connect(path) as connection:
+        token_id = str(
+            connection.execute(
+                "SELECT access_jti FROM device_identity_grants ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()[0]
+        )
+    assert broker.access_token_is_current(
+        account_id="member-org", token_id=token_id
+    ) is True
+
+    repository.update_tenant_model_policy(
+        "org-policy",
+        UpdateTenantModelPolicyRequest(
+            allowed_model_ids=["ecorex-chat", "gpt-image-2"],
+            expected_revision=0,
+            client_request_id="update-org-policy-0001",
+        ),
+        actor=ACTOR,
+    )
+    assert directory.resolve("member-org").model_allowlist == ("ecorex-chat",)
+    assert broker.access_token_is_current(
+        account_id="member-org", token_id=token_id
+    ) is False
+    assert grant.access_token is not None
+
+
+def test_personal_tenant_policy_immediately_advances_user_auth_epoch(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path / "control.db")
+    _create_user(repository, "personal-member", password="personal-member-password")
+    directory = AdminManagementDeviceAccountDirectory(repository)
+    original_epoch = directory.resolve("personal-member").auth_epoch
+
+    repository.update_tenant_model_policy(
+        "personal:personal-member",
+        UpdateTenantModelPolicyRequest(
+            allowed_model_ids=["ecorex-chat", "gpt-image-2"],
+            expected_revision=0,
+            client_request_id="update-personal-policy-0001",
+        ),
+        actor=ACTOR,
+    )
+
+    assert directory.resolve("personal-member").auth_epoch != original_epoch
 
 
 def test_platform_roles_come_only_from_deployment_allowlist(tmp_path: Path) -> None:

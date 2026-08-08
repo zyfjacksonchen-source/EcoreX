@@ -1,6 +1,6 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { AtSign, ChevronDown, FileText, LoaderCircle, Plus, Send, ShieldCheck, Square, X } from "lucide-react";
+import { AtSign, Cable, ChevronDown, FileText, LoaderCircle, Plus, Send, ShieldCheck, Square, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { SendDisposition } from "../state/useRuntimeSession.ts";
@@ -44,6 +44,7 @@ interface ComposerProps {
   onChatModelChange: (modelId: string) => void;
   onImageModelChange: (modelId: string) => void;
   onOpenPermissionSettings: () => void;
+  onOpenConnections: () => void;
   onSend: (
     input: string,
     disposition: SendDisposition,
@@ -86,6 +87,7 @@ export function Composer({
   onChatModelChange,
   onImageModelChange,
   onOpenPermissionSettings,
+  onOpenConnections,
   onSend,
   onRefreshCapabilityMentions,
   onUploadAttachment,
@@ -499,6 +501,25 @@ export function Composer({
         {attachmentError ? <p className="ex-composer-attachment-error" role="status">{attachmentError}</p> : null}
       </div>
       <div className="ex-composer-meta">
+        <Tooltip.Root delayDuration={500}>
+          <Tooltip.Trigger asChild>
+            <button
+              type="button"
+              className="ex-permission-inline"
+              data-testid="composer-connections"
+              aria-label="打开外部连接与通道"
+              onClick={onOpenConnections}
+            >
+              <Cable aria-hidden="true" />外部连接
+            </button>
+          </Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content className="ex-tooltip ex-permission-tooltip" side="top" sideOffset={8}>
+              <span>连接飞书、邮箱等外部服务，并管理消息通道。</span>
+              <Tooltip.Arrow className="ex-tooltip-arrow" />
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
         <Tooltip.Root delayDuration={900}>
           <Tooltip.Trigger asChild>
             <button

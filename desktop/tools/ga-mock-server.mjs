@@ -22,7 +22,7 @@ const MIME = {
   ".svg": "image/svg+xml; charset=utf-8",
 };
 
-const SCENARIOS = new Set(["empty", "unauthenticated", "thinking", "codex-layout", "slow-reconnect", "retry", "hitl", "connector-login", "connector-device", "connector-reauth", "connector-restart", "artifact", "replay", "thread-switch", "many-threads", "long-timeline"]);
+const SCENARIOS = new Set(["empty", "unauthenticated", "thinking", "codex-layout", "slow-reconnect", "retry", "hitl", "connector-login", "connector-device", "connector-reauth", "connector-restart", "artifact", "image-gallery", "replay", "thread-switch", "many-threads", "long-timeline"]);
 const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted", "superseded"]);
 const GA_THEMES = new Set(["light", "dark"]);
 const GA_VIEWPORTS = Object.freeze({
@@ -495,6 +495,31 @@ function artifact(artifactId = "artifact-ga-source", revisionId = "revision-ga-s
       score: 0.94,
       summary: "主体边缘、标题安全区和整体对比度已检查。",
     },
+  };
+}
+
+function artifactItem(projection, index) {
+  return {
+    item_id: `item-${projection.artifact_id}`,
+    thread_id: "thread-ga",
+    turn_id: "turn-ga",
+    kind: "artifact",
+    status: projection.status === "pending" ? "in_progress" : projection.status === "failed" ? "failed" : "completed",
+    content: {
+      artifact: projection,
+      image_batch: {
+        schema_version: 1,
+        batch_id: "image-batch-ga",
+        parent_execution_id: "turn-ga:image-batch-call",
+        index,
+        count: 3,
+        task_id: `image-batch-task-ga-${index}`,
+      },
+    },
+    created_seq: 4 + index,
+    inherited: false,
+    created_at: NOW,
+    updated_at: NOW,
   };
 }
 
@@ -1085,6 +1110,44 @@ function scenarioState(name) {
     items.push(item("item-assistant-ga", "turn-ga", "assistant", "已完成主视觉，并检查了主体边缘与标题安全区。请先看一眼下方图片。"));
     base.artifacts.push(artifact());
   }
+  if (name === "image-gallery") {
+    items.push(item("item-assistant-ga", "turn-ga", "assistant", "已按顺序返回本次图片批次。"));
+    const galleryArtifacts = [
+      artifact("artifact-gallery-ready", "revision-gallery-ready", "批次图片_01.png"),
+      artifact("artifact-gallery-ready-third", "revision-gallery-ready-third", "批次图片_03.png"),
+    ];
+    base.artifacts.push(...galleryArtifacts);
+    items.push(artifactItem(galleryArtifacts[0], 0), artifactItem(galleryArtifacts[1], 2));
+    base.seq = 4;
+    emit(base, envelope(base, "artifact.image.batch_task_failed", {
+      turnId: "turn-ga",
+      payload: {
+        schema_version: 1,
+        image_batch: {
+          schema_version: 1,
+          batch_id: "image-batch-ga",
+          parent_execution_id: "turn-ga:image-batch-call",
+          index: 1,
+          count: 3,
+          task_id: "image-batch-task-ga-1",
+        },
+        error: { code: "managed_image_unavailable", retryable: true },
+      },
+    }));
+    base.seq = 6;
+    emit(base, envelope(base, "artifact.image.batch_settled", {
+      turnId: "turn-ga",
+      payload: {
+        schema_version: 1,
+        batch_id: "image-batch-ga",
+        parent_execution_id: "turn-ga:image-batch-call",
+        requested_count: 3,
+        completed_count: 2,
+        failed_count: 1,
+        status: "partial_failed",
+      },
+    }));
+  }
   if (name === "replay") {
     items.push(item("item-assistant-ga", "turn-ga", "assistant", "已完成季度资料整理，可以使用任务诊断验证事件或显式创建新执行。"));
   }
@@ -1095,7 +1158,7 @@ function scenarioState(name) {
     items,
     jobs: [],
     interactions,
-    watermark: name === "codex-layout" ? 4 : name === "hitl" || name === "connector-login" || name === "connector-device" || name === "connector-reauth" || name === "connector-restart" ? 3 : 2,
+    watermark: name === "image-gallery" ? 7 : name === "codex-layout" ? 4 : name === "hitl" || name === "connector-login" || name === "connector-device" || name === "connector-reauth" || name === "connector-restart" ? 3 : 2,
   };
   base.projections.set(activeThread.thread_id, base.projection);
   base.seq = base.projection.watermark;
@@ -1181,14 +1244,14 @@ function bootstrap(state) {
         model_id: "ecorex-gemini-3.1-pro",
         display_name: "Gemini 3.1 Pro",
         capabilities: ["chat", "tools", "reasoning", "vision"],
-        aliases: ["gemini", "gemini-3.1-pro", "gemini-3.1-pro-preview"],
+        aliases: ["gemini", "gemini-3.1-pro", "gemini-3.1-pro-high"],
         is_default: false,
         model_policy: {
           schema_version: 1,
-          policy_id: "ecorex-gemini-3.1-pro-preview",
+          policy_id: "ecorex-gemini-3.1-pro-high",
           policy_version: "1.0.0",
           local_model_id: "ecorex-gemini-3.1-pro",
-          upstream_model_id: "gemini-3.1-pro-preview",
+          upstream_model_id: "gemini-3.1-pro-high",
           reasoning_effort: "medium",
           context_management: { type: "compaction", compact_threshold_tokens: 900_000 },
         },

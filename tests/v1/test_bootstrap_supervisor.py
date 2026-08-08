@@ -312,6 +312,8 @@ def test_uses_authoritative_pointer_and_launches_with_fixed_safe_argv(
     assert spec.environment["PYTHONDONTWRITEBYTECODE"] == "1"
     assert spec.environment["PYTHONNOUSERSITE"] == "1"
     assert spec.environment["PYTHONTZPATH"] == ""
+    assert spec.environment["EMATE_DESKTOP"] == "1"
+    assert spec.environment["EMATE_DATA_DIR"] == str(install_root)
 
 
 def test_runtime_failure_reports_only_nonce_bound_safe_startup_stage(
@@ -574,6 +576,8 @@ def test_default_launcher_uses_no_shell_and_a_sanitized_environment(
         host_architecture="x64",
         source_environment={
             "GITHUB_TOKEN": "secret",
+            "EMATE_DATA_DIR": str(tmp_path / "attacker"),
+            "EMATE_DESKTOP": "0",
             "SYSTEMDRIVE": "C:",
             "TEMP": str(tmp_path),
             "ECOREX_RUNTIME_OWNER_NONCE": "A" * 43,
@@ -592,6 +596,8 @@ def test_default_launcher_uses_no_shell_and_a_sanitized_environment(
     assert kwargs["env"]["PYTHONTZPATH"] == ""
     assert kwargs["env"]["SYSTEMDRIVE"] == "C:"
     assert kwargs["env"]["ECOREX_RUNTIME_OWNER_NONCE"] == "A" * 43
+    assert kwargs["env"]["EMATE_DESKTOP"] == "1"
+    assert kwargs["env"]["EMATE_DATA_DIR"] == str(install_root)
     assert Path(kwargs["executable"]).is_absolute()
 
     with pytest.raises(BootstrapConfigurationError):

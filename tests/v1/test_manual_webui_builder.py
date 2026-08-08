@@ -82,15 +82,15 @@ def test_manual_webui_runtime_config_is_canonical_and_rebound(tmp_path: Path) ->
         allow_nan=False,
     ).encode("utf-8")
     assert value["identity"] == {
-        "version": "1.0.0",
+        "version": "2.0.0",
         "platform": "macos",
         "architecture": "arm64",
     }
     assert value["release_public_keys"] == {"v1": "public"}
     assert value["capability_packs"] == [
         {
-            "artifact": "ecorex-capability-pack-1.0.0.zip",
-            "manifest": "ecorex-capability-pack-1.0.0.json",
+            "artifact": "ecorex-capability-pack-2.0.0.zip",
+            "manifest": "ecorex-capability-pack-2.0.0.json",
         }
     ]
 
@@ -106,7 +106,8 @@ def test_manual_webui_release_sources_are_one_ordered_set() -> None:
         ("cdn", 2),
     ]
     assert sources[0].base_url.startswith("https://gh-proxy.com/")
-    assert sources[2].base_url == "https://dl.ecoremedia.net/ecorex-agent/downloads"
+    assert sources[1].base_url.endswith("/EcoreX/releases/download/v2.0.0")
+    assert sources[2].base_url == "https://mvdcm.ecoremedia.net/e-mate/update"
 
 
 def test_manual_webui_macos_core_keeps_both_runtime_entries_executable() -> None:

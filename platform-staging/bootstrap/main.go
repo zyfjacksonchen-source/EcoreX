@@ -49,7 +49,7 @@ var (
 	stableSemverPattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})$`)
 	semverPattern       = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
 	artifactKindPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,63}$`)
-	errProductLocked    = errors.New("another EcoreX install or Runtime is active")
+	errProductLocked    = errors.New("another e-Mate install or Runtime is active")
 )
 
 // Set by the pinned Go build.  The external config may carry a signed release
@@ -319,7 +319,8 @@ func main() {
 	localRelease := flag.String("local-release", "", "install an authenticated local release directory")
 	previewLocalRelease := flag.String("preview-local-release", "", "open an authenticated local release in an isolated acceptance window")
 	previewPort := flag.Int("preview-port", 18765, "loopback port for the isolated acceptance Runtime")
-	installRootFlag := flag.String("install-root", "", "override the EcoreX data root")
+	installRootFlag := flag.String("install-root", "", "override the e-Mate data root")
+	noOpen := flag.Bool("no-open", false, "leave the verified UI for the desktop shell to open")
 	launchInstalled := flag.Bool(
 		"launch-installed",
 		false,
@@ -338,7 +339,7 @@ func main() {
 		if *indexURL != "" || *localRelease != "" || *previewLocalRelease != "" {
 			fail(fmt.Errorf("installed Runtime launch does not accept release discovery overrides"))
 		}
-		if err := runInstalled(*installRootFlag); err != nil {
+		if err := runInstalled(*installRootFlag, !*noOpen); err != nil {
 			fail(err)
 		}
 		return
@@ -347,13 +348,13 @@ func main() {
 		if *indexURL != "" || *previewLocalRelease != "" {
 			fail(fmt.Errorf("local release install does not accept public discovery overrides"))
 		}
-		if err := runLocalRelease(*localRelease, *installRootFlag); err != nil {
+		if err := runLocalRelease(*localRelease, *installRootFlag, !*noOpen); err != nil {
 			fail(err)
 		}
 		return
 	}
 	if *previewLocalRelease != "" {
-		if *indexURL != "" || *previewPort < 1 || *previewPort > 65535 || *previewPort == 8765 {
+		if *indexURL != "" || *noOpen || *previewPort < 1 || *previewPort > 65535 || *previewPort == 8765 {
 			fail(fmt.Errorf("local release preview options are invalid"))
 		}
 		if err := runPreviewLocalRelease(*previewLocalRelease, *installRootFlag, *previewPort); err != nil {
@@ -361,20 +362,20 @@ func main() {
 		}
 		return
 	}
-	if err := run(*indexURL, *installRootFlag); err != nil {
+	if err := run(*indexURL, *installRootFlag, !*noOpen); err != nil {
 		fail(err)
 	}
 }
 
-func runLocalRelease(localRelease, rootOverride string) error {
-	return runLocalReleaseMode(localRelease, rootOverride, false, 8765)
+func runLocalRelease(localRelease, rootOverride string, openUI bool) error {
+	return runLocalReleaseMode(localRelease, rootOverride, false, 8765, openUI)
 }
 
 func runPreviewLocalRelease(localRelease, rootOverride string, port int) error {
-	return runLocalReleaseMode(localRelease, rootOverride, true, port)
+	return runLocalReleaseMode(localRelease, rootOverride, true, port, true)
 }
 
-func runLocalReleaseMode(localRelease, rootOverride string, preview bool, port int) error {
+func runLocalReleaseMode(localRelease, rootOverride string, preview bool, port int, openUI bool) error {
 	progress := newBootstrapProgress(os.Stderr)
 	if preview {
 		progress.Stage("准备", "正在验证新版候选并创建隔离验收窗口")
@@ -546,9 +547,11 @@ func runLocalReleaseMode(localRelease, rootOverride string, preview bool, port i
 			python, root, trustedDefinitions, legacy, ownerNonce, port, true,
 		)
 	}
-	go func() {
-		_ = waitForRuntimeAndOpen(root, 5*time.Minute)
-	}()
+	if openUI {
+		go func() {
+			_ = waitForRuntimeAndOpen(root, 5*time.Minute)
+		}()
+	}
 	return supervise(python, root, trustedDefinitions, legacy, ownerNonce)
 }
 
@@ -748,9 +751,9 @@ func copyLocalArtifact(source, destination string, item artifact) error {
 	return nil
 }
 
-func runInstalled(rootOverride string) error {
+func runInstalled(rootOverride string, openUI bool) error {
 	progress := newBootstrapProgress(os.Stderr)
-	progress.Stage("启动", "正在检查本机 EcoreX")
+	progress.Stage("启动", "正在检查本机 e-Mate")
 	configuration, _, keys, _, err := loadConfig()
 	if err != nil {
 		return err
@@ -762,8 +765,8 @@ func runInstalled(rootOverride string) error {
 	lock, err := acquireProductLock(filepath.Join(root, "bootstrap-launch.lock"))
 	if err != nil {
 		if errors.Is(err, errProductLocked) {
-			progress.Stage("等待", "EcoreX 正在启动，准备好后会自动打开浏览器")
-			return waitForRuntimeAndOpen(root, 5*time.Minute)
+			progress.Stage("等待", "e-Mate 正在启动，准备好后将显示界面")
+			return waitForRuntime(root, 5*time.Minute, openUI)
 		}
 		return err
 	}
@@ -774,10 +777,10 @@ func runInstalled(rootOverride string) error {
 	if err := ensureRuntimeDataDirectories(root); err != nil {
 		return err
 	}
-	if opened, err := openRunningRuntime(root); err != nil {
+	if opened, err := openRunningRuntime(root, openUI); err != nil {
 		return err
 	} else if opened {
-		progress.Success("EcoreX 已在运行，浏览器已打开")
+		progress.Success("e-Mate 已在运行")
 		return nil
 	}
 	progress.Stage("准备", "正在确认已安装版本与本机安全组件")
@@ -802,16 +805,18 @@ func runInstalled(rootOverride string) error {
 	if err != nil {
 		return err
 	}
-	progress.Stage("启动", "正在启动本地服务，准备好后会自动打开浏览器")
-	go func() {
-		if waitForRuntimeAndOpen(root, 5*time.Minute) == nil {
-			progress.Success("EcoreX 已就绪，浏览器已打开")
-		}
-	}()
+	progress.Stage("启动", "正在启动本地服务")
+	if openUI {
+		go func() {
+			if waitForRuntimeAndOpen(root, 5*time.Minute) == nil {
+				progress.Success("e-Mate 已就绪，界面已打开")
+			}
+		}()
+	}
 	return supervise(python, root, trustedDefinitions, legacy, ownerNonce)
 }
 
-func run(indexOverride, rootOverride string) error {
+func run(indexOverride, rootOverride string, openUI bool) error {
 	progress := newBootstrapProgress(os.Stderr)
 	progress.Stage("准备", "正在检查系统、存储空间与安装状态")
 	configuration, _, keys, publicationKeys, err := loadConfig()
@@ -838,8 +843,8 @@ func run(indexOverride, rootOverride string) error {
 	lock, err := acquireProductLock(filepath.Join(root, "bootstrap-launch.lock"))
 	if err != nil {
 		if errors.Is(err, errProductLocked) {
-			progress.Stage("等待", "另一个 EcoreX 进程正在工作，准备好后会自动打开浏览器")
-			return waitForRuntimeAndOpen(root, 5*time.Minute)
+			progress.Stage("等待", "另一个 e-Mate 进程正在工作，准备好后将显示界面")
+			return waitForRuntime(root, 5*time.Minute, openUI)
 		}
 		return err
 	}
@@ -850,10 +855,10 @@ func run(indexOverride, rootOverride string) error {
 	if err := ensureRuntimeDataDirectories(root); err != nil {
 		return err
 	}
-	if opened, err := openRunningRuntime(root); err != nil {
+	if opened, err := openRunningRuntime(root, openUI); err != nil {
 		return err
 	} else if opened {
-		progress.Success("EcoreX 已在运行，浏览器已打开")
+		progress.Success("e-Mate 已在运行")
 		return nil
 	}
 	progress.Stage("准备", "正在准备本机安全组件")
@@ -898,7 +903,7 @@ func run(indexOverride, rootOverride string) error {
 	if err := acceptPointerAuthority(root, *index.Authority, *index.Freshness, keys, publicationKeys, trustedNow); err != nil {
 		return err
 	}
-	progress.Stage("版本", fmt.Sprintf("已确认 EcoreX v%s，正在准备所需组件", release.Version))
+	progress.Stage("版本", fmt.Sprintf("已确认 e-Mate v%s，正在准备所需组件", release.Version))
 	platform, architecture, err := productTarget()
 	if err != nil {
 		return err
@@ -959,7 +964,7 @@ func run(indexOverride, rootOverride string) error {
 	_ = os.RemoveAll(coreRoot)
 	extractActivity := progress.BeginActivity(
 		"解压",
-		"正在展开已验证的 EcoreX 核心",
+		"正在展开已验证的 e-Mate 核心",
 	)
 	extractErr := extractCore(
 		filepath.Join(artifactsDir, core.FileName),
@@ -969,7 +974,7 @@ func run(indexOverride, rootOverride string) error {
 	if extractErr != nil {
 		return extractErr
 	}
-	progress.Stage("解压", "EcoreX 核心已准备完成")
+	progress.Stage("解压", "e-Mate 核心已准备完成")
 	trustedDefinitions, err := persistTrust(root, configuration.ReleasePublicKeys, keys)
 	if err != nil {
 		return err
@@ -1006,17 +1011,26 @@ func run(indexOverride, rootOverride string) error {
 	if err != nil {
 		return err
 	}
-	progress.Stage("启动", "正在启动本地服务，准备好后会自动打开浏览器")
-	go func() {
-		if waitForRuntimeAndOpen(root, 5*time.Minute) == nil {
-			progress.Success("EcoreX 已就绪，浏览器已打开；以后可从桌面快捷方式再次启动")
-		}
-	}()
+	progress.Stage("启动", "正在启动本地服务")
+	if openUI {
+		go func() {
+			if waitForRuntimeAndOpen(root, 5*time.Minute) == nil {
+				progress.Success("e-Mate 已就绪，界面已打开；以后可从桌面快捷方式再次启动")
+			}
+		}()
+	}
 	return supervise(python, root, trustedDefinitions, legacy, ownerNonce)
 }
 
 func waitForRuntimeAndOpen(root string, timeout time.Duration) error {
 	return waitForRuntimeAndOpenAt(root, productWebUIURL, timeout, openWebUI)
+}
+
+func waitForRuntime(root string, timeout time.Duration, openUI bool) error {
+	if openUI {
+		return waitForRuntimeAndOpen(root, timeout)
+	}
+	return waitForRuntimeAndOpenAt(root, productWebUIURL, timeout, nil)
 }
 
 func waitForRuntimeAndOpenAt(
@@ -1026,9 +1040,6 @@ func waitForRuntimeAndOpenAt(
 ) error {
 	if timeout <= 0 || timeout > 15*time.Minute {
 		return fmt.Errorf("Runtime launch wait is invalid")
-	}
-	if opener == nil {
-		return fmt.Errorf("WebUI opener is unavailable")
 	}
 	deadline := time.Now().Add(timeout)
 	client := &http.Client{
@@ -1048,32 +1059,34 @@ func waitForRuntimeAndOpenAt(
 	defer client.CloseIdleConnections()
 	for {
 		if runtimeUIReadyAt(client, root, webUIURL) {
-			if err := opener(webUIURL); err != nil {
-				return fmt.Errorf("EcoreX WebUI could not be opened")
-			}
-			if err := recordBrowserOpen(root, webUIURL); err != nil {
-				return err
+			if opener != nil {
+				if err := opener(webUIURL); err != nil {
+					return fmt.Errorf("e-Mate WebUI could not be opened")
+				}
+				if err := recordBrowserOpen(root, webUIURL); err != nil {
+					return err
+				}
 			}
 			return nil
 		}
 		if !time.Now().Before(deadline) {
-			return fmt.Errorf("EcoreX Runtime did not become ready")
+			return fmt.Errorf("e-Mate Runtime did not become ready")
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
 }
 
-func openRunningRuntime(root string) (bool, error) {
-	return openRunningRuntimeAt(root, productWebUIURL, openWebUI)
+func openRunningRuntime(root string, openUI bool) (bool, error) {
+	if openUI {
+		return openRunningRuntimeAt(root, productWebUIURL, openWebUI)
+	}
+	return openRunningRuntimeAt(root, productWebUIURL, nil)
 }
 
 func openRunningRuntimeAt(
 	root, webUIURL string,
 	opener func(string) error,
 ) (bool, error) {
-	if opener == nil {
-		return false, fmt.Errorf("WebUI opener is unavailable")
-	}
 	client := &http.Client{
 		Timeout: 3 * time.Second,
 		Transport: &http.Transport{
@@ -1092,11 +1105,13 @@ func openRunningRuntimeAt(
 	if !runtimeUIReadyAt(client, root, webUIURL) {
 		return false, nil
 	}
-	if err := opener(webUIURL); err != nil {
-		return false, fmt.Errorf("EcoreX WebUI could not be opened")
-	}
-	if err := recordBrowserOpen(root, webUIURL); err != nil {
-		return false, err
+	if opener != nil {
+		if err := opener(webUIURL); err != nil {
+			return false, fmt.Errorf("e-Mate WebUI could not be opened")
+		}
+		if err := recordBrowserOpen(root, webUIURL); err != nil {
+			return false, err
+		}
 	}
 	return true, nil
 }
@@ -1588,13 +1603,13 @@ func installRoot(override string) (string, error) {
 		if base == "" || !filepath.IsAbs(base) {
 			return "", fmt.Errorf("Windows LocalAppData is unavailable")
 		}
-		return filepath.Join(base, "EcoreX"), nil
+		return filepath.Join(base, "e-Mate"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || !filepath.IsAbs(home) {
 		return "", fmt.Errorf("user data directory is unavailable")
 	}
-	return filepath.Join(home, "Library", "Application Support", "EcoreX"), nil
+	return filepath.Join(home, ".emate"), nil
 }
 
 func loadTrustedLocalConfig(root string) (legacySelection, bool, error) {
@@ -2774,7 +2789,7 @@ func superviseAt(
 		minimalEnvironment(),
 		"ECOREX_RUNTIME_OWNER_NONCE="+ownerNonce,
 	)
-	if err := command.Run(); err != nil {
+	if err := runOwnedSupervisor(command); err != nil {
 		return fmt.Errorf("installed Runtime did not pass Bootstrap health")
 	}
 	return nil

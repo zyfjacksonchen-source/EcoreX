@@ -10,14 +10,16 @@ from pathlib import Path
 import sqlite3
 
 
-CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION = 4
-ADMIN_MANAGEMENT_MIGRATION_NAME = "password-credentials"
+CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION = 6
+ADMIN_MANAGEMENT_MIGRATION_NAME = "provider-usage-audit-metadata"
 
 _INITIAL_MIGRATION_NAME = "initial-admin-management"
 _INITIAL_MIGRATION_CHECKSUM = (
     "ceeb871fe920bc47afe58032a461b464220f707a56633deed1ce8b4e45afc72d"
 )
 _MIGRATION_V2_NAME = "managed-model-origin-presets"
+_MIGRATION_V4_NAME = "password-credentials"
+_MIGRATION_V5_NAME = "tenant-model-policies"
 
 
 ADMIN_MANAGEMENT_SCHEMA_SQL = """
@@ -294,8 +296,60 @@ CREATE INDEX IF NOT EXISTS idx_admin_ops_password_failures_lock
     ON admin_ops_password_failures(locked_until, updated_at);
 """
 
-ADMIN_MANAGEMENT_MIGRATION_CHECKSUM = hashlib.sha256(
+_MIGRATION_V4_CHECKSUM = hashlib.sha256(
     b"ecorex-admin-management-schema-v4\0password-credentials"
+).hexdigest()
+
+ADMIN_MANAGEMENT_SCHEMA_V5_SQL = """
+CREATE TABLE IF NOT EXISTS admin_ops_tenant_model_policies (
+    organization_id TEXT PRIMARY KEY,
+    allowed_model_ids_json TEXT NOT NULL CHECK(length(allowed_model_ids_json) BETWEEN 2 AND 8192),
+    default_chat_model_id TEXT NOT NULL DEFAULT 'ecorex-chat'
+        CHECK(default_chat_model_id='ecorex-chat'),
+    default_chat_reasoning_effort TEXT NOT NULL DEFAULT 'max'
+        CHECK(default_chat_reasoning_effort='max'),
+    image_primary_model_id TEXT NOT NULL DEFAULT 'gpt-image-2-pro'
+        CHECK(image_primary_model_id='gpt-image-2-pro'),
+    image_fallback_upstream_model_id TEXT NOT NULL DEFAULT 'gpt-image-2'
+        CHECK(image_fallback_upstream_model_id='gpt-image-2'),
+    revision INTEGER NOT NULL CHECK(revision > 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
+_DEFAULT_TENANT_ALLOWED_MODEL_IDS_JSON = json.dumps(
+    [
+        "ecorex-chat",
+        "ecorex-deepseek-v4-pro",
+        "ecorex-doubao-seed-2.0-pro",
+        "ecorex-gemini-3.1-pro",
+        "ecorex-gpt-5.6-sol",
+        "gpt-image-2",
+        "gpt-image-2-edit",
+    ],
+    separators=(",", ":"),
+)
+
+_MIGRATION_V5_CHECKSUM = hashlib.sha256(
+    b"ecorex-admin-management-schema-v5\0tenant-model-policies-with-default-backfill"
+).hexdigest()
+
+ADMIN_MANAGEMENT_SCHEMA_V6_SQL = """
+ALTER TABLE admin_ops_provider_usage_facts ADD COLUMN organization_id TEXT;
+ALTER TABLE admin_ops_provider_usage_facts ADD COLUMN requested_model_id TEXT;
+ALTER TABLE admin_ops_provider_usage_facts ADD COLUMN provider_reported_model_id TEXT;
+ALTER TABLE admin_ops_provider_usage_facts ADD COLUMN actual_model_id TEXT;
+ALTER TABLE admin_ops_provider_usage_facts ADD COLUMN actual_provider_id TEXT;
+ALTER TABLE admin_ops_provider_usage_facts ADD COLUMN fallback_from_model_id TEXT;
+ALTER TABLE admin_ops_provider_usage_facts ADD COLUMN fallback_used INTEGER
+CHECK(fallback_used IS NULL OR fallback_used IN (0,1));
+ALTER TABLE admin_ops_provider_usage_facts ADD COLUMN job_status TEXT;
+ALTER TABLE admin_ops_provider_usage_facts ADD COLUMN result_status TEXT;
+"""
+
+ADMIN_MANAGEMENT_MIGRATION_CHECKSUM = hashlib.sha256(
+    b"ecorex-admin-management-schema-v6\0provider-usage-audit-metadata"
 ).hexdigest()
 
 
@@ -339,6 +393,8 @@ def _expected_shape() -> str:
         connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V2_SQL)
         connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V3_SQL)
         connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V4_SQL)
+        connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V5_SQL)
+        connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V6_SQL)
         return _managed_shape(connection)
     finally:
         connection.close()
@@ -399,6 +455,8 @@ class AdminManagementSchemaManager:
                     ),
                     (2, _MIGRATION_V2_NAME, _MIGRATION_V2_CHECKSUM),
                     (3, "provider-usage-facts", _MIGRATION_V3_CHECKSUM),
+                    (4, _MIGRATION_V4_NAME, _MIGRATION_V4_CHECKSUM),
+                    (5, _MIGRATION_V5_NAME, _MIGRATION_V5_CHECKSUM),
                 )
                 if any(
                     tuple(row) != expected_prefix[index]
@@ -507,18 +565,76 @@ class AdminManagementSchemaManager:
                     ") VALUES(3,'provider-usage-facts',?,?)",
                     (_MIGRATION_V3_CHECKSUM, installed_at),
                 )
-            _execute_sql(connection, ADMIN_MANAGEMENT_SCHEMA_V4_SQL)
-            installed_at = datetime.now(UTC).isoformat()
-            connection.execute(
-                "INSERT INTO admin_ops_schema_migrations("
-                "version,migration_name,migration_checksum,installed_at"
-                ") VALUES(4,?,?,?)",
-                (
-                    ADMIN_MANAGEMENT_MIGRATION_NAME,
-                    ADMIN_MANAGEMENT_MIGRATION_CHECKSUM,
-                    installed_at,
-                ),
-            )
+            rows = connection.execute(
+                "SELECT version,migration_name,migration_checksum "
+                "FROM admin_ops_schema_migrations ORDER BY version"
+            ).fetchall()
+            if len(rows) == 3:
+                _execute_sql(connection, ADMIN_MANAGEMENT_SCHEMA_V4_SQL)
+                installed_at = datetime.now(UTC).isoformat()
+                connection.execute(
+                    "INSERT INTO admin_ops_schema_migrations("
+                    "version,migration_name,migration_checksum,installed_at"
+                    ") VALUES(4,?,?,?)",
+                    (_MIGRATION_V4_NAME, _MIGRATION_V4_CHECKSUM, installed_at),
+                )
+            rows = connection.execute(
+                "SELECT version,migration_name,migration_checksum "
+                "FROM admin_ops_schema_migrations ORDER BY version"
+            ).fetchall()
+            if len(rows) == 4:
+                _execute_sql(connection, ADMIN_MANAGEMENT_SCHEMA_V5_SQL)
+                installed_at = datetime.now(UTC).isoformat()
+                tenant_ids = [
+                    str(row[0])
+                    for row in connection.execute(
+                        "SELECT organization_id FROM admin_ops_users "
+                        "WHERE organization_id IS NOT NULL "
+                        "UNION SELECT 'personal:' || account_id FROM admin_ops_users "
+                        "WHERE organization_id IS NULL ORDER BY 1"
+                    ).fetchall()
+                ]
+                connection.executemany(
+                    "INSERT INTO admin_ops_tenant_model_policies("
+                    "organization_id,allowed_model_ids_json,revision,created_at,updated_at"
+                    ") VALUES(?,?,1,?,?)",
+                    (
+                        (
+                            organization_id,
+                            _DEFAULT_TENANT_ALLOWED_MODEL_IDS_JSON,
+                            installed_at,
+                            installed_at,
+                        )
+                        for organization_id in tenant_ids
+                    ),
+                )
+                connection.execute(
+                    "INSERT INTO admin_ops_schema_migrations("
+                    "version,migration_name,migration_checksum,installed_at"
+                    ") VALUES(5,?,?,?)",
+                    (
+                        _MIGRATION_V5_NAME,
+                        _MIGRATION_V5_CHECKSUM,
+                        installed_at,
+                    ),
+                )
+            rows = connection.execute(
+                "SELECT version,migration_name,migration_checksum "
+                "FROM admin_ops_schema_migrations ORDER BY version"
+            ).fetchall()
+            if len(rows) == 5:
+                _execute_sql(connection, ADMIN_MANAGEMENT_SCHEMA_V6_SQL)
+                installed_at = datetime.now(UTC).isoformat()
+                connection.execute(
+                    "INSERT INTO admin_ops_schema_migrations("
+                    "version,migration_name,migration_checksum,installed_at"
+                    ") VALUES(6,?,?,?)",
+                    (
+                        ADMIN_MANAGEMENT_MIGRATION_NAME,
+                        ADMIN_MANAGEMENT_MIGRATION_CHECKSUM,
+                        installed_at,
+                    ),
+                )
             if _managed_shape(connection) != ADMIN_MANAGEMENT_SCHEMA_SHA256:
                 raise AdminManagementSchemaError(
                     "admin management schema migration target drifted"
@@ -562,7 +678,7 @@ class AdminManagementSchemaManager:
             raise AdminManagementSchemaError(
                 "admin management schema history is invalid"
             )
-        initial, migration_v2, migration_v3, value = row
+        initial, migration_v2, migration_v3, migration_v4, migration_v5, value = row
         if (
             int(initial[0]) != 1
             or str(initial[1]) != _INITIAL_MIGRATION_NAME
@@ -573,6 +689,12 @@ class AdminManagementSchemaManager:
             or int(migration_v3[0]) != 3
             or str(migration_v3[1]) != "provider-usage-facts"
             or str(migration_v3[2]) != _MIGRATION_V3_CHECKSUM
+            or int(migration_v4[0]) != 4
+            or str(migration_v4[1]) != _MIGRATION_V4_NAME
+            or str(migration_v4[2]) != _MIGRATION_V4_CHECKSUM
+            or int(migration_v5[0]) != 5
+            or str(migration_v5[1]) != _MIGRATION_V5_NAME
+            or str(migration_v5[2]) != _MIGRATION_V5_CHECKSUM
             or
             int(value[0]) != CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION
             or str(value[1]) != ADMIN_MANAGEMENT_MIGRATION_NAME
@@ -596,6 +718,8 @@ __all__ = [
     "ADMIN_MANAGEMENT_SCHEMA_V2_SQL",
     "ADMIN_MANAGEMENT_SCHEMA_V3_SQL",
     "ADMIN_MANAGEMENT_SCHEMA_V4_SQL",
+    "ADMIN_MANAGEMENT_SCHEMA_V5_SQL",
+    "ADMIN_MANAGEMENT_SCHEMA_V6_SQL",
     "AdminManagementSchemaError",
     "AdminManagementSchemaManager",
     "AdminManagementSchemaReceipt",

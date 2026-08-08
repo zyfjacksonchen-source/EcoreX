@@ -653,6 +653,14 @@ textarea {
   min-width: 0;
 }
 
+.ex-account-avatar {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
 .ex-account-trigger > span {
   min-width: 0;
   overflow: hidden;

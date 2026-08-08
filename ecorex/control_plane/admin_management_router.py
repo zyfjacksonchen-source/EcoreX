@@ -22,8 +22,10 @@ from .management_models import (
     ModelConfigurationProjection,
     ModelTestProjection,
     StageModelConfigurationRequest,
+    TenantModelPolicyProjection,
     TestAndActivateModelRequest,
     UpdateAdminUserRequest,
+    UpdateTenantModelPolicyRequest,
     UsageSummaryProjection,
 )
 from .models import ControlPrincipal
@@ -114,6 +116,34 @@ def create_admin_management_router(
         _current: ControlPrincipal = Depends(model_admin_dependency),
     ) -> list[ModelConfigurationProjection]:
         return await asyncio.to_thread(repository.list_model_configurations)
+
+    @router.get(
+        "/tenants/{organization_id}/model-policy",
+        response_model=TenantModelPolicyProjection,
+    )
+    async def get_tenant_model_policy(
+        organization_id: str,
+        _current: ControlPrincipal = Depends(model_admin_dependency),
+    ) -> TenantModelPolicyProjection:
+        return await asyncio.to_thread(
+            repository.get_tenant_model_policy, organization_id
+        )
+
+    @router.put(
+        "/tenants/{organization_id}/model-policy",
+        response_model=TenantModelPolicyProjection,
+    )
+    async def update_tenant_model_policy(
+        organization_id: str,
+        request: UpdateTenantModelPolicyRequest,
+        current: ControlPrincipal = Depends(model_admin_dependency),
+    ) -> TenantModelPolicyProjection:
+        return await asyncio.to_thread(
+            repository.update_tenant_model_policy,
+            organization_id,
+            request,
+            actor=current,
+        )
 
     @router.post(
         "/models", response_model=ModelConfigurationProjection, status_code=201

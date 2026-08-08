@@ -1,5 +1,4 @@
-import * as Dialog from "@radix-ui/react-dialog";
-import { Activity, AlertCircle, Blocks, Brain, FolderOutput, KeyRound, RefreshCw, RotateCcw, Shield, X } from "lucide-react";
+import { Activity, AlertCircle, Blocks, BookOpenText, Brain, Camera, FolderOutput, KeyRound, RefreshCw, RotateCcw, Shield, UserRound, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
@@ -40,6 +39,9 @@ interface SettingsDialogProps {
   extensions: ExtensionCatalogSnapshot | null;
   extensionLoadState: ExtensionLoadState;
   onManageExtensions: () => void;
+  onManageKnowledge: () => void;
+  profileAvatar: string | null;
+  onProfileAvatarChange: (value: string | null) => void;
   memory: MemorySnapshot | null;
   memoryLoadState: "loading" | "ready" | "error";
   memoryBusy: boolean;
@@ -82,6 +84,9 @@ export function SettingsDialog({
   extensions,
   extensionLoadState,
   onManageExtensions,
+  onManageKnowledge,
+  profileAvatar,
+  onProfileAvatarChange,
   memory,
   memoryLoadState,
   memoryBusy,
@@ -130,6 +135,7 @@ export function SettingsDialog({
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
   const passwordRequestId = useRef<string | null>(null);
   const extensionSummary = extensionCatalogSummary(extensions);
   const updateReady = isVerifiedRuntimeUpdateReady(bootstrap?.update);
@@ -196,6 +202,7 @@ export function SettingsDialog({
       setNewPassword("");
       setConfirmPassword("");
       setPasswordError(null);
+      setAvatarError(null);
       passwordRequestId.current = null;
     }
   }, [open]);
@@ -234,13 +241,27 @@ export function SettingsDialog({
     }
   };
 
-  const handleOpenChange = (nextOpen: boolean) => {
-    if (!nextOpen) {
-      setConfirmElevation(false);
-      setConfirmMemoryReset(false);
-      setConfirmQuarantineDelete(false);
+  const chooseAvatar = (file: File | undefined) => {
+    if (!file) return;
+    if (!file.type.match(/^image\/(?:png|jpeg|webp)$/u)) {
+      setAvatarError("请选择 PNG、JPEG 或 WebP 图片。");
+      return;
     }
-    onOpenChange(nextOpen);
+    if (file.size > 512 * 1024) {
+      setAvatarError("头像不能超过 512 KB。");
+      return;
+    }
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      if (typeof reader.result !== "string" || !/^data:image\/(?:png|jpeg|webp);base64,/u.test(reader.result)) {
+        setAvatarError("头像读取失败，请重试。");
+        return;
+      }
+      onProfileAvatarChange(reader.result);
+      setAvatarError(null);
+    }, { once: true });
+    reader.addEventListener("error", () => setAvatarError("头像读取失败，请重试。"), { once: true });
+    reader.readAsDataURL(file);
   };
 
   const credentialKindLabel = (kind: MigrationCredentialKind) => ({
@@ -259,25 +280,37 @@ export function SettingsDialog({
     permission_configuration: "旧版权限设置",
   })[origin];
 
-  return (
-    <Dialog.Root open={open} onOpenChange={handleOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="ex-dialog-overlay" />
-        <Dialog.Content className="ex-dialog" aria-describedby="ecorex-settings-description">
-          <div className="ex-dialog-heading">
-            <div>
-              <Dialog.Title>设置</Dialog.Title>
-              <Dialog.Description id="ecorex-settings-description">
-                在这里管理账户、扩展、产物位置、记忆、权限和版本。
-              </Dialog.Description>
-            </div>
-            <Dialog.Close className="ex-icon-button" aria-label="关闭设置">
-              <X aria-hidden="true" />
-            </Dialog.Close>
-          </div>
+  if (!open) return null;
 
-          <section className="ex-settings-section">
-            <h2>托管账户</h2>
+  return (
+    <section className="ex-settings-workspace" aria-label="设置" data-testid="settings-workspace">
+      <header className="ex-settings-page-header">
+        <div><h1>设置</h1><p id="ecorex-settings-description">管理个人资料、常规设置、知识和记忆。</p></div>
+        <button className="ex-icon-button" type="button" aria-label="关闭设置" onClick={() => onOpenChange(false)}><X aria-hidden="true" /></button>
+      </header>
+      <div className="ex-settings-page-layout">
+        <nav className="ex-settings-page-nav" aria-label="设置分区">
+          <a href="#settings-profile">个人资料</a>
+          <a href="#settings-general">常规设置</a>
+          <a href="#settings-knowledge">知识</a>
+          <a href="#settings-memory">记忆</a>
+        </nav>
+        <div className="ex-settings-page-content">
+
+          <section className="ex-settings-section" id="settings-profile">
+            <h2>个人资料</h2>
+            <div className="ex-profile-avatar-row">
+              <span className="ex-profile-avatar-preview">
+                {profileAvatar ? <img src={profileAvatar} alt="当前头像" /> : <UserRound aria-hidden="true" />}
+              </span>
+              <div><strong>头像</strong><p>仅保存在此设备，不会上传或改变企业账号资料。</p></div>
+              <label className="ex-button ex-profile-avatar-button">
+                <Camera aria-hidden="true" /><span>选择图片</span>
+                <input type="file" aria-label="选择头像图片" accept="image/png,image/jpeg,image/webp" onChange={(event) => chooseAvatar(event.target.files?.[0])} />
+              </label>
+              {profileAvatar ? <button className="ex-button" type="button" onClick={() => onProfileAvatarChange(null)}>移除</button> : null}
+            </div>
+            {avatarError ? <p className="ex-settings-note is-error" role="status">{avatarError}</p> : null}
             <div className="ex-settings-row">
               <div>
                 <strong>{authenticated ? bootstrap?.login.display_name || "已登录账号" : "需要登录"}</strong>
@@ -312,8 +345,8 @@ export function SettingsDialog({
             ) : null}
           </section>
 
-          <section className="ex-settings-section">
-            <h2>产物位置</h2>
+          <section className="ex-settings-section" id="settings-general">
+            <h2>常规设置</h2>
             <div className="ex-settings-row">
               <span className="ex-settings-icon"><FolderOutput aria-hidden="true" /></span>
               <div>
@@ -494,7 +527,17 @@ export function SettingsDialog({
             </p>
           </section>
 
-          <section className="ex-settings-section">
+          <section className="ex-settings-section" id="settings-knowledge">
+            <h2>知识</h2>
+            <div className="ex-settings-row">
+              <span className="ex-settings-icon"><BookOpenText aria-hidden="true" /></span>
+              <div><strong>知识库</strong><p>由 Runtime 的知识能力读取、整理和更新，不在设置页保存副本。</p></div>
+              <button className="ex-button ex-permission-change" type="button" onClick={onManageKnowledge}>在会话中管理</button>
+            </div>
+            <p className="ex-settings-note">点击后会进入当前会话，由小芯先读取真实知识目录，再按你的确认执行修改。</p>
+          </section>
+
+          <section className="ex-settings-section" id="settings-memory">
             <h2>记忆</h2>
             <div className="ex-settings-row">
               <span className="ex-settings-icon"><Brain aria-hidden="true" /></span>
@@ -824,8 +867,8 @@ export function SettingsDialog({
               </div>
             ) : null}
           </section>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+        </div>
+      </div>
+    </section>
   );
 }

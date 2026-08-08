@@ -390,7 +390,7 @@
         <input id="model-active-revision" type="hidden">
         <div class="editor-grid">
           <label for="model-modality"><span>用途</span><select id="model-modality"><option value="chat">主模型</option><option value="image_generation">生图模型</option><option value="image_edit">精修模型</option></select></label>
-          <label for="model-local-id"><span>e-Mate 模型位</span><select id="model-local-id"><option value="ecorex-chat">GPT 主模型</option><option value="ecorex-deepseek-v4-pro">DeepSeek</option><option value="ecorex-gemini-3.1-pro">Gemini</option><option value="ecorex-doubao-seed-2.0-pro">豆包</option><option value="gpt-image-2">生图模型</option><option value="gpt-image-2-edit">精修模型</option></select></label>
+          <label for="model-local-id"><span>e-Mate 模型位</span><select id="model-local-id"><option value="ecorex-chat">GPT-5.6 Luna（默认）</option><option value="ecorex-gpt-5.6-sol">GPT-5.6 Sol</option><option value="ecorex-deepseek-v4-pro">DeepSeek</option><option value="ecorex-gemini-3.1-pro">Gemini</option><option value="ecorex-doubao-seed-2.0-pro">豆包</option><option value="gpt-image-2">生图模型</option><option value="gpt-image-2-edit">精修模型</option></select></label>
           <label for="model-display-name"><span>页面显示名称</span><input id="model-display-name" type="text" maxlength="128" required></label>
           <label for="model-upstream-id"><span>服务端模型名</span><input id="model-upstream-id" type="text" maxlength="128" required></label>
           <input id="model-provider" type="hidden" value="responses">
@@ -399,6 +399,25 @@
           <label class="check-row" for="model-enabled"><input id="model-enabled" type="checkbox" checked><span>启用</span></label>
         </div>
         <div class="dialog-actions"><button class="button" id="model-cancel-button" type="button">取消</button><button class="button primary" id="model-save-button" type="submit">保存草稿</button></div>
+      </form>
+    </dialog>
+
+    <dialog class="editor-dialog" id="tenant-policy-dialog" aria-labelledby="tenant-policy-dialog-title">
+      <form id="tenant-policy-form" novalidate>
+        <div class="dialog-heading"><h2 id="tenant-policy-dialog-title">租户模型策略</h2><p>变更会立即使该组织现有会话刷新，并影响下一次请求。</p></div>
+        <input id="tenant-policy-revision" type="hidden">
+        <div class="editor-grid">
+          <label class="span-all" for="tenant-policy-organization"><span>组织 ID</span><input id="tenant-policy-organization" type="text" readonly></label>
+          <label class="check-row" for="tenant-model-luna"><input id="tenant-model-luna" type="checkbox" value="ecorex-chat" checked disabled><span>GPT-5.6 Luna · max（固定默认）</span></label>
+          <label class="check-row" for="tenant-model-sol"><input id="tenant-model-sol" type="checkbox" value="ecorex-gpt-5.6-sol"><span>GPT-5.6 Sol · medium</span></label>
+          <label class="check-row" for="tenant-model-deepseek"><input id="tenant-model-deepseek" type="checkbox" value="ecorex-deepseek-v4-pro"><span>DeepSeek</span></label>
+          <label class="check-row" for="tenant-model-gemini"><input id="tenant-model-gemini" type="checkbox" value="ecorex-gemini-3.1-pro"><span>Gemini 3.1 Pro High</span></label>
+          <label class="check-row" for="tenant-model-doubao"><input id="tenant-model-doubao" type="checkbox" value="ecorex-doubao-seed-2.0-pro"><span>豆包 Seed 2.0 Pro</span></label>
+          <label class="check-row" for="tenant-model-image"><input id="tenant-model-image" type="checkbox" value="gpt-image-2" checked disabled><span>生图 gpt-image-2-pro（失败后仅按策略降级到 gpt-image-2）</span></label>
+          <label class="check-row" for="tenant-model-image-edit"><input id="tenant-model-image-edit" type="checkbox" value="gpt-image-2-edit"><span>图片精修</span></label>
+          <p class="field-help span-all" id="tenant-policy-status">读取租户策略后方可保存。</p>
+        </div>
+        <div class="dialog-actions"><button class="button" id="tenant-policy-cancel-button" type="button">取消</button><button class="button primary" id="tenant-policy-save-button" type="submit">保存并立即生效</button></div>
       </form>
     </dialog>
 

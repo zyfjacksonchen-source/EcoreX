@@ -4,6 +4,7 @@ import {
   Archive,
   ArchiveRestore,
   Blocks,
+  CalendarClock,
   ChevronDown,
   Copy,
   FolderOpen,
@@ -18,7 +19,6 @@ import {
   RefreshCw,
   Search,
   Settings2,
-  Sparkles,
   Trash2,
   UserRound,
   X,
@@ -45,15 +45,16 @@ interface SidebarProps {
   mutationKey: string | null;
   authenticated: boolean;
   accountDisplayName: string | null;
+  profileAvatar: string | null;
   skillsActive: boolean;
-  creativeActive: boolean;
+  schedulesActive: boolean;
   homeActive: boolean;
   sessionBusy: boolean;
   sessionError: string | null;
   onClose: () => void;
   onNewTask: (project?: ProjectProjection | null) => void;
   onOpenSkills: () => void;
-  onOpenCreative: () => void;
+  onOpenSchedules: () => void;
   onPickProject: () => Promise<ProjectProjection | null>;
   onClearProjectError: () => void;
   onOpenThread: (threadId: string) => Promise<boolean>;
@@ -88,15 +89,16 @@ export function Sidebar({
   mutationKey,
   authenticated,
   accountDisplayName,
+  profileAvatar,
   skillsActive,
-  creativeActive,
+  schedulesActive,
   homeActive,
   sessionBusy,
   sessionError,
   onClose,
   onNewTask,
   onOpenSkills,
-  onOpenCreative,
+  onOpenSchedules,
   onPickProject,
   onClearProjectError,
   onOpenThread,
@@ -363,14 +365,15 @@ export function Sidebar({
           <span>新任务</span>
         </button>
         <button
-          className={`ex-sidebar-action ex-sidebar-skill-link${creativeActive ? " is-current" : ""}`}
+          className={`ex-sidebar-action ex-sidebar-skill-link${schedulesActive ? " is-current" : ""}`}
           type="button"
-          aria-label="创意中心"
-          aria-current={creativeActive ? "page" : undefined}
-          onClick={onOpenCreative}
+          aria-label="定时任务"
+          aria-current={schedulesActive ? "page" : undefined}
+          data-testid="sidebar-schedules"
+          onClick={onOpenSchedules}
         >
-          <Sparkles aria-hidden="true" />
-          <span>创意中心</span>
+          <CalendarClock aria-hidden="true" />
+          <span>定时任务</span>
         </button>
         <button
           className={`ex-sidebar-action ex-sidebar-skill-link${skillsActive ? " is-current" : ""}`}
@@ -614,7 +617,9 @@ export function Sidebar({
                 type="button"
                 aria-label={`用户中心，${authenticated ? accountDisplayName || "已登录账号" : "未登录"}`}
               >
-                <UserRound aria-hidden="true" />
+                {profileAvatar
+                  ? <img className="ex-account-avatar" src={profileAvatar} alt="" />
+                  : <UserRound aria-hidden="true" />}
                 <span>用户中心</span>
                 <ChevronDown className="ex-account-chevron" aria-hidden="true" />
               </button>

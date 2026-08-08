@@ -1,4 +1,4 @@
-"""Authoritative v1 policy for EcoreX-managed model identities.
+"""Authoritative policy for e-Mate managed model identities.
 
 The public Runtime model ID is intentionally stable across upstream model
 upgrades.  Both the local catalog and the cloud Model Gateway import this
@@ -113,12 +113,12 @@ ECOREX_DEEPSEEK_MODEL_POLICY = ManagedChatModelPolicy(
 
 ECOREX_GEMINI_MODEL_POLICY = ManagedChatModelPolicy(
     schema_version=1,
-    policy_id="ecorex-gemini-3.1-pro-preview",
-    policy_version="1.0.0",
+    policy_id="ecorex-gemini-3.1-pro-high",
+    policy_version="2.0.0",
     local_model_id="ecorex-gemini-3.1-pro",
-    upstream_model_id="gemini-3.1-pro-preview",
-    display_name="Gemini 3.1 Pro",
-    aliases=("gemini", "gemini-3.1-pro", "gemini-3.1-pro-preview"),
+    upstream_model_id="gemini-3.1-pro-high",
+    display_name="Gemini 3.1 Pro High",
+    aliases=("gemini", "gemini-3.1-pro", "gemini-3.1-pro-high"),
     reasoning_effort="medium",
     context_management_type="compaction",
     compact_threshold_tokens=900_000,

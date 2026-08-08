@@ -34,8 +34,13 @@ does not select providers, API keys, models or installation commands.
   `attachment_ids` for images attached to the current Turn.
 - Set `size` or `quality` only when the user requests them or the deliverable
   clearly requires them. Do not invent provider-specific parameters.
-- Call `imagegen` once for one requested result. Split genuinely different
-  deliverables into separate task steps instead of inventing a batch schema.
+- For one requested result, call `imagegen` with the single `instruction`
+  contract. For two to eight independent results, make one `imagegen` call
+  with the ordered native `tasks` array; each task uses the same fields as a
+  single request. Never mix top-level single-image fields with `tasks`.
+- Keep the user's requested order. More than eight results must be split into
+  sequential batches of at most eight; do not launch parallel tool calls or
+  delegate image generation to subagents.
 
 ## Verify and recover
 
@@ -43,8 +48,9 @@ does not select providers, API keys, models or installation commands.
   subject, composition, text and edit preservation are present.
 - When references were supplied, compare subject identity, layout, style,
   colour and requested changes before delivery.
-- If a result has a specific visible defect, retry with a targeted correction
-  that names that defect. Do not repeat an unchanged request.
+- If a result has a specific visible defect, retry only that result with a
+  targeted correction that names the defect. Do not repeat an unchanged
+  request or regenerate successful siblings from a partial batch.
 - If Runtime reports the image Pack, model or service unavailable, follow the
   structured recovery choices. Do not run npm, pip, provider HTTP scripts,
   Pillow, HTML, SVG or canvas as a substitute for final image generation.

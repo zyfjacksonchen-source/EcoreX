@@ -38,15 +38,30 @@ const composer = await readFile(
   new URL("../src/v1/components/Composer.tsx", import.meta.url),
   "utf-8",
 );
+const artifactShelf = await readFile(
+  new URL("../src/v1/components/ArtifactShelf.tsx", import.meta.url),
+  "utf-8",
+);
+const imageGallery = await readFile(
+  new URL("../src/v1/state/timelineImageGallery.ts", import.meta.url),
+  "utf-8",
+);
+const imageBatchFacts = await readFile(
+  new URL("../src/v1/state/imageBatchFacts.ts", import.meta.url),
+  "utf-8",
+);
 
 test("the chat DOM virtualizes durable turn projections", () => {
   assert.match(timeline, /from "react-virtuoso"/u);
-  assert.match(timeline, /buildTimelineTurns\(turns, items, interactions\)/u);
+  assert.match(timeline, /items\.filter\(\(item\) => item\.kind !== "task_list"\)/u);
+  assert.match(timeline, /buildTimelineTurns\(turns, timelineItems, interactions\)/u);
   assert.match(timeline, /computeItemKey=\{\(_index, entry\) => entry\.turn\.turn_id\}/u);
   assert.match(timeline, /increaseViewportBy=\{\{ top: 800, bottom: 800 \}\}/u);
   assert.match(timeline, /atBottomThreshold=\{TIMELINE_BOTTOM_THRESHOLD_PX\}/u);
   assert.match(timeline, /TIMELINE_BOTTOM_THRESHOLD_PX = 72/u);
-  assert.match(turnProjection, /foldTurnProcess/u);
+  assert.match(turnProjection, /function sequence\(block: TimelineBlock\)/u);
+  assert.match(turnProjection, /return leftSeq - rightSeq/u);
+  assert.match(turnProjection, /\.filter\(isPresent\)/u);
   assert.match(turnProjection, /created_seq/u);
   assert.doesNotMatch(timeline, /selectTimelineWindow|historyEndAnchorId/u);
   assert.match(timeline, /item\.kind === "artifact"/u);
@@ -115,6 +130,32 @@ test("streaming Markdown renders the frame-batched text without a second delay",
   assert.doesNotMatch(richMessage, /window\.setTimeout/u);
   assert.doesNotMatch(richMessage, /useDeferredValue/u);
   assert.match(richMessage, /\{text\}/u);
+});
+
+test("one complete backend image batch uses the native placeholder and accessible gallery controls", () => {
+  assert.match(timeline, /groupTimelineImageArtifacts\([\s\S]*entry\.blocks,[\s\S]*imageBatchFailures/u);
+  assert.match(imageGallery, /artifact\?\.family !== "image"/u);
+  assert.match(imageGallery, /typeof block\.item\.content\.retouch_job_id === "string"/u);
+  assert.match(imageGallery, /block\.item\.content\.image_batch/u);
+  assert.match(imageGallery, /fact\.schema_version !== 1/u);
+  assert.match(imageGallery, /new Set\(images\.map\(\(fact\) => fact\.index\)\)\.size/u);
+  assert.match(imageGallery, /sort\(\(left, right\) => left\.index - right\.index\)/u);
+  assert.match(artifactShelf, /"ArrowLeft"/u);
+  assert.match(artifactShelf, /"ArrowRight"/u);
+  assert.match(artifactShelf, /data-artifact-status/u);
+  assert.match(artifactShelf, /ex-image-generation-canvas/u);
+  assert.match(artifactShelf, /aria-live="polite"/u);
+  assert.match(features, /\.ex-image-gallery-track[\s\S]*scroll-snap-type:\s*inline mandatory/u);
+  assert.match(features, /prefers-reduced-motion[\s\S]*\.ex-image-gallery-track/u);
+});
+
+test("partial image batches project only durable backend failure facts", () => {
+  assert.match(runtimeSession, /setImageBatchFacts\(\(current\) => reduceImageBatchFacts\(current, events\)\)/u);
+  assert.match(runtimeSession, /client\.eventPage\(threadId, afterSeq, 1_000, pageSignal\)/u);
+  assert.match(imageBatchFacts, /event\.event_type !== "artifact\.image\.batch_task_failed"/u);
+  assert.match(imageBatchFacts, /event\.event_type !== "artifact\.image\.batch_settled"/u);
+  assert.match(imageBatchFacts, /if \(batchFailures\.length !== settlement\.failedCount\) return \[\]/u);
+  assert.match(artifactShelf, /data-image-batch-task-id/u);
 });
 
 test("continuing by task ID keeps the current transcript until the target is verified", () => {

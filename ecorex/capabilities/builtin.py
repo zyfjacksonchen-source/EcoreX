@@ -216,9 +216,8 @@ _SHELL_INPUT = {
     "required": ["command"],
     "additionalProperties": False,
 }
-_IMAGE_INPUT = {
-    "type": "object",
-    "properties": {
+def _image_task_properties():
+    return {
         "instruction": {"type": "string", "minLength": 1, "maxLength": 20000},
         "reference_artifact_ids": {
             "type": "array",
@@ -232,8 +231,27 @@ _IMAGE_INPUT = {
         },
         "size": {"type": "string", "maxLength": 64},
         "quality": {"type": "string", "maxLength": 64},
+    }
+
+
+_IMAGE_INPUT = {
+    "type": "object",
+    "description": "Provide one instruction or one tasks array, never both.",
+    "properties": {
+        **_image_task_properties(),
+        "tasks": {
+            "type": "array",
+            "description": "Two to eight ordered image generation or edit tasks.",
+            "minItems": 2,
+            "maxItems": 8,
+            "items": {
+                "type": "object",
+                "properties": _image_task_properties(),
+                "required": ["instruction"],
+                "additionalProperties": False,
+            },
+        },
     },
-    "required": ["instruction"],
     "additionalProperties": False,
 }
 _TASK_LIST_INPUT = {
@@ -1261,7 +1279,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
         ),
         ToolSpec(
             tool_id="imagegen",
-            version="1.0.0",
+            version="1.1.0",
             display_name="图片生成与编辑",
             description="生成图片或基于现有图片创建新修订",
             input_schema=_IMAGE_INPUT,

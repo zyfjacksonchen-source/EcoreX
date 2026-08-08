@@ -909,7 +909,7 @@
   box-sizing: border-box;
 }
 
-.ex-home-dashboard-creative {
+.ex-home-dashboard-schedules {
   align-content: start;
   padding-top: 48px;
 }
@@ -951,7 +951,7 @@
 }
 
 .ex-home-hero h1 span,
-.ex-home-creative header small {
+.ex-home-schedules header small {
   color: var(--color-brand-strong);
 }
 
@@ -1065,7 +1065,7 @@
 }
 
 .ex-home-overview > header,
-.ex-home-creative > header {
+.ex-home-schedules > header {
   min-height: 24px;
   display: flex;
   align-items: center;
@@ -1076,13 +1076,13 @@
 .ex-home-overview h2,
 .ex-home-overview h3,
 .ex-home-overview p,
-.ex-home-creative h2,
-.ex-home-creative p {
+.ex-home-schedules h2,
+.ex-home-schedules p {
   margin: 0;
 }
 
 .ex-home-overview h2,
-.ex-home-creative h2 {
+.ex-home-schedules h2 {
   font-size: 18px;
   font-weight: 700;
 }
@@ -1116,7 +1116,7 @@
 .ex-home-metrics article,
 .ex-home-report,
 .ex-home-report > section,
-.ex-home-creative button {
+.ex-home-schedules button {
   border: 1px solid var(--color-rule);
   background: color-mix(in srgb, var(--color-surface) 92%, transparent);
 }
@@ -1133,8 +1133,8 @@
 .ex-home-metrics span,
 .ex-home-report small,
 .ex-home-report p,
-.ex-home-creative p,
-.ex-home-creative button small {
+.ex-home-schedules p,
+.ex-home-schedules button small {
   color: var(--color-ink-muted);
 }
 
@@ -1240,33 +1240,33 @@
   white-space: nowrap;
 }
 
-.ex-home-creative {
+.ex-home-schedules {
   display: grid;
   gap: 10px;
 }
 
-.ex-home-creative h1 {
+.ex-home-schedules h1 {
   margin: 0;
   font-size: 28px;
 }
 
-.ex-home-creative > header > div {
+.ex-home-schedules > header > div {
   display: grid;
   gap: 2px;
 }
 
-.ex-home-creative header small,
-.ex-home-creative header p {
+.ex-home-schedules header small,
+.ex-home-schedules header p {
   font-size: 12px;
 }
 
-.ex-home-creative > div {
+.ex-home-schedules > div {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
-.ex-home-creative button {
+.ex-home-schedules button {
   min-height: 76px;
   padding: 14px;
   border-radius: var(--radius-card);
@@ -1279,35 +1279,40 @@
   cursor: pointer;
 }
 
-.ex-home-creative button:hover,
-.ex-home-creative button:focus-visible,
+.ex-home-schedules button:hover,
+.ex-home-schedules button:focus-visible,
 .ex-home-project button:hover,
 .ex-home-project button:focus-visible {
   border-color: var(--color-brand-strong);
   background: var(--color-hover);
 }
 
-.ex-home-creative button svg {
+.ex-home-schedules button svg {
   width: 20px;
   height: 20px;
   color: var(--color-brand-strong);
 }
 
-.ex-home-creative button span {
+.ex-home-schedules button span {
   min-width: 0;
   display: grid;
   gap: 4px;
 }
 
-.ex-home-creative button small {
+.ex-home-schedules button small {
   line-height: 1.35;
+}
+
+.ex-home-schedule-note {
+  color: var(--color-ink-subtle) !important;
+  font-size: var(--text-caption-size);
 }
 
 @media (max-width: 860px) {
   .ex-home-dashboard { padding-inline: 12px; }
   .ex-home-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ex-home-report { grid-template-columns: 1fr; }
-  .ex-home-creative > div { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ex-home-schedules > div { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-height: 820px) and (min-width: 769px) {
@@ -1346,8 +1351,8 @@
   .ex-home-project { justify-content: stretch; }
   .ex-new-project-trigger.is-compact { width: 100%; }
   .ex-home-overview > header,
-  .ex-home-creative > header { align-items: flex-start; flex-direction: column; }
-  .ex-home-creative > div { grid-template-columns: 1fr; }
+  .ex-home-schedules > header { align-items: flex-start; flex-direction: column; }
+  .ex-home-schedules > div { grid-template-columns: 1fr; }
 }
 
 .ex-new-conversation-options {
@@ -3626,6 +3631,135 @@
   gap: var(--space-2);
 }
 
+.ex-image-gallery {
+  width: min(640px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-card);
+  background: var(--color-raised);
+}
+
+.ex-image-gallery-track {
+  display: flex;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scroll-snap-type: inline mandatory;
+  scrollbar-width: none;
+}
+
+.ex-image-gallery-track::-webkit-scrollbar {
+  display: none;
+}
+
+.ex-image-gallery-slide {
+  min-width: 0;
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+.ex-image-gallery-media {
+  width: 100%;
+  min-height: 280px;
+  aspect-ratio: 16 / 10;
+  padding: 0;
+  border: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  color: var(--color-ink-subtle);
+  background: var(--color-surface);
+}
+
+button.ex-image-gallery-media {
+  cursor: zoom-in;
+}
+
+.ex-image-gallery-media > img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.ex-image-gallery-media > .ex-image-generation-canvas {
+  width: 100%;
+  height: 100%;
+  min-height: inherit;
+  border: 0;
+  border-radius: 0;
+}
+
+.ex-image-gallery-failure {
+  max-width: 360px;
+  padding: var(--space-6);
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+  text-align: center;
+  color: var(--color-ink-muted);
+}
+
+.ex-image-gallery-failure > svg {
+  width: 28px;
+  height: 28px;
+}
+
+.ex-image-gallery-failure > small {
+  color: var(--color-ink-subtle);
+}
+
+.ex-image-gallery-caption,
+.ex-image-gallery-navigation,
+.ex-image-gallery-caption > div {
+  display: flex;
+  align-items: center;
+}
+
+.ex-image-gallery-caption {
+  min-height: 56px;
+  padding: var(--space-2) var(--space-3);
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.ex-image-gallery-caption > span {
+  min-width: 0;
+}
+
+.ex-image-gallery-caption strong,
+.ex-image-gallery-caption small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ex-image-gallery-caption small {
+  color: var(--color-ink-subtle);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.ex-image-gallery-caption > div {
+  flex: none;
+  gap: var(--space-1);
+}
+
+.ex-image-gallery-navigation {
+  min-height: 40px;
+  border-top: 1px solid var(--color-rule);
+  justify-content: center;
+  gap: var(--space-3);
+  color: var(--color-ink-muted);
+  font-size: var(--text-caption-size);
+}
+
+.ex-image-gallery-navigation > span {
+  min-width: 48px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 .ex-artifact {
   position: relative;
   min-height: 56px;
@@ -3763,6 +3897,155 @@ button.ex-artifact-primary {
   font-family: var(--font-display);
   font-size: var(--text-title-size);
   line-height: var(--text-title-line);
+}
+
+.ex-settings-workspace {
+  position: fixed;
+  z-index: var(--z-modal);
+  inset: 8px 8px 8px var(--layout-sidebar-width);
+  min-width: 0;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-panel);
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  color: var(--color-ink);
+  background: var(--color-workspace-surface);
+}
+
+.ex-settings-page-header {
+  min-height: 76px;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-rule);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.ex-settings-page-header h1,
+.ex-settings-page-header p {
+  margin: 0;
+}
+
+.ex-settings-page-header h1 {
+  font-family: var(--font-display);
+  font-size: 24px;
+}
+
+.ex-settings-page-header p {
+  margin-top: var(--space-1);
+  color: var(--color-ink-muted);
+  font-size: var(--text-caption-size);
+}
+
+.ex-settings-page-layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 184px minmax(0, 1fr);
+}
+
+.ex-settings-page-nav {
+  padding: var(--space-4) var(--space-3);
+  border-right: 1px solid var(--color-rule);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ex-settings-page-nav a {
+  min-height: var(--target-desktop);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-control);
+  display: flex;
+  align-items: center;
+  color: var(--color-ink-muted);
+  text-decoration: none;
+}
+
+.ex-settings-page-nav a:hover,
+.ex-settings-page-nav a:focus-visible {
+  color: var(--color-ink);
+  background: var(--color-hover);
+}
+
+.ex-settings-page-content {
+  min-width: 0;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  padding: 0 max(var(--space-5), calc((100% - 820px) / 2)) var(--space-8);
+}
+
+.ex-profile-avatar-row {
+  min-height: 80px;
+  padding: var(--space-3);
+  border-top: 1px solid var(--color-rule);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.ex-profile-avatar-row > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.ex-profile-avatar-row strong,
+.ex-profile-avatar-row p {
+  margin: 0;
+}
+
+.ex-profile-avatar-row p {
+  color: var(--color-ink-muted);
+  font-size: var(--text-caption-size);
+}
+
+.ex-profile-avatar-preview {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  color: var(--color-brand-strong);
+  background: var(--color-brand-soft);
+}
+
+.ex-profile-avatar-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ex-profile-avatar-button input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.ex-profile-avatar-button {
+  position: relative;
+  cursor: pointer;
+}
+
+@media (max-width: 839px) {
+  .ex-settings-workspace { inset: 0; border: 0; border-radius: 0; }
+}
+
+@media (max-width: 639px) {
+  .ex-settings-page-layout { grid-template-columns: 1fr; }
+  .ex-settings-page-nav {
+    padding: var(--space-2) var(--space-3);
+    border-right: 0;
+    border-bottom: 1px solid var(--color-rule);
+    flex-direction: row;
+    overflow-x: auto;
+  }
+  .ex-settings-page-nav a { flex: none; }
+  .ex-settings-page-content { padding-inline: var(--space-3); }
+  .ex-profile-avatar-row { align-items: flex-start; flex-wrap: wrap; }
 }
 
 .ex-settings-section {
@@ -4220,8 +4503,17 @@ button.ex-artifact-primary {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ex-artifact-actions {
+  .ex-artifact-actions,
+  .ex-image-gallery-track {
     transition: none;
+    scroll-behavior: auto;
+  }
+}
+
+@media (max-width: 639px) {
+  .ex-image-gallery-media {
+    min-height: 220px;
+    aspect-ratio: 4 / 3;
   }
 }
 

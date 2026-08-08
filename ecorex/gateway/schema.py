@@ -20,7 +20,7 @@ import stat
 from typing import Any, Mapping, Sequence
 
 
-CURRENT_GATEWAY_SCHEMA_VERSION = 3
+CURRENT_GATEWAY_SCHEMA_VERSION = 4
 GATEWAY_SCHEMA_RECEIPT_VERSION = 1
 MAX_LEGACY_EVENTS = 100_000
 MAX_LEGACY_EVENT_BYTES = 64 * 1024 * 1024
@@ -265,7 +265,32 @@ BEFORE DELETE ON gateway_usage_settlements BEGIN
 END;
 """
 
-GATEWAY_SCHEMA_SQL = GATEWAY_SCHEMA_V2_SQL + GATEWAY_USAGE_SETTLEMENT_SCHEMA_SQL
+GATEWAY_SCHEMA_V3_SQL = GATEWAY_SCHEMA_V2_SQL + GATEWAY_USAGE_SETTLEMENT_SCHEMA_SQL
+
+GATEWAY_AUDIT_FACTS_SCHEMA_SQL = """
+ALTER TABLE gateway_requests ADD COLUMN organization_id TEXT;
+
+DROP TRIGGER gateway_requests_identity_immutable;
+CREATE TRIGGER gateway_requests_identity_immutable
+BEFORE UPDATE ON gateway_requests
+WHEN NEW.request_id != OLD.request_id
+  OR NEW.account_id != OLD.account_id
+  OR NEW.organization_id IS NOT OLD.organization_id
+  OR NEW.quota_period != OLD.quota_period
+  OR NEW.request_fingerprint != OLD.request_fingerprint
+  OR NEW.model_id != OLD.model_id
+  OR NEW.trace_id != OLD.trace_id
+  OR NEW.created_at != OLD.created_at
+BEGIN
+    SELECT RAISE(ABORT, 'gateway request identity is immutable');
+END;
+
+ALTER TABLE gateway_model_attempts ADD COLUMN organization_id TEXT;
+ALTER TABLE gateway_model_attempts ADD COLUMN reasoning_effort TEXT
+    CHECK(reasoning_effort IN ('medium','high','max') OR reasoning_effort IS NULL);
+"""
+
+GATEWAY_SCHEMA_SQL = GATEWAY_SCHEMA_V3_SQL + GATEWAY_AUDIT_FACTS_SCHEMA_SQL
 PRE_AUTHORITY_GATEWAY_SCHEMA_SQL = GATEWAY_REQUEST_SCHEMA_SQL + GATEWAY_EVENT_SCHEMA_SQL
 LEGACY_GATEWAY_SCHEMA_SQL = (
     GATEWAY_REQUEST_SCHEMA_SQL + LEGACY_GATEWAY_EVENT_SCHEMA_SQL
@@ -353,6 +378,7 @@ PRE_AUTHORITY_GATEWAY_SCHEMA_SHA256 = _compiled_schema_digest(
 )
 GATEWAY_SCHEMA_V1_SHA256 = _compiled_schema_digest(GATEWAY_SCHEMA_V1_SQL)
 GATEWAY_SCHEMA_V2_SHA256 = _compiled_schema_digest(GATEWAY_SCHEMA_V2_SQL)
+GATEWAY_SCHEMA_V3_SHA256 = _compiled_schema_digest(GATEWAY_SCHEMA_V3_SQL)
 GATEWAY_SCHEMA_SHA256 = _compiled_schema_digest(GATEWAY_SCHEMA_SQL)
 MIGRATION_001_NAME = "initial-versioned-gateway-ledger"
 MIGRATION_001_CHECKSUM = _digest(
@@ -369,6 +395,11 @@ MIGRATION_003_NAME = "durable-provider-usage-settlement-outbox"
 MIGRATION_003_CHECKSUM = _digest(
     b"ecorex-gateway-schema-migration-v3\0"
     + GATEWAY_USAGE_SETTLEMENT_SCHEMA_SQL.encode("utf-8")
+)
+MIGRATION_004_NAME = "tenant-model-attempt-audit-facts"
+MIGRATION_004_CHECKSUM = _digest(
+    b"emate-gateway-schema-migration-v4\0"
+    + GATEWAY_AUDIT_FACTS_SCHEMA_SQL.encode("utf-8")
 )
 
 
@@ -388,7 +419,8 @@ class GatewaySchemaReceipt:
         expected = {
             1: (MIGRATION_001_NAME, MIGRATION_001_CHECKSUM, GATEWAY_SCHEMA_V1_SHA256),
             2: (MIGRATION_002_NAME, MIGRATION_002_CHECKSUM, GATEWAY_SCHEMA_V2_SHA256),
-            3: (MIGRATION_003_NAME, MIGRATION_003_CHECKSUM, GATEWAY_SCHEMA_SHA256),
+            3: (MIGRATION_003_NAME, MIGRATION_003_CHECKSUM, GATEWAY_SCHEMA_V3_SHA256),
+            4: (MIGRATION_004_NAME, MIGRATION_004_CHECKSUM, GATEWAY_SCHEMA_SHA256),
         }.get(self.migration_version)
         if (
             self.schema_version != GATEWAY_SCHEMA_RECEIPT_VERSION
@@ -457,16 +489,17 @@ class GatewaySchemaManager:
                 if source_digest not in {
                     GATEWAY_SCHEMA_V1_SHA256,
                     GATEWAY_SCHEMA_V2_SHA256,
+                    GATEWAY_SCHEMA_V3_SHA256,
                 }:
                     raise GatewaySchemaError("gateway schema source shape is unknown")
                 rows = connection.execute(
                     "SELECT * FROM gateway_schema_migrations ORDER BY version"
                 ).fetchall()
-                expected_count = (
-                    1
-                    if source_digest == GATEWAY_SCHEMA_V1_SHA256
-                    else 2
-                )
+                expected_count = {
+                    GATEWAY_SCHEMA_V1_SHA256: 1,
+                    GATEWAY_SCHEMA_V2_SHA256: 2,
+                    GATEWAY_SCHEMA_V3_SHA256: 3,
+                }[source_digest]
                 if len(rows) != expected_count or [
                     int(row["version"]) for row in rows
                 ] != list(range(1, expected_count + 1)):
@@ -530,20 +563,39 @@ class GatewaySchemaManager:
                 )
                 self._insert_receipt(connection, receipt_v2)
                 current_digest = target_digest
-            if current_digest != GATEWAY_SCHEMA_V2_SHA256:
+            if current_digest == GATEWAY_SCHEMA_V2_SHA256:
+                _execute_sql(connection, GATEWAY_USAGE_SETTLEMENT_SCHEMA_SQL)
+                installed_at = datetime.now(UTC).isoformat()
+                connection.execute(
+                    "INSERT INTO gateway_usage_settlements("
+                    "request_id,state,attempt_count,next_attempt_at,created_at,"
+                    "updated_at,settled_at,last_error_code"
+                    ") SELECT request_id,'pending',0,?,?,?,NULL,NULL "
+                    "FROM gateway_requests WHERE status='completed' "
+                    "AND terminal_event_type IN ('response.completed','tool_call.requested')",
+                    (installed_at, installed_at, installed_at),
+                )
+                target_digest = _schema_digest(connection)
+                if target_digest != GATEWAY_SCHEMA_V3_SHA256:
+                    raise GatewaySchemaError("gateway schema migration target drifted")
+                receipt_v3 = GatewaySchemaReceipt(
+                    schema_version=GATEWAY_SCHEMA_RECEIPT_VERSION,
+                    migration_version=3,
+                    migration_name=MIGRATION_003_NAME,
+                    migration_checksum=MIGRATION_003_CHECKSUM,
+                    source_schema_sha256=GATEWAY_SCHEMA_V2_SHA256,
+                    target_schema_sha256=target_digest,
+                    transformed_rows=transformed_rows,
+                    event_chain_sha256=event_chain_digest,
+                    installed_at=installed_at,
+                )
+                self._insert_receipt(connection, receipt_v3)
+                current_digest = target_digest
+            if current_digest != GATEWAY_SCHEMA_V3_SHA256:
                 raise GatewaySchemaError("gateway schema migration target drifted")
 
-            _execute_sql(connection, GATEWAY_USAGE_SETTLEMENT_SCHEMA_SQL)
+            _execute_sql(connection, GATEWAY_AUDIT_FACTS_SCHEMA_SQL)
             installed_at = datetime.now(UTC).isoformat()
-            connection.execute(
-                "INSERT INTO gateway_usage_settlements("
-                "request_id,state,attempt_count,next_attempt_at,created_at,"
-                "updated_at,settled_at,last_error_code"
-                ") SELECT request_id,'pending',0,?,?,?,NULL,NULL "
-                "FROM gateway_requests WHERE status='completed' "
-                "AND terminal_event_type IN ('response.completed','tool_call.requested')",
-                (installed_at, installed_at, installed_at),
-            )
             target_digest = _schema_digest(connection)
             if target_digest != GATEWAY_SCHEMA_SHA256:
                 raise GatewaySchemaError("gateway schema migration target drifted")
@@ -556,9 +608,9 @@ class GatewaySchemaManager:
             receipt = GatewaySchemaReceipt(
                 schema_version=GATEWAY_SCHEMA_RECEIPT_VERSION,
                 migration_version=CURRENT_GATEWAY_SCHEMA_VERSION,
-                migration_name=MIGRATION_003_NAME,
-                migration_checksum=MIGRATION_003_CHECKSUM,
-                source_schema_sha256=GATEWAY_SCHEMA_V2_SHA256,
+                migration_name=MIGRATION_004_NAME,
+                migration_checksum=MIGRATION_004_CHECKSUM,
+                source_schema_sha256=GATEWAY_SCHEMA_V3_SHA256,
                 target_schema_sha256=target_digest,
                 transformed_rows=transformed_rows,
                 event_chain_sha256=event_chain_digest,
@@ -652,8 +704,14 @@ class GatewaySchemaManager:
             3: (
                 MIGRATION_003_NAME,
                 MIGRATION_003_CHECKSUM,
-                GATEWAY_SCHEMA_SHA256,
+                GATEWAY_SCHEMA_V3_SHA256,
                 {GATEWAY_SCHEMA_V2_SHA256},
+            ),
+            4: (
+                MIGRATION_004_NAME,
+                MIGRATION_004_CHECKSUM,
+                GATEWAY_SCHEMA_SHA256,
+                {GATEWAY_SCHEMA_V3_SHA256},
             ),
         }.get(version)
         if (

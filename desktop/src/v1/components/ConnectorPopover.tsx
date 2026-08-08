@@ -216,16 +216,16 @@ export function ConnectorCatalogPanel({
   };
 
   return (
-    <section className="ex-connector-catalog-panel" aria-label="协作连接" aria-busy={loadState === "loading"}>
+    <section className="ex-connector-catalog-panel" aria-label="外部连接与通道" aria-busy={loadState === "loading"}>
         <div className="ex-connector-catalog">
           <div className="ex-popover-heading">
             <div>
-              <strong>协作连接</strong>
+              <strong>通道</strong>
               <span>统一连接飞书、腾讯文档和外部消息渠道，并随时检查或撤销授权</span>
             </div>
             <div className="ex-connector-heading-actions">
               <IconButton
-                label="刷新协作连接状态"
+                label="刷新通道状态"
                 tooltipSide="bottom"
                 disabled={loadState === "loading"}
                 onClick={() => void onRefresh()}
@@ -242,7 +242,7 @@ export function ConnectorCatalogPanel({
               <button className="ex-button" type="button" onClick={() => void onRefresh()}>
                 重新加载
               </button>
-              <IconButton label="关闭协作连接错误" tooltipSide="bottom" onClick={onClearError}>
+              <IconButton label="关闭通道错误" tooltipSide="bottom" onClick={onClearError}>
                 <X aria-hidden="true" />
               </IconButton>
             </div>
@@ -348,7 +348,7 @@ export function ConnectorCatalogPanel({
             {loadState !== "loading" && !catalog.length ? (
               <div className="ex-popover-empty">
                 <Unplug aria-hidden="true" />
-                <strong>协作连接目录为空</strong>
+                <strong>通道目录为空</strong>
                 <span>当前安装中没有可用连接。刷新后仍为空时，请检查是否已安装完整组件。</span>
                 <button className="ex-button" type="button" onClick={() => void onRefresh()}>
                   刷新目录

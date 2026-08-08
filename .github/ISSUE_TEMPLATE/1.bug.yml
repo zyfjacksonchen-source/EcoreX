@@ -11,14 +11,14 @@ body:
     attributes:
       label: Self check
       options:
-        - label: I'm on the latest version and searched [existing issues](https://github.com/zhayujie/CowAgent/issues) (incl. closed) — no duplicate.
+        - label: I'm on the latest version and searched [existing issues](https://github.com/zyfjacksonchen-source/EcoreX/issues) (incl. closed) — no duplicate.
           required: true
   - type: textarea
     attributes:
       label: Environment
-      description: "Version (`cow status`), OS, Python version, install method, model & channel."
+      description: "e-Mate version, OS, install method, model and channel."
       placeholder: |
-        Version: v1.2.0
+        Version: v2.0.0
         OS: macOS / Linux / Windows / Docker
         Python: 3.11
         Install: installer / Docker / source

@@ -64,6 +64,18 @@ class DurableChatHandoff:
 
 
 class ChatHandoffAuthority(Protocol):
+    def bind_model_attempt(
+        self,
+        request: ModelGatewayRequest,
+        *,
+        config_id: str,
+        config_revision: int,
+        upstream_model_id: str,
+        provider_protocol: str,
+        provider_origin_preset: str,
+        ttl_seconds: int,
+    ) -> None: ...
+
     def bind_chat_model_attempt(
         self,
         request: ModelGatewayRequest,

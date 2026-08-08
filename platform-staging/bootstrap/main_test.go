@@ -286,7 +286,7 @@ func TestBootstrapProgressShowsStageSpeedAndETA(t *testing.T) {
 	for _, expected := range []string{
 		"[下载]",
 		"(1/2)",
-		"EcoreX 核心",
+		"e-Mate 核心",
 		"50%",
 		"25.0 MiB/s",
 		"剩余 2 秒",
@@ -1298,6 +1298,16 @@ func TestOrphanRuntimeIsOpenedWithoutRotatingItsOwnerNonce(t *testing.T) {
 		browserOpen["version"] != version ||
 		browserOpen["url"] != server.URL+"/" {
 		t.Fatalf("browser-open receipt is not bound to the installed Runtime: %#v", browserOpen)
+	}
+	if err := os.Remove(filepath.Join(root, "bootstrap", "browser-opened.json")); err != nil {
+		t.Fatal(err)
+	}
+	opened, err = openRunningRuntimeAt(root, server.URL+"/", nil)
+	if err != nil || !opened {
+		t.Fatalf("verified Runtime was not detected for the desktop shell: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "bootstrap", "browser-opened.json")); !os.IsNotExist(err) {
+		t.Fatal("no-open mode wrote a browser-open receipt")
 	}
 	if _, err := issueRuntimeOwnerReceipt(root); err != nil {
 		t.Fatal(err)

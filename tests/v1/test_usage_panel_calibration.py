@@ -552,7 +552,216 @@ def test_usage_and_audit_share_one_projection_and_reconciliation(
         "replaced_duplicate_count": 1,
         "unassociated_record_count": 1,
         "missing_provider_usage_count": 0,
+        "account_balance_mismatch_count": 0,
+        "token_balance_delta": 0,
+        "image_balance_delta": 0,
+        "account_balances": [],
+        "by_model": [
+            {
+                "model": "gpt-5.6-sol",
+                "records": 2,
+                "tokens": 39,
+                "reasoning_efforts": [],
+            }
+        ],
+        "by_tenant_model": [],
+        "image_provider_fact_count": 0,
+        "image_provider_facts_truncated": False,
+        "image_provider_facts": [],
     }
+
+
+def test_usage_panel_reconciles_management_counters_with_provider_facts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "usage-balances.sqlite3"
+    _database(str(database))
+    _add_v1_facts(str(database))
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        ALTER TABLE admin_ops_users ADD COLUMN token_limit INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE admin_ops_users ADD COLUMN tokens_used INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE admin_ops_users ADD COLUMN image_limit INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE admin_ops_users ADD COLUMN images_used INTEGER NOT NULL DEFAULT 0;
+        CREATE TABLE admin_ops_provider_usage_facts(
+            fact_id TEXT PRIMARY KEY,
+            source_service TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            usage_kind TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            total_tokens INTEGER NOT NULL,
+            image_count INTEGER NOT NULL,
+            provider_created_at TEXT NOT NULL
+        );
+        UPDATE admin_ops_users SET tokens_used=25,images_used=1
+        WHERE account_id='account-one';
+        UPDATE admin_ops_users SET tokens_used=7 WHERE account_id='account-zero';
+        INSERT INTO admin_ops_provider_usage_facts VALUES(
+            'fact-1','managed_gateway','gateway-request-1','chat','account-one',25,0,
+            '2026-07-18T10:02:00+08:00'
+        );
+        INSERT INTO admin_ops_provider_usage_facts VALUES(
+            'fact-image-old','image_service','image-job-old','image','account-one',0,1,
+            '2026-07-18T10:03:00+08:00'
+        );
+        """
+    )
+    connection.commit()
+    connection.close()
+    _use_database(monkeypatch, str(database))
+
+    payload = usage_panel_service.build_payload(
+        datetime(2026, 7, 18, tzinfo=TZ),
+        datetime(2026, 7, 19, tzinfo=TZ),
+    )
+
+    assert payload["reconciliation"]["account_balance_mismatch_count"] == 1
+    assert payload["reconciliation"]["token_balance_delta"] == 7
+    assert next(
+        row
+        for row in payload["reconciliation"]["account_balances"]
+        if row["account_id"] == "account-one"
+    )["balanced"] is True
+    assert payload["reconciliation"]["image_provider_facts"] == [
+        {
+            "job_id": "image-job-old",
+            "account_id": "account-one",
+            "user": "同名用户 · one@example.test",
+            "organization_id": "",
+            "requested_model_id": "",
+            "provider_reported_model_id": "",
+            "actual_model_id": "未公开",
+            "actual_provider_id": "",
+            "fallback_from_model_id": "",
+            "fallback_used": None,
+            "job_status": "",
+            "result_status": "",
+            "image_count": 1,
+            "provider_created_at": "2026-07-18T10:03:00+08:00",
+        }
+    ]
+
+
+def test_usage_panel_projects_image_provider_audit_metadata(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "usage-image-audit.sqlite3"
+    _database(str(database))
+    _add_v1_facts(str(database))
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        ALTER TABLE admin_ops_users ADD COLUMN token_limit INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE admin_ops_users ADD COLUMN tokens_used INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE admin_ops_users ADD COLUMN image_limit INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE admin_ops_users ADD COLUMN images_used INTEGER NOT NULL DEFAULT 0;
+        CREATE TABLE admin_ops_provider_usage_facts(
+            fact_id TEXT PRIMARY KEY,
+            source_service TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            usage_kind TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            total_tokens INTEGER NOT NULL,
+            image_count INTEGER NOT NULL,
+            provider_created_at TEXT NOT NULL,
+            organization_id TEXT,
+            requested_model_id TEXT,
+            provider_reported_model_id TEXT,
+            actual_model_id TEXT,
+            actual_provider_id TEXT,
+            fallback_from_model_id TEXT,
+            fallback_used INTEGER,
+            job_status TEXT,
+            result_status TEXT
+        );
+        UPDATE admin_ops_users SET images_used=1 WHERE account_id='account-one';
+        INSERT INTO admin_ops_provider_usage_facts VALUES(
+            'fact-image','image_service','image-job-1','image','account-one',0,1,
+            '2026-07-18T10:03:00+08:00','org-image','gpt-image-2',
+            'gpt-image-2',NULL,'managed-image',NULL,NULL,'running','completed'
+        );
+        """
+    )
+    connection.commit()
+    connection.close()
+    _use_database(monkeypatch, str(database))
+
+    fact = usage_panel_service.build_payload(
+        datetime(2026, 7, 18, tzinfo=TZ),
+        datetime(2026, 7, 19, tzinfo=TZ),
+    )["reconciliation"]["image_provider_facts"][0]
+
+    assert fact["organization_id"] == "org-image"
+    assert fact["requested_model_id"] == "gpt-image-2"
+    assert fact["provider_reported_model_id"] == "gpt-image-2"
+    assert fact["actual_model_id"] == "未公开"
+    assert fact["actual_provider_id"] == "managed-image"
+    assert fact["fallback_from_model_id"] == ""
+    assert fact["fallback_used"] is None
+    assert fact["job_id"] == "image-job-1"
+    assert fact["job_status"] == "running"
+    assert fact["result_status"] == "completed"
+
+
+def test_usage_panel_reconciles_actual_upstream_model_and_reasoning(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "usage-model-attempt.sqlite3"
+    _database(str(database))
+    _add_v1_facts(str(database))
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        ALTER TABLE gateway_requests ADD COLUMN organization_id TEXT;
+        UPDATE gateway_requests SET organization_id='org-luna';
+        CREATE TABLE gateway_model_attempts(
+            request_id TEXT PRIMARY KEY,
+            upstream_model_id TEXT NOT NULL,
+            reasoning_effort TEXT,
+            thread_id TEXT,
+            turn_id TEXT
+        );
+        INSERT INTO gateway_model_attempts VALUES(
+            'gateway-request-1','gpt-5.6-luna','max','thread-1','turn-1'
+        );
+        """
+    )
+    connection.commit()
+    connection.close()
+    _use_database(monkeypatch, str(database))
+
+    payload = usage_panel_service.build_payload(
+        datetime(2026, 7, 18, tzinfo=TZ),
+        datetime(2026, 7, 19, tzinfo=TZ),
+    )
+
+    assert payload["reconciliation"]["by_model"] == [
+        {
+            "model": "gpt-5.6-luna",
+            "records": 1,
+            "tokens": 25,
+            "reasoning_efforts": [{"level": "max", "records": 1}],
+        },
+        {
+            "model": "gpt-5.6-sol",
+            "records": 1,
+            "tokens": 14,
+            "reasoning_efforts": [],
+        },
+    ]
+    assert payload["reconciliation"]["by_tenant_model"] == [
+        {
+            "organization_id": "org-luna",
+            "model": "gpt-5.6-luna",
+            "reasoning_effort": "max",
+            "records": 1,
+            "tokens": 25,
+        }
+    ]
 
 
 def test_composer_account_projection_uses_the_exact_panel_ledger(

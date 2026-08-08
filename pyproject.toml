@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ecorex-agent-runtime"
 dynamic = ["version"]
-description = "EcoreX local agent runtime"
+description = "e-Mate Enterprise local agent runtime"
 requires-python = ">=3.11"
 dependencies = [
     "cryptography==46.0.7",
@@ -36,6 +36,12 @@ control-plane-cloud = [
 ]
 
 [project.scripts]
+emate = "ecorex.server.cli:main"
+emate-backend = "ecorex.server.cli:main"
+emate-release = "ecorex.control_plane.cli:main"
+emate-control-plane = "ecorex.control_plane.production:main"
+emate-image = "ecorex.image_orchestrator.production:main"
+emate-gateway = "ecorex.gateway.production:main"
 ecorex = "ecorex.server.cli:main"
 ecorex-product = "ecorex.server.cli:main"
 ecorex-bootstrap = "ecorex.bootstrap.cli:main"

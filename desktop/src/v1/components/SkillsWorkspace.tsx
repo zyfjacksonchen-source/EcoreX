@@ -53,6 +53,7 @@ import {
 import { IconButton } from "./IconButton.tsx";
 
 interface SkillsWorkspaceProps {
+  openChannelsKey?: number;
   connectorRuntime: ConnectorCatalogPanelProps;
   snapshot: ExtensionCatalogSnapshot | null;
   loadState: ExtensionLoadState;
@@ -103,7 +104,7 @@ const CATEGORY_LABEL: Record<SkillCategory, string> = {
   system: "系统能力",
   office: "办公能力",
   image_media: "图像 / 媒体",
-  collaboration: "协作连接",
+  collaboration: "通道",
   data: "数据能力",
   development: "开发能力",
   automation: "自动化",
@@ -180,6 +181,7 @@ function SkillSwitch({
 }
 
 export function SkillsWorkspace({
+  openChannelsKey = 0,
   connectorRuntime,
   snapshot,
   loadState,
@@ -248,6 +250,13 @@ export function SkillsWorkspace({
     void onRefresh();
     void onRefreshMcpOAuth();
   }, [onRefresh, onRefreshMcpOAuth]);
+
+  useEffect(() => {
+    if (!openChannelsKey) return;
+    setTab("installed");
+    setCategory("collaboration");
+    setSelectedId(null);
+  }, [openChannelsKey]);
 
   useEffect(() => {
     if (tab !== "discover") return;
@@ -482,7 +491,9 @@ export function SkillsWorkspace({
             ))}
           </div>
           {category === "collaboration" ? (
-            <ConnectorCatalogPanel {...connectorRuntime} />
+            <section aria-label="能力中心通道" data-testid="capability-channels">
+              <ConnectorCatalogPanel {...connectorRuntime} />
+            </section>
           ) : null}
           {category === "collaboration" && catalogReady && !mcpConfigured ? (
             <div className="ex-skills-empty" data-empty-state="mcp-unconfigured">

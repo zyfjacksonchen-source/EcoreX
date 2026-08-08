@@ -111,6 +111,7 @@ class GatewayPrincipal:
     quota_period: str
     request_limit: int
     concurrent_request_limit: int = 4
+    organization_id: str | None = None
 
     def __post_init__(self) -> None:
         if any(
@@ -125,6 +126,15 @@ class GatewayPrincipal:
             for model_id in self.allowed_model_ids
         ):
             raise ValueError("gateway principal model allowlist is invalid")
+        if self.organization_id is not None and (
+            not isinstance(self.organization_id, str)
+            or not 1 <= len(self.organization_id) <= 128
+            or any(
+                character.isspace() or ord(character) < 32
+                for character in self.organization_id
+            )
+        ):
+            raise ValueError("gateway principal organization is invalid")
         if (
             isinstance(self.request_limit, bool)
             or not 1 <= self.request_limit <= 1_000_000
@@ -356,6 +366,7 @@ class SQLiteGatewayStore:
             if row is not None:
                 if (
                     row["account_id"] != principal.account_id
+                    or row["organization_id"] != principal.organization_id
                     or row["request_fingerprint"] != fingerprint
                 ):
                     raise GatewayRequestConflict(
@@ -465,12 +476,13 @@ class SQLiteGatewayStore:
             lease_token = "gwlease_" + secrets.token_hex(24)
             connection.execute(
                 "INSERT INTO gateway_requests("
-                "request_id, account_id, quota_period, request_fingerprint, model_id, "
+                "request_id, account_id, organization_id, quota_period, request_fingerprint, model_id, "
                 "trace_id, status, lease_token, lease_expires_at, created_at, updated_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)",
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)",
                 (
                     request.request_id,
                     principal.account_id,
+                    principal.organization_id,
                     principal.quota_period,
                     fingerprint,
                     request.model_id,
@@ -516,7 +528,7 @@ class SQLiteGatewayStore:
         try:
             connection.execute("BEGIN")
             row = connection.execute(
-                "SELECT account_id,request_fingerprint,status "
+                "SELECT account_id,organization_id,request_fingerprint,status "
                 "FROM gateway_requests WHERE request_id=?",
                 (request.request_id,),
             ).fetchone()
@@ -525,6 +537,7 @@ class SQLiteGatewayStore:
                 return None
             if (
                 row["account_id"] != principal.account_id
+                or row["organization_id"] != principal.organization_id
                 or row["request_fingerprint"] != fingerprint
             ):
                 raise GatewayRequestConflict(
@@ -554,29 +567,53 @@ class SQLiteGatewayStore:
         *,
         ttl_seconds: int,
     ) -> None:
-        if not 300 <= ttl_seconds <= 86_400:
-            raise ValueError("chat handoff TTL is invalid")
-        if revision.provider_protocol != "openai_compatible_chat":
-            raise GatewayStoreError("chat handoff protocol is invalid")
-        now = _utcnow()
-        values = (
-            request.request_id,
-            request.thread_id,
-            request.turn_id,
-            revision.config_id,
-            revision.revision,
-            revision.local_model_id,
-            revision.upstream_model_id,
-            revision.provider_protocol,
-            revision.provider_origin_preset,
-            _iso(now + timedelta(seconds=ttl_seconds)),
-            _iso(now),
+        if revision.local_model_id != request.model_id:
+            raise GatewayStoreError("chat handoff model identity is invalid")
+        self.bind_model_attempt(
+            request,
+            config_id=revision.config_id,
+            config_revision=revision.revision,
+            upstream_model_id=revision.upstream_model_id,
+            provider_protocol=revision.provider_protocol,
+            provider_origin_preset=revision.provider_origin_preset,
+            ttl_seconds=ttl_seconds,
         )
+
+    def bind_model_attempt(
+        self,
+        request: ModelGatewayRequest,
+        *,
+        config_id: str,
+        config_revision: int,
+        upstream_model_id: str,
+        provider_protocol: str,
+        provider_origin_preset: str,
+        ttl_seconds: int,
+    ) -> None:
+        if not 300 <= ttl_seconds <= 86_400:
+            raise ValueError("model attempt TTL is invalid")
+        if (
+            isinstance(config_revision, bool)
+            or config_revision < 1
+            or provider_protocol not in {"responses", "openai_compatible_chat"}
+            or any(
+                _SAFE_MODEL_ID.fullmatch(value) is None
+                for value in (
+                    config_id,
+                    request.model_id,
+                    upstream_model_id,
+                    provider_origin_preset,
+                )
+            )
+        ):
+            raise GatewayStoreError("model attempt identity is invalid")
+        now = _utcnow()
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT status,model_id FROM gateway_requests WHERE request_id=?",
+                "SELECT status,model_id,organization_id FROM gateway_requests "
+                "WHERE request_id=?",
                 (request.request_id,),
             ).fetchone()
             if (
@@ -585,6 +622,21 @@ class SQLiteGatewayStore:
                 or row["model_id"] != request.model_id
             ):
                 raise GatewayRequestConflict("gateway model attempt is not active")
+            values = (
+                request.request_id,
+                request.thread_id,
+                request.turn_id,
+                config_id,
+                config_revision,
+                request.model_id,
+                upstream_model_id,
+                provider_protocol,
+                provider_origin_preset,
+                row["organization_id"],
+                request.model_policy.reasoning_effort,
+                _iso(now + timedelta(seconds=ttl_seconds)),
+                _iso(now),
+            )
             existing = connection.execute(
                 "SELECT * FROM gateway_model_attempts WHERE request_id=?",
                 (request.request_id,),
@@ -602,9 +654,11 @@ class SQLiteGatewayStore:
                         "upstream_model_id",
                         "provider_protocol",
                         "provider_origin_preset",
+                        "organization_id",
+                        "reasoning_effort",
                     )
                 )
-                if identity != values[:9]:
+                if identity != values[:11]:
                     raise GatewayRequestConflict("gateway model revision changed")
                 connection.commit()
                 return
@@ -626,8 +680,8 @@ class SQLiteGatewayStore:
                 "INSERT INTO gateway_model_attempts("
                 "request_id,thread_id,turn_id,model_config_id,model_config_revision,"
                 "local_model_id,upstream_model_id,provider_protocol,"
-                "provider_origin_preset,expires_at,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "provider_origin_preset,organization_id,reasoning_effort,expires_at,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 values,
             )
             connection.commit()
@@ -755,6 +809,7 @@ class SQLiteGatewayStore:
                 "attempts.model_config_id,attempts.model_config_revision,"
                 "attempts.local_model_id,attempts.upstream_model_id,"
                 "attempts.provider_protocol,attempts.provider_origin_preset,"
+                "attempts.organization_id,attempts.reasoning_effort,"
                 "requests.account_id AS source_account_id "
                 "FROM gateway_chat_handoffs handoffs "
                 "JOIN gateway_model_attempts attempts "
@@ -809,6 +864,8 @@ class SQLiteGatewayStore:
                 revision.upstream_model_id,
                 revision.provider_protocol,
                 revision.provider_origin_preset,
+                target["organization_id"],
+                request.model_policy.reasoning_effort,
                 target["account_id"],
             )
             actual_identity = tuple(
@@ -822,6 +879,8 @@ class SQLiteGatewayStore:
                     "upstream_model_id",
                     "provider_protocol",
                     "provider_origin_preset",
+                    "organization_id",
+                    "reasoning_effort",
                     "source_account_id",
                 )
             )
@@ -883,6 +942,7 @@ class SQLiteGatewayStore:
                 "upstream_model_id",
                 "provider_protocol",
                 "provider_origin_preset",
+                "reasoning_effort",
             )
         ) != (
             request.thread_id,
@@ -893,6 +953,7 @@ class SQLiteGatewayStore:
             revision.upstream_model_id,
             revision.provider_protocol,
             revision.provider_origin_preset,
+            request.model_policy.reasoning_effort,
         ):
             raise GatewayRequestConflict("gateway model revision changed")
 
@@ -1932,8 +1993,8 @@ def create_managed_gateway_app(
                 await service_lifecycle.shutdown()
 
     app = FastAPI(
-        title="EcoreX Managed Model Gateway",
-        version="1.0.0",
+        title="e-Mate Managed Model Gateway",
+        version="2.0.0",
         docs_url=None,
         redoc_url=None,
         openapi_url="/api/v1/openapi.json",

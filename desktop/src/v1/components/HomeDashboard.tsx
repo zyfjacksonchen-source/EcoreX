@@ -1,4 +1,4 @@
-import { Sparkles } from "lucide-react";
+import { CalendarClock, ListChecks, PauseCircle, PlayCircle, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 
 import type {
@@ -9,17 +9,16 @@ import type {
 import { homeTaskActivity } from "../state/homeTaskActivity.ts";
 import NewConversationProjectSelector from "./NewConversationProjectSelector.tsx";
 
-const TEMPLATES = [
-  ["图片创作", "把想法变成可直接使用的视觉素材", "帮我创作一张图片："],
-  ["视频策划", "整理脚本、分镜和制作清单", "帮我策划一个视频，主题是："],
-  ["文案写作", "起草、改写或润色办公内容", "帮我写一份文案，用途是："],
-  ["品牌方案", "梳理定位、口径和品牌表达", "帮我制定一份品牌方案，背景是："],
-  ["营销推广", "输出渠道计划和可执行素材", "帮我制定一份营销推广计划，目标是："],
-  ["灵感探索", "从模糊想法快速形成可行方向", "围绕这个想法帮我发散并形成行动方案："],
+const SCHEDULE_ACTIONS = [
+  [CalendarClock, "创建定时任务", "告诉小芯执行时间、内容和发送通道", "请帮我创建一个定时任务。先向我确认执行时间、任务内容和发送通道，再调用定时任务能力保存："],
+  [ListChecks, "查看定时任务", "从 Runtime 读取当前任务，不在页面伪造状态", "请调用定时任务能力，列出我当前的全部定时任务和下次执行时间。"],
+  [PauseCircle, "暂停定时任务", "选择任务后由 Runtime 立即停用", "请调用定时任务能力，先列出当前启用的定时任务，再让我选择要暂停的任务。"],
+  [PlayCircle, "恢复定时任务", "选择任务后由 Runtime 重新启用", "请调用定时任务能力，先列出当前暂停的定时任务，再让我选择要恢复的任务。"],
+  [Trash2, "删除定时任务", "删除前由小芯再次向你确认", "请调用定时任务能力，先列出当前定时任务，再让我选择要删除的任务；删除前必须再次确认。"],
 ] as const;
 
 interface HomeDashboardProps {
-  mode?: "home" | "creative";
+  mode?: "home" | "schedules";
   composer: ReactNode;
   threads: readonly ThreadProjection[];
   projects: readonly ProjectProjection[];
@@ -58,19 +57,23 @@ export function HomeDashboard({
     .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at))
     .slice(0, 2);
 
-  if (mode === "creative") {
+  if (mode === "schedules") {
     return (
-      <div className="ex-home-dashboard ex-home-dashboard-creative">
-        <section className="ex-home-creative" aria-labelledby="emate-creative-title">
-          <header><div><small>Creative Center</small><h1 id="emate-creative-title">创意中心</h1></div><p>选择模板开始，已有草稿不会被覆盖。</p></header>
+      <div className="ex-home-dashboard ex-home-dashboard-schedules" data-testid="schedules-workspace">
+        <section className="ex-home-schedules" aria-labelledby="emate-schedules-title">
+          <header>
+            <div><small>Runtime Scheduler</small><h1 id="emate-schedules-title">定时任务</h1></div>
+            <p>操作将在当前会话中执行，由 Runtime 返回真实结果。</p>
+          </header>
           <div>
-            {TEMPLATES.map(([title, description, prompt]) => (
+            {SCHEDULE_ACTIONS.map(([Icon, title, description, prompt]) => (
               <button className="ex-button ex-home-template" key={title} type="button" onClick={() => onTemplate(prompt)}>
-                <Sparkles aria-hidden="true" />
+                <Icon aria-hidden="true" />
                 <span><strong>{title}</strong><small>{description}</small></span>
               </button>
             ))}
           </div>
+          <p className="ex-home-schedule-note">此页面不缓存任务清单；查看、修改和执行状态始终以 Runtime 返回的事实为准。</p>
         </section>
       </div>
     );

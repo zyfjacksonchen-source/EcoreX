@@ -198,6 +198,43 @@ class UsageSummaryProjection(ManagementModel):
     captured_at: str
 
 
+class TenantModelPolicyProjection(ManagementModel):
+    schema_version: Literal[1] = 1
+    organization_id: str
+    configured: bool
+    allowed_model_ids: list[str]
+    default_chat_model_id: Literal["ecorex-chat"] = "ecorex-chat"
+    default_chat_reasoning_effort: Literal["max"] = "max"
+    image_primary_model_id: Literal["gpt-image-2-pro"] = "gpt-image-2-pro"
+    image_fallback_upstream_model_id: Literal["gpt-image-2"] = "gpt-image-2"
+    revision: int = Field(ge=0)
+    created_at: str | None
+    updated_at: str | None
+
+
+class UpdateTenantModelPolicyRequest(ManagementModel):
+    allowed_model_ids: list[str] = Field(min_length=2, max_length=len(MANAGED_MODEL_SLOTS))
+    default_chat_model_id: Literal["ecorex-chat"] = "ecorex-chat"
+    default_chat_reasoning_effort: Literal["max"] = "max"
+    image_primary_model_id: Literal["gpt-image-2-pro"] = "gpt-image-2-pro"
+    image_fallback_upstream_model_id: Literal["gpt-image-2"] = "gpt-image-2"
+    expected_revision: int = Field(ge=0)
+    client_request_id: str = Field(min_length=8, max_length=256)
+
+    @field_validator("allowed_model_ids")
+    @classmethod
+    def _allowed_model_ids(cls, value: list[str]) -> list[str]:
+        normalized = sorted(value)
+        if (
+            len(normalized) != len(set(normalized))
+            or any(model_id not in MANAGED_MODEL_SLOTS for model_id in normalized)
+            or "ecorex-chat" not in normalized
+            or "gpt-image-2" not in normalized
+        ):
+            raise ValueError("tenant model allowlist is invalid")
+        return normalized
+
+
 class ModelRevisionProjection(ManagementModel):
     config_id: str
     revision: int = Field(ge=1)
@@ -330,7 +367,9 @@ __all__ = [
     "ProviderOriginPreset",
     "StageModelConfigurationRequest",
     "TestAndActivateModelRequest",
+    "TenantModelPolicyProjection",
     "UpdateAdminUserRequest",
+    "UpdateTenantModelPolicyRequest",
     "UsageSummaryProjection",
     "provider_origin_preset_for_slot",
     "provider_protocol_for_slot",

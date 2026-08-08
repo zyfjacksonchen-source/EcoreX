@@ -25,12 +25,15 @@ from .management_models import (
     AdminUserProjection,
     CreateAdminUserRequest,
     CreateModelConfigurationRequest,
+    MANAGED_MODEL_SLOTS,
     ModelConfigurationProjection,
     ModelRevisionProjection,
     ModelTestProjection,
     PasswordChangeProjection,
     StageModelConfigurationRequest,
+    TenantModelPolicyProjection,
     UpdateAdminUserRequest,
+    UpdateTenantModelPolicyRequest,
     UsageSummaryProjection,
     provider_origin_preset_for_slot,
     provider_protocol_for_slot,
@@ -1068,6 +1071,14 @@ class AdminManagementRepository:
         total_tokens: int = 0,
         image_count: int = 0,
         provider_created_at: str,
+        requested_model_id: str | None = None,
+        provider_reported_model_id: str | None = None,
+        actual_model_id: str | None = None,
+        actual_provider_id: str | None = None,
+        fallback_from_model_id: str | None = None,
+        fallback_used: bool | None = None,
+        job_status: str | None = None,
+        result_status: str | None = None,
     ) -> AdminUserProjection:
         """Settle one immutable provider fact into account counters exactly once.
 
@@ -1077,6 +1088,15 @@ class AdminManagementRepository:
         and audit chain commit in one SQLite transaction.
         """
 
+        audit_values = (
+            requested_model_id,
+            provider_reported_model_id,
+            actual_model_id,
+            actual_provider_id,
+            fallback_from_model_id,
+            job_status,
+            result_status,
+        )
         if (
             source_service not in _PROVIDER_USAGE_SERVICES
             or usage_kind not in _PROVIDER_USAGE_KINDS
@@ -1108,6 +1128,39 @@ class AdminManagementRepository:
             )
             or not isinstance(provider_created_at, str)
             or not 1 <= len(provider_created_at) <= 64
+            or any(
+                value is not None
+                and (
+                    not isinstance(value, str)
+                    or not 1 <= len(value) <= 256
+                    or any(ord(character) < 33 for character in value)
+                )
+                for value in audit_values
+            )
+            or (
+                usage_kind == "image"
+                and any(
+                    value is None
+                    for value in (
+                        requested_model_id,
+                        provider_reported_model_id,
+                        actual_provider_id,
+                        job_status,
+                        result_status,
+                    )
+                )
+            )
+            or (
+                fallback_from_model_id is not None
+                and (
+                    actual_model_id is None
+                    or fallback_from_model_id == actual_model_id
+                    or fallback_used is not True
+                )
+            )
+            or (fallback_used is not None and not isinstance(fallback_used, bool))
+            or (fallback_used is True and fallback_from_model_id is None)
+            or (fallback_used is False and fallback_from_model_id is not None)
         ):
             raise ValueError("provider usage fact is invalid")
         try:
@@ -1117,7 +1170,7 @@ class AdminManagementRepository:
         if created.tzinfo is None:
             raise ValueError("provider usage timestamp is invalid")
         created_at = created.astimezone(UTC).isoformat()
-        material = {
+        base_material = {
             "source_service": source_service,
             "source_id": source_id,
             "usage_kind": usage_kind,
@@ -1128,7 +1181,6 @@ class AdminManagementRepository:
             "image_count": image_count,
             "provider_created_at": created_at,
         }
-        payload_sha256 = _sha(material)
         fact_id = "usagefact_" + hashlib.sha256(
             b"ecorex-provider-usage-fact-v1\0"
             + source_service.encode("ascii")
@@ -1141,14 +1193,40 @@ class AdminManagementRepository:
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
-                "SELECT account_id,payload_sha256 FROM admin_ops_provider_usage_facts "
+                "SELECT * FROM admin_ops_provider_usage_facts "
                 "WHERE fact_id=?",
                 (fact_id,),
             ).fetchone()
             if existing is not None:
+                has_audit_metadata = any(
+                    existing[key] is not None
+                    for key in (
+                        "organization_id",
+                        "requested_model_id",
+                        "provider_reported_model_id",
+                        "actual_model_id",
+                        "actual_provider_id",
+                        "fallback_from_model_id",
+                        "job_status",
+                        "result_status",
+                    )
+                ) or existing["fallback_used"] is not None
+                material = base_material
+                if has_audit_metadata:
+                    material = material | {
+                        "organization_id": existing["organization_id"],
+                        "requested_model_id": requested_model_id,
+                        "provider_reported_model_id": provider_reported_model_id,
+                        "actual_model_id": actual_model_id,
+                        "actual_provider_id": actual_provider_id,
+                        "fallback_from_model_id": fallback_from_model_id,
+                        "fallback_used": fallback_used,
+                        "job_status": job_status,
+                        "result_status": result_status,
+                    }
                 if (
                     str(existing["account_id"]) != account_id
-                    or str(existing["payload_sha256"]) != payload_sha256
+                    or str(existing["payload_sha256"]) != _sha(material)
                 ):
                     raise AdminManagementConflict(
                         "provider usage identity was reused"
@@ -1167,6 +1245,19 @@ class AdminManagementRepository:
             ).fetchone()
             if row is None:
                 raise AdminManagementNotFound("user does not exist")
+            organization_id = row["organization_id"]
+            material = base_material | {
+                "organization_id": organization_id,
+                "requested_model_id": requested_model_id,
+                "provider_reported_model_id": provider_reported_model_id,
+                "actual_model_id": actual_model_id,
+                "actual_provider_id": actual_provider_id,
+                "fallback_from_model_id": fallback_from_model_id,
+                "fallback_used": fallback_used,
+                "job_status": job_status,
+                "result_status": result_status,
+            }
+            payload_sha256 = _sha(material)
             revision = int(row["revision"]) + 1
             token_value = int(row["tokens_used"]) + total_tokens
             image_value = int(row["images_used"]) + image_count
@@ -1175,7 +1266,10 @@ class AdminManagementRepository:
                 "INSERT INTO admin_ops_provider_usage_facts("
                 "fact_id,source_service,source_id,usage_kind,account_id,"
                 "input_tokens,output_tokens,total_tokens,image_count,payload_sha256,"
-                "provider_created_at,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                "provider_created_at,recorded_at,organization_id,requested_model_id,"
+                "provider_reported_model_id,actual_model_id,actual_provider_id,"
+                "fallback_from_model_id,fallback_used,job_status,result_status) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     fact_id,
                     source_service,
@@ -1189,6 +1283,15 @@ class AdminManagementRepository:
                     payload_sha256,
                     created_at,
                     recorded_at,
+                    organization_id,
+                    requested_model_id,
+                    provider_reported_model_id,
+                    actual_model_id,
+                    actual_provider_id,
+                    fallback_from_model_id,
+                    None if fallback_used is None else int(fallback_used),
+                    job_status,
+                    result_status,
                 ),
             )
             updated = connection.execute(
@@ -1221,6 +1324,15 @@ class AdminManagementRepository:
                     "output_tokens": output_tokens,
                     "total_tokens": total_tokens,
                     "image_count": image_count,
+                    "organization_id": organization_id,
+                    "requested_model_id": requested_model_id,
+                    "provider_reported_model_id": provider_reported_model_id,
+                    "actual_model_id": actual_model_id,
+                    "actual_provider_id": actual_provider_id,
+                    "fallback_from_model_id": fallback_from_model_id,
+                    "fallback_used": fallback_used,
+                    "job_status": job_status,
+                    "result_status": result_status,
                     "resulting_user_revision": revision,
                 },
             )
@@ -1251,6 +1363,126 @@ class AdminManagementRepository:
             return [self._model_configuration(connection, row) for row in rows]
         finally:
             connection.close()
+
+    def get_tenant_model_policy(
+        self, organization_id: str
+    ) -> TenantModelPolicyProjection:
+        connection = self._connect()
+        try:
+            return self._tenant_model_policy(connection, organization_id)
+        finally:
+            connection.close()
+
+    def update_tenant_model_policy(
+        self,
+        organization_id: str,
+        request: UpdateTenantModelPolicyRequest,
+        *,
+        actor: ControlPrincipal,
+    ) -> TenantModelPolicyProjection:
+        return self._mutate(
+            actor=actor,
+            client_request_id=request.client_request_id,
+            operation="tenant_model_policy.update",
+            request_payload=request.model_dump(mode="json")
+            | {"organization_id": organization_id},
+            projection=TenantModelPolicyProjection,
+            action=lambda connection: self._update_tenant_model_policy(
+                connection, organization_id, request, actor
+            ),
+        )
+
+    def _update_tenant_model_policy(
+        self,
+        connection: sqlite3.Connection,
+        organization_id: str,
+        request: UpdateTenantModelPolicyRequest,
+        actor: ControlPrincipal,
+    ) -> TenantModelPolicyProjection:
+        organization_id = self._organization_id(organization_id)
+        existing = connection.execute(
+            "SELECT revision,created_at FROM admin_ops_tenant_model_policies "
+            "WHERE organization_id=?",
+            (organization_id,),
+        ).fetchone()
+        current_revision = int(existing["revision"]) if existing is not None else 0
+        if current_revision != request.expected_revision:
+            raise AdminManagementConflict("tenant model policy revision changed")
+        revision = current_revision + 1
+        now = _now()
+        allowed_json = json.dumps(
+            request.allowed_model_ids,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        if existing is None:
+            connection.execute(
+                "INSERT INTO admin_ops_tenant_model_policies("
+                "organization_id,allowed_model_ids_json,default_chat_model_id,"
+                "default_chat_reasoning_effort,image_primary_model_id,"
+                "image_fallback_upstream_model_id,revision,created_at,updated_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    organization_id,
+                    allowed_json,
+                    request.default_chat_model_id,
+                    request.default_chat_reasoning_effort,
+                    request.image_primary_model_id,
+                    request.image_fallback_upstream_model_id,
+                    revision,
+                    now,
+                    now,
+                ),
+            )
+        else:
+            cursor = connection.execute(
+                "UPDATE admin_ops_tenant_model_policies SET allowed_model_ids_json=?,"
+                "default_chat_model_id=?,default_chat_reasoning_effort=?,"
+                "image_primary_model_id=?,image_fallback_upstream_model_id=?,"
+                "revision=?,updated_at=? WHERE organization_id=? AND revision=?",
+                (
+                    allowed_json,
+                    request.default_chat_model_id,
+                    request.default_chat_reasoning_effort,
+                    request.image_primary_model_id,
+                    request.image_fallback_upstream_model_id,
+                    revision,
+                    now,
+                    organization_id,
+                    current_revision,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise AdminManagementConflict("tenant model policy revision changed")
+        if organization_id.startswith("personal:"):
+            connection.execute(
+                "UPDATE admin_ops_users SET revision=revision+1,updated_at=? "
+                "WHERE account_id=? AND organization_id IS NULL",
+                (now, organization_id.removeprefix("personal:")),
+            )
+        else:
+            connection.execute(
+                "UPDATE admin_ops_users SET revision=revision+1,updated_at=? "
+                "WHERE organization_id=?",
+                (now, organization_id),
+            )
+        self._audit(
+            connection,
+            actor=actor,
+            action="tenant.model_policy.update",
+            target_id=organization_id,
+            payload={
+                "allowed_model_ids": request.allowed_model_ids,
+                "default_chat_model_id": request.default_chat_model_id,
+                "default_chat_reasoning_effort": request.default_chat_reasoning_effort,
+                "image_primary_model_id": request.image_primary_model_id,
+                "image_fallback_upstream_model_id": (
+                    request.image_fallback_upstream_model_id
+                ),
+                "revision": revision,
+            },
+        )
+        return self._tenant_model_policy(connection, organization_id)
 
     def create_model_configuration(
         self,
@@ -1822,9 +2054,16 @@ class AdminManagementRepository:
         finally:
             connection.close()
 
-    def active_public_catalog(self) -> list[dict[str, object]]:
+    def active_public_catalog(
+        self, *, organization_id: str | None = None
+    ) -> list[dict[str, object]]:
         connection = self._connect()
         try:
+            allowed_model_ids: frozenset[str] | None = None
+            if organization_id is not None:
+                policy = self._tenant_model_policy(connection, organization_id)
+                if policy.configured:
+                    allowed_model_ids = frozenset(policy.allowed_model_ids)
             rows = connection.execute(
                 "SELECT configs.config_id,configs.local_model_id,configs.modality,"
                 "configs.active_revision,revisions.display_name,revisions.upstream_model_id,"
@@ -1859,6 +2098,8 @@ class AdminManagementRepository:
                     ),
                 }
                 for row in rows
+                if allowed_model_ids is None
+                or str(row["local_model_id"]) in allowed_model_ids
             ]
         finally:
             connection.close()
@@ -2079,6 +2320,65 @@ class AdminManagementRepository:
             password_configured=credential is not None,
             credential_state="configured" if credential is not None else "missing",
             password_changed_at=password_changed_at,
+        )
+
+    @staticmethod
+    def _organization_id(value: str) -> str:
+        normalized = str(value)
+        if (
+            not 1 <= len(normalized) <= 128
+            or any(ord(character) < 32 for character in normalized)
+            or "/" in normalized
+            or "\\" in normalized
+        ):
+            raise ValueError("organization ID is invalid")
+        return normalized
+
+    @classmethod
+    def _tenant_model_policy(
+        cls,
+        connection: sqlite3.Connection,
+        organization_id: str,
+    ) -> TenantModelPolicyProjection:
+        organization_id = cls._organization_id(organization_id)
+        row = connection.execute(
+            "SELECT * FROM admin_ops_tenant_model_policies WHERE organization_id=?",
+            (organization_id,),
+        ).fetchone()
+        if row is None:
+            return TenantModelPolicyProjection(
+                organization_id=organization_id,
+                configured=False,
+                allowed_model_ids=sorted(MANAGED_MODEL_SLOTS),
+                revision=0,
+                created_at=None,
+                updated_at=None,
+            )
+        try:
+            allowed_model_ids = json.loads(str(row["allowed_model_ids_json"]))
+            if (
+                not isinstance(allowed_model_ids, list)
+                or len(allowed_model_ids) != len(set(allowed_model_ids))
+                or any(model_id not in MANAGED_MODEL_SLOTS for model_id in allowed_model_ids)
+                or "ecorex-chat" not in allowed_model_ids
+                or "gpt-image-2" not in allowed_model_ids
+            ):
+                raise ValueError
+        except (json.JSONDecodeError, TypeError, ValueError):
+            raise AdminManagementError("tenant model policy is invalid") from None
+        return TenantModelPolicyProjection(
+            organization_id=organization_id,
+            configured=True,
+            allowed_model_ids=sorted(allowed_model_ids),
+            default_chat_model_id=str(row["default_chat_model_id"]),
+            default_chat_reasoning_effort=str(row["default_chat_reasoning_effort"]),
+            image_primary_model_id=str(row["image_primary_model_id"]),
+            image_fallback_upstream_model_id=str(
+                row["image_fallback_upstream_model_id"]
+            ),
+            revision=int(row["revision"]),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
         )
 
     def _model_configuration(

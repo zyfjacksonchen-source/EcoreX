@@ -1,6 +1,9 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
+  AlertCircle,
+  ChevronLeft,
+  ChevronRight,
   Download,
   Eye,
   ExternalLink,
@@ -13,13 +16,14 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 
 import type { ArtifactProjection } from "../api/contracts.ts";
 import {
   artifactUiActions,
   type ArtifactUiAction,
 } from "../state/artifactActions.ts";
+import type { FailedImageBatchSlot } from "../state/imageBatchFacts.ts";
 import {
   artifactFamilyLabel,
   formatFileSize,
@@ -200,6 +204,151 @@ function ActionSheet({
 
 function OverflowActions(props: OverflowActionsProps) {
   return props.asSheet ? <ActionSheet {...props} /> : <MoreMenu {...props} />;
+}
+
+export type ImageArtifactGalleryViewSlot =
+  | { kind: "artifact"; artifact: ArtifactProjection }
+  | FailedImageBatchSlot;
+
+export function ImageArtifactGallery({
+  slots,
+  previewUrls,
+  onAction,
+  onPreviewVisible,
+}: {
+  slots: ImageArtifactGalleryViewSlot[];
+  previewUrls: Record<string, string>;
+  onAction: ArtifactShelfProps["onAction"];
+  onPreviewVisible: ArtifactShelfProps["onPreviewVisible"];
+}) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const count = slots.length;
+  useEffect(() => setActiveIndex((index) => Math.min(index, count - 1)), [count]);
+  const activeArtifact = slots[activeIndex]?.kind === "artifact"
+    ? slots[activeIndex].artifact
+    : null;
+  useEffect(() => {
+    if (activeArtifact?.actions.includes("preview")) onPreviewVisible(activeArtifact);
+  }, [activeArtifact?.artifact_id, activeArtifact?.revision_id, onPreviewVisible]);
+  const goTo = (index: number) => {
+    const target = Math.max(0, Math.min(count - 1, index));
+    const track = trackRef.current;
+    const slide = track?.children.item(target) as HTMLElement | null;
+    if (!track || !slide) return;
+    track.scrollTo({
+      left: slide.offsetLeft - track.offsetLeft,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    });
+    setActiveIndex(target);
+  };
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    goTo(activeIndex + (event.key === "ArrowRight" ? 1 : -1));
+  };
+  const syncActiveSlide = () => {
+    const track = trackRef.current;
+    if (!track) return;
+    const slides = [...track.children] as HTMLElement[];
+    const nearest = slides.reduce((best, slide, index) => (
+      Math.abs(slide.offsetLeft - track.offsetLeft - track.scrollLeft)
+        < Math.abs(slides[best].offsetLeft - track.offsetLeft - track.scrollLeft)
+        ? index
+        : best
+    ), 0);
+    setActiveIndex(nearest);
+  };
+  return (
+    <section className="ex-artifact-shelf" aria-label="任务产物">
+      <p className="ex-section-label">产物</p>
+      <div className="ex-image-gallery">
+      <div
+        ref={trackRef}
+        className="ex-image-gallery-track"
+        role="region"
+        tabIndex={0}
+        aria-label={`图片画廊，第 ${activeIndex + 1} 张，共 ${count} 张`}
+        onKeyDown={onKeyDown}
+        onScroll={syncActiveSlide}
+      >
+        {slots.map((slot, index) => {
+          const artifact = slot.kind === "artifact" ? slot.artifact : null;
+          const ready = artifact?.status === "ready";
+          const failed = slot.kind === "failed"
+            || artifact?.status === "failed"
+            || artifact?.status === "deleted";
+          const displayName = artifact?.display_name ?? `批次图片 ${index + 1}`;
+          const previewUrl = artifact ? previewUrls[artifact.artifact_id] : null;
+          const canPreview = Boolean(ready && artifact?.actions.includes("preview"));
+          const media = artifact && ready && previewUrl ? (
+            <img src={previewUrl} alt={artifact.display_name} />
+          ) : failed ? (
+            <span className="ex-image-gallery-failure" role="img" aria-label={artifact?.status === "deleted" ? "图片已不可用" : "图片未完成"}>
+              <AlertCircle aria-hidden="true" />
+              <strong>{artifact?.status === "deleted" ? "图片已不可用" : "图片未完成"}</strong>
+              {slot.kind === "failed" ? (
+                <small>{slot.retryable ? "可以稍后重试此张图片。" : "本次未生成有效图片。"}</small>
+              ) : artifact?.quality_evidence.summary ? <small>{artifact.quality_evidence.summary}</small> : null}
+            </span>
+          ) : (
+            <span className="ex-image-generation-canvas" role="img" aria-label={ready ? "正在载入图片预览" : "正在生成图片"}>
+              <span className="ex-image-generation-glow" aria-hidden="true" />
+              <ImageIcon aria-hidden="true" />
+            </span>
+          );
+          return (
+            <article
+              className="ex-image-gallery-slide"
+              data-preview-artifact-id={canPreview ? artifact?.artifact_id : undefined}
+              data-artifact-status={slot.kind === "failed" ? "failed" : artifact?.status}
+              data-image-batch-task-id={slot.kind === "failed" ? slot.taskId : undefined}
+              role="group"
+              aria-label={`${index + 1}/${count}：${displayName}`}
+              key={slot.kind === "failed" ? slot.taskId : artifact?.artifact_id}
+            >
+              {canPreview && artifact ? (
+                <button
+                  className="ex-image-gallery-media"
+                  type="button"
+                  data-artifact-preview-trigger={artifact.artifact_id}
+                  aria-label={`预览图片：${artifact.display_name}`}
+                  onClick={() => onAction(artifact, "preview")}
+                >{media}</button>
+              ) : <div className="ex-image-gallery-media">{media}</div>}
+              <div className="ex-image-gallery-caption">
+                <span><strong>{displayName}</strong><small>{slot.kind === "failed" ? "生成失败" : artifact?.status === "pending" ? "正在生成" : ready ? "已完成" : artifact?.status === "failed" ? "生成失败" : "不可用"}</small></span>
+                {artifact && ready ? (
+                  <div role="group" aria-label={`图片操作：${artifact.display_name}`}>
+                    {artifact.actions.includes("open") ? (
+                      <IconButton label={`打开：${artifact.display_name}`} onClick={() => onAction(artifact, "open")}>
+                        <ExternalLink aria-hidden="true" />
+                      </IconButton>
+                    ) : null}
+                    {artifact.actions.includes("download") ? (
+                      <IconButton label={`下载：${artifact.display_name}`} onClick={() => onAction(artifact, "download")}>
+                        <Download aria-hidden="true" />
+                      </IconButton>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+      <div className="ex-image-gallery-navigation">
+        <IconButton label="上一张图片" disabled={activeIndex === 0} onClick={() => goTo(activeIndex - 1)}>
+          <ChevronLeft aria-hidden="true" />
+        </IconButton>
+        <span aria-live="polite" aria-atomic="true">{activeIndex + 1} / {count}</span>
+        <IconButton label="下一张图片" disabled={activeIndex === count - 1} onClick={() => goTo(activeIndex + 1)}>
+          <ChevronRight aria-hidden="true" />
+        </IconButton>
+      </div>
+      </div>
+    </section>
+  );
 }
 
 export function ArtifactShelf({

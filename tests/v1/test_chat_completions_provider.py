@@ -84,13 +84,13 @@ def test_stream_chat_completion_maps_text_reasoning_usage() -> None:
 def test_nonstream_chat_completion_maps_one_tool_handoff() -> None:
     parser = _ChatCompletionParser(
         "request-chat-tool",
-        expected_model_id="gemini-3.1-pro-preview",
+        expected_model_id="gemini-3.1-pro-high",
         tool_names={"fetch_document": "fetch.document"},
     )
     events = parser.feed_response(
         {
             "id": "chatcmpl_tool_1",
-            "model": "gemini-3.1-pro-preview",
+            "model": "gemini-3.1-pro-high",
             "choices": [
                 {
                     "index": 0,

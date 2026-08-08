@@ -2187,6 +2187,7 @@ def create_app(
         account_id=settings.account_id,
         client=settings.image_orchestration_client,
         input_attachments=input_attachment_service,
+        batch_max_parallel=settings.image_execution_concurrency,
     )
     composition.capability_service.bind_invocation_backend(image_tool_backend)
     if worker_supervisor is not None:

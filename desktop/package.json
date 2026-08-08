@@ -1,23 +1,34 @@
 {
-  "name": "ecorex-webui",
-  "version": "1.0.0",
+  "name": "e-mate-desktop",
+  "version": "2.0.0",
   "private": true,
-  "description": "EcoreX v1 thin React WebUI for the local Runtime",
+  "description": "e-Mate Enterprise desktop client",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "dev:electron": "npm run build:web && electron .",
     "contracts:generate": "node tools/run-python.mjs tools/generate-runtime-contracts.py",
     "contracts:check": "node tools/run-python.mjs tools/generate-runtime-contracts.py --check",
     "prebuild": "npm run contracts:check",
     "build:skill-hub": "astro build --root skill-hub",
     "test:skill-hub": "node --test tools/skill-hub-astro-contract.test.mjs",
-    "build": "npm run build:skill-hub && vite build && node tools/merge-skill-hub-dist.mjs dist skill-hub/dist && node tools/rehash-dist.mjs dist && node tools/check-v1-bundle.mjs dist",
+    "build:web": "npm run build:skill-hub && vite build && node tools/merge-skill-hub-dist.mjs dist skill-hub/dist && node tools/rehash-dist.mjs dist && node tools/check-v1-bundle.mjs dist",
+    "build": "npm run build:web && npm run test:electron && npm run brand:check",
+    "stage:runtime": "node tools/stage-electron-runtime.mjs",
+    "dist": "npm run stage:runtime && npm run build && electron-builder",
+    "dist:mac": "npm run dist:mac:arm64 && npm run dist:mac:x64",
+    "dist:mac:arm64": "node tools/stage-electron-runtime.mjs --platform macos --arch arm64 && npm run build && electron-builder --mac --arm64",
+    "dist:mac:x64": "node tools/stage-electron-runtime.mjs --platform macos --arch x64 && npm run build && electron-builder --mac --x64",
+    "dist:win": "node tools/stage-electron-runtime.mjs --platform windows --arch x64 && npm run build && electron-builder --win --x64",
+    "brand:check": "node tools/check-electron-brand.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "pretypecheck": "npm run contracts:check",
     "typecheck": "tsc --noEmit",
-    "test:v1": "npm run contracts:check && node --experimental-strip-types --test src/v1/state/homeTaskActivity.test.ts src/v1/state/modelSelection.test.ts src/v1/state/runtimeReducer.test.ts src/v1/state/shares.test.ts src/v1/state/replay.test.ts src/v1/state/artifactActions.test.ts src/v1/state/artifactPreviewCache.test.ts src/v1/state/artifactPreviewState.test.ts src/v1/state/timelineTurns.test.ts src/v1/state/timelineArtifacts.test.ts src/v1/state/retouchPresentation.test.ts src/v1/state/retouchCanvas.test.ts src/v1/state/extensions.test.ts src/v1/state/migrationQuarantine.test.ts src/v1/state/userLanguage.test.ts src/v1/state/updatePresentation.test.ts src/v1/state/updateActivationHandoff.test.ts src/v1/state/themePreference.test.ts src/v1/api/artifactRuntimeContract.test.ts src/v1/api/runtimeClient.test.ts src/v1/api/skillHubRuntimeContract.test.ts tools/acceptance-preview-contract.test.mjs tools/artifact-preview-contract.test.mjs tools/design-contrast.test.mjs tools/design-density-contract.test.mjs tools/extension-manager-contract.test.mjs tools/ga-mock-server.test.mjs tools/installed-authenticated-cdp-contract.test.mjs tools/interaction-accessibility-contract.test.mjs tools/product-language-contract.test.mjs tools/skill-hub-astro-contract.test.mjs tools/update-ux-contract.test.mjs tools/rehash-dist.test.mjs tools/check-v1-bundle.test.mjs tools/lazy-feature-contract.test.mjs tools/runtime-contract-codegen.test.mjs tools/timeline-rendering-contract.test.mjs tools/user-login-layout-contract.test.mjs",
+    "test:v1": "npm run contracts:check && node --experimental-strip-types --test src/v1/state/homeTaskActivity.test.ts src/v1/state/modelSelection.test.ts src/v1/state/runtimeReducer.test.ts src/v1/state/shares.test.ts src/v1/state/replay.test.ts src/v1/state/artifactActions.test.ts src/v1/state/artifactPreviewCache.test.ts src/v1/state/artifactPreviewState.test.ts src/v1/state/imageBatchFacts.test.ts src/v1/state/timelineTurns.test.ts src/v1/state/timelineArtifacts.test.ts src/v1/state/timelineImageGallery.test.ts src/v1/state/retouchPresentation.test.ts src/v1/state/retouchCanvas.test.ts src/v1/state/extensions.test.ts src/v1/state/migrationQuarantine.test.ts src/v1/state/userLanguage.test.ts src/v1/state/updatePresentation.test.ts src/v1/state/updateActivationHandoff.test.ts src/v1/state/themePreference.test.ts src/v1/api/artifactRuntimeContract.test.ts src/v1/api/runtimeClient.test.ts src/v1/api/skillHubRuntimeContract.test.ts tools/acceptance-preview-contract.test.mjs tools/artifact-preview-contract.test.mjs tools/design-contrast.test.mjs tools/design-density-contract.test.mjs tools/extension-manager-contract.test.mjs tools/ga-mock-server.test.mjs tools/installed-authenticated-cdp-contract.test.mjs tools/interaction-accessibility-contract.test.mjs tools/product-language-contract.test.mjs tools/skill-hub-astro-contract.test.mjs tools/update-ux-contract.test.mjs tools/rehash-dist.test.mjs tools/check-v1-bundle.test.mjs tools/lazy-feature-contract.test.mjs tools/runtime-contract-codegen.test.mjs tools/timeline-rendering-contract.test.mjs tools/user-login-layout-contract.test.mjs",
     "test:e2e": "playwright test --config=playwright.config.ts",
     "test:cdp-preflight": "node tools/run-local-live-preflight-cdp.mjs",
+    "test:electron": "node --test tools/electron-shell-contract.test.mjs tools/task-notifications.test.mjs",
     "ga:serve": "node tools/ga-mock-server.mjs"
   },
   "dependencies": {
@@ -30,7 +41,8 @@
     "react-dom": "^19.2.3",
     "react-markdown": "10.1.0",
     "react-virtuoso": "4.18.11",
-    "remark-gfm": "4.0.1"
+    "remark-gfm": "4.0.1",
+    "electron-updater": "6.8.9"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",
@@ -40,10 +52,71 @@
     "@vitejs/plugin-react": "5.1.1",
     "astro": "7.1.6",
     "axe-core": "^4.12.1",
+    "electron": "33.2.0",
+    "electron-builder": "25.1.8",
     "typescript": "^5.9.3",
     "vite": "7.3.5"
   },
   "overrides": {
     "esbuild": "0.28.1"
+  },
+  "build": {
+    "appId": "net.ecoremedia.emate",
+    "productName": "e-Mate",
+    "asar": true,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**/*",
+      "dist/**/*",
+      "src/v1/assets/emate-mark.png",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "runtime-bundle",
+        "to": "runtime"
+      }
+    ],
+    "mac": {
+      "icon": "icon.icns",
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "notarize": false,
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "icon": "icon.ico",
+      "forceCodeSigning": false,
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "e-Mate"
+    },
+    "publish": {
+      "provider": "generic",
+      "url": "https://mvdcm.ecoremedia.net/e-mate/update/"
+    }
   }
 }

@@ -253,9 +253,8 @@ async function runPreflight() {
       await checkedVisible(page.getByRole("region", { name: "对话" }), "timeline_missing");
     };
     const settings = async () => {
-      await page.getByRole("button", { name: /验收账号，打开账号菜单/u }).click();
-      await page.getByRole("menuitem", { name: "设置" }).click();
-      const dialog = page.getByRole("dialog", { name: "设置" });
+      await page.getByRole("button", { name: "设置", exact: true }).click();
+      const dialog = page.getByTestId("settings-workspace");
       await checkedVisible(dialog, "settings_missing");
       return dialog;
     };
@@ -331,7 +330,7 @@ async function runPreflight() {
       },
       "tool-progressive-disclosure": async () => {
         await openThread("artifact");
-        await page.getByRole("button", { name: "技能", exact: true }).click();
+        await page.getByRole("button", { name: "能力中心", exact: true }).click();
         const workspace = page.getByRole("region", { name: "技能" });
         await checkedVisible(workspace, "skill_workspace_missing");
         check((await workspace.textContent())?.includes("技能、MCP、工具组件和能力包") === true, "extension_categories_missing");
@@ -437,7 +436,7 @@ async function runPreflight() {
         const workspace = page.locator(".ex-skills-workspace");
         await checkedVisible(workspace, "skills_workspace_missing");
         await workspace.getByRole("tab", { name: /已安装/u }).click();
-        await workspace.getByRole("button", { name: "协作连接", exact: true }).click();
+        await workspace.getByRole("button", { name: "通道", exact: true }).click();
         const panel = workspace.locator(".ex-connector-catalog-panel");
         await checkedVisible(panel, "connector_catalog_missing");
         const text = await panel.textContent();

@@ -8,7 +8,12 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from jsonschema import Draft202012Validator, ValidationError
 import pytest
 
-from ecorex.capabilities import CapabilityPackManifest, verify_capability_pack
+from ecorex.capabilities import (
+    CapabilityPackManifest,
+    builtin_capability_registry,
+    tool_spec_digest,
+    verify_capability_pack,
+)
 from ecorex.pack_catalog import CAPABILITY_PACK_SERVICE_IDS
 from ecorex.release import (
     ArtifactBuildInput,
@@ -102,6 +107,9 @@ def test_release_builder_emits_double_signed_verifiable_capability_pack(
     )
     assert verified.manifest.pack_id == "image"
     assert [binding.tool_id for binding in verified.manifest.tools] == ["imagegen"]
+    imagegen = builtin_capability_registry().get("imagegen")
+    assert verified.manifest.tools[0].tool_version == "1.1.0"
+    assert verified.manifest.tools[0].spec_sha256 == tool_spec_digest(imagegen)
     assert verified.manifest.services == ()
     metadata = json.loads(built.metadata_path.read_text(encoding="utf-8"))
     assert {entry["kind"] for entry in metadata["artifacts"]} == {

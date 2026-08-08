@@ -24,11 +24,17 @@ import type {
 } from "../api/contracts.ts";
 import { tryValidateArtifactProjection } from "../api/runtimeContract.ts";
 import { mergeArtifactProjections } from "../state/artifactActions.ts";
+import type { FailedImageBatchSlot } from "../state/imageBatchFacts.ts";
+import type { ImageArtifactGalleryViewSlot } from "./ArtifactShelf.tsx";
 import { retouchPresentation, type RetouchPresentation } from "../state/retouchPresentation.ts";
 import {
   artifactRevisionIdentity,
   selectUnbackedArtifactProjections,
 } from "../state/timelineArtifacts.ts";
+import {
+  groupTimelineImageArtifacts,
+  type TimelinePresentationBlock,
+} from "../state/timelineImageGallery.ts";
 import {
   buildTimelineTurns,
   type TimelineBlock,
@@ -43,6 +49,7 @@ const NewConversationProjectSelector = lazy(() => import("./NewConversationProje
 const ReasoningBlock = lazy(() => import("./ReasoningBlock.tsx"));
 const TurnCompletionRow = lazy(() => import("./TurnCompletionRow.tsx"));
 const ArtifactShelf = lazy(async () => ({ default: (await import("./ArtifactShelf.tsx")).ArtifactShelf }));
+const ImageArtifactGallery = lazy(async () => ({ default: (await import("./ArtifactShelf.tsx")).ImageArtifactGallery }));
 
 interface TimelineProps {
   items: ItemProjection[];
@@ -53,6 +60,7 @@ interface TimelineProps {
   activeTurn: TurnProjection | null;
   isThinking: boolean;
   artifacts: ArtifactProjection[];
+  imageBatchFailures: FailedImageBatchSlot[];
   artifactPreviewUrls: Record<string, string>;
   onArtifactAction: (artifact: ArtifactProjection, action: string) => void;
   onArtifactPreviewVisible: (artifact: ArtifactProjection) => void;
@@ -193,6 +201,7 @@ interface BlockProps {
   block: TimelineBlock;
   turn: TurnProjection;
   artifactByRevision: Map<string, ArtifactProjection>;
+  imageBatchFailures: FailedImageBatchSlot[];
   artifactPreviewUrls: Record<string, string>;
   onArtifactAction: (artifact: ArtifactProjection, action: string) => void;
   onArtifactPreviewVisible: (artifact: ArtifactProjection) => void;
@@ -336,6 +345,10 @@ const TurnRow = memo(function TurnRow({
   modelSwitch,
   ...blockProps
 }: TurnRowProps) {
+  const presentationBlocks = groupTimelineImageArtifacts(
+    entry.blocks,
+    blockProps.imageBatchFailures.filter((failure) => failure.turnId === entry.turn.turn_id),
+  );
   const firstAssistant = entry.assistantBlocks.find((block) => (
     block.kind !== "interaction" || block.interaction.status !== "pending"
   ));
@@ -345,8 +358,34 @@ const TurnRow = memo(function TurnRow({
     && role(block.item) === "assistant"
     && messageText(block.item).trim()
   ));
-  const renderBlock = (block: TimelineBlock) => (
-    <TimelineBlockView key={block.key} block={block} turn={entry.turn} {...blockProps} />
+  const renderBlock = (block: TimelinePresentationBlock) => {
+    if (block.kind !== "image_gallery") {
+      return <TimelineBlockView key={block.key} block={block} turn={entry.turn} {...blockProps} />;
+    }
+    const slots = block.slots.flatMap<ImageArtifactGalleryViewSlot>((slot) => {
+      if (slot.kind === "failed") return [slot];
+      const projected = artifactFrom(slot.block.item);
+      if (!projected) return [];
+      return [{
+        kind: "artifact" as const,
+        artifact: blockProps.artifactByRevision.get(artifactRevisionIdentity(projected)) ?? projected,
+      }];
+    });
+    return (
+      <Suspense key={block.key} fallback={<div className="ex-activity-row" role="status">正在载入图片…</div>}>
+        <ImageArtifactGallery
+          slots={slots}
+          previewUrls={blockProps.artifactPreviewUrls}
+          onAction={blockProps.onArtifactAction}
+          onPreviewVisible={blockProps.onArtifactPreviewVisible}
+        />
+      </Suspense>
+    );
+  };
+  const containsBlock = (candidate: TimelinePresentationBlock, key: string) => (
+    candidate.kind === "image_gallery"
+      ? candidate.slots.some((slot) => slot.kind === "artifact" && slot.block.key === key)
+      : candidate.key === key
   );
   let headingRendered = false;
   return (
@@ -358,10 +397,10 @@ const TurnRow = memo(function TurnRow({
       {modelSwitch ? (
         <div className="ex-model-switch-divider" role="separator"><span>已切换至 {modelSwitch}</span></div>
       ) : null}
-      {entry.blocks.map((block) => {
+      {presentationBlocks.map((block) => {
         const showHeading = !headingRendered
           && firstAssistant !== undefined
-          && block.key === firstAssistant.key;
+          && containsBlock(block, firstAssistant.key);
         if (showHeading) headingRendered = true;
         return (
           <div key={block.key}>
@@ -405,6 +444,7 @@ export function Timeline({
   activeTurn,
   isThinking,
   artifacts,
+  imageBatchFailures,
   artifactPreviewUrls,
   onArtifactAction,
   onArtifactPreviewVisible,
@@ -728,6 +768,7 @@ export function Timeline({
                 entry={entry}
                 modelSwitch={modelSwitches.get(entry.turn.turn_id) ?? null}
                 artifactByRevision={artifactByRevision}
+                imageBatchFailures={imageBatchFailures}
                 artifactPreviewUrls={artifactPreviewUrls}
                 onArtifactAction={onArtifactAction}
                 onArtifactPreviewVisible={onArtifactPreviewVisible}
