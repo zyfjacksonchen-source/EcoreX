@@ -1865,7 +1865,7 @@ def test_empty_tool_continuation_forces_text_without_replaying_tool(tmp_path) ->
     forced = gateway.requests[2]
     assert forced.previous_response_id == "resp_empty"
     assert forced.direct_tools == []
-    assert "不要调用任何工具" in forced.input
+    assert "不要调用任何工具" in forced.input_items[-1].content
     assert any(
         event.event_type == "model.empty_final_response_recovery"
         for event in kernel.events.page(thread.thread_id, limit=1_000).events
@@ -2607,7 +2607,7 @@ def test_repeated_identical_failures_trigger_reflection_then_loop_stop(
                     "response_id": f"resp_invalid_{index}",
                     "tool_call_id": f"call_invalid_{index}",
                     "tool_name": "read",
-                    "arguments": {},
+                    "arguments": {"max_bytes": 1024 * (index + 1)},
                 }
             ]
             for index in range(3)
@@ -2632,12 +2632,13 @@ def test_repeated_identical_failures_trigger_reflection_then_loop_stop(
 
     assert result.outcome is WorkerOutcome.COMPLETED
     second = gateway.requests[2].tool_outputs[0].output
-    third = gateway.requests[3].tool_outputs[0].output
+    third = gateway.requests[3].input_items[0].output
     assert second["recovery"]["reflection_required"] is True
     assert second["recovery"]["reflection_trigger"] == "same_failure_twice"
     assert third["recovery"]["reflection_trigger"] == "same_failure_three_times"
     assert third["recovery"]["action"] == "respond_without_tool"
     assert third["recovery"]["retry_allowed"] is False
+    assert gateway.requests[3].direct_tools == []
     events = kernel.events.page(thread.thread_id, limit=1_000).events
     assert any(event.event_type == "agent.reflection_requested" for event in events)
     assert any(event.event_type == "agent.loop_detected" for event in events)
@@ -2709,6 +2710,127 @@ def test_open_tool_circuit_blocks_repeat_dispatch_and_returns_to_model(
     assert gateway.requests[2].tool_outputs[0].output["code"] == "tool_circuit_open"
     events = kernel.events.page(thread.thread_id, limit=1_000).events
     assert sum(event.event_type == "tool.circuit_opened" for event in events) == 1
+
+
+def test_deterministic_tool_failures_do_not_poison_circuit_and_force_final_text(
+    tmp_path,
+) -> None:
+    calls = []
+
+    class MissingWorkspacePath(RuntimeError):
+        code = "workspace_read_failed"
+        retryable = False
+
+    def read(arguments):
+        calls.append(dict(arguments))
+        raise MissingWorkspacePath("unavailable")
+
+    _app, kernel, composition, thread, _created = _runtime(
+        tmp_path,
+        input_text="读取不存在的报告",
+        capability_handlers={"read": read},
+    )
+    gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": f"resp_missing_{index}",
+                    "tool_call_id": f"call_missing_{index}",
+                    "tool_name": "read",
+                    "arguments": {
+                        "path": "missing.md",
+                        "max_bytes": 1024 * (index + 1),
+                    },
+                }
+            ]
+            for index in range(3)
+        ]
+        + [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "response.completed",
+                    "response_id": "resp_missing_final",
+                }
+            ]
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+    )
+    checkpoints = []
+    original_heartbeat = worker._heartbeat
+
+    async def capture_heartbeat(*args):
+        checkpoints.append(dict(args[-1]))
+        await original_heartbeat(*args)
+
+    worker._heartbeat = capture_heartbeat
+
+    result = asyncio.run(worker.run_once("worker-missing-workspace"))
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert len(calls) == 3
+    assert gateway.requests[3].direct_tools == []
+    recovery = gateway.requests[3].input_items[0].output["recovery"]
+    assert recovery["action"] == "respond_without_tool"
+    assert recovery["retry_allowed"] is False
+    assert any(
+        checkpoint.get("phase") == "tool_recovery"
+        and checkpoint.get("force_text_response") is True
+        for checkpoint in checkpoints
+    )
+    events = kernel.events.page(thread.thread_id, limit=1_000).events
+    assert not any(event.event_type == "tool.circuit_opened" for event in events)
+
+
+def test_tool_call_in_forced_final_round_hits_runtime_guardrail(tmp_path) -> None:
+    _app, kernel, composition, _thread, _created = _runtime(
+        tmp_path,
+        input_text="反复读取",
+    )
+    gateway = ScriptedGateway(
+        [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": f"resp_guard_{index}",
+                    "tool_call_id": f"call_guard_{index}",
+                    "tool_name": "read",
+                    "arguments": {"max_bytes": 1024 * (index + 1)},
+                }
+            ]
+            for index in range(3)
+        ]
+        + [
+            [
+                {
+                    "seq": 1,
+                    "event_type": "tool_call.requested",
+                    "response_id": "resp_guard_violation",
+                    "tool_call_id": "call_guard_violation",
+                    "tool_name": "read",
+                    "arguments": {"path": "."},
+                }
+            ]
+        ]
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=gateway,
+        capabilities=composition.capability_service,
+    )
+
+    result = asyncio.run(worker.run_once("worker-final-tool-violation"))
+
+    assert result.outcome is WorkerOutcome.FAILED
+    assert result.reason == "tool_recovery_finalization_violated"
+    assert gateway.requests[3].direct_tools == []
 
 
 def test_new_provider_attempt_does_not_append_to_failed_partial_message(

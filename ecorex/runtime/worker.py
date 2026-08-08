@@ -1211,6 +1211,15 @@ class AgentTurnWorker:
                     raise _GatewayResponseFailure(
                         "gateway_stream_missing_terminal", retryable=True
                     )
+                if force_text_response:
+                    return await self._finish_guardrail(
+                        job_id=job.job_id,
+                        turn_id=turn.turn_id,
+                        worker_id=worker_id,
+                        lease_token=lease_token,
+                        reason="tool_recovery_finalization_violated",
+                        round_index=round_index,
+                    )
                 handled = await self._handle_tool_event(
                     job_id=job.job_id,
                     turn_id=turn.turn_id,
@@ -1235,7 +1244,16 @@ class AgentTurnWorker:
                 else:
                     previous_response_id = None
                     tool_outputs = []
-                force_text_response = False
+                recovery = (
+                    handled.output.get("recovery")
+                    if isinstance(handled.output, Mapping)
+                    else None
+                )
+                force_text_response = bool(
+                    isinstance(recovery, Mapping)
+                    and recovery.get("action") == "respond_without_tool"
+                    and recovery.get("retry_allowed") is False
+                )
                 round_index += 1
                 await self._heartbeat(
                     job.job_id,
@@ -1250,6 +1268,7 @@ class AgentTurnWorker:
                             value.model_dump(mode="json") for value in tool_outputs
                         ],
                         "assistant_item_id": assistant_item_id,
+                        "force_text_response": force_text_response,
                         "execution_batch_id": authority.batch.batch_id,
                         "user_revision_ordinals": [],
                         **self._continuation_recovery_checkpoint(
@@ -2392,21 +2411,18 @@ class AgentTurnWorker:
             legacy_tool_outputs = []
         if force_text_response:
             finalization_instruction = (
-                "请基于刚才已经完成的工具结果，直接向用户说明实际完成情况、"
-                "产物和未完成项。不要调用任何工具。"
+                "现在进入当前任务的无工具收口轮。请根据上方工具结果与错误事实，"
+                "直接向用户说明实际完成情况、可用的部分结果和未完成项。"
+                "不要调用任何工具，也不要声称未完成的步骤已经完成。"
             )
-            if stateless_continuation is not None:
-                input_items = [
-                    *(input_items or []),
-                    GatewayUserMessageInput(
-                        message_id=f"{turn.turn_id}:finalize:{round_index}",
-                        content=finalization_instruction,
-                    ),
-                ]
-                legacy_input = None
-            else:
-                legacy_input = finalization_instruction
-                input_items = None
+            input_items = [
+                *(input_items or [*typed_tool_outputs, *visual_evidence_items]),
+                GatewayUserMessageInput(
+                    message_id=f"{turn.turn_id}:finalize:{round_index}",
+                    content=finalization_instruction,
+                ),
+            ]
+            legacy_input = None
             legacy_tool_outputs = []
         request = ModelGatewayRequest(
             # A transport replay inside one leased attempt must retain its ID,
@@ -2779,8 +2795,11 @@ class AgentTurnWorker:
             if isinstance(details.get("arguments_sha256"), str)
             else hashlib.sha256(json_dumps(event.arguments).encode("utf-8")).hexdigest()
         )
+        # Parameter tuning must not hide a semantic loop. Three failures of
+        # the same Tool with the same machine code are one failed direction,
+        # even when the model changes unrelated limits on every call.
         action_fingerprint = hashlib.sha256(
-            f"{requested_tool}\0{arguments_sha256}\0{code}".encode("utf-8")
+            f"{requested_tool}\0{code}".encode("utf-8")
         ).hexdigest()
         fingerprints = [*prior_fingerprints, action_fingerprint]
         loop_trigger = self._loop_trigger(fingerprints)
@@ -2789,7 +2808,7 @@ class AgentTurnWorker:
             if len(fingerprints) >= 2 and fingerprints[-1] == fingerprints[-2]
             else None
         )
-        exhausted = recovery_count >= self._MAX_AUTOMATIC_TOOL_RECOVERIES
+        exhausted = recovery_count + 1 >= self._MAX_AUTOMATIC_TOOL_RECOVERIES
         action, retry_allowed = self._recovery_action(code, exhausted=exhausted)
         if loop_trigger is not None:
             action, retry_allowed, exhausted = "respond_without_tool", False, True
@@ -2924,6 +2943,9 @@ class AgentTurnWorker:
                 "previous_response_id": event.response_id,
                 "tool_outputs": [output.model_dump(mode="json")],
                 "assistant_item_id": assistant_item_id,
+                "force_text_response": (
+                    action == "respond_without_tool" and retry_allowed is False
+                ),
                 "execution_batch_id": execution_batch_id,
                 "user_revision_ordinals": [],
             },
@@ -4002,7 +4024,7 @@ class AgentTurnWorker:
                 code = self._safe_error_code(error)
                 retryable = bool(getattr(error, "retryable", False))
                 turn = await _run_blocking(self.kernel.get_turn, turn_id)
-                circuit_opened = self._record_circuit_failure(spec)
+                circuit_opened = retryable and self._record_circuit_failure(spec)
                 if circuit_opened:
                     await _run_blocking(
                         self.kernel.append_execution_event,
