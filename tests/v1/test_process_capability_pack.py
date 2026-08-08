@@ -177,6 +177,7 @@ if sandbox_contract is not None:
     result["network_scope"] = sandbox_contract["network_scope"]
     result["process_tree_scope"] = sandbox_contract["process_tree_scope"]
     result["stdout_limit_bytes"] = sandbox_contract["stdout_limit_bytes"]
+    result["timeout_seconds"] = sandbox_contract["timeout_seconds"]
 sys.stdout.write(json.dumps(response, sort_keys=True, separators=(",", ":")))
 """
 
@@ -425,6 +426,17 @@ def test_sandbox_pack_receives_backend_authoritative_permission_snapshot(
     assert result.value["network_scope"] == "denied"
     assert result.value["process_tree_scope"] == "contained-inherited"
     assert result.value["stdout_limit_bytes"] == 4 * 1024 * 1024
+    default_timeout = asyncio.run(
+        service.tool_call(
+            plan.snapshot_id,
+            "shell",
+            {"command": "pwd"},
+            policy_snapshot_id="policy-default",
+            idempotency_key="job:tool-default-timeout",
+            approved=True,
+        )
+    )
+    assert default_timeout.value["timeout_seconds"] == 125
 
 
 def test_workspace_shell_is_fail_closed_without_a_verified_os_backend(

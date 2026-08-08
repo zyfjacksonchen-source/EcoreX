@@ -1177,7 +1177,7 @@ def test_sandbox_pack_acknowledges_exact_core_contract_and_fixed_shell(
     request = _request(
         "sandbox",
         "shell",
-        {"command": "echo ecorex-pack-ready", "timeout_seconds": 5},
+        {"command": "pwd"},
         tmp_path,
     )
     roots_digest = hashlib.sha256(str(tmp_path.resolve()).encode()).hexdigest()
@@ -1190,7 +1190,7 @@ def test_sandbox_pack_acknowledges_exact_core_contract_and_fixed_shell(
         "filesystem_write_scope": "host-unrestricted",
         "network_scope": "host-unrestricted",
         "process_tree_scope": "contained-inherited",
-        "timeout_seconds": 10.0,
+        "timeout_seconds": 125.0,
         "stdout_limit_bytes": 4 * 1024 * 1024,
         "stderr_limit_bytes": 64 * 1024,
     }
@@ -1204,7 +1204,7 @@ def test_sandbox_pack_acknowledges_exact_core_contract_and_fixed_shell(
     response = _invoke(artifact, request)
     assert response["status"] == "completed"
     assert response["sandbox_contract_id"] == contract["contract_id"]
-    assert "ecorex-pack-ready" in response["result"]["stdout"]
+    assert Path(response["result"]["stdout"].strip()).resolve() == tmp_path.resolve()
 
     request["context"]["sandbox_contract"]["contract_id"] = "sandbox_" + "0" * 64
     rejected = _invoke(artifact, request)

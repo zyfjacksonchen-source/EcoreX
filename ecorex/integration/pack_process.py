@@ -586,7 +586,7 @@ class ProcessCapabilityPackAdapter:
             return self.default_timeout_seconds
         raw = arguments.get("timeout_seconds", self.default_timeout_seconds)
         if isinstance(raw, bool) or not isinstance(raw, int):
-            return self.default_timeout_seconds
+            raw = self.default_timeout_seconds
         return float(min(3605, max(2, raw + 5)))
 
 
