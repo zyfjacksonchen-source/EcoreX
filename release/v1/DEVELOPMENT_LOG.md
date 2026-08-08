@@ -1284,3 +1284,44 @@ Python compile：passed
 六个 Skill metadata（正式随包无 PyYAML parser）：preserved
 首个 macOS 候选：因真实 Skills 泄漏被拒绝，必须基于新提交重签 Runtime 后重建
 ```
+
+# 2026-08-09 — 2.0.0 macOS arm64 未签名候选
+
+- 品牌修复提交为 `08b9bf80befe7840e394449afe0bc0eaedcff657`，Renderer 树保持
+  `303c5bc4af1e2dcb432b7b2a704ce95defae2ed7`。该精确提交重新生成跨平台
+  签名 Runtime seed；私钥未持久化，平台 Developer ID/公证均为 false。
+- Runtime `release_id=release-stable-38e78d015cabadb5864b9940`，
+  `build_digest=38e78d015cabadb5864b99408c135391034eb40e0d495997c12704ae6607141d`，
+  `manifest_sha256=b78db66e96af61af78340b238ccf03259dccb12920ac7df1151ec6effd1ddcfc`。
+  Windows Runtime ZIP SHA-256 为
+  `36fe5001d2c9d24bf4b3b6635329ae6574c9446514a4c5559fb986a4dfd90f36`；
+  macOS universal Runtime ZIP SHA-256 为
+  `56286fd1f33e8ea897444f17ec63322a265109bbb2dde7b0454b0b79be2682fb`。
+- macOS arm64 桌面候选使用 `electron-builder 25.1.8`、Electron 33.2.0，
+  `identity=null`、Hardened Runtime false、未公证。包内主程序和 Bootstrap 都是
+  arm64；`CFBundleIdentifier=net.ecoremedia.emate`，版本 `2.0.0`，图标 ICNS
+  1024×1024 且带 alpha。Mach-O 仅保留工具链产生的 ad-hoc/linker signature，
+  TeamIdentifier 为空，Gatekeeper 按预期拒绝直接信任。
+- 候选 DMG SHA-256：
+  `81307417e89922fe4a9643573bc7fddde6006c076015d41de1fb114bed78a06f`；
+  ZIP SHA-256：
+  `cd0d85145c0a44b9b14c0945ad9f31bda7d51b0c958dbaf4980537b770b3db67`；
+  `latest-mac.yml` SHA-256：
+  `46e3cc1b67417a371aa6d43ec233f61d074a03e9f201f13acccbfa85f390503e`。
+  清单内两个文件的 size/SHA-512 已逐项从本地制品重算一致。
+- 新 Runtime release 的 46 个文件以及 `.app` 展开的 118 个文件均通过 ZIP/二进制
+  品牌门禁，0 violation。首个被拒绝候选的文件在同名重建时被覆盖；其哈希与拒绝
+  原因仍在本日志，旧 DMG/ZIP 本体未保留。
+- 尚未发布：Computer Use 已停在运行未识别来源应用的动作前，等待动作时确认；
+  GitHub 发布技能要求本机存在并认证 `gh`，当前 `gh` 不存在，因此没有推送、没有
+  Actions run、没有 Release、没有企业更新源写入，也没有推进 `latest`。
+
+本轮定向验证：
+
+```text
+Runtime release 展开品牌扫描：46 files，0 violation
+macOS .app 展开品牌扫描：118 files，0 violation
+DMG/ZIP latest-mac SHA-512/size 回读：passed
+Bundle ID / version / icon alpha / arm64 / unsigned state：passed
+Computer Use、Browser、Windows、macOS x64、部署发布：pending
+```
