@@ -344,6 +344,7 @@ class RuntimeSettings:
     )
     close_connector_adapters_on_shutdown: bool = True
     connector_vault: Any | None = field(default=None, repr=False)
+    legacy_audit_vault_factory: Any | None = field(default=None, repr=False)
     connector_oauth_return_uri: str | None = None
     connector_maintenance_seconds: float = 15.0
     share_publisher: SharePublisher | None = field(default=None, repr=False)
@@ -1014,6 +1015,212 @@ def _has_encrypted_audit_rows(kernel: RuntimeKernel) -> bool:
         )
 
 
+_INSTALLATION_AUDIT_KEY_REFERENCE = "ecorex/observability/audit/installation-v1"
+_AUDIT_KEY_MIGRATION_ACCOUNT_LIMIT = 64
+
+
+def _account_audit_key_reference(account_id: str) -> str:
+    return "ecorex/observability/audit/" + hashlib.sha256(
+        account_id.encode("utf-8")
+    ).hexdigest()[:32]
+
+
+def _decode_audit_key(stored: Mapping[str, Any]) -> bytes:
+    try:
+        encoded = stored["aes256_gcm_key"]
+        material = base64.b64decode(str(encoded), altchars=b"-_", validate=True)
+    except (KeyError, TypeError, ValueError):
+        raise RuntimeError("credential vault returned an invalid audit key") from None
+    if len(material) != 32:
+        raise RuntimeError("credential vault returned an invalid audit key")
+    return material
+
+
+def _historical_audit_account_ids(kernel: RuntimeKernel) -> tuple[str, ...]:
+    with kernel.database.reader() as connection:
+        rows = connection.execute(
+            "SELECT account_id FROM ("
+            "SELECT account_id FROM observability_audit_outbox "
+            "WHERE payload_format = ? UNION "
+            "SELECT account_id FROM observability_trace_outbox "
+            "WHERE payload_format = ?) ORDER BY account_id LIMIT ?",
+            (
+                AuditPayloadCipher.FORMAT,
+                AuditPayloadCipher.FORMAT,
+                _AUDIT_KEY_MIGRATION_ACCOUNT_LIMIT + 1,
+            ),
+        ).fetchall()
+    if len(rows) > _AUDIT_KEY_MIGRATION_ACCOUNT_LIMIT:
+        raise RuntimeError("audit key migration account limit exceeded")
+    result: list[str] = []
+    for row in rows:
+        account_id = row["account_id"]
+        if (
+            not isinstance(account_id, str)
+            or not account_id
+            or len(account_id) > 512
+            or any(ord(character) < 32 or ord(character) == 127 for character in account_id)
+        ):
+            raise RuntimeError("audit key migration account identity is invalid")
+        result.append(account_id)
+    return tuple(result)
+
+
+def _decrypt_observability_row(
+    row: Mapping[str, Any],
+    *,
+    fields: tuple[str, ...],
+    ciphers: tuple[AuditPayloadCipher, ...],
+) -> str | None:
+    associated_data = "\x1f".join(str(row[name]) for name in fields)
+    for cipher in ciphers:
+        try:
+            plaintext = cipher.decrypt(
+                str(row["payload_json"]), associated_data=associated_data
+            )
+        except AuditIntegrityError:
+            continue
+        if hashlib.sha256(plaintext.encode("utf-8")).hexdigest() == str(
+            row["payload_sha256"]
+        ):
+            return plaintext
+    return None
+
+
+def _observability_rows_unlock_with_keys(
+    kernel: RuntimeKernel, materials: tuple[bytes, ...]
+) -> bool:
+    ciphers = tuple(AuditPayloadCipher(material) for material in materials)
+    if not ciphers:
+        return False
+    try:
+        with kernel.database.reader() as connection:
+            for table, fields in (
+                (
+                    "observability_audit_outbox",
+                    (
+                        "audit_id",
+                        "source_event_id",
+                        "category",
+                        "event_type",
+                        "account_id",
+                    ),
+                ),
+                (
+                    "observability_trace_outbox",
+                    ("batch_id", "account_id", "thread_id", "segment_id"),
+                ),
+            ):
+                cursor = connection.execute(
+                    f"SELECT {', '.join(fields)}, payload_json, payload_sha256 "
+                    f"FROM {table} WHERE payload_format = ?",
+                    (AuditPayloadCipher.FORMAT,),
+                )
+                for row in cursor:
+                    if _decrypt_observability_row(
+                        row, fields=fields, ciphers=ciphers
+                    ) is None:
+                        return False
+    except AuditIntegrityError:
+        return False
+    return True
+
+
+def _observability_rows_unlock_with_key(
+    kernel: RuntimeKernel, material: bytes
+) -> bool:
+    return _observability_rows_unlock_with_keys(kernel, (material,))
+
+
+def _legacy_audit_key_candidates(
+    settings: RuntimeSettings,
+    *,
+    credential_vault: Any,
+    account_ids: tuple[str, ...],
+) -> tuple[bytes, ...]:
+    references = tuple(
+        dict.fromkeys(
+            _account_audit_key_reference(account_id)
+            for account_id in (*account_ids, "local-user", settings.account_id)
+        )
+    )
+    sources = [credential_vault]
+    factory = settings.legacy_audit_vault_factory
+    if factory is not None:
+        if not callable(factory):
+            raise RuntimeError("legacy audit vault factory is invalid")
+        try:
+            sources.append(factory())
+        except Exception:
+            pass
+    materials: list[bytes] = []
+    for source in sources:
+        for legacy_reference in references:
+            try:
+                candidate = _decode_audit_key(source.get(legacy_reference))
+            except (KeyError, RuntimeError):
+                continue
+            if candidate not in materials:
+                materials.append(candidate)
+    return tuple(materials)
+
+
+def _reencrypt_observability_rows(
+    kernel: RuntimeKernel,
+    *,
+    target_material: bytes,
+    legacy_materials: tuple[bytes, ...],
+) -> None:
+    target_cipher = AuditPayloadCipher(target_material)
+    candidates = tuple(
+        AuditPayloadCipher(material)
+        for material in dict.fromkeys((target_material, *legacy_materials))
+    )
+    with kernel.database.transaction() as connection:
+        for table, identity, fields in (
+            (
+                "observability_audit_outbox",
+                "audit_id",
+                (
+                    "audit_id",
+                    "source_event_id",
+                    "category",
+                    "event_type",
+                    "account_id",
+                ),
+            ),
+            (
+                "observability_trace_outbox",
+                "batch_id",
+                ("batch_id", "account_id", "thread_id", "segment_id"),
+            ),
+        ):
+            cursor = connection.execute(
+                f"SELECT {', '.join(fields)}, payload_json, payload_sha256 "
+                f"FROM {table} WHERE payload_format = ?",
+                (AuditPayloadCipher.FORMAT,),
+            )
+            while batch := cursor.fetchmany(128):
+                for row in batch:
+                    associated_data = "\x1f".join(str(row[name]) for name in fields)
+                    plaintext = _decrypt_observability_row(
+                        row, fields=fields, ciphers=candidates
+                    )
+                    if plaintext is None:
+                        raise RuntimeError(
+                            "credential vault cannot unlock the encrypted audit outbox"
+                        )
+                    connection.execute(
+                        f"UPDATE {table} SET payload_json = ? WHERE {identity} = ?",
+                        (
+                            target_cipher.encrypt(
+                                plaintext, associated_data=associated_data
+                            ),
+                            row[identity],
+                        ),
+                    )
+
+
 def _local_audit_key(
     database_path: str | Path,
     account_id: str,
@@ -1083,35 +1290,62 @@ def _resolve_audit_encryption_key(
                 ) from None
             return os.urandom(32)
 
-    reference = "ecorex/observability/audit/" + (
-        "acceptance-preview"
+    reference = (
+        "ecorex/observability/audit/acceptance-preview"
         if settings.acceptance_preview
-        else hashlib.sha256(settings.account_id.encode("utf-8")).hexdigest()[:32]
+        else _INSTALLATION_AUDIT_KEY_REFERENCE
     )
+    encrypted_rows = _has_encrypted_audit_rows(kernel)
+    legacy_materials: tuple[bytes, ...] = ()
     try:
         stored = credential_vault.get(reference)
     except (KeyError, RuntimeError):
-        if _has_encrypted_audit_rows(kernel):
+        if encrypted_rows and not create:
             raise RuntimeError(
-                "OS credential vault cannot unlock the encrypted audit outbox"
+                "credential vault cannot unlock the encrypted audit outbox"
             ) from None
         if not create:
             return os.urandom(32)
+        if encrypted_rows:
+            legacy_materials = _legacy_audit_key_candidates(
+                settings,
+                credential_vault=credential_vault,
+                account_ids=_historical_audit_account_ids(kernel),
+            )
+            if not _observability_rows_unlock_with_keys(kernel, legacy_materials):
+                raise RuntimeError(
+                    "credential vault cannot unlock the encrypted audit outbox"
+                ) from None
         candidate = os.urandom(32)
         credential_vault.put(
             reference,
-            {"aes256_gcm_key": base64.urlsafe_b64encode(candidate).decode("ascii")},
+            {
+                "aes256_gcm_key": base64.urlsafe_b64encode(candidate).decode("ascii")
+            },
         )
         stored = credential_vault.get(reference)
-    try:
-        encoded = stored["aes256_gcm_key"]
-        material = base64.b64decode(str(encoded), altchars=b"-_", validate=True)
-    except (KeyError, TypeError, ValueError):
+    material = _decode_audit_key(stored)
+    if not encrypted_rows or _observability_rows_unlock_with_key(kernel, material):
+        return material
+    if not create:
         raise RuntimeError(
-            "OS credential vault returned an invalid audit key"
+            "credential vault cannot unlock the encrypted audit outbox"
         ) from None
-    if len(material) != 32:
-        raise RuntimeError("OS credential vault returned an invalid audit key")
+    if not legacy_materials:
+        legacy_materials = _legacy_audit_key_candidates(
+            settings,
+            credential_vault=credential_vault,
+            account_ids=_historical_audit_account_ids(kernel),
+        )
+    _reencrypt_observability_rows(
+        kernel,
+        target_material=material,
+        legacy_materials=legacy_materials,
+    )
+    if not _observability_rows_unlock_with_key(kernel, material):
+        raise RuntimeError(
+            "credential vault cannot unlock the encrypted audit outbox"
+        )
     return material
 
 
@@ -1201,6 +1435,10 @@ def create_app(
         settings.session_reload_requester
     ):
         raise ValueError("session reload requester must be callable")
+    if settings.legacy_audit_vault_factory is not None and not callable(
+        settings.legacy_audit_vault_factory
+    ):
+        raise ValueError("legacy audit vault factory must be callable")
     for callback, label in (
         (
             settings.first_install_registration_recorder,

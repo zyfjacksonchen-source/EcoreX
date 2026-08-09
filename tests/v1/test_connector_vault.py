@@ -11,6 +11,7 @@ from ecorex.connectors import (
     LocalEncryptedCredentialVault,
     MacOSKeychainCredentialVault,
     WindowsCredentialVault,
+    legacy_production_credential_vault,
     production_credential_vault,
 )
 import ecorex.connectors.vault as vault_module
@@ -90,6 +91,12 @@ def test_platform_vaults_use_emate_product_identity() -> None:
         vault_module._MacOSKeychainBackend._SERVICE
         == "net.ecoremedia.emate.connector-credentials"
     )
+    assert vault_module._LegacyWindowsCredentialBackend._target("test") == "EcoreX:test"
+    assert (
+        vault_module._LegacyMacOSKeychainBackend._SERVICE
+        == "com.ecorex.connector-credentials"
+    )
+    assert callable(legacy_production_credential_vault)
 
 
 def test_acceptance_vault_survives_restart_without_plaintext(tmp_path) -> None:

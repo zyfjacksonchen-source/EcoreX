@@ -380,6 +380,7 @@ class LocalEncryptedCredentialVault(EphemeralEncryptedCredentialVault):
 
 
 class _WindowsCredentialBackend:
+    _TARGET_PREFIX = "e-Mate:"
     _CRED_TYPE_GENERIC = 1
     _CRED_PERSIST_LOCAL_MACHINE = 2
     _ERROR_NOT_FOUND = 1168
@@ -422,9 +423,9 @@ class _WindowsCredentialBackend:
         self._cred_free.argtypes = [ctypes.c_void_p]
         self._cred_free.restype = None
 
-    @staticmethod
-    def _target(reference: str) -> str:
-        return "e-Mate:" + reference
+    @classmethod
+    def _target(cls, reference: str) -> str:
+        return cls._TARGET_PREFIX + reference
 
     def put(self, reference: str, payload: bytes) -> None:
         if len(payload) > 5 * 512:
@@ -682,6 +683,14 @@ class MacOSKeychainCredentialVault(SerializedCredentialVault):
         super().__init__(backend or _MacOSKeychainBackend())
 
 
+class _LegacyWindowsCredentialBackend(_WindowsCredentialBackend):
+    _TARGET_PREFIX = "EcoreX:"
+
+
+class _LegacyMacOSKeychainBackend(_MacOSKeychainBackend):
+    _SERVICE = "com.ecorex.connector-credentials"
+
+
 def production_credential_vault() -> CredentialVault:
     """Return the platform vault or fail closed on unsupported platforms."""
 
@@ -692,6 +701,16 @@ def production_credential_vault() -> CredentialVault:
     raise RuntimeError("no supported production credential vault is available")
 
 
+def legacy_production_credential_vault() -> CredentialVault:
+    """Read the released 2.0.0 vault namespace during a bounded upgrade."""
+
+    if sys.platform == "win32":
+        return WindowsCredentialVault(backend=_LegacyWindowsCredentialBackend())
+    if sys.platform == "darwin":
+        return MacOSKeychainCredentialVault(backend=_LegacyMacOSKeychainBackend())
+    raise RuntimeError("no supported legacy production credential vault is available")
+
+
 __all__ = [
     "BinaryCredentialBackend",
     "CredentialVault",
@@ -699,6 +718,7 @@ __all__ = [
     "InMemoryCredentialVault",
     "LocalEncryptedCredentialVault",
     "MacOSKeychainCredentialVault",
+    "legacy_production_credential_vault",
     "RejectingCredentialVault",
     "SerializedCredentialVault",
     "WindowsCredentialVault",

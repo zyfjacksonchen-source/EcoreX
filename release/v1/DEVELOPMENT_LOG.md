@@ -2225,6 +2225,29 @@ TypeScript / runtime contracts：passed
   身份不同或指针损坏则先走 `--local-release` 完成验证升级。同一版本后续启动仍直接启动
   已安装槽位，不会每次复制约 800 MiB 的 Runtime。
 
+## 2026-08-10 补充 — 2.0.0 审计密钥一次性迁移到本机加密 Vault
+
+- 精确 `869aa43` 候选已完成真实 2.0.0→2.0.1 签名槽位升级，但完整 Runtime 在
+  `runtime_registration` 失败。脱敏诊断只记录异常类型与栈位置，根因是 2.0.0 的 61 条
+  `aesgcm-v1` 审计记录仍由旧平台 Vault 中的账号引用密钥加密，而 2.0.1 已改用本机加密
+  Vault 且没有迁移该审计密钥。
+- 审计密钥现使用安装级固定引用，不再随登录账号变化。迁移从审计与 Trace outbox 有界读取历史
+  账号引用，并检查当前 Vault 与 2.0.0 的 Win/mac 平台命名空间；支持不同历史账号使用不同旧
+  密钥。全部旧记录必须逐条解密并匹配已存 SHA-256，才会持久化安装级密钥，并在单一 SQLite
+  事务内重加密。中断可用同一安装级密钥继续；失败保持数据库、旧密钥和回滚槽不变。
+- 全新安装或已完成迁移的启动不访问旧平台 Vault。macOS 现有 2.0.0 用户首次升级可能需要系统
+  允许一次旧 Keychain 项读取；迁移完成后继续只使用 owner-only `0600` 本机加密 Vault。
+
+定向验证：
+
+```text
+多历史账号/不同 key 的审计与 Trace→安装级 key 迁移、重启不再访问旧 Vault：passed
+错误旧 key 不写入目标 Vault：passed
+本机 Vault / Runtime 审计迁移聚焦回归：16 passed
+Ruff / py_compile / git diff check：passed
+真实 Keychain 接管、Computer Use 与新签名三平台候选：pending CI rebuild
+```
+
 ## 2026-08-10 补充 — 任务详情冷加载交互与通道状态收敛
 
 - 真实 Browser 对抗验收复现：任务更多菜单首次冷加载检查/重跑弹窗后，菜单与模态框交接会让
