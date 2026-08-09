@@ -88,6 +88,7 @@ test("loopback owner proof never discloses its secret to an untrusted listener",
     const attackerClosed = new Promise((resolve) => { markAttackerClosed = resolve; });
     const attacker = http.createServer((request, response) => {
       disclosed = request.headers["x-ecorex-owner-nonce"];
+      request.socket.on("error", () => {});
       request.socket.once("close", markAttackerClosed);
       response.writeHead(200, { "X-EcoreX-Runtime-Owner": "verified" });
       response.write("untrusted body stays open");
@@ -118,9 +119,12 @@ test("loopback owner proof never discloses its secret to an untrusted listener",
     assert.equal(await backendContract.runtimeResponds(runtimePort, dataDir), true);
 
     const drip = net.createServer((socket) => {
+      socket.on("error", () => {});
       socket.once("data", () => {
         socket.write("HTTP/1.1 204 No Content\r\nX-Drip: ");
-        const interval = setInterval(() => socket.write("x"), 100);
+        const interval = setInterval(() => {
+          if (!socket.destroyed) socket.write("x");
+        }, 100);
         socket.once("close", () => clearInterval(interval));
       });
     });

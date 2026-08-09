@@ -74,14 +74,16 @@ function runtimeResponds(port, dataDir) {
       path: "/api/v1/runtime-owner",
       headers: { "X-EcoreX-Owner-Challenge": challenge },
     }, (response) => {
+      response.once("error", () => finish(false));
       const supplied = response.headers["x-ecorex-runtime-owner"];
       const proof = typeof supplied === "string" ? Buffer.from(supplied, "base64url") : Buffer.alloc(0);
-      response.destroy();
-      finish(
+      const accepted = (
         response.statusCode === 204
         && proof.length === expected.length
-        && crypto.timingSafeEqual(proof, expected),
+        && crypto.timingSafeEqual(proof, expected)
       );
+      finish(accepted);
+      response.destroy();
     });
     deadline = setTimeout(() => {
       request.destroy();

@@ -2187,3 +2187,7 @@ Electron shell/owner proof/通知合同：8 passed
 Go Bootstrap 全套：passed
 git diff check：passed
 ```
+
+Windows CI 的首轮跨平台回归在主动关闭不可信长响应时由 `IncomingMessage` 发出
+`ECONNRESET`；产品探针现在先完成 proof 判定、注册固定错误收敛，再销毁响应，测试 listener
+也显式收敛平台 TCP reset。该修复不放宽 proof、截止时间或连接关闭门禁。
