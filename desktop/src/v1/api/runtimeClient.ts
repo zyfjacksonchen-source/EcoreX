@@ -5,6 +5,8 @@ import type {
   ArtifactProjection,
   BootstrapResponse,
   CapabilityMentionCatalog,
+  ChannelConnectorCatalogResponse,
+  ChannelConnectorInstanceProjection,
   ConversationUsageProjection,
   ConnectorAuthChallenge,
   ConnectorAuthKind,
@@ -55,6 +57,9 @@ import type {
   RetouchViewState,
   RetouchWorkspaceProjection,
   UpdateMutationResponse,
+  UserMCPMutationResponse,
+  UserMCPServerListResponse,
+  UserMCPServerRequest,
 } from "./contracts.ts";
 import { RuntimeApiError } from "./runtimeErrors.ts";
 export { RuntimeApiError } from "./runtimeErrors.ts";
@@ -821,6 +826,59 @@ export class RuntimeClient {
     return this.json("/api/v1/connectors", { signal });
   }
 
+  channelConnectorCatalog(signal?: AbortSignal): Promise<ChannelConnectorCatalogResponse> {
+    return this.json("/api/v1/connectors/channels", { signal });
+  }
+
+  saveChannelConnector(
+    channelId: string,
+    values: Readonly<{
+      display_name: string;
+      config: Record<string, string | number>;
+      secrets: Record<string, string>;
+    }>,
+    clientRequestId = createClientRequestId("channel_connector_save"),
+  ): Promise<ChannelConnectorInstanceProjection> {
+    return this.json(
+      `/api/v1/connectors/channels/${encodeURIComponent(channelId)}/instance`,
+      {
+        method: "PUT",
+        headers: { "X-EcoreX-Client-Request-ID": clientRequestId },
+        body: JSON.stringify(values),
+      },
+      true,
+    );
+  }
+
+  mutateChannelConnector(
+    channelId: string,
+    action: "test" | "enable" | "disable" | "retry",
+    clientRequestId = createClientRequestId(`channel_connector_${action}`),
+  ): Promise<ChannelConnectorInstanceProjection> {
+    return this.json(
+      `/api/v1/connectors/channels/${encodeURIComponent(channelId)}/${action}`,
+      {
+        method: "POST",
+        headers: { "X-EcoreX-Client-Request-ID": clientRequestId },
+      },
+      true,
+    );
+  }
+
+  async disconnectChannelConnector(
+    channelId: string,
+    clientRequestId = createClientRequestId("channel_connector_disconnect"),
+  ): Promise<void> {
+    await this.json<unknown>(
+      `/api/v1/connectors/channels/${encodeURIComponent(channelId)}/instance`,
+      {
+        method: "DELETE",
+        headers: { "X-EcoreX-Client-Request-ID": clientRequestId },
+      },
+      true,
+    );
+  }
+
   extensionCatalog(signal?: AbortSignal): Promise<ExtensionCatalogSnapshot> {
     return this.json("/api/v1/extensions", { signal });
   }
@@ -1001,6 +1059,48 @@ export class RuntimeClient {
   async clearMcpOAuth(serviceId: string): Promise<void> {
     await this.json<unknown>(
       `/api/v1/mcp/oauth/${encodeURIComponent(serviceId)}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
+  userMcpServers(signal?: AbortSignal): Promise<UserMCPServerListResponse> {
+    return this.json("/api/v1/mcp/servers", { signal });
+  }
+
+  createUserMcpServer(request: UserMCPServerRequest): Promise<UserMCPMutationResponse> {
+    return this.json(
+      "/api/v1/mcp/servers",
+      { method: "POST", body: JSON.stringify(request) },
+      true,
+    );
+  }
+
+  updateUserMcpServer(
+    serverId: string,
+    request: UserMCPServerRequest,
+  ): Promise<UserMCPMutationResponse> {
+    return this.json(
+      `/api/v1/mcp/servers/${encodeURIComponent(serverId)}`,
+      { method: "PUT", body: JSON.stringify(request) },
+      true,
+    );
+  }
+
+  mutateUserMcpServer(
+    serverId: string,
+    action: "test" | "enable" | "disable",
+  ): Promise<UserMCPMutationResponse> {
+    return this.json(
+      `/api/v1/mcp/servers/${encodeURIComponent(serverId)}/${action}`,
+      { method: "POST" },
+      true,
+    );
+  }
+
+  async deleteUserMcpServer(serverId: string): Promise<void> {
+    await this.json<unknown>(
+      `/api/v1/mcp/servers/${encodeURIComponent(serverId)}`,
       { method: "DELETE" },
       true,
     );

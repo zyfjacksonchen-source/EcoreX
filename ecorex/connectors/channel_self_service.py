@@ -1,0 +1,968 @@
+"""Tenant-scoped self-service lifecycle for predecessor messaging channels.
+
+The legacy channels still own their vendor connections.  This boundary owns
+only typed configuration, encrypted credential storage and lifecycle facts;
+it never writes a ``config.json`` or downloads a missing SDK.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
+import hashlib
+import json
+import re
+import threading
+from typing import Any, Protocol
+
+from fastapi import APIRouter, Header, HTTPException, Response, status
+from pydantic import BaseModel, ConfigDict, Field
+
+from .channel_catalog import CHANNEL_CATALOG, normalize_channel_name
+from .models import ConnectorAuthKind, ConnectorHealth, ConnectorHealthResult
+from .repository import ConnectorOutboxEvent
+from .vault import CredentialVault
+
+
+_CONTRACT_VERSION = "channel-self-service-v1"
+_ERROR_CODE_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$")
+
+
+class ChannelState(StrEnum):
+    UNCONFIGURED = "unconfigured"
+    STOPPED = "stopped"
+    STARTING = "starting"
+    CONNECTED = "connected"
+    DEGRADED = "degraded"
+    ERROR = "error"
+    STOPPING = "stopping"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelCredentialOwner:
+    account_id: str
+    organization_id: str
+
+    def __post_init__(self) -> None:
+        for value in (self.account_id, self.organization_id):
+            if (
+                not isinstance(value, str)
+                or not value.strip()
+                or len(value) > 256
+                or any(character in value for character in ("\x00", "\r", "\n"))
+            ):
+                raise ValueError("channel credential owner is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelAuditEvent:
+    account_id: str
+    organization_id: str
+    channel_id: str
+    action: str
+    outcome: str
+    request_id: str | None
+    field_names: tuple[str, ...]
+    error_code: str | None
+    created_at: datetime
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "account_id": self.account_id,
+            "organization_id": self.organization_id,
+            "channel_id": self.channel_id,
+            "action": self.action,
+            "outcome": self.outcome,
+            "request_id": self.request_id,
+            "field_names": list(self.field_names),
+            "error_code": self.error_code,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+class ChannelLifecycleAdapter(Protocol):
+    """A packaged adapter; network checks must be real, never projections."""
+
+    def test(self, config: Mapping[str, Any]) -> ConnectorHealthResult:
+        ...
+
+    def start(self, config: Mapping[str, Any]) -> ConnectorHealthResult:
+        ...
+
+    def health(self) -> ConnectorHealthResult:
+        ...
+
+    def stop(self, timeout_seconds: float) -> bool:
+        ...
+
+
+class ChannelSelfServiceError(RuntimeError):
+    def __init__(self, code: str, http_status: int) -> None:
+        super().__init__(code)
+        self.code = code
+        self.http_status = http_status
+
+
+@dataclass(frozen=True, slots=True)
+class _StoredChannel:
+    display_name: str
+    enabled: bool
+    config: Mapping[str, Any]
+    secrets: Mapping[str, str]
+    updated_at: datetime
+
+
+class ChannelSelfService:
+    """One-runtime, one-tenant messaging-channel authority."""
+
+    def __init__(
+        self,
+        *,
+        owner: ChannelCredentialOwner,
+        vault: CredentialVault,
+        adapters: Mapping[str, ChannelLifecycleAdapter] | None = None,
+        audit_sink: Callable[[ChannelAuditEvent], None] | None = None,
+        oauth_channels: frozenset[str] = frozenset({"feishu"}),
+        oauth_available: frozenset[str] = frozenset(),
+        stop_timeout_seconds: float = 5.0,
+    ) -> None:
+        if not 0.1 <= stop_timeout_seconds <= 300:
+            raise ValueError("channel stop timeout is invalid")
+        self.owner = owner
+        self.vault = vault
+        self.adapters = {
+            normalize_channel_name(channel_id): adapter
+            for channel_id, adapter in dict(adapters or {}).items()
+        }
+        unknown = set(self.adapters) - set(CHANNEL_CATALOG)
+        if unknown:
+            raise ValueError("unknown channel lifecycle adapter")
+        self.audit_sink = audit_sink
+        self.oauth_channels = frozenset(
+            normalize_channel_name(channel_id) for channel_id in oauth_channels
+        )
+        self.oauth_available = frozenset(
+            normalize_channel_name(channel_id) for channel_id in oauth_available
+        )
+        if self.oauth_available - self.oauth_channels:
+            raise ValueError("OAuth availability includes a non-OAuth channel")
+        self.stop_timeout_seconds = float(stop_timeout_seconds)
+        self._states: dict[str, tuple[ChannelState, ConnectorHealth, str | None]] = {}
+        self._lock = threading.RLock()
+
+    def catalog(self) -> dict[str, Any]:
+        items: list[dict[str, Any]] = []
+        for channel_id, definition in CHANNEL_CATALOG.items():
+            stored = self._read(channel_id)
+            fields = self._fields(channel_id)
+            oauth = channel_id in self.oauth_channels
+            adapter_available = (
+                channel_id in self.oauth_available
+                if oauth
+                else channel_id in self.adapters
+            )
+            if not adapter_available:
+                unavailable_reason = "adapter_not_packaged"
+            else:
+                unavailable_reason = None
+            instance = self._projection(channel_id, stored) if stored else None
+            configured = bool(instance and not instance["missing_fields"])
+            items.append(
+                {
+                    "channel_id": channel_id,
+                    "label": str(
+                        (definition.get("label") or {}).get("zh") or channel_id
+                    ),
+                    "description": str(definition.get("description") or ""),
+                    "icon": str(definition.get("icon") or ""),
+                    "auth_kind": self._auth_kind(channel_id).value,
+                    "adapter_available": adapter_available,
+                    "unavailable_reason": unavailable_reason,
+                    "fields": [
+                        self._public_field(field, stored)
+                        for field in fields
+                        if not oauth
+                    ],
+                    "instance": instance,
+                    "actions": {
+                        "save": bool(adapter_available and not oauth),
+                        "test": bool(adapter_available and configured and not oauth),
+                        "enable": bool(
+                            adapter_available
+                            and configured
+                            and not oauth
+                            and not instance["enabled"]
+                        ),
+                        "disable": bool(
+                            adapter_available
+                            and configured
+                            and not oauth
+                            and instance["enabled"]
+                        ),
+                        "retry": bool(adapter_available and configured and not oauth),
+                        "disconnect": bool(instance and not oauth),
+                        "auth_begin": bool(oauth and adapter_available),
+                    },
+                }
+            )
+        return {"contract_version": _CONTRACT_VERSION, "items": items}
+
+    async def start(self) -> None:
+        await asyncio.to_thread(self._restore_enabled)
+
+    async def stop(self) -> None:
+        await asyncio.to_thread(self._shutdown)
+
+    def _restore_enabled(self) -> None:
+        """Restore only previously enabled channels with packaged adapters."""
+
+        for channel_id in self.adapters:
+            stored = self._read(channel_id)
+            if (
+                stored is None
+                or not stored.enabled
+                or self._missing_fields(channel_id, stored)
+            ):
+                continue
+            try:
+                result = self._call_adapter(
+                    channel_id,
+                    "auto_start",
+                    None,
+                    lambda adapter=self.adapters[channel_id], record=stored: adapter.start(
+                        self._material(record)
+                    ),
+                )
+            except ChannelSelfServiceError:
+                continue
+            with self._lock:
+                self._states[channel_id] = (
+                    _state_for_health(result.health),
+                    result.health,
+                    _error_code(result.error_code),
+                )
+            self._audit(
+                channel_id, "auto_start", "succeeded", None, (), result.error_code
+            )
+
+    def _shutdown(self) -> None:
+        """Gracefully stop owned adapters; never inject an async exception."""
+
+        failed = False
+        for channel_id in self.adapters:
+            state = self._states.get(channel_id)
+            if state is None or state[0] not in {
+                ChannelState.STARTING,
+                ChannelState.CONNECTED,
+                ChannelState.DEGRADED,
+                ChannelState.ERROR,
+            }:
+                continue
+            try:
+                self._stop(channel_id, action="shutdown", request_id=None)
+            except ChannelSelfServiceError:
+                failed = True
+        if failed:
+            raise RuntimeError("channel_shutdown_failed")
+
+    def save(
+        self,
+        channel_id: str,
+        *,
+        display_name: str,
+        config: Mapping[str, Any],
+        secrets: Mapping[str, str],
+        request_id: str | None,
+    ) -> dict[str, Any]:
+        channel_id = self._writable_channel(channel_id)
+        if channel_id not in self.adapters:
+            raise ChannelSelfServiceError("channel_adapter_unavailable", 503)
+        request_id = _request_id(request_id)
+        with self._lock:
+            previous = self._read(channel_id)
+            if previous is not None and previous.enabled:
+                raise ChannelSelfServiceError("channel_must_be_disabled", 409)
+            public_fields, secret_fields = self._field_maps(channel_id)
+            if set(config) - set(public_fields) or set(secrets) - set(secret_fields):
+                raise ChannelSelfServiceError("channel_config_field_invalid", 422)
+            clean_config = dict(previous.config) if previous else {}
+            clean_secrets = dict(previous.secrets) if previous else {}
+            for key, value in config.items():
+                clean_config[key] = self._field_value(public_fields[key], value)
+            for key, value in secrets.items():
+                clean_secrets[key] = _secret_value(value)
+            now = datetime.now(UTC)
+            stored = _StoredChannel(
+                display_name=_display_name(display_name, channel_id),
+                enabled=bool(previous.enabled) if previous else False,
+                config=clean_config,
+                secrets=clean_secrets,
+                updated_at=now,
+            )
+            self._vault_put(channel_id, stored)
+            missing = self._missing_fields(channel_id, stored)
+            self._states[channel_id] = (
+                ChannelState.UNCONFIGURED
+                if missing
+                else (
+                    ChannelState.STOPPED
+                    if channel_id in self.adapters
+                    else ChannelState.UNAVAILABLE
+                ),
+                ConnectorHealth.DISABLED
+                if not stored.enabled or channel_id not in self.adapters
+                else ConnectorHealth.UNCONFIGURED,
+                None,
+            )
+        self._audit(
+            channel_id,
+            "save",
+            "succeeded",
+            request_id,
+            tuple(sorted(set(config) | set(secrets))),
+            None,
+        )
+        return self._projection(channel_id, stored)
+
+    def test(self, channel_id: str, *, request_id: str | None) -> dict[str, Any]:
+        channel_id, stored, adapter = self._ready(channel_id, request_id)
+        result = self._call_adapter(
+            channel_id,
+            "test",
+            request_id,
+            lambda: adapter.test(self._material(stored)),
+        )
+        state = ChannelState.STOPPED if result.health == ConnectorHealth.CONNECTED else _state_for_health(result.health)
+        with self._lock:
+            self._states[channel_id] = (state, result.health, _error_code(result.error_code))
+        self._audit(channel_id, "test", "succeeded", request_id, (), result.error_code)
+        return self._projection(channel_id, stored)
+
+    def enable(self, channel_id: str, *, request_id: str | None) -> dict[str, Any]:
+        channel_id, stored, adapter = self._ready(channel_id, request_id)
+        stored = self._set_enabled(channel_id, stored, True)
+        with self._lock:
+            self._states[channel_id] = (
+                ChannelState.STARTING,
+                ConnectorHealth.AUTHENTICATING,
+                None,
+            )
+        result = self._call_adapter(
+            channel_id,
+            "enable",
+            request_id,
+            lambda: adapter.start(self._material(stored)),
+        )
+        with self._lock:
+            self._states[channel_id] = (
+                _state_for_health(result.health),
+                result.health,
+                _error_code(result.error_code),
+            )
+        self._audit(channel_id, "enable", "succeeded", request_id, (), result.error_code)
+        return self._projection(channel_id, stored)
+
+    def disable(self, channel_id: str, *, request_id: str | None) -> dict[str, Any]:
+        channel_id = self._writable_channel(channel_id)
+        request_id = _request_id(request_id)
+        stored = self._required_stored(channel_id)
+        self._stop(channel_id, action="disable", request_id=request_id)
+        stored = self._set_enabled(channel_id, stored, False)
+        with self._lock:
+            self._states[channel_id] = (
+                ChannelState.STOPPED,
+                ConnectorHealth.DISABLED,
+                None,
+            )
+        self._audit(channel_id, "disable", "succeeded", request_id, (), None)
+        return self._projection(channel_id, stored)
+
+    def retry(self, channel_id: str, *, request_id: str | None) -> dict[str, Any]:
+        channel_id, stored, adapter = self._ready(channel_id, request_id)
+        self._stop(channel_id, action="retry", request_id=request_id)
+        stored = self._set_enabled(channel_id, stored, True)
+        with self._lock:
+            self._states[channel_id] = (
+                ChannelState.STARTING,
+                ConnectorHealth.AUTHENTICATING,
+                None,
+            )
+        result = self._call_adapter(
+            channel_id,
+            "retry",
+            request_id,
+            lambda: adapter.start(self._material(stored)),
+        )
+        with self._lock:
+            self._states[channel_id] = (
+                _state_for_health(result.health),
+                result.health,
+                _error_code(result.error_code),
+            )
+        self._audit(channel_id, "retry", "succeeded", request_id, (), result.error_code)
+        return self._projection(channel_id, stored)
+
+    def health(self, channel_id: str, *, request_id: str | None) -> dict[str, Any]:
+        channel_id, stored, adapter = self._ready(channel_id, request_id)
+        result = self._call_adapter(
+            channel_id, "health", request_id, adapter.health
+        )
+        with self._lock:
+            self._states[channel_id] = (
+                _state_for_health(result.health),
+                result.health,
+                _error_code(result.error_code),
+            )
+        self._audit(channel_id, "health", "succeeded", request_id, (), result.error_code)
+        return self._projection(channel_id, stored)
+
+    def disconnect(self, channel_id: str, *, request_id: str | None) -> None:
+        channel_id = self._writable_channel(channel_id)
+        request_id = _request_id(request_id)
+        if self._read(channel_id) is None:
+            self._audit(channel_id, "disconnect", "succeeded", request_id, (), None)
+            return
+        self._stop(channel_id, action="disconnect", request_id=request_id)
+        self._vault_delete(channel_id)
+        with self._lock:
+            self._states.pop(channel_id, None)
+        self._audit(channel_id, "disconnect", "succeeded", request_id, (), None)
+
+    def _ready(
+        self, channel_id: str, request_id: str | None
+    ) -> tuple[str, _StoredChannel, ChannelLifecycleAdapter]:
+        channel_id = self._writable_channel(channel_id)
+        _request_id(request_id)
+        stored = self._required_stored(channel_id)
+        if self._missing_fields(channel_id, stored):
+            raise ChannelSelfServiceError("channel_not_configured", 409)
+        adapter = self.adapters.get(channel_id)
+        if adapter is None:
+            raise ChannelSelfServiceError("channel_adapter_unavailable", 503)
+        return channel_id, stored, adapter
+
+    def _stop(
+        self,
+        channel_id: str,
+        *,
+        action: str,
+        request_id: str | None,
+    ) -> None:
+        adapter = self.adapters.get(channel_id)
+        if adapter is None:
+            return
+        with self._lock:
+            self._states[channel_id] = (
+                ChannelState.STOPPING,
+                ConnectorHealth.DEGRADED,
+                None,
+            )
+        try:
+            stopped = bool(adapter.stop(self.stop_timeout_seconds))
+        except Exception:
+            stopped = False
+        if not stopped:
+            with self._lock:
+                self._states[channel_id] = (
+                    ChannelState.ERROR,
+                    ConnectorHealth.ERROR,
+                    "channel_stop_timeout",
+                )
+            self._audit(
+                channel_id,
+                action,
+                "failed",
+                request_id,
+                (),
+                "channel_stop_timeout",
+            )
+            raise ChannelSelfServiceError("channel_stop_timeout", 503)
+
+    def _call_adapter(
+        self,
+        channel_id: str,
+        operation: str,
+        request_id: str | None,
+        call: Callable[[], ConnectorHealthResult],
+    ) -> ConnectorHealthResult:
+        try:
+            result = call()
+        except Exception:
+            with self._lock:
+                self._states[channel_id] = (
+                    ChannelState.ERROR,
+                    ConnectorHealth.ERROR,
+                    "channel_adapter_failed",
+                )
+            self._audit(
+                channel_id,
+                operation,
+                "failed",
+                request_id,
+                (),
+                "channel_adapter_failed",
+            )
+            raise ChannelSelfServiceError("channel_adapter_failed", 502) from None
+        if not isinstance(result, ConnectorHealthResult):
+            self._audit(
+                channel_id,
+                operation,
+                "failed",
+                request_id,
+                (),
+                "channel_adapter_result_invalid",
+            )
+            raise ChannelSelfServiceError("channel_adapter_result_invalid", 502)
+        _error_code(result.error_code)
+        return result
+
+    def _set_enabled(
+        self, channel_id: str, stored: _StoredChannel, enabled: bool
+    ) -> _StoredChannel:
+        updated = _StoredChannel(
+            display_name=stored.display_name,
+            enabled=enabled,
+            config=dict(stored.config),
+            secrets=dict(stored.secrets),
+            updated_at=datetime.now(UTC),
+        )
+        self._vault_put(channel_id, updated)
+        return updated
+
+    def _required_stored(self, channel_id: str) -> _StoredChannel:
+        stored = self._read(channel_id)
+        if stored is None:
+            raise ChannelSelfServiceError("channel_instance_not_found", 404)
+        return stored
+
+    def _read(self, channel_id: str) -> _StoredChannel | None:
+        try:
+            payload = self.vault.get(self._reference(channel_id))
+        except KeyError:
+            return None
+        except RuntimeError:
+            raise ChannelSelfServiceError("channel_vault_unavailable", 503) from None
+        try:
+            if set(payload) != {
+                "schema_version",
+                "channel_id",
+                "display_name",
+                "enabled",
+                "config_json",
+                "secrets_json",
+                "updated_at",
+            }:
+                raise ValueError
+            if (
+                payload["schema_version"] != "1"
+                or payload["channel_id"] != channel_id
+                or payload["enabled"] not in {"0", "1"}
+            ):
+                raise ValueError
+            config = json.loads(payload["config_json"])
+            secrets = json.loads(payload["secrets_json"])
+            if not isinstance(config, dict) or not isinstance(secrets, dict):
+                raise ValueError
+            public_fields, secret_fields = self._field_maps(channel_id)
+            if set(config) - set(public_fields) or set(secrets) - set(secret_fields):
+                raise ValueError
+            config = {
+                key: self._field_value(public_fields[key], value)
+                for key, value in config.items()
+            }
+            updated_at = datetime.fromisoformat(payload["updated_at"])
+            if updated_at.tzinfo is None:
+                raise ValueError
+            return _StoredChannel(
+                display_name=_display_name(payload["display_name"], channel_id),
+                enabled=payload["enabled"] == "1",
+                config=config,
+                secrets={key: _secret_value(value) for key, value in secrets.items()},
+                updated_at=updated_at.astimezone(UTC),
+            )
+        except Exception:
+            raise ChannelSelfServiceError("channel_vault_record_invalid", 503) from None
+
+    def _encode(
+        self, channel_id: str, stored: _StoredChannel
+    ) -> dict[str, str]:
+        return {
+            "schema_version": "1",
+            "channel_id": channel_id,
+            "display_name": stored.display_name,
+            "enabled": "1" if stored.enabled else "0",
+            "config_json": json.dumps(
+                stored.config, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
+            "secrets_json": json.dumps(
+                stored.secrets, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
+            "updated_at": stored.updated_at.isoformat(),
+        }
+
+    def _vault_put(self, channel_id: str, stored: _StoredChannel) -> None:
+        try:
+            self.vault.put(
+                self._reference(channel_id), self._encode(channel_id, stored)
+            )
+        except (ChannelSelfServiceError, KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:
+            raise ChannelSelfServiceError("channel_vault_unavailable", 503) from None
+
+    def _vault_delete(self, channel_id: str) -> None:
+        try:
+            self.vault.delete(self._reference(channel_id))
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:
+            raise ChannelSelfServiceError("channel_vault_unavailable", 503) from None
+
+    def _projection(
+        self, channel_id: str, stored: _StoredChannel
+    ) -> dict[str, Any]:
+        fields = self._fields(channel_id)
+        configured = sorted(
+            str(field["key"])
+            for field in fields
+            if self._has_field(stored, field)
+        )
+        missing = self._missing_fields(channel_id, stored)
+        default_state = (
+            ChannelState.UNCONFIGURED
+            if missing
+            else (ChannelState.UNAVAILABLE if channel_id not in self.adapters else ChannelState.STOPPED)
+        )
+        default_health = (
+            ConnectorHealth.UNCONFIGURED
+            if missing
+            else (
+                ConnectorHealth.DISABLED
+                if not stored.enabled or channel_id not in self.adapters
+                else ConnectorHealth.DEGRADED
+            )
+        )
+        state, health, error_code = self._states.get(
+            channel_id, (default_state, default_health, None)
+        )
+        return {
+            "instance_id": self._instance_id(channel_id),
+            "channel_id": channel_id,
+            "display_name": stored.display_name,
+            "configured_fields": configured,
+            "missing_fields": missing,
+            "enabled": stored.enabled,
+            "state": state.value,
+            "health": health.value,
+            "last_error_code": error_code,
+            "updated_at": stored.updated_at.isoformat(),
+        }
+
+    def _public_field(
+        self,
+        field: Mapping[str, Any],
+        stored: _StoredChannel | None,
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "key": str(field["key"]),
+            "label": str(field.get("label") or field["key"]),
+            "type": str(field.get("type") or "text"),
+            "required": _field_required(field),
+            "secret": field.get("type") == "secret",
+            "configured": bool(stored and self._has_field(stored, field)),
+        }
+        if "default" in field and field.get("type") != "secret":
+            result["default"] = field["default"]
+        return result
+
+    def _field_maps(
+        self, channel_id: str
+    ) -> tuple[dict[str, Mapping[str, Any]], dict[str, Mapping[str, Any]]]:
+        public: dict[str, Mapping[str, Any]] = {}
+        secret: dict[str, Mapping[str, Any]] = {}
+        for field in self._fields(channel_id):
+            target = secret if field.get("type") == "secret" else public
+            target[str(field["key"])] = field
+        return public, secret
+
+    def _fields(self, channel_id: str) -> tuple[Mapping[str, Any], ...]:
+        definition = CHANNEL_CATALOG[channel_id]
+        fields = tuple(
+            field
+            for field in definition.get("fields", ())
+            if isinstance(field, Mapping) and field.get("key")
+        )
+        if any(str(field.get("type") or "text") not in {"text", "secret", "number"} for field in fields):
+            raise RuntimeError("channel catalog field type is unsupported")
+        return fields
+
+    @staticmethod
+    def _field_value(field: Mapping[str, Any], value: Any) -> Any:
+        if field.get("type") == "number":
+            if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 65535:
+                raise ChannelSelfServiceError("channel_config_value_invalid", 422)
+            return value
+        if not isinstance(value, str):
+            raise ChannelSelfServiceError("channel_config_value_invalid", 422)
+        text = value
+        if not text or len(text) > 8192 or any(character in text for character in ("\x00", "\r", "\n")):
+            raise ChannelSelfServiceError("channel_config_value_invalid", 422)
+        return text
+
+    @staticmethod
+    def _has_field(stored: _StoredChannel, field: Mapping[str, Any]) -> bool:
+        key = str(field["key"])
+        if field.get("type") == "secret":
+            return key in stored.secrets and bool(stored.secrets[key])
+        if key in stored.config and stored.config[key] not in ("", None):
+            return True
+        return "default" in field
+
+    def _missing_fields(
+        self, channel_id: str, stored: _StoredChannel
+    ) -> list[str]:
+        return [
+            str(field["key"])
+            for field in self._fields(channel_id)
+            if _field_required(field) and not self._has_field(stored, field)
+        ]
+
+    def _material(self, stored: _StoredChannel) -> dict[str, Any]:
+        return {**dict(stored.config), **dict(stored.secrets)}
+
+    def _writable_channel(self, value: str) -> str:
+        channel_id = normalize_channel_name(value)
+        if channel_id not in CHANNEL_CATALOG:
+            raise ChannelSelfServiceError("channel_not_found", 404)
+        if channel_id in self.oauth_channels:
+            raise ChannelSelfServiceError("channel_oauth_required", 409)
+        return channel_id
+
+    def _reference(self, channel_id: str) -> str:
+        organization = hashlib.sha256(
+            self.owner.organization_id.encode("utf-8")
+        ).hexdigest()[:32]
+        account = hashlib.sha256(self.owner.account_id.encode("utf-8")).hexdigest()[:32]
+        return f"ecorex/channel-instances/{organization}/{account}/{channel_id}"
+
+    def _instance_id(self, channel_id: str) -> str:
+        source = "\x00".join(
+            (self.owner.organization_id, self.owner.account_id, channel_id)
+        )
+        return "channel_" + hashlib.sha256(source.encode("utf-8")).hexdigest()[:32]
+
+    @staticmethod
+    def _auth_kind(channel_id: str) -> ConnectorAuthKind:
+        if channel_id == "feishu":
+            return ConnectorAuthKind.OAUTH2
+        if channel_id == "weixin":
+            return ConnectorAuthKind.DEVICE_CODE
+        if channel_id in {"telegram", "slack", "discord"}:
+            return ConnectorAuthKind.API_TOKEN
+        return ConnectorAuthKind.APP_CREDENTIALS
+
+    def _audit(
+        self,
+        channel_id: str,
+        action: str,
+        outcome: str,
+        request_id: str | None,
+        field_names: tuple[str, ...],
+        error_code: str | None,
+    ) -> None:
+        if self.audit_sink is None:
+            return
+        self.audit_sink(
+            ChannelAuditEvent(
+                account_id=self.owner.account_id,
+                organization_id=self.owner.organization_id,
+                channel_id=channel_id,
+                action=action,
+                outcome=outcome,
+                request_id=request_id,
+                field_names=field_names,
+                error_code=_error_code(error_code),
+                created_at=datetime.now(UTC),
+            )
+        )
+
+
+class _StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class SaveChannelRequest(_StrictModel):
+    display_name: str = Field(default="", max_length=256)
+    config: dict[str, Any] = Field(default_factory=dict, max_length=64)
+    secrets: dict[str, str] = Field(default_factory=dict, max_length=64)
+
+
+def create_channel_self_service_router(service: ChannelSelfService) -> APIRouter:
+    router = APIRouter(prefix="/connectors/channels", tags=["connectors"])
+
+    @router.get("")
+    def catalog() -> dict[str, Any]:
+        return _api(service.catalog)
+
+    @router.put("/{channel_id}/instance")
+    def save(
+        channel_id: str,
+        request: SaveChannelRequest,
+        client_request_id: str | None = Header(
+            default=None, alias="X-EcoreX-Client-Request-ID"
+        ),
+    ) -> dict[str, Any]:
+        return _api(
+            service.save,
+            channel_id,
+            display_name=request.display_name,
+            config=request.config,
+            secrets=request.secrets,
+            request_id=client_request_id,
+        )
+
+    def action(name: str, operation: Callable[..., dict[str, Any]]) -> None:
+        def endpoint(
+            channel_id: str,
+            client_request_id: str | None = Header(
+                default=None, alias="X-EcoreX-Client-Request-ID"
+            ),
+        ) -> dict[str, Any]:
+            return _api(operation, channel_id, request_id=client_request_id)
+
+        endpoint.__name__ = f"channel_{name}"
+        router.add_api_route(
+            f"/{{channel_id}}/{name}", endpoint, methods=["POST"]
+        )
+
+    action("test", service.test)
+    action("enable", service.enable)
+    action("disable", service.disable)
+    action("retry", service.retry)
+    action("health", service.health)
+
+    @router.delete(
+        "/{channel_id}/instance", status_code=status.HTTP_204_NO_CONTENT
+    )
+    def disconnect(
+        channel_id: str,
+        client_request_id: str | None = Header(
+            default=None, alias="X-EcoreX-Client-Request-ID"
+        ),
+    ) -> Response:
+        _api(service.disconnect, channel_id, request_id=client_request_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    return router
+
+
+def _api(call: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    try:
+        return call(*args, **kwargs)
+    except ChannelSelfServiceError as error:
+        raise HTTPException(
+            status_code=error.http_status,
+            detail={"code": error.code, "message": "通道操作失败"},
+        ) from None
+
+
+def _display_name(value: Any, channel_id: str) -> str:
+    text = str(value or "").strip() or str(
+        CHANNEL_CATALOG[channel_id].get("label", {}).get("zh") or channel_id
+    )
+    if len(text) > 256 or any(character in text for character in ("\x00", "\r", "\n")):
+        raise ChannelSelfServiceError("channel_display_name_invalid", 422)
+    return text
+
+
+def _secret_value(value: Any) -> str:
+    if not isinstance(value, str) or not value or len(value) > 64 * 1024:
+        raise ChannelSelfServiceError("channel_secret_invalid", 422)
+    if any(character in value for character in ("\x00", "\r", "\n")):
+        raise ChannelSelfServiceError("channel_secret_invalid", 422)
+    return value
+
+
+def _request_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not _REQUEST_ID_RE.fullmatch(value):
+        raise ChannelSelfServiceError("channel_request_id_invalid", 422)
+    return value
+
+
+def _error_code(value: str | None) -> str | None:
+    if value is None:
+        return None
+    code = str(value)
+    if not _ERROR_CODE_RE.fullmatch(code):
+        raise ChannelSelfServiceError("channel_adapter_result_invalid", 502)
+    return code
+
+
+def _field_required(field: Mapping[str, Any]) -> bool:
+    return bool(
+        field.get("required") is not False
+        and not (field.get("type") in {"number", "bool"} and "default" in field)
+    )
+
+
+def _state_for_health(health: ConnectorHealth) -> ChannelState:
+    return {
+        ConnectorHealth.UNCONFIGURED: ChannelState.UNCONFIGURED,
+        ConnectorHealth.AUTHENTICATING: ChannelState.STARTING,
+        ConnectorHealth.CONNECTED: ChannelState.CONNECTED,
+        ConnectorHealth.DEGRADED: ChannelState.DEGRADED,
+        ConnectorHealth.ERROR: ChannelState.ERROR,
+        ConnectorHealth.DISABLED: ChannelState.STOPPED,
+    }[health]
+
+
+def channel_audit_outbox_event(event: ChannelAuditEvent) -> ConnectorOutboxEvent:
+    """Translate one secret-free channel lifecycle fact into the audit bridge."""
+
+    identity = "\x00".join(
+        (
+            event.account_id,
+            event.organization_id,
+            event.channel_id,
+            event.action,
+            event.outcome,
+            event.request_id or event.created_at.isoformat(),
+        )
+    )
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    return ConnectorOutboxEvent(
+        event_id=f"channel_{digest[:32]}",
+        event_type=f"connector.channel.{event.action}",
+        aggregate_id=f"channel_{digest[32:]}",
+        aggregate_seq=1,
+        payload={
+            "connector_id": event.channel_id,
+            "instance_id": f"channel_{digest[32:]}",
+            "status": event.outcome,
+            "outcome": event.outcome,
+            "error_code": event.error_code,
+        },
+        created_at=event.created_at,
+        lease_token="channel-self-service",
+        attempts=1,
+    )
+
+
+__all__ = [
+    "ChannelAuditEvent",
+    "ChannelCredentialOwner",
+    "ChannelLifecycleAdapter",
+    "ChannelSelfService",
+    "ChannelSelfServiceError",
+    "ChannelState",
+    "SaveChannelRequest",
+    "channel_audit_outbox_event",
+    "create_channel_self_service_router",
+]

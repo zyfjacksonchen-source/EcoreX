@@ -320,6 +320,7 @@ class RuntimeComposition:
         mcp_runtime_bindings: tuple["MCPRuntimeBinding", ...] = (),
         mcp_oauth_service: "MCPOAuthService | None" = None,
         tenant_id: str = "local-user",
+        mcp_tenant_id: str | None = None,
         enforce_admin_tool_denies: bool = False,
         persist_startup_snapshots: bool = True,
     ) -> None:
@@ -408,9 +409,12 @@ class RuntimeComposition:
         if not isinstance(tenant_id, str) or not tenant_id:
             raise ValueError("Extension execution tenant identity is required")
         self.permission_account_id = tenant_id
-        mcp_tenant_id = (
-            "tenant_" + hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()
-        )
+        if mcp_tenant_id is None:
+            mcp_tenant_id = (
+                "tenant_" + hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()
+            )
+        elif not re.fullmatch(r"tenant_[0-9a-f]{64}", mcp_tenant_id):
+            raise ValueError("MCP tenant namespace is invalid")
         effective_mcp_bindings = (
             mcp_runtime_bindings if self._persist_startup_snapshots else ()
         )

@@ -118,6 +118,8 @@ class SerializedCredentialVault:
         reference = _validate_reference(reference)
         try:
             payload = bytearray(self._backend.get(reference))
+        except KeyError:
+            raise
         except Exception:
             raise RuntimeError("credential vault read failed") from None
         try:

@@ -1931,6 +1931,82 @@ test("connector catalog and lifecycle mutations use strict authenticated routes"
   }
 });
 
+test("channel self-service keeps secrets write-only across save, test, state, and disconnect", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Request[] = [];
+  const instance = {
+    instance_id: "channel-instance-1",
+    channel_id: "telegram",
+    display_name: "办公通知",
+    configured_fields: ["telegram_token"],
+    missing_fields: [],
+    enabled: true,
+    state: "connected" as const,
+    health: "connected" as const,
+    last_error_code: null,
+    updated_at: "2026-08-09T00:00:00Z",
+  };
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    if (request.method === "GET") {
+      return Response.json({
+        contract_version: "channel-self-service-v1",
+        items: [{
+          channel_id: "telegram",
+          label: "Telegram",
+          description: "Telegram 消息渠道",
+          icon: "fa-paper-plane",
+          auth_kind: "app_credentials",
+          fields: [{ key: "telegram_token", label: "Bot Token", type: "secret", required: true, secret: true, configured: true }],
+          instance,
+          adapter_available: true,
+          unavailable_reason: null,
+          actions: { save: true, test: true, enable: false, disable: true, retry: true, disconnect: true, auth_begin: false },
+        }],
+      });
+    }
+    if (request.method === "DELETE") return new Response(null, { status: 204 });
+    return Response.json(instance);
+  };
+  try {
+    const client = new RuntimeClient({
+      apiBase: "http://127.0.0.1:8765",
+      bearerToken: "b".repeat(43),
+    });
+    client.acceptBootstrap(bootstrap);
+    const catalog = await client.channelConnectorCatalog();
+    await client.saveChannelConnector("telegram", {
+      display_name: "办公通知",
+      config: {},
+      secrets: { telegram_token: "write-only-token" },
+    }, "channel_save_stable");
+    await client.mutateChannelConnector("telegram", "test", "channel_test_stable");
+    await client.mutateChannelConnector("telegram", "disable", "channel_disable_stable");
+    await client.mutateChannelConnector("telegram", "enable", "channel_enable_stable");
+    await client.mutateChannelConnector("telegram", "retry", "channel_retry_stable");
+    await client.disconnectChannelConnector("telegram", "channel_disconnect_stable");
+
+    assert.equal(catalog.items[0]?.fields[0]?.configured, true);
+    assert.equal("value" in catalog.items[0]!.fields[0]!, false);
+    assert.match(requests[0]?.url ?? "", /connectors\/channels$/u);
+    assert.equal(requests[1]?.method, "PUT");
+    assert.deepEqual(JSON.parse(await requests[1]!.text()), {
+      display_name: "办公通知",
+      config: {},
+      secrets: { telegram_token: "write-only-token" },
+    });
+    assert.deepEqual(
+      requests.slice(2, 6).map((request) => new URL(request.url).pathname.split("/").at(-1)),
+      ["test", "disable", "enable", "retry"],
+    );
+    assert.equal(requests[6]?.method, "DELETE");
+    assert.equal(requests[6]?.headers.get("x-ecorex-client-request-id"), "channel_disconnect_stable");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("remote MCP OAuth uses authenticated status, begin, and clear routes", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Request[] = [];
@@ -1973,6 +2049,69 @@ test("remote MCP OAuth uses authenticated status, begin, and clear routes", asyn
     assert.equal(requests[1]?.headers.get("x-ecorex-csrf"), "mcp-csrf-token");
     assert.equal(requests[2]?.method, "DELETE");
     assert.equal(requests[2]?.headers.get("x-ecorex-csrf"), "mcp-csrf-token");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("user MCP client covers HTTPS server CRUD, test, and activation routes", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Request[] = [];
+  const server = {
+    server_id: "user.mcp.one",
+    display_name: "Research MCP",
+    endpoint: "https://mcp.example.test/service",
+    auth_kind: "bearer" as const,
+    oauth_client_id: null,
+    oauth_scope: "",
+    authorization_hosts: [],
+    enabled: false,
+    credential_configured: true,
+    tested_at: null,
+    tool_count: 0,
+    tool_names: [],
+    revision: 1,
+  };
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    if (request.method === "DELETE") return new Response(null, { status: 204 });
+    if (request.method === "GET") return Response.json({ items: [server] });
+    return Response.json({ server, restart_required: true, restart_scheduled: true });
+  };
+  try {
+    const client = new RuntimeClient({
+      apiBase: "http://127.0.0.1:8765",
+      bearerToken: "mcp-runtime-token",
+      csrfToken: "mcp-csrf-token",
+    });
+    const payload = {
+      display_name: "Research MCP",
+      endpoint: "https://mcp.example.test/service",
+      auth_kind: "bearer" as const,
+      credential: "write-only-token",
+      oauth_scope: "",
+      authorization_hosts: [],
+    };
+    const catalog = await client.userMcpServers();
+    await client.createUserMcpServer(payload);
+    await client.updateUserMcpServer("user.mcp/one", { ...payload, credential: undefined });
+    await client.mutateUserMcpServer("user.mcp/one", "test");
+    await client.mutateUserMcpServer("user.mcp/one", "enable");
+    await client.mutateUserMcpServer("user.mcp/one", "disable");
+    await client.deleteUserMcpServer("user.mcp/one");
+
+    assert.equal(catalog.items[0]?.credential_configured, true);
+    assert.equal("credential" in catalog.items[0]!, false);
+    assert.equal(JSON.parse(await requests[1]!.text()).credential, "write-only-token");
+    assert.equal("credential" in JSON.parse(await requests[2]!.text()), false);
+    assert.deepEqual(
+      requests.slice(3, 6).map((request) => new URL(request.url).pathname.split("/").at(-1)),
+      ["test", "enable", "disable"],
+    );
+    assert.match(requests[2]?.url ?? "", /user\.mcp%2Fone$/u);
+    assert.equal(requests[6]?.method, "DELETE");
+    assert.equal(requests[6]?.headers.get("x-ecorex-csrf"), "mcp-csrf-token");
   } finally {
     globalThis.fetch = originalFetch;
   }

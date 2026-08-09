@@ -648,8 +648,119 @@ test("scheduled tasks and external connections enter the real conversation and c
   await expect(guardedPage.locator(".ex-composer textarea")).toHaveValue(/调用定时任务能力/u);
 
   await guardedPage.getByTestId("composer-connections").click();
-  await expect(guardedPage.getByTestId("capability-channels")).toBeVisible();
+  const channels = guardedPage.getByTestId("capability-channels");
+  await expect(channels).toBeVisible();
   await expect(guardedPage.getByRole("heading", { name: "能力中心" })).toBeVisible();
+
+  const unavailable = channels.locator("article.ex-connector-row").filter({ hasText: "钉钉" });
+  await expect(unavailable.getByRole("button", { name: "暂不可连接" })).toBeDisabled();
+  await expect(unavailable.getByRole("button", { name: "配置账号" })).toHaveCount(0);
+
+  const telegram = channels.locator("article.ex-connector-row").filter({ hasText: "Telegram" });
+  await telegram.getByRole("button", { name: "配置账号" }).click();
+  await telegram.getByLabel("连接名称").fill("办公通知机器人");
+  const secret = telegram.locator('input[type="password"]');
+  await expect(secret).toHaveAttribute("autocomplete", "new-password");
+  await secret.fill("ga-token-never-echoed");
+  await telegram.getByRole("button", { name: "保存配置" }).click();
+  await expect(secret).toHaveValue("");
+  await expect(telegram.getByText("已配置", { exact: true })).toBeVisible();
+  await telegram.getByRole("button", { name: "重试连接" }).click();
+  await expect(telegram.getByText("已连接", { exact: true })).toBeVisible();
+  await telegram.getByRole("button", { name: "测试连接" }).click();
+  await expect(telegram.getByText("已连接", { exact: true })).toBeVisible();
+  await telegram.getByRole("button", { name: "停用" }).click();
+  await expect(telegram.getByText("已停用", { exact: true })).toBeVisible();
+  await telegram.getByRole("button", { name: "启用" }).click();
+  await expect(telegram.getByText("已连接", { exact: true })).toBeVisible();
+  await telegram.getByRole("button", { name: "断开" }).click();
+  await telegram.getByRole("button", { name: "确认断开并删除凭据" }).click();
+  await expect(telegram.getByText("已配置", { exact: true })).toHaveCount(0);
+});
+
+test("remote MCP self-service closes HTTPS, secret, test, lifecycle, and delete flows", async ({ guardedPage }) => {
+  await openArtifactScenario(guardedPage);
+  await guardedPage.getByRole("button", { name: "能力中心", exact: true }).click();
+  const workspace = guardedPage.getByRole("region", { name: "能力中心" });
+  await workspace.getByRole("tab", { name: /已安装/u }).click();
+  await workspace.getByRole("button", { name: "通道", exact: true }).click();
+
+  const mcp = workspace.getByRole("region", { name: "远程 MCP" });
+  await expect(mcp.getByText("尚未添加远程 MCP")).toBeVisible();
+  await mcp.getByRole("button", { name: "刷新远程 MCP" }).click();
+  await mcp.getByRole("button", { name: "添加远程 MCP" }).click();
+  await mcp.getByLabel("显示名称").fill("办公资料 MCP");
+  const endpoint = mcp.getByLabel("HTTPS 地址");
+  await endpoint.fill("http://mcp.example.test/service");
+  await expect(endpoint).toHaveAttribute("aria-invalid", "true");
+  await expect(mcp.getByRole("button", { name: "保存配置" })).toBeDisabled();
+  await endpoint.fill("https://mcp.example.test/service");
+
+  const auth = mcp.getByLabel("认证方式");
+  await auth.selectOption("oauth2");
+  await expect(mcp.getByLabel("OAuth Client ID（可选）")).toBeVisible();
+  await expect(mcp.getByLabel("授权范围（空格分隔）")).toBeVisible();
+  await expect(mcp.getByLabel("额外授权域名（逗号分隔）")).toBeVisible();
+  await auth.selectOption("bearer");
+  const secret = mcp.getByLabel("Bearer 令牌", { exact: true });
+  await expect(secret).toHaveAttribute("type", "password");
+  await expect(secret).toHaveAttribute("autocomplete", "new-password");
+  await secret.fill("ga-mcp-token-never-echoed");
+  await mcp.getByRole("button", { name: "保存配置" }).click();
+
+  const row = mcp.locator("article.ex-mcp-server-row").filter({ hasText: "办公资料 MCP" });
+  await expect(row).toBeVisible();
+  await row.getByRole("button", { name: "编辑" }).click();
+  await expect(mcp.getByLabel(/Bearer 令牌.*已配置/u)).toHaveValue("");
+  await expect(mcp.getByLabel(/Bearer 令牌.*已配置/u)).toHaveAttribute("placeholder", "已安全保存；留空不修改");
+  await mcp.getByLabel("显示名称").fill("办公资料检索 MCP");
+  await mcp.getByLabel("HTTPS 地址").fill("https://mcp.example.test/service");
+  await mcp.getByRole("button", { name: "保存配置" }).click();
+
+  const renamed = mcp.locator("article.ex-mcp-server-row").filter({ hasText: "办公资料检索 MCP" });
+  await renamed.getByRole("button", { name: "真实测试" }).click();
+  await expect(renamed.getByText("已冻结工具：2")).toBeVisible();
+  await expect(renamed.getByText("documents.search")).toBeVisible();
+  await expect(renamed.getByText("documents.write")).toBeVisible();
+  await renamed.getByRole("button", { name: "启用" }).click();
+  await expect(renamed.getByText("已启用", { exact: true })).toBeVisible();
+  await expect(renamed.getByRole("button", { name: "编辑" })).toBeDisabled();
+  await renamed.getByRole("button", { name: "停用" }).click();
+  await expect(renamed.getByText("未启用", { exact: true })).toBeVisible();
+  await expect(renamed.getByRole("button", { name: "编辑" })).toBeEnabled();
+
+  await renamed.getByRole("button", { name: "删除" }).click();
+  await renamed.getByRole("button", { name: "取消删除" }).click();
+  await renamed.getByRole("button", { name: "删除" }).click();
+  await renamed.getByRole("button", { name: "确认删除并清除凭据" }).click();
+  await expect(mcp.getByText("尚未添加远程 MCP")).toBeVisible();
+
+  await mcp.getByRole("button", { name: "添加远程 MCP" }).click();
+  await mcp.getByLabel("显示名称").fill("OAuth MCP");
+  await mcp.getByLabel("HTTPS 地址").fill("https://oauth-mcp.example.test/service");
+  await mcp.getByLabel("认证方式").selectOption("oauth2");
+  await mcp.getByLabel("OAuth Client ID（可选）").fill("desktop-client");
+  await mcp.getByLabel("授权范围（空格分隔）").fill("mcp.read mcp.write");
+  await mcp.getByLabel("额外授权域名（逗号分隔）").fill("auth.example.test");
+  await mcp.getByRole("button", { name: "保存配置" }).click();
+  const oauthRow = mcp.locator("article.ex-mcp-server-row").filter({ hasText: "OAuth MCP" });
+  await oauthRow.getByRole("button", { name: "刷新授权状态" }).click();
+  await expect(oauthRow.getByText("OAuth 状态：待授权")).toBeVisible();
+  await guardedPage.evaluate(() => {
+    window.open = () => ({
+      close() {},
+      focus() {},
+      location: { href: "" },
+      opener: null,
+    }) as unknown as Window;
+  });
+  await oauthRow.getByRole("button", { name: "开始授权" }).click();
+  await expect(oauthRow.getByText("OAuth 状态：已授权")).toBeVisible();
+  await oauthRow.getByRole("button", { name: "取消授权" }).click();
+  await expect(oauthRow.getByText("OAuth 状态：待授权")).toBeVisible();
+  await oauthRow.getByRole("button", { name: "删除" }).click();
+  await oauthRow.getByRole("button", { name: "确认删除并清除凭据" }).click();
+  await expect(mcp.getByText("尚未添加远程 MCP")).toBeVisible();
 });
 
 test("mobile task drawer continues a task by ID and closes after recovery", async ({ browser }) => {

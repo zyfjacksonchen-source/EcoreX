@@ -518,6 +518,69 @@ export interface ConnectorCatalogResponse {
   items: ConnectorCatalogItem[];
 }
 
+export interface ChannelConnectorFieldProjection {
+  key: string;
+  label: string;
+  type: "text" | "secret" | "number";
+  required: boolean;
+  default?: string | number;
+  secret: boolean;
+  configured: boolean;
+}
+
+export interface ChannelConnectorInstanceProjection {
+  instance_id: string;
+  channel_id: string;
+  display_name: string;
+  configured_fields: string[];
+  missing_fields: string[];
+  enabled: boolean;
+  state:
+    | "unconfigured"
+    | "stopped"
+    | "starting"
+    | "connected"
+    | "degraded"
+    | "error"
+    | "stopping"
+    | "unavailable";
+  health: ConnectorHealth;
+  last_error_code: string | null;
+  updated_at: string;
+}
+
+export interface ChannelConnectorActions {
+  save: boolean;
+  test: boolean;
+  enable: boolean;
+  disable: boolean;
+  retry: boolean;
+  disconnect: boolean;
+  auth_begin?: boolean;
+}
+
+export interface ChannelConnectorCatalogItem {
+  channel_id: string;
+  label: string;
+  description: string;
+  icon: string;
+  auth_kind: ConnectorAuthKind;
+  fields: ChannelConnectorFieldProjection[];
+  instance: ChannelConnectorInstanceProjection | null;
+  adapter_available: boolean;
+  unavailable_reason:
+    | "adapter_not_packaged"
+    | "dependency_missing"
+    | "oauth_only"
+    | null;
+  actions: ChannelConnectorActions;
+}
+
+export interface ChannelConnectorCatalogResponse {
+  contract_version: "channel-self-service-v1";
+  items: ChannelConnectorCatalogItem[];
+}
+
 export type ExtensionKind =
   | "skill"
   | "mcp_server"
@@ -644,6 +707,44 @@ export interface MCPOAuthChallengeProjection {
   state: "authorizing";
   authorization_url: string;
   expires_at: number;
+}
+
+export type UserMCPAuthKind = "none" | "bearer" | "oauth2";
+
+export interface UserMCPServerProjection {
+  server_id: string;
+  display_name: string;
+  endpoint: string;
+  auth_kind: UserMCPAuthKind;
+  oauth_client_id: string | null;
+  oauth_scope: string;
+  authorization_hosts: string[];
+  enabled: boolean;
+  credential_configured: boolean;
+  tested_at: number | null;
+  tool_count: number;
+  tool_names: string[];
+  revision: number;
+}
+
+export interface UserMCPServerRequest {
+  display_name: string;
+  endpoint: string;
+  auth_kind: UserMCPAuthKind;
+  credential?: string;
+  oauth_client_id?: string;
+  oauth_scope: string;
+  authorization_hosts: string[];
+}
+
+export interface UserMCPServerListResponse {
+  items: UserMCPServerProjection[];
+}
+
+export interface UserMCPMutationResponse {
+  server: UserMCPServerProjection;
+  restart_required: true;
+  restart_scheduled: boolean;
 }
 
 export interface CapabilityMentionProjection {

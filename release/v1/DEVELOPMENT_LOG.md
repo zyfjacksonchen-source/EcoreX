@@ -1699,3 +1699,110 @@ Control Plane 生产组合（含 Feishu enabled/disabled）回归：20 passed
 Python compile + git diff check：passed
 真实扫码/飞书 API/生产激活：not run（等待用户凭据）
 ```
+
+# 2026-08-09 — 用户级远程 MCP 自助配置与租户隔离
+
+- 复用既有 `ManagedHTTPMCPTransport`、OAuth 2.1/S256 PKCE、OS Credential
+  Vault 与 `MCPClientSupervisor`。未改 Agent planner、Turn、tool dispatch 或
+  worker 架构，也没有给用户配置开放 stdio、command、环境变量或动态 Python
+  import；首版只接受一个无 userinfo/query/fragment 的显式 HTTPS endpoint，禁止
+  本机/私网 IP，连接前再次解析 DNS 并拒绝任何非公网地址，HTTP redirect 继续由
+  原 transport 失败关闭。
+- 新增 `/api/v1/mcp/servers` Product API，覆盖注册、编辑、删除、真实握手测试、
+  启用和停用。测试会执行 MCP `initialize`、`notifications/initialized` 与有界
+  `tools/list`，冻结并复用原 Core schema/tool-name 安全合同；用户远程工具统一按
+  `read+write+network`、`non_idempotent`、`approval=always` 的保守权限进入现有
+  supervisor。目录或连接配置改变后先禁用，重新测试后才允许启用。
+- MCP 可执行 Provider 按既有架构只在 Runtime 启动时组成，因此成功变更明确返回
+  `restart_required=true` 并调用现有 controlled reload requester，不引入第二条热加载
+  路径。用户明确批准的最小 Core 合同例外仅是
+  `user-mcp-config-sha256` 与最低优先级 `user_configured` provenance：它只证明本机
+  用户授权的精确 HTTPS 配置与冻结工具目录，不能加载本地代码，不能冒充
+  administrator 或 Ed25519 发布者签名。
+- 非 Secret 配置存入独立 `user-mcp-v1.db`，主键为
+  `account_id+organization_id+server_id`。Bearer、OAuth access/refresh token 和动态
+  client secret 只进入现有 OS Vault；API 只返回 `credential_configured`，Pydantic
+  使用 secret 类型且所有可能携带合法 secret 的约束在服务边界转为固定错误码，
+  避免验证错误回显原值。编辑为其他认证类型和删除时清理旧凭据。
+- 原 MCP/OAuth namespace 只哈希 `account_id`，同账号跨组织会共用 token/session。
+  现统一哈希 `[account_id, organization_id]`，OAuth vault reference、supervisor session、
+  circuit/lock 都使用相同复合 namespace；个人账号以固定 `personal` scope 参与哈希。
+
+本轮定向验证：
+
+```text
+自助 CRUD/租户隔离/Secret 不落库不回显/HTTPS 与 DNS SSRF/Product mount：6 passed
+ManagedHTTP 真握手、目录冻结、原 MCP supervisor 工具调用：passed
+原 MCP/OAuth 聚焦回归：27 passed
+Extension/Capability provenance、Product Runtime、managed-session 回归：167 passed
+Ruff + Python compile + git diff check：passed
+真实第三方远程 MCP OAuth：not run（由用户在生产端配置自己的账户后验收）
+```
+
+# 2026-08-09 — 消息通道自助连接边界与 CowAgent 复用审计
+
+- CowAgent 2.1.5 的开箱通道链为：全局 `config.json` 读取 `channel_type`，
+  `ChannelManager` 用 `channel_factory` 构造平台实例并在线程中运行 `startup()`，
+  `wait_startup()` 投影就绪，平台 SDK 自行负责长连接和重连；重启会重建全局实例，
+  停止超时还会向线程注入 `SystemExit`。e-Mate 只复用了目录和生命周期语义，没有
+  复用明文配置、全局单例、环境继承、首用下载依赖或强杀线程。
+- 新增 `/api/v1/connectors/channels` typed Product API，覆盖目录、一次性凭据保存、
+  真实连接测试、启用、停用、健康、重试和断开。实例以
+  `account_id+organization_id+channel_id` 隔离，公开投影只返回字段是否已配置；配置与
+  Secret 一并进入现有 OS 加密 Vault，不进入 SQLite、日志、审计正文或 API 响应。
+  生命周期事实经既有 Connector Event Sink 进入审计 outbox，停止失败保留 Vault 记录，
+  不会删除仍被运行中 adapter 使用的凭据。
+- 服务端按 `CHANNEL_CATALOG` 校验字段并只接受已注入的真实
+  `ChannelLifecycleAdapter`。未打包 adapter 的通道目录明确返回
+  `adapter_available=false`、`unavailable_reason=adapter_not_packaged`，保存、测试、
+  启用、健康和重试全部失败关闭，字段完整不等于连接健康。飞书继续走已有 Product
+  OAuth；只有真实 Feishu adapter 已注入时才开放 `auth_begin`。
+- 当前签名 v1 `channels` capability pack 只有 Feishu/Tencent Docs contracts，没有
+  11 个 CowAgent 消息通道的可执行 adapter；Runtime lock 也没有 `lark-oapi`、
+  `dingtalk_stream`、`wechatpy`、`web.py`、`pycryptodome`、
+  `python-telegram-bot`、`slack_bolt` 或 `discord.py` 等闭包。因此“11 通道生产可运行”
+  仍是发布阻断，必须补齐锁定/供应链审计后的签名 adapter pack 并通过 Runtime 注入，
+  不得用首次启动 `pip install` 或字段完整性伪造测试成功。
+
+本轮定向验证：
+
+```text
+通道目录/租户隔离/Secret 单向性/真实生命周期/恢复/停止失败保护/审计桥：passed
+Channel/Vault/Product Runtime/Connector integration/User MCP 聚焦回归：53 passed
+Ruff 0.15.21 + Python compile + git diff check：passed
+11 通道真实供应商连接：blocked（签名 adapter/SDK closure 尚不存在）
+```
+
+## 2026-08-09 补充 — 通道 Runtime 投递合同与自助配置收口
+
+- 新增 `channel-runtime-dispatch-v1` 产品边界，不引入 Cow `Bridge` 或
+  `AgentBridge`。平台入站消息只以组织、账号、通道、外部会话和消息标识的哈希生成
+  确定性 Thread/Turn 请求，并复用现有
+  `composition.admit_turn -> kernel.create_turn -> worker.notify`；同一平台消息重放不会
+  生成第二个 Turn，连续消息复用同一 Thread。外部会话和消息原值不写入 Runtime。
+- 出站只读取终态 Runtime projection 中已完成的 assistant message，生成确定性 delivery
+  idempotency key，再交给平台 transport。平台 transport 必须先持久去重再确认供应商发送；
+  当前没有签名 transport/SDK 的通道继续 `adapter_available=false`，不会因该合同存在而
+  伪装可用。
+- 正式 Runtime 的 `python311.zip` 只包含 `ecorex`。为避免安装包启动时隐式依赖旧 Cow
+  源码树，通道目录在 `ecorex.connectors` 内保留运行时安全投影，并用测试逐项锁定
+  CowAgent 2.1.5 的通道顺序、别名、名称、说明、图标和字段合同。
+- 已启用通道必须先停用才能修改配置或密钥；文本字段不再把数组、对象等结构值静默
+  转成字符串。前端同步禁用运行中编辑，并移除配置面板与通道卡片重复显示的健康状态。
+- 远程 MCP 的公网检查从“连接前 DNS 预检”加强为 socket connect 时重新解析、拒绝
+  混合/私网答案并连接到已验证 IP，TLS 仍以原 hostname 验证，关闭 DNS rebinding 的
+  检查到连接时间差；远程测试结果同时按配置 revision 写入，不能覆盖测试期间发生的
+  配置变更。
+
+补充验证：
+
+```text
+Channel self-service + Runtime dispatcher + User MCP：18 passed
+上述功能与 MCP/Extension/managed-session 10 文件联合回归：91 passed；2 个 Skill 搜索断言在未修改的
+b7a89c1 基线也失败，已隔离复现，未越权修改冻结 Skill Core
+RuntimeClient：53 passed
+TypeScript + Runtime contract codegen check：passed
+Web production build/bundle gate：passed
+通道与远程 MCP GA Chromium：2 passed
+ecorex-only python311.zip 隔离导入：passed
+```

@@ -1595,7 +1595,8 @@
                 "capability_pack",
                 "administrator",
                 "local_bundle",
-                "legacy_import"
+                "legacy_import",
+                "user_configuration"
               ],
               "title": "Source",
               "type": "string"
@@ -1623,7 +1624,8 @@
                 "builtin",
                 "administrator",
                 "verified_publisher",
-                "local_untrusted"
+                "local_untrusted",
+                "user_configured"
               ],
               "title": "Trust",
               "type": "string"

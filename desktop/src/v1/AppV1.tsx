@@ -734,8 +734,10 @@ export function AppV1() {
             <Suspense fallback={<section className="ex-skills-loading" role="status">正在打开技能…</section>}>
               <SkillsWorkspace
                 openChannelsKey={openChannelsKey}
+                mcpClient={runtime.client}
                 connectorRuntime={{
                   catalog: runtime.connectorCatalog,
+                  channelCatalog: runtime.channelConnectorCatalog,
                   loadState: runtime.connectorCatalogState,
                   error: runtime.connectorError,
                   notice: runtime.connectorNotice,
@@ -745,6 +747,9 @@ export function AppV1() {
                   onReconnect: runtime.reconnectConnector,
                   onHealthCheck: runtime.refreshConnectorHealth,
                   onDisconnect: runtime.disconnectConnector,
+                  onSaveConfiguration: runtime.saveChannelConnector,
+                  onChannelAction: runtime.mutateChannelConnector,
+                  onChannelDisconnect: runtime.disconnectChannelConnector,
                   onClearError: runtime.clearConnectorError,
                   onClearNotice: runtime.clearConnectorNotice,
                 }}

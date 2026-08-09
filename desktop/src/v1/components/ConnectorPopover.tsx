@@ -7,14 +7,19 @@ import {
   Link2,
   LoaderCircle,
   MessageCircle,
+  Play,
+  Power,
+  PowerOff,
   RefreshCw,
   RotateCw,
+  Save,
   Unplug,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
+  ChannelConnectorCatalogItem,
   ConnectorCatalogItem,
   ConnectorHealth,
   ConnectorInstanceProjection,
@@ -33,6 +38,7 @@ import { TechnicalDetails } from "./TechnicalDetails.tsx";
 
 export interface ConnectorCatalogPanelProps {
   catalog: ConnectorCatalogItem[];
+  channelCatalog: ChannelConnectorCatalogItem[];
   loadState: ConnectorCatalogLoadState;
   error: string | null;
   notice: string | null;
@@ -51,6 +57,19 @@ export interface ConnectorCatalogPanelProps {
     item: ConnectorCatalogItem,
     instance: ConnectorInstanceProjection,
   ) => Promise<boolean>;
+  onSaveConfiguration: (
+    item: ChannelConnectorCatalogItem,
+    values: Readonly<{
+      display_name: string;
+      config: Record<string, string | number>;
+      secrets: Record<string, string>;
+    }>,
+  ) => Promise<boolean>;
+  onChannelAction: (
+    item: ChannelConnectorCatalogItem,
+    action: "test" | "enable" | "disable" | "retry",
+  ) => Promise<boolean>;
+  onChannelDisconnect: (item: ChannelConnectorCatalogItem) => Promise<boolean>;
   onClearError: () => void;
   onClearNotice: () => void;
 }
@@ -60,6 +79,11 @@ const busyLabels: Record<ConnectorOperationState["kind"], string> = {
   reconnecting: "重新授权中",
   checking: "检查中",
   disconnecting: "断开中",
+  saving: "保存中",
+  testing: "测试中",
+  enabling: "启用中",
+  disabling: "停用中",
+  retrying: "重试中",
 };
 
 function HealthIcon({ health }: { health: ConnectorHealth }) {
@@ -84,6 +108,204 @@ function ConnectorIcon({ item }: { item: ConnectorCatalogItem }) {
   if (item.definition.icon_key === "tencent-docs") return <FileText aria-hidden="true" />;
   if (item.definition.icon_key === "feishu") return <Link2 aria-hidden="true" />;
   return <MessageCircle aria-hidden="true" />;
+}
+
+interface ChannelConfigurationProps {
+  item: ChannelConnectorCatalogItem;
+  configurationEnabled: boolean;
+  operation: ConnectorOperationState | null;
+  onSave: ConnectorCatalogPanelProps["onSaveConfiguration"];
+  onAction: ConnectorCatalogPanelProps["onChannelAction"];
+  onDisconnect: ConnectorCatalogPanelProps["onChannelDisconnect"];
+}
+
+function ChannelConfiguration({
+  item,
+  configurationEnabled,
+  operation,
+  onSave,
+  onAction,
+  onDisconnect,
+}: ChannelConfigurationProps) {
+  const [open, setOpen] = useState(false);
+  const [displayName, setDisplayName] = useState(item.instance?.display_name ?? item.label);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const busy = Boolean(operation);
+  const configurationEditable = configurationEnabled && !item.instance?.enabled;
+
+  useEffect(() => {
+    setDisplayName(item.instance?.display_name ?? item.label);
+  }, [item.instance?.display_name, item.label]);
+
+  useEffect(() => {
+    if (!confirmDisconnect) return;
+    const timer = window.setTimeout(() => setConfirmDisconnect(false), 5_000);
+    return () => window.clearTimeout(timer);
+  }, [confirmDisconnect]);
+
+  const missingRequired = item.fields.some((field) => (
+    field.required && !field.configured && !(values[field.key] ?? "").trim()
+  ));
+
+  const save = async () => {
+    const config: Record<string, string | number> = {};
+    const secrets: Record<string, string> = {};
+    for (const field of item.fields) {
+      const value = (values[field.key] ?? "").trim();
+      if (!value) continue;
+      if (field.secret || field.type === "secret") secrets[field.key] = value;
+      else config[field.key] = field.type === "number" ? Number(value) : value;
+    }
+    if (await onSave(item, { display_name: displayName.trim(), config, secrets })) {
+      setValues({});
+    }
+  };
+
+  return (
+    <div className="ex-channel-configuration">
+      <button
+        className="ex-button ex-connector-action"
+        type="button"
+        aria-expanded={open}
+        onClick={() => {
+          setOpen((current) => !current);
+          if (open) setValues({});
+        }}
+      >
+        {open
+          ? "收起"
+          : !configurationEnabled
+            ? "管理已保存配置"
+            : item.instance
+              ? "管理配置"
+              : "配置账号"}
+      </button>
+      {open ? (
+        <form
+          className="ex-channel-configuration-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save();
+          }}
+        >
+          {configurationEnabled ? (
+            <label>
+              <span>连接名称</span>
+              <input
+                type="text"
+                value={displayName}
+                required
+                maxLength={120}
+                disabled={busy || !configurationEditable}
+                onChange={(event) => setDisplayName(event.target.value)}
+              />
+            </label>
+          ) : null}
+          {configurationEnabled
+            ? item.fields.map((field) => {
+                const isSecret = field.secret || field.type === "secret";
+                return (
+                  <label key={field.key}>
+                    <span>
+                      {field.label}
+                      {field.required ? "（必填）" : ""}
+                      {field.configured ? <small>已配置</small> : null}
+                    </span>
+                    <input
+                      type={isSecret ? "password" : field.type === "number" ? "number" : "text"}
+                      value={values[field.key] ?? ""}
+                      required={field.required && !field.configured}
+                      disabled={busy || !configurationEditable}
+                      autoComplete={isSecret ? "new-password" : "off"}
+                      placeholder={field.configured
+                        ? "已安全保存；留空不修改"
+                        : field.default === undefined
+                          ? ""
+                          : String(field.default)}
+                      onChange={(event) => setValues((current) => ({
+                        ...current,
+                        [field.key]: event.target.value,
+                      }))}
+                    />
+                  </label>
+                );
+              })
+            : null}
+          {configurationEnabled ? (
+            <p className="ex-channel-secret-note">
+              {configurationEditable
+                ? "密钥只在本次保存时提交，保存后立即清空，页面不会读取或回显。"
+                : "通道运行中不能修改配置；请先停用，再编辑并重新启用。"}
+            </p>
+          ) : null}
+          <div className="ex-channel-configuration-actions">
+            {configurationEditable && item.actions.save ? (
+              <button
+                className="ex-button is-primary"
+                type="submit"
+                disabled={busy || !displayName.trim() || missingRequired}
+              >
+                <Save aria-hidden="true" />
+                {operation?.kind === "saving" ? busyLabels.saving : "保存配置"}
+              </button>
+            ) : null}
+            {item.instance && item.actions.test ? (
+              <button className="ex-button" type="button" disabled={busy} onClick={() => void onAction(item, "test")}>
+                <Play aria-hidden="true" />
+                {operation?.kind === "testing" ? busyLabels.testing : "测试连接"}
+              </button>
+            ) : null}
+            {item.instance?.enabled && item.actions.disable ? (
+              <button className="ex-button" type="button" disabled={busy} onClick={() => void onAction(item, "disable")}>
+                <PowerOff aria-hidden="true" />
+                {operation?.kind === "disabling" ? busyLabels.disabling : "停用"}
+              </button>
+            ) : null}
+            {item.instance && !item.instance.enabled && item.actions.enable ? (
+              <button className="ex-button" type="button" disabled={busy} onClick={() => void onAction(item, "enable")}>
+                <Power aria-hidden="true" />
+                {operation?.kind === "enabling" ? busyLabels.enabling : "启用"}
+              </button>
+            ) : null}
+            {item.instance && item.actions.retry && ["degraded", "error"].includes(item.instance.health) ? (
+              <button className="ex-button" type="button" disabled={busy} onClick={() => void onAction(item, "retry")}>
+                <RotateCw aria-hidden="true" />
+                {operation?.kind === "retrying" ? busyLabels.retrying : "重试连接"}
+              </button>
+            ) : null}
+            {item.instance && item.actions.disconnect ? (
+              <button
+                className={`ex-button${confirmDisconnect ? " is-danger" : ""}`}
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  if (!confirmDisconnect) {
+                    setConfirmDisconnect(true);
+                    return;
+                  }
+                  setConfirmDisconnect(false);
+                  void onDisconnect(item);
+                }}
+              >
+                <Unplug aria-hidden="true" />
+                {operation?.kind === "disconnecting"
+                  ? busyLabels.disconnecting
+                  : confirmDisconnect
+                    ? "确认断开并删除凭据"
+                    : "断开"}
+              </button>
+            ) : null}
+          </div>
+          {item.instance?.last_error_code ? (
+            <div className="ex-channel-instance-status" role="status">
+              <span>{serviceReasonMessage(item.instance.last_error_code, "连接最近一次运行失败，请检查配置后重试。")}</span>
+            </div>
+          ) : null}
+        </form>
+      ) : null}
+    </div>
+  );
 }
 
 interface InstanceRowProps {
@@ -172,6 +394,7 @@ function InstanceRow({
 
 export function ConnectorCatalogPanel({
   catalog,
+  channelCatalog,
   loadState,
   error,
   notice,
@@ -181,12 +404,19 @@ export function ConnectorCatalogPanel({
   onReconnect,
   onHealthCheck,
   onDisconnect,
+  onSaveConfiguration,
+  onChannelAction,
+  onChannelDisconnect,
   onClearError,
   onClearNotice,
 }: ConnectorCatalogPanelProps) {
   const [confirmDisconnectId, setConfirmDisconnectId] = useState<string | null>(null);
   const confirmTimer = useRef<number | null>(null);
   const sections = useMemo(() => connectorSections(catalog), [catalog]);
+  const channels = useMemo(
+    () => new Map(channelCatalog.map((item) => [item.channel_id, item])),
+    [channelCatalog],
+  );
 
   const clearDisconnectConfirmation = () => {
     if (confirmTimer.current !== null) window.clearTimeout(confirmTimer.current);
@@ -273,10 +503,25 @@ export function ConnectorCatalogPanel({
                 {section.items.map((item) => {
                   const connectorId = item.definition.connector_id;
                   const operation = operations[connectorId] ?? null;
-                  const unavailable = connectorUnavailableMessage(item);
+                  const channel = channels.get(connectorId) ?? null;
+                  const selfServiceChannel = channel
+                    && ["app_credentials", "api_token"].includes(channel.auth_kind)
+                    && (channel.adapter_available || channel.instance)
+                      ? channel
+                      : null;
+                  const unavailable = channel
+                    ? channel.adapter_available
+                      ? channel.auth_kind === "device_code"
+                        ? "当前版本暂不能在页面完成此账号登录。"
+                        : null
+                      : channel.unavailable_reason === "dependency_missing"
+                        ? "当前安装缺少这个通道所需的运行组件。"
+                        : "当前安装暂不支持这个通道。"
+                    : connectorUnavailableMessage(item);
                   const overallHealth = connectorOverallHealth(item);
+                  const visibleHealth = selfServiceChannel?.instance?.health ?? overallHealth;
                   return (
-                    <article className="ex-connector-row" key={connectorId} data-health={overallHealth}>
+                    <article className="ex-connector-row" key={connectorId} data-health={visibleHealth}>
                       <span className="ex-connector-icon" aria-hidden="true">
                         <ConnectorIcon item={item} />
                       </span>
@@ -286,10 +531,10 @@ export function ConnectorCatalogPanel({
                           {item.definition.tier === "beta" ? (
                             <span className="ex-connector-tier">Beta</span>
                           ) : null}
-                          {!item.instances.length ? <ConnectorStatus health={overallHealth} /> : null}
+                          {selfServiceChannel || !item.instances.length ? <ConnectorStatus health={visibleHealth} /> : null}
                         </div>
                         <p>{item.definition.description}</p>
-                        {item.instances.map((instance) => (
+                        {!selfServiceChannel ? item.instances.map((instance) => (
                           <InstanceRow
                             key={instance.instance_id}
                             item={item}
@@ -300,7 +545,17 @@ export function ConnectorCatalogPanel({
                             onHealthCheck={onHealthCheck}
                             onRequestDisconnect={requestDisconnect}
                           />
-                        ))}
+                        )) : null}
+                        {selfServiceChannel ? (
+                          <ChannelConfiguration
+                            item={selfServiceChannel}
+                            configurationEnabled={selfServiceChannel.adapter_available}
+                            operation={operation}
+                            onSave={onSaveConfiguration}
+                            onAction={onChannelAction}
+                            onDisconnect={onChannelDisconnect}
+                          />
+                        ) : null}
                         {unavailable ? (
                           <>
                             <p
@@ -322,7 +577,7 @@ export function ConnectorCatalogPanel({
                             </div>
                           </>
                         ) : null}
-                        {!unavailable ? (
+                        {!unavailable && !selfServiceChannel ? (
                           <div className="ex-connector-connect-row">
                             <button
                               className={`ex-button ex-connector-action${item.instances.length ? "" : " is-primary"}`}

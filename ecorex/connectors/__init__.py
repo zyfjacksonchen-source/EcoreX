@@ -1,4 +1,21 @@
 from .builtin import builtin_connector_definitions, builtin_connector_registry
+from .channel_self_service import (
+    ChannelAuditEvent,
+    ChannelCredentialOwner,
+    ChannelLifecycleAdapter,
+    ChannelSelfService,
+    ChannelSelfServiceError,
+    ChannelState,
+    channel_audit_outbox_event,
+    create_channel_self_service_router,
+)
+from .channel_runtime import (
+    ChannelInboundMessage,
+    ChannelOutboundText,
+    ChannelRuntimeDispatcher,
+    ChannelTextTransport,
+    ChannelTurnReceipt,
+)
 from .api import create_connector_router
 from .composition import (
     ConnectorComposition,
@@ -65,6 +82,17 @@ __all__ = [
     "AuthChallenge",
     "AuthGrant",
     "BinaryCredentialBackend",
+    "ChannelAuditEvent",
+    "ChannelCredentialOwner",
+    "ChannelLifecycleAdapter",
+    "ChannelInboundMessage",
+    "ChannelOutboundText",
+    "ChannelRuntimeDispatcher",
+    "ChannelSelfService",
+    "ChannelSelfServiceError",
+    "ChannelState",
+    "ChannelTextTransport",
+    "ChannelTurnReceipt",
     "ConnectorActionSpec",
     "ConnectorAdapter",
     "ConnectorAuthError",
@@ -112,5 +140,7 @@ __all__ = [
     "builtin_connector_registry",
     "build_connector_composition",
     "create_connector_router",
+    "channel_audit_outbox_event",
+    "create_channel_self_service_router",
     "production_credential_vault",
 ]

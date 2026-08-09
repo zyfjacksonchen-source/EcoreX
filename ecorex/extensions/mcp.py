@@ -973,6 +973,7 @@ class MCPClientSupervisor:
             "builtin": ToolProviderTrust.BUILTIN,
             "administrator": ToolProviderTrust.ADMINISTRATOR,
             "verified_publisher": ToolProviderTrust.VERIFIED_PUBLISHER,
+            "user_configured": ToolProviderTrust.USER_CONFIGURED,
         }.get(manifest.trust.value)
         if trust is None:
             raise ExtensionIntegrityError("MCP provider trust is not executable")
@@ -1153,6 +1154,7 @@ class ManagedHTTPMCPTransport:
         *,
         client: httpx.AsyncClient | None = None,
         expected_host: str,
+        own_client: bool = False,
     ) -> None:
         parsed = urlsplit(endpoint)
         if (
@@ -1172,7 +1174,7 @@ class ManagedHTTPMCPTransport:
             follow_redirects=False,
             trust_env=False,
         )
-        self._owns_client = client is None
+        self._owns_client = client is None or own_client
         self._session_id: str | None = None
         self._oauth_provider: MCPBearerTokenProvider | None = None
 

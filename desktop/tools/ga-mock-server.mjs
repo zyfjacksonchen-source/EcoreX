@@ -905,6 +905,9 @@ function scenarioState(name) {
     connectorLoginBeginCount: 0,
     connectorLoginCheckCount: 0,
     connectorLoginCancelCount: 0,
+    channelInstances: new Map(),
+    userMcpServers: new Map(),
+    mcpOAuthAuthorized: new Set(),
     interactionRespondCount: 0,
     sessionLogoutCount: 0,
   };
@@ -1367,6 +1370,55 @@ function connectorCatalog() {
         instances: [],
         unavailable_reason: null,
       })),
+    ],
+  };
+}
+
+function channelConnectorCatalog(state) {
+  const instance = state.channelInstances.get("telegram") ?? null;
+  const item = (channelId, label, overrides = {}) => ({
+    channel_id: channelId,
+    label,
+    description: `${label}消息渠道`,
+    icon: "fa-comment",
+    auth_kind: "app_credentials",
+    fields: [],
+    instance: null,
+    adapter_available: false,
+    unavailable_reason: "adapter_not_packaged",
+    actions: {
+      save: false,
+      test: false,
+      enable: false,
+      disable: false,
+      retry: false,
+      disconnect: false,
+      auth_begin: false,
+    },
+    ...overrides,
+  });
+  return {
+    contract_version: "channel-self-service-v1",
+    items: [
+      item("feishu", "飞书", {
+        auth_kind: "oauth2",
+        adapter_available: true,
+        unavailable_reason: null,
+        actions: { save: false, test: false, enable: false, disable: false, retry: false, disconnect: false, auth_begin: true },
+      }),
+      item("telegram", "Telegram", {
+        fields: [{ key: "telegram_token", label: "Bot Token", type: "secret", required: true, secret: true, configured: Boolean(instance) }],
+        instance,
+        adapter_available: true,
+        unavailable_reason: null,
+        actions: { save: true, test: Boolean(instance), enable: Boolean(instance && !instance.enabled), disable: Boolean(instance?.enabled), retry: Boolean(instance), disconnect: Boolean(instance), auth_begin: false },
+      }),
+      item("dingtalk", "钉钉", {
+        fields: [
+          { key: "dingtalk_client_id", label: "Client ID", type: "text", required: true, secret: false, configured: false },
+          { key: "dingtalk_client_secret", label: "Client Secret", type: "secret", required: true, secret: true, configured: false },
+        ],
+      }),
     ],
   };
 }
@@ -2009,6 +2061,56 @@ async function handleApi(holder, req, res, url) {
     return json(res, 200, deviceFlowProjection(state, { restartScheduled: true }));
   }
   if (path === "/api/v1/connectors" && req.method === "GET") return json(res, 200, connectorCatalog());
+  if (path === "/api/v1/connectors/channels" && req.method === "GET") {
+    return json(res, 200, channelConnectorCatalog(state));
+  }
+  const channelInstanceMatch = path.match(/^\/api\/v1\/connectors\/channels\/([^/]+)\/instance$/u);
+  if (channelInstanceMatch && req.method === "PUT") {
+    const channelId = decodeURIComponent(channelInstanceMatch[1]);
+    const request = await body(req);
+    if (channelId !== "telegram") return apiError(res, 503, "channel_adapter_unavailable", "Channel adapter unavailable");
+    const existing = state.channelInstances.get(channelId);
+    if (!existing && !request.secrets?.telegram_token) {
+      return apiError(res, 422, "channel_configuration_incomplete", "Bot Token is required");
+    }
+    const projection = {
+      instance_id: "channel-instance-telegram",
+      channel_id: channelId,
+      display_name: String(request.display_name || "Telegram"),
+      configured_fields: ["telegram_token"],
+      missing_fields: [],
+      enabled: true,
+      state: "error",
+      health: "error",
+      last_error_code: "channel_not_started",
+      updated_at: new Date().toISOString(),
+    };
+    state.channelInstances.set(channelId, projection);
+    return json(res, 200, projection);
+  }
+  if (channelInstanceMatch && req.method === "DELETE") {
+    state.channelInstances.delete(decodeURIComponent(channelInstanceMatch[1]));
+    res.writeHead(204);
+    return res.end();
+  }
+  const channelActionMatch = path.match(/^\/api\/v1\/connectors\/channels\/([^/]+)\/(test|enable|disable|retry)$/u);
+  if (channelActionMatch && req.method === "POST") {
+    const channelId = decodeURIComponent(channelActionMatch[1]);
+    const action = channelActionMatch[2];
+    const current = state.channelInstances.get(channelId);
+    if (!current) return apiError(res, 404, "channel_instance_not_found", "Channel instance not found");
+    const enabled = action === "disable" ? false : true;
+    const projection = {
+      ...current,
+      enabled,
+      state: enabled ? "connected" : "stopped",
+      health: enabled ? "connected" : "disabled",
+      last_error_code: null,
+      updated_at: new Date().toISOString(),
+    };
+    state.channelInstances.set(channelId, projection);
+    return json(res, 200, projection);
+  }
   if (path === "/api/v1/skill-hub/skills" && req.method === "GET") {
     const query = (url.searchParams.get("query") || "").trim().toLocaleLowerCase("zh-CN");
     const category = url.searchParams.get("category");
@@ -2225,6 +2327,91 @@ async function handleApi(holder, req, res, url) {
     return usage ? json(res, 200, usage) : apiError(res, 404, "usage_unavailable", "Usage is unavailable");
   }
 
+  if (path === "/api/v1/mcp/servers" && req.method === "GET") {
+    return json(res, 200, { items: [...state.userMcpServers.values()] });
+  }
+  if (path === "/api/v1/mcp/servers" && req.method === "POST") {
+    const request = await body(req);
+    if (!String(request.endpoint || "").startsWith("https://")) {
+      return apiError(res, 422, "mcp_endpoint_invalid", "MCP endpoint must use HTTPS");
+    }
+    if (request.auth_kind === "bearer" && !request.credential) {
+      return apiError(res, 422, "mcp_bearer_credential_required", "Bearer credential is required");
+    }
+    const server = {
+      server_id: "user.mcp.ga",
+      display_name: String(request.display_name),
+      endpoint: String(request.endpoint),
+      auth_kind: request.auth_kind,
+      oauth_client_id: request.oauth_client_id ?? null,
+      oauth_scope: request.oauth_scope || "",
+      authorization_hosts: request.authorization_hosts || [],
+      enabled: false,
+      credential_configured: request.auth_kind === "bearer",
+      tested_at: null,
+      tool_count: 0,
+      tool_names: [],
+      revision: 1,
+    };
+    state.userMcpServers.set(server.server_id, server);
+    return json(res, 201, { server, restart_required: true, restart_scheduled: true });
+  }
+  const userMcpMatch = path.match(/^\/api\/v1\/mcp\/servers\/([^/]+)$/u);
+  if (userMcpMatch && req.method === "PUT") {
+    const serverId = decodeURIComponent(userMcpMatch[1]);
+    const current = state.userMcpServers.get(serverId);
+    if (!current) return apiError(res, 404, "mcp_server_not_found", "MCP server not found");
+    const request = await body(req);
+    if (!String(request.endpoint || "").startsWith("https://")) {
+      return apiError(res, 422, "mcp_endpoint_invalid", "MCP endpoint must use HTTPS");
+    }
+    const connectionChanged = current.endpoint !== request.endpoint || current.auth_kind !== request.auth_kind;
+    const server = {
+      ...current,
+      display_name: String(request.display_name),
+      endpoint: String(request.endpoint),
+      auth_kind: request.auth_kind,
+      oauth_client_id: request.oauth_client_id ?? null,
+      oauth_scope: request.oauth_scope || "",
+      authorization_hosts: request.authorization_hosts || [],
+      credential_configured: request.auth_kind === "bearer"
+        ? Boolean(request.credential || current.credential_configured)
+        : false,
+      enabled: connectionChanged ? false : current.enabled,
+      tested_at: connectionChanged ? null : current.tested_at,
+      tool_count: connectionChanged ? 0 : current.tool_count,
+      tool_names: connectionChanged ? [] : current.tool_names,
+      revision: current.revision + 1,
+    };
+    state.userMcpServers.set(serverId, server);
+    return json(res, 200, { server, restart_required: true, restart_scheduled: true });
+  }
+  if (userMcpMatch && req.method === "DELETE") {
+    state.userMcpServers.delete(decodeURIComponent(userMcpMatch[1]));
+    res.writeHead(204);
+    return res.end();
+  }
+  const userMcpActionMatch = path.match(/^\/api\/v1\/mcp\/servers\/([^/]+)\/(test|enable|disable)$/u);
+  if (userMcpActionMatch && req.method === "POST") {
+    const serverId = decodeURIComponent(userMcpActionMatch[1]);
+    const action = userMcpActionMatch[2];
+    const current = state.userMcpServers.get(serverId);
+    if (!current) return apiError(res, 404, "mcp_server_not_found", "MCP server not found");
+    if (action === "enable" && !current.tested_at) {
+      return apiError(res, 409, "mcp_server_test_required", "MCP server must be tested first");
+    }
+    const server = {
+      ...current,
+      enabled: action === "enable" ? true : action === "disable" ? false : current.enabled,
+      tested_at: action === "test" ? 1_786_172_040 : current.tested_at,
+      tool_count: action === "test" ? 2 : current.tool_count,
+      tool_names: action === "test" ? ["documents.search", "documents.write"] : current.tool_names,
+      revision: current.revision + 1,
+    };
+    state.userMcpServers.set(serverId, server);
+    return json(res, 200, { server, restart_required: true, restart_scheduled: true });
+  }
+
   const usageMatch = path.match(/^\/api\/v1\/threads\/([^/]+)\/usage$/);
   if (usageMatch && req.method === "GET") {
     const usage = conversationUsage(state, decodeURIComponent(usageMatch[1]));
@@ -2238,8 +2425,35 @@ async function handleApi(holder, req, res, url) {
         state: "authorization_required",
         expires_at: null,
         scope: "mcp.read mcp.write",
-      }],
+      }, ...[...state.userMcpServers.values()]
+        .filter((server) => server.auth_kind === "oauth2")
+        .map((server) => ({
+          service_id: server.server_id,
+          state: state.mcpOAuthAuthorized.has(server.server_id) ? "authorized" : "authorization_required",
+          expires_at: state.mcpOAuthAuthorized.has(server.server_id) ? 1_900_000_000 : null,
+          scope: server.oauth_scope,
+        }))],
     });
+  }
+  const mcpOAuthBeginMatch = path.match(/^\/api\/v1\/mcp\/oauth\/([^/]+)\/begin$/u);
+  if (mcpOAuthBeginMatch && req.method === "POST") {
+    const serviceId = decodeURIComponent(mcpOAuthBeginMatch[1]);
+    if (!state.userMcpServers.has(serviceId)) {
+      return apiError(res, 404, "mcp_oauth_service_not_found", "MCP OAuth service not found");
+    }
+    state.mcpOAuthAuthorized.add(serviceId);
+    return json(res, 200, {
+      service_id: serviceId,
+      state: "authorizing",
+      authorization_url: "https://auth.example.test/authorize?state=opaque",
+      expires_at: 1_900_000_000,
+    });
+  }
+  const mcpOAuthClearMatch = path.match(/^\/api\/v1\/mcp\/oauth\/([^/]+)$/u);
+  if (mcpOAuthClearMatch && req.method === "DELETE") {
+    state.mcpOAuthAuthorized.delete(decodeURIComponent(mcpOAuthClearMatch[1]));
+    res.writeHead(204);
+    return res.end();
   }
 
   const pinThreadMatch = path.match(/^\/api\/v1\/threads\/([^/]+)\/pin$/);

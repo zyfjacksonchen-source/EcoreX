@@ -83,5 +83,13 @@ from .mcp_oauth import (
     MCPOAuthStatus,
     register_mcp_oauth_routes,
 )
+from .user_mcp import (
+    UserMCPError,
+    UserMCPServer,
+    UserMCPServerRequest,
+    UserMCPService,
+    create_user_mcp_router,
+    mcp_tenant_namespace,
+)
 
 __all__ = [name for name in globals() if not name.startswith("_")]

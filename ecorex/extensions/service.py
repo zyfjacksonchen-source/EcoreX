@@ -61,6 +61,7 @@ from .models import (
     verify_core_extension,
     verify_legacy_declarative_skill,
     verify_local_bundle_skill,
+    verify_user_configured_mcp,
     version_satisfies,
 )
 from .repository import ExtensionStateRecord, SQLiteExtensionRepository
@@ -316,7 +317,14 @@ class ExtensionService:
                 "Runtime binding manifest disagrees with its stored revision"
             )
         try:
-            if candidate.source is ExtensionSource.CORE_BUNDLE:
+            if candidate.signature.algorithm == "user-mcp-config-sha256":
+                verify_user_configured_mcp(
+                    candidate,
+                    runtime_api_version=self.runtime_api_version,
+                    platform=self.platform,
+                    architecture=self.architecture,
+                )
+            elif candidate.source is ExtensionSource.CORE_BUNDLE:
                 verify_core_extension(
                     candidate,
                     runtime_api_version=self.runtime_api_version,
@@ -2288,7 +2296,14 @@ class ExtensionService:
                     raise ExtensionIntegrityError(
                         "extension signature evidence is not bound to its revision"
                     )
-                if candidate.source in {
+                if candidate.signature.algorithm == "user-mcp-config-sha256":
+                    verify_user_configured_mcp(
+                        candidate,
+                        runtime_api_version=self.runtime_api_version,
+                        platform=self.platform,
+                        architecture=self.architecture,
+                    )
+                elif candidate.source in {
                     ExtensionSource.SIGNED_RELEASE,
                     ExtensionSource.CAPABILITY_PACK,
                     ExtensionSource.ADMINISTRATOR,

@@ -12,7 +12,12 @@ export type ConnectorOperationKind =
   | "connecting"
   | "reconnecting"
   | "checking"
-  | "disconnecting";
+  | "disconnecting"
+  | "saving"
+  | "testing"
+  | "enabling"
+  | "disabling"
+  | "retrying";
 
 export interface ConnectorOperationState {
   connectorId: string;

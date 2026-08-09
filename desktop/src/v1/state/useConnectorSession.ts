@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
   BootstrapResponse,
+  ChannelConnectorCatalogItem,
+  ChannelConnectorInstanceProjection,
   ConnectorCatalogItem,
   ConnectorCatalogResponse,
   ConnectorInstanceProjection,
@@ -56,6 +58,7 @@ export function useConnectorSession({
   formatError,
 }: UseConnectorSessionOptions) {
   const [connectorCatalog, setConnectorCatalog] = useState<ConnectorCatalogItem[]>([]);
+  const [channelConnectorCatalog, setChannelConnectorCatalog] = useState<ChannelConnectorCatalogItem[]>([]);
   const [connectorCatalogState, setConnectorCatalogState] = useState<ConnectorCatalogLoadState>("idle");
   const [connectorError, setConnectorError] = useState<string | null>(null);
   const [connectorNotice, setConnectorNotice] = useState<string | null>(null);
@@ -70,9 +73,13 @@ export function useConnectorSession({
   ): Promise<ConnectorCatalogResponse | null> => {
     if (!quiet) setConnectorCatalogState("loading");
     try {
-      const response = await client.connectorCatalog(signal);
+      const [response, channelResponse] = await Promise.all([
+        client.connectorCatalog(signal),
+        client.channelConnectorCatalog(signal),
+      ]);
       if (signal?.aborted) return null;
       setConnectorCatalog(response.items);
+      setChannelConnectorCatalog(channelResponse.items);
       setConnectorCatalogState("ready");
       if (!quiet) setConnectorError(null);
       return response;
@@ -155,6 +162,17 @@ export function useConnectorSession({
               instance.instance_id === projection.instance_id ? projection : instance
             )),
           }
+        : candidate
+    )));
+  }, []);
+
+  const replaceChannelInstance = useCallback((
+    channelId: string,
+    projection: ChannelConnectorInstanceProjection | null,
+  ) => {
+    setChannelConnectorCatalog((current) => current.map((candidate) => (
+      candidate.channel_id === channelId
+        ? { ...candidate, instance: projection }
         : candidate
     )));
   }, []);
@@ -352,7 +370,18 @@ export function useConnectorSession({
     let succeeded = false;
     setConnectorError(null);
     try {
-      await client.disconnectConnector(instance.instance_id, operation.clientRequestId);
+      const channelItem = channelConnectorCatalog.find(
+        (candidate) => candidate.channel_id === item.definition.connector_id,
+      );
+      if (channelItem?.instance?.instance_id === instance.instance_id) {
+        await client.disconnectChannelConnector(
+          channelItem.channel_id,
+          operation.clientRequestId,
+        );
+        replaceChannelInstance(channelItem.channel_id, null);
+      } else {
+        await client.disconnectConnector(instance.instance_id, operation.clientRequestId);
+      }
       removeInstance(item.definition.connector_id, instance.instance_id);
       await Promise.all([
         refreshConnectors(undefined, true),
@@ -371,22 +400,129 @@ export function useConnectorSession({
   }, [
     beginOperation,
     client,
+    channelConnectorCatalog,
     finishOperation,
     formatError,
     refreshBootstrap,
     refreshConnectors,
     removeInstance,
+    replaceChannelInstance,
   ]);
+
+  const saveChannelConnector = useCallback(async (
+    item: ChannelConnectorCatalogItem,
+    values: Readonly<{
+      display_name: string;
+      config: Record<string, string | number>;
+      secrets: Record<string, string>;
+    }>,
+  ) => {
+    const operation = beginOperation(
+      item.channel_id,
+      item.instance?.instance_id ?? null,
+      "saving",
+    );
+    if (!operation) return false;
+    let succeeded = false;
+    setConnectorError(null);
+    try {
+      const projection = await client.saveChannelConnector(
+        item.channel_id,
+        values,
+        operation.clientRequestId,
+      );
+      replaceChannelInstance(item.channel_id, projection);
+      await refreshConnectors(undefined, true);
+      setConnectorNotice(`${item.label} 配置已安全保存。敏感字段不会在页面回显。`);
+      succeeded = true;
+      return true;
+    } catch (error) {
+      setConnectorError(
+        `${item.label} 配置保存失败：${formatError(error)} 请检查后重试。`,
+      );
+      return false;
+    } finally {
+      finishOperation(operation, succeeded);
+    }
+  }, [beginOperation, client, finishOperation, formatError, refreshConnectors, replaceChannelInstance]);
+
+  const mutateChannelConnector = useCallback(async (
+    item: ChannelConnectorCatalogItem,
+    action: "test" | "enable" | "disable" | "retry",
+  ) => {
+    const operationKinds = {
+      test: "testing",
+      enable: "enabling",
+      disable: "disabling",
+      retry: "retrying",
+    } as const;
+    const operation = beginOperation(
+      item.channel_id,
+      item.instance?.instance_id ?? null,
+      operationKinds[action],
+    );
+    if (!operation) return false;
+    let succeeded = false;
+    setConnectorError(null);
+    try {
+      const projection = await client.mutateChannelConnector(
+        item.channel_id,
+        action,
+        operation.clientRequestId,
+      );
+      replaceChannelInstance(item.channel_id, projection);
+      await refreshConnectors(undefined, true);
+      succeeded = true;
+      return true;
+    } catch (error) {
+      const labels = { test: "测试", enable: "启用", disable: "停用", retry: "重试" };
+      setConnectorError(
+        `${item.label}${labels[action]}失败：${formatError(error)} 请检查配置后重试。`,
+      );
+      return false;
+    } finally {
+      finishOperation(operation, succeeded);
+    }
+  }, [beginOperation, client, finishOperation, formatError, refreshConnectors, replaceChannelInstance]);
+
+  const disconnectChannelConnector = useCallback(async (
+    item: ChannelConnectorCatalogItem,
+  ) => {
+    const operation = beginOperation(
+      item.channel_id,
+      item.instance?.instance_id ?? null,
+      "disconnecting",
+    );
+    if (!operation) return false;
+    let succeeded = false;
+    setConnectorError(null);
+    try {
+      await client.disconnectChannelConnector(item.channel_id, operation.clientRequestId);
+      replaceChannelInstance(item.channel_id, null);
+      await refreshConnectors(undefined, true);
+      setConnectorNotice(`${item.label} 已断开，本地保存的凭据已删除。`);
+      succeeded = true;
+      return true;
+    } catch (error) {
+      setConnectorError(
+        `${item.label} 未完成断开：${formatError(error)} 凭据尚未确认删除，请重试。`,
+      );
+      return false;
+    } finally {
+      finishOperation(operation, succeeded);
+    }
+  }, [beginOperation, client, finishOperation, formatError, refreshConnectors, replaceChannelInstance]);
 
   return {
     connectorCatalog,
+    channelConnectorCatalog,
     connectorCatalogState,
     connectorError,
     connectorNotice,
     connectorOperations,
     clearConnectorError: () => setConnectorError(null),
     clearConnectorNotice: () => setConnectorNotice(null),
-    refreshConnectors: () => refreshConnectors(),
+    refreshConnectors,
     connectConnector: (item: ConnectorCatalogItem) => authorize(item),
     reconnectConnector: (
       item: ConnectorCatalogItem,
@@ -394,5 +530,8 @@ export function useConnectorSession({
     ) => authorize(item, instance),
     refreshConnectorHealth,
     disconnectConnector,
+    saveChannelConnector,
+    mutateChannelConnector,
+    disconnectChannelConnector,
   };
 }

@@ -1918,8 +1918,15 @@ class ExtensionProjection(FrozenProtocolModel):
         "administrator",
         "local_bundle",
         "legacy_import",
+        "user_configuration",
     ]
-    trust: Literal["builtin", "administrator", "verified_publisher", "local_untrusted"]
+    trust: Literal[
+        "builtin",
+        "administrator",
+        "verified_publisher",
+        "local_untrusted",
+        "user_configured",
+    ]
     status: Literal["staged", "enabled", "disabled", "quarantined", "uninstalled"]
     health: Literal["unknown", "healthy", "degraded", "unhealthy", "circuit_open"]
     provenance: dict[str, str | None]

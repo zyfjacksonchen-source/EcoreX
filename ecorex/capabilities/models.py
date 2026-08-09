@@ -186,6 +186,7 @@ class ToolProviderTrust(StrEnum):
     BUILTIN = "builtin"
     ADMINISTRATOR = "administrator"
     VERIFIED_PUBLISHER = "verified_publisher"
+    USER_CONFIGURED = "user_configured"
 
 
 _CORE_PROVIDER_EVIDENCE_SHA256 = hashlib.sha256(
@@ -242,6 +243,7 @@ class ToolProviderProvenance:
                     ToolProviderTrust.BUILTIN,
                     ToolProviderTrust.ADMINISTRATOR,
                     ToolProviderTrust.VERIFIED_PUBLISHER,
+                    ToolProviderTrust.USER_CONFIGURED,
                 }
                 # Even a Core-bundled transport remains an MCP protocol
                 # provider. Product-reviewed routing metadata belongs to Core
@@ -272,6 +274,7 @@ class ToolProviderProvenance:
             ToolProviderTrust.BUILTIN: 3,
             ToolProviderTrust.ADMINISTRATOR: 2,
             ToolProviderTrust.VERIFIED_PUBLISHER: 1,
+            ToolProviderTrust.USER_CONFIGURED: 0,
         }[self.trust]
 
     def to_dict(self) -> dict[str, Any]:

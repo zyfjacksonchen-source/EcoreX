@@ -3553,6 +3553,191 @@
   min-width: 0;
 }
 
+.ex-channel-configuration {
+  margin-top: var(--space-3);
+}
+
+.ex-channel-configuration-form {
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-card);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-3);
+  background: var(--color-raised);
+}
+
+.ex-channel-configuration-form label,
+.ex-channel-configuration-form label > span {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.ex-channel-configuration-form label > span {
+  grid-template-columns: minmax(0, max-content) auto;
+  align-items: baseline;
+  color: var(--color-ink-muted);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.ex-channel-configuration-form label small {
+  color: var(--color-success);
+}
+
+.ex-channel-configuration-form input {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--target-desktop);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-control);
+  color: var(--color-ink);
+  background: var(--color-surface);
+  font: inherit;
+}
+
+.ex-channel-configuration-form input:focus-visible {
+  outline: 0;
+  border-color: var(--color-brand-strong);
+  box-shadow: var(--focus-subtle-ring);
+}
+
+.ex-channel-configuration-form input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ex-mcp-self-service .ex-popover-heading,
+.ex-mcp-self-service .ex-connector-heading-actions {
+  flex-wrap: wrap;
+}
+
+.ex-mcp-configuration-form {
+  margin-top: var(--space-3);
+}
+
+.ex-mcp-configuration-form select {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--target-desktop);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-control);
+  color: var(--color-ink);
+  background: var(--color-surface);
+  font: inherit;
+}
+
+.ex-mcp-configuration-form select:focus-visible {
+  outline: 0;
+  border-color: var(--color-brand-strong);
+  box-shadow: var(--focus-subtle-ring);
+}
+
+.ex-field-error,
+.ex-mcp-error {
+  color: var(--color-danger);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.ex-mcp-error {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.ex-mcp-error code,
+.ex-connector-message code,
+.ex-mcp-tool-facts code {
+  font-family: var(--font-mono);
+}
+
+.ex-connector-message code {
+  display: block;
+  margin-top: var(--space-1);
+}
+
+.ex-mcp-endpoint {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+}
+
+.ex-mcp-tool-facts {
+  margin-top: var(--space-2);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  color: var(--color-ink-muted);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.ex-mcp-tool-facts ul {
+  flex-basis: 100%;
+  margin: 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+}
+
+.ex-mcp-server-row .ex-connector-actions {
+  margin-top: var(--space-3);
+}
+
+.ex-mcp-oauth-row {
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-card);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  color: var(--color-ink-muted);
+  background: var(--color-raised);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.ex-mcp-oauth-row .ex-connector-actions {
+  flex-basis: 100%;
+  margin-top: var(--space-1);
+}
+
+.ex-channel-secret-note,
+.ex-channel-configuration-actions,
+.ex-channel-instance-status {
+  grid-column: 1 / -1;
+}
+
+.ex-channel-secret-note {
+  margin: 0;
+  color: var(--color-ink-subtle);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.ex-channel-configuration-actions,
+.ex-channel-instance-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.ex-channel-instance-status {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-rule);
+  color: var(--color-ink-muted);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
 .ex-connector-body > .ex-connector-unavailable {
   color: var(--color-ink-muted);
 }

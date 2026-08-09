@@ -66,6 +66,7 @@ class ExtensionSource(StrEnum):
     ADMINISTRATOR = "administrator"
     LOCAL_BUNDLE = "local_bundle"
     LEGACY_IMPORT = "legacy_import"
+    USER_CONFIGURATION = "user_configuration"
 
 
 class ExtensionTrust(StrEnum):
@@ -73,6 +74,7 @@ class ExtensionTrust(StrEnum):
     ADMINISTRATOR = "administrator"
     VERIFIED_PUBLISHER = "verified_publisher"
     LOCAL_UNTRUSTED = "local_untrusted"
+    USER_CONFIGURED = "user_configured"
 
 
 class RuntimeBoundary(StrEnum):
@@ -128,6 +130,7 @@ class ExtensionSignature:
             "core-slot-sha256",
             "local-content-sha256",
             "migration-record-sha256",
+            "user-mcp-config-sha256",
         }:
             raise ExtensionManifestError("unsupported extension signature algorithm")
         if not _SIGNATURE_KEY_ID.fullmatch(self.key_id):
@@ -368,6 +371,10 @@ class ExtensionManifest:
             ExtensionSource.ADMINISTRATOR: (ExtensionTrust.ADMINISTRATOR, "ed25519"),
             ExtensionSource.SIGNED_RELEASE: (ExtensionTrust.VERIFIED_PUBLISHER, "ed25519"),
             ExtensionSource.CAPABILITY_PACK: (ExtensionTrust.VERIFIED_PUBLISHER, "ed25519"),
+            ExtensionSource.USER_CONFIGURATION: (
+                ExtensionTrust.USER_CONFIGURED,
+                "user-mcp-config-sha256",
+            ),
         }
         expected_trust, expected_algorithm = mapping[self.source]
         if self.trust is not expected_trust or self.signature.algorithm != expected_algorithm:
@@ -578,6 +585,35 @@ def verify_core_extension(
         raise ExtensionVerificationError("Core extension provenance is invalid")
     if manifest.signature.value != manifest.artifact_sha256:
         raise ExtensionVerificationError("Core extension is not bound to its slot declaration digest")
+    assert_compatible(
+        manifest,
+        runtime_api_version=runtime_api_version,
+        platform=platform,
+        architecture=architecture,
+    )
+    return VerifiedExtensionManifest._verified(manifest)
+
+
+def verify_user_configured_mcp(
+    manifest: ExtensionManifest,
+    *,
+    runtime_api_version: str,
+    platform: str,
+    architecture: str,
+) -> VerifiedExtensionManifest:
+    """Bind one locally authorized HTTPS MCP configuration, never executable code."""
+
+    if not (
+        manifest.source is ExtensionSource.USER_CONFIGURATION
+        and manifest.trust is ExtensionTrust.USER_CONFIGURED
+        and manifest.kind is ExtensionKind.MCP_SERVER
+        and manifest.runtime_boundary is RuntimeBoundary.MANAGED_ADAPTER
+        and manifest.transport is ExtensionTransport.STREAMABLE_HTTP
+        and manifest.signature.algorithm == "user-mcp-config-sha256"
+        and manifest.signature.key_id == "user-mcp-config-v1"
+        and manifest.signature.value == manifest.artifact_sha256
+    ):
+        raise ExtensionVerificationError("user MCP configuration provenance is invalid")
     assert_compatible(
         manifest,
         runtime_api_version=runtime_api_version,
@@ -816,5 +852,6 @@ __all__ = [
     "verify_extension_manifest",
     "verify_legacy_declarative_skill",
     "verify_local_bundle_skill",
+    "verify_user_configured_mcp",
     "version_satisfies",
 ]

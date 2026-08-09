@@ -46,12 +46,16 @@ from ecorex.capabilities import (
 )
 from ecorex.capabilities.planner import availability_reasons
 from ecorex.connectors import (
+    ChannelCredentialOwner,
+    ChannelSelfService,
     ConnectorAuthKind,
     ConnectorComposition,
     ConnectorError,
     InMemoryCredentialVault,
     RejectingCredentialVault,
     build_connector_composition,
+    channel_audit_outbox_event,
+    create_channel_self_service_router,
 )
 from ecorex.gateway import (
     GatewayAccountUsageProjection,
@@ -61,6 +65,10 @@ from ecorex.gateway import (
 from ecorex.ids import is_id
 from ecorex.extensions.api import register_extension_routes
 from ecorex.extensions.mcp_oauth import MCPOAuthService, register_mcp_oauth_routes
+from ecorex.extensions.user_mcp import (
+    UserMCPService,
+    create_user_mcp_router,
+)
 from ecorex.extensions.local_bundle import LocalSkillBundleStore
 from ecorex.extensions.repository import SQLiteExtensionRepository
 from ecorex.extensions.service import ExtensionService
@@ -330,6 +338,9 @@ class RuntimeSettings:
     update_drain_timeout_seconds: float = 120.0
     update_drain_poll_seconds: float = 0.05
     connector_adapters: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    channel_lifecycle_adapters: Mapping[str, Any] = field(
+        default_factory=dict, repr=False
+    )
     close_connector_adapters_on_shutdown: bool = True
     connector_vault: Any | None = field(default=None, repr=False)
     connector_oauth_return_uri: str | None = None
@@ -1562,11 +1573,28 @@ def create_app(
         initialize=startup_convergence_allowed,
         execution_gate=runtime_execution_gate,
     )
+    managed_organization_id = (
+        startup_data_scope.organization_id if startup_data_scope is not None else None
+    )
+    user_mcp_service = UserMCPService(
+        Path(settings.database_path).expanduser().resolve().with_name("user-mcp-v1.db"),
+        account_id=settings.account_id,
+        organization_id=managed_organization_id,
+        vault=connector_vault,
+        runtime_api_version="1.0.0",
+        platform=settings.platform,
+        architecture=settings.architecture,
+        reload_requester=settings.session_reload_requester,
+        initialize=startup_convergence_allowed,
+    )
+    effective_mcp_bindings = (
+        tuple(settings.mcp_runtime_bindings) + user_mcp_service.runtime_bindings()
+    )
     mcp_oauth_registrations = tuple(
         binding.oauth_registration
         for binding in settings.mcp_runtime_bindings
         if getattr(binding, "oauth_registration", None) is not None
-    )
+    ) + user_mcp_service.oauth_registrations()
     mcp_oauth_service = (
         MCPOAuthService(
             mcp_oauth_registrations,
@@ -1579,6 +1607,23 @@ def create_app(
         else None
     )
     connector_registry = connector_composition.service.registry
+    channel_self_service = ChannelSelfService(
+        owner=ChannelCredentialOwner(
+            account_id=settings.account_id,
+            organization_id=managed_organization_id or "personal-local",
+        ),
+        vault=connector_vault,
+        adapters=settings.channel_lifecycle_adapters,
+        audit_sink=lambda event: connector_event_sink.publish(
+            channel_audit_outbox_event(event)
+        ),
+        oauth_available=(
+            frozenset({"feishu"})
+            if connector_registry.has_adapter("feishu")
+            else frozenset()
+        ),
+        stop_timeout_seconds=settings.lifecycle_shutdown_seconds,
+    )
     connector_catalog = connector_composition.service.catalog()
     extension_governance_enabled = settings.extension_service is not None
     extension_service = settings.extension_service or ExtensionService(
@@ -1869,9 +1914,10 @@ def create_app(
         ),
         extension_service=extension_service,
         extension_governance_enabled=extension_governance_enabled,
-        mcp_runtime_bindings=tuple(settings.mcp_runtime_bindings),
+        mcp_runtime_bindings=effective_mcp_bindings,
         mcp_oauth_service=mcp_oauth_service,
         tenant_id=settings.account_id,
+        mcp_tenant_id=user_mcp_service.tenant_namespace,
         enforce_admin_tool_denies=settings.enforce_admin_tool_denies,
         persist_startup_snapshots=startup_convergence_allowed,
     )
@@ -1894,6 +1940,8 @@ def create_app(
     app.state.office_skill_backend = office_skill_backend
     app.state.mcp_client_supervisor = composition.mcp_supervisor
     app.state.mcp_oauth_service = mcp_oauth_service
+    app.state.user_mcp_service = user_mcp_service
+    app.state.channel_self_service = channel_self_service
     app.state.permission_authority = permission_authority
     app.state.extension_service = extension_service
     app.state.managed_session_service = managed_session
@@ -1910,14 +1958,14 @@ def create_app(
     app.state.migration_quarantine_service = migration_quarantine_service
     app.include_router(create_migration_quarantine_router(migration_quarantine_service))
     register_extension_routes(app, extension_service)
+    app.include_router(
+        create_user_mcp_router(user_mcp_service, oauth_service=mcp_oauth_service)
+    )
     if mcp_oauth_service is not None:
         register_mcp_oauth_routes(
             app,
             mcp_oauth_service,
-            tenant_id=(
-                "tenant_"
-                + hashlib.sha256(settings.account_id.encode("utf-8")).hexdigest()
-            ),
+            tenant_id=user_mcp_service.tenant_namespace,
         )
 
     @app.get("/api/v1/capability-mentions")
@@ -2149,6 +2197,9 @@ def create_app(
     )
     app.state.capability_pack_service_lifecycles = capability_pack_service_lifecycles
     app.include_router(connector_composition.router, prefix="/api/v1")
+    app.include_router(
+        create_channel_self_service_router(channel_self_service), prefix="/api/v1"
+    )
     artifact_publisher = RuntimeArtifactEventPublisher(
         kernel.events,
         account_id=settings.account_id,
@@ -2663,6 +2714,7 @@ def create_app(
         (1, "agent_worker", worker_supervisor),
         (1, "mcp", composition.mcp_supervisor),
         (1, "mcp_oauth", mcp_oauth_service),
+        (4, "channel_self_service", channel_self_service),
         (4, "model_gateway", gateway_lifecycle),
         (4, "image_gateway", image_client_lifecycle),
         (1, "retouch_worker", retouch_supervisor),
@@ -2751,6 +2803,7 @@ def create_app(
                                     worker_supervisor,
                                     retouch_supervisor,
                                     share_supervisor,
+                                    channel_self_service,
                                 )
                             )
                             and not managed_session_ready
@@ -2841,6 +2894,7 @@ def create_app(
             or path.startswith("/api/v1/update/")
             or path.startswith("/api/v1/connectors/")
             or path.startswith("/api/v1/mcp/oauth/")
+            or path.startswith("/api/v1/mcp/servers")
             or path == "/api/v1/shares"
             or path.startswith("/api/v1/shares/")
             or re.fullmatch(
