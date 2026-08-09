@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -38,6 +39,49 @@ def test_manual_webui_builder_pins_and_rechecks_base_package(
         match="manual_webui_base_windows_invalid",
     ):
         builder["_base_package"](package, "windows")
+
+
+def test_manual_webui_builder_preserves_predecessor_release_trust(
+    tmp_path: Path,
+) -> None:
+    builder = _builder()
+    public = bytes(range(32))
+    key_id = f"release-{hashlib.sha256(public).hexdigest()[:20]}"
+    trust = tmp_path / "predecessor.json"
+    trust.write_text(
+        json.dumps(
+            {
+                "schema": builder["PREDECESSOR_TRUST_SCHEMA"],
+                "version": "2.0.0",
+                "release_id": "release-stable-" + "a" * 24,
+                "build_digest": "b" * 64,
+                "signing_key_id": key_id,
+                "release_public_keys": {
+                    key_id: base64.b64encode(public).decode("ascii")
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    keys, identity = builder["_load_predecessor_trust"](trust)
+
+    assert tuple(keys) == (key_id,)
+    assert identity == {
+        "version": "2.0.0",
+        "release_id": "release-stable-" + "a" * 24,
+        "build_digest": "b" * 64,
+        "signing_key_id": key_id,
+    }
+
+    value = json.loads(trust.read_text(encoding="utf-8"))
+    value["release_public_keys"][key_id] = value["release_public_keys"][key_id][:-2] + "9="
+    trust.write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(
+        builder["ManualWebUIBuildError"],
+        match="manual_webui_predecessor_trust_invalid",
+    ):
+        builder["_load_predecessor_trust"](trust)
 
 
 def test_manual_webui_runtime_config_is_canonical_and_rebound(

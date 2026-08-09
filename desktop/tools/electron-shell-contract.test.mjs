@@ -140,6 +140,60 @@ test("loopback owner proof never discloses its secret to an untrusted listener",
   }
 });
 
+test("packaged desktop installs a different signed Runtime release before launch", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-current-"));
+  const releaseDir = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-seed-"));
+  const slotId = "r-current";
+  const identity = {
+    release_id: "release-stable-" + "a".repeat(24),
+    version: "2.0.1",
+    build_digest: "b".repeat(64),
+  };
+  try {
+    const pythonPath = process.platform === "win32"
+      ? path.join(dataDir, "slots", slotId, "payload", "bin", "pack-python", "python.exe")
+      : path.join(dataDir, "slots", slotId, "payload", "bin", "pack-python", "bin", "python3");
+    await mkdir(path.dirname(pythonPath), { recursive: true });
+    await writeFile(pythonPath, "runtime");
+    await writeFile(path.join(dataDir, "slot-pointers.json"), JSON.stringify({
+      current: slotId,
+      known_good: [slotId],
+    }));
+    await writeFile(path.join(dataDir, "slots", slotId, ".slot.json"), JSON.stringify(identity));
+    await writeFile(path.join(releaseDir, "release-manifest.json"), JSON.stringify(identity));
+    assert.equal(backendContract.installedReleaseMatches(dataDir, releaseDir), true);
+
+    await writeFile(path.join(dataDir, "slot-pointers.json"), JSON.stringify({
+      current: slotId,
+      previous: null,
+      known_good: [slotId],
+      unexpected: true,
+    }));
+    assert.equal(backendContract.installedReleaseMatches(dataDir, releaseDir), false);
+    await writeFile(path.join(dataDir, "slot-pointers.json"), JSON.stringify({
+      current: slotId,
+      previous: null,
+    }));
+    assert.equal(backendContract.installedReleaseMatches(dataDir, releaseDir), false);
+    await writeFile(path.join(dataDir, "slot-pointers.json"), JSON.stringify({
+      current: slotId,
+      previous: null,
+      known_good: [slotId],
+    }));
+
+    await writeFile(path.join(releaseDir, "release-manifest.json"), JSON.stringify({
+      ...identity,
+      version: "2.0.2",
+    }));
+    assert.equal(backendContract.installedReleaseMatches(dataDir, releaseDir), false);
+  } finally {
+    await Promise.all([
+      rm(dataDir, { recursive: true, force: true }),
+      rm(releaseDir, { recursive: true, force: true }),
+    ]);
+  }
+});
+
 test("mac metadata parsing only offers newer stable releases", () => {
   assert.equal(updateContract.parseUpdateVersion("version: 2.0.1\nfiles: []\n"), "2.0.1");
   const digest = Buffer.alloc(64, 7).toString("base64");

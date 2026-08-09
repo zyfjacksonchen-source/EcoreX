@@ -87,6 +87,7 @@ MAX_EXPANDED = 2 * 1024 * 1024 * 1024
 WINDOWS_PACKAGE = f"e-Mate_{__version__}-runtime-windows-x64.zip"
 MACOS_PACKAGE = f"e-Mate_{__version__}-runtime-macos-universal.zip"
 RECEIPT_SCHEMA = "emate.desktop-runtime-build-receipt.v2"
+PREDECESSOR_TRUST_SCHEMA = "emate.desktop-predecessor-trust.v1"
 PURE_RUNTIME_OVERLAYS = {
     "charset-normalizer": ("charset_normalizer", "3.4.9"),
     "lark-channel-sdk": ("lark_channel", "1.2.0"),
@@ -118,6 +119,75 @@ def _canonical_json(value: object) -> bytes:
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         + "\n"
     ).encode("utf-8")
+
+
+def _load_predecessor_trust(path: Path) -> tuple[dict[str, str], dict[str, str]]:
+    try:
+        absolute = path.absolute()
+        resolved = absolute.resolve(strict=True)
+        metadata = absolute.lstat()
+        value = json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        _fail("manual_webui_predecessor_trust_invalid")
+    required = {
+        "schema",
+        "version",
+        "release_id",
+        "build_digest",
+        "signing_key_id",
+        "release_public_keys",
+    }
+    if (
+        resolved != absolute
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_size < 1
+        or metadata.st_size > 32 * 1024
+        or not isinstance(value, dict)
+        or set(value) != required
+    ):
+        _fail("manual_webui_predecessor_trust_invalid")
+    try:
+        predecessor_sequence = stable_release_sequence(value["version"])
+        current_sequence = stable_release_sequence(__version__)
+    except (TypeError, ValueError):
+        _fail("manual_webui_predecessor_trust_invalid")
+    if (
+        value["schema"] != PREDECESSOR_TRUST_SCHEMA
+        or not isinstance(value["version"], str)
+        or not is_stable_release_version(value["version"])
+        or predecessor_sequence >= current_sequence
+        or not isinstance(value["release_id"], str)
+        or not re.fullmatch(r"release-stable-[0-9a-f]{24}", value["release_id"])
+        or not isinstance(value["build_digest"], str)
+        or not re.fullmatch(r"[0-9a-f]{64}", value["build_digest"])
+        or not isinstance(value["signing_key_id"], str)
+        or not isinstance(value["release_public_keys"], dict)
+        or not 1 <= len(value["release_public_keys"]) <= 8
+    ):
+        _fail("manual_webui_predecessor_trust_invalid")
+    keys: dict[str, str] = {}
+    for key_id, encoded in value["release_public_keys"].items():
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except (TypeError, ValueError):
+            _fail("manual_webui_predecessor_trust_invalid")
+        if (
+            not isinstance(key_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", key_id)
+            or len(raw) != 32
+            or base64.b64encode(raw).decode("ascii") != encoded
+            or not key_id.endswith(hashlib.sha256(raw).hexdigest()[:20])
+        ):
+            _fail("manual_webui_predecessor_trust_invalid")
+        keys[key_id] = encoded
+    if value["signing_key_id"] not in keys:
+        _fail("manual_webui_predecessor_trust_invalid")
+    return keys, {
+        "version": value["version"],
+        "release_id": value["release_id"],
+        "build_digest": value["build_digest"],
+        "signing_key_id": value["signing_key_id"],
+    }
 
 
 def _run(
@@ -1089,10 +1159,18 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             if existing_keys and candidate != existing_keys:
                 _fail("manual_webui_base_trust_mismatch")
             existing_keys = candidate
-        release_keys = {
-            **existing_keys,
-            key_id: base64.b64encode(public).decode("ascii"),
-        }
+        predecessor_keys, predecessor = _load_predecessor_trust(
+            args.predecessor_trust
+        )
+        release_keys = dict(existing_keys)
+        for predecessor_key_id, encoded in predecessor_keys.items():
+            current = release_keys.get(predecessor_key_id)
+            if current is not None and current != encoded:
+                _fail("manual_webui_predecessor_trust_conflict")
+            release_keys[predecessor_key_id] = encoded
+        release_keys[key_id] = base64.b64encode(public).decode("ascii")
+        if len(release_keys) > 8:
+            _fail("manual_webui_release_trust_too_large")
         stages = _prepare_stages(
             source,
             base_artifacts,
@@ -1158,6 +1236,10 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                     for role, value in BASE_PACKAGES.items()
                 },
             },
+            "predecessor": {
+                **predecessor,
+                "trusted_key_ids": sorted(predecessor_keys),
+            },
             "signing": {
                 "inner_integrity": "ed25519",
                 "key_id": key_id,
@@ -1186,6 +1268,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--web-dist", required=True, type=Path)
     parser.add_argument("--base-windows", required=True, type=Path)
     parser.add_argument("--base-macos", required=True, type=Path)
+    parser.add_argument("--predecessor-trust", required=True, type=Path)
     parser.add_argument("--go", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--generated-at")

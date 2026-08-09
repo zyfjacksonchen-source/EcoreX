@@ -2210,6 +2210,21 @@ TypeScript / runtime contracts：passed
 新签名三平台候选与真实 Computer Use：pending CI rebuild
 ```
 
+## 2026-08-10 补充 — 2.0.1 保留 2.0.0 槽位验证公钥
+
+- 精确 `711721e` 候选在全新安装根可启动，但真实 2.0.0 数据根会拒绝旧槽位，随后本地发布
+  也在切换前失败。旧槽位清单由 2.0.0 的
+  `ecorex-webui-release-cfb9b141bd87235444ca` 签名；2.0.1 Bootstrap 此前只继承 0.3.2
+  基线公钥并加入本次临时公钥，遗漏了直接前驱公钥。
+- 构建现从受版本控制的前驱信任记录合并 2.0.0 签名公钥；记录绑定前驱版本、release ID、
+  build digest、签名 key ID 和公钥哈希命名，冲突、篡改、未来版本或超过 Bootstrap 八把公钥
+  上限均失败关闭；公钥 Base64 还必须是 Bootstrap 接受的规范编码。该变更只修复
+  2.0.0→2.0.1 验证链，不删除旧槽位、不绕过签名、不改 Runtime Core。
+- 桌面壳只在已安装槽位的 release ID、版本和 build digest 与安装包内签名种子完全一致时走
+  `--launch-installed`，并复用 Bootstrap 的 `known_good`、安全槽位 ID 与 Python 常规文件门禁；
+  身份不同或指针损坏则先走 `--local-release` 完成验证升级。同一版本后续启动仍直接启动
+  已安装槽位，不会每次复制约 800 MiB 的 Runtime。
+
 ## 2026-08-10 补充 — 任务详情冷加载交互与通道状态收敛
 
 - 真实 Browser 对抗验收复现：任务更多菜单首次冷加载检查/重跑弹窗后，菜单与模态框交接会让

@@ -1,0 +1,10 @@
+{
+  "build_digest": "36d240b2ceae5d4b55f33dc8e5e30b7f3688a442106f2c723281992410a316f8",
+  "release_id": "release-stable-36d240b2ceae5d4b55f33dc8",
+  "release_public_keys": {
+    "ecorex-webui-release-cfb9b141bd87235444ca": "bXoHp+C9D1I6amv2yfM8BN+qpzztXHJCvi9VOyXJ/fA="
+  },
+  "schema": "emate.desktop-predecessor-trust.v1",
+  "signing_key_id": "ecorex-webui-release-cfb9b141bd87235444ca",
+  "version": "2.0.0"
+}

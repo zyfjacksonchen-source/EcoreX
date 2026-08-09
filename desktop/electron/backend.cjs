@@ -34,6 +34,63 @@ function installedSlotExists(dataDir) {
   }
 }
 
+function installedReleaseMatches(dataDir, releaseDir) {
+  try {
+    const safeId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+    const pointerPath = path.join(dataDir, "slot-pointers.json");
+    const pointerMetadata = fs.lstatSync(pointerPath);
+    const manifestPath = path.join(releaseDir, "release-manifest.json");
+    const manifestMetadata = fs.lstatSync(manifestPath);
+    if (
+      !pointerMetadata.isFile() || pointerMetadata.isSymbolicLink() || pointerMetadata.size > 16 * 1024
+      || !manifestMetadata.isFile() || manifestMetadata.isSymbolicLink() || manifestMetadata.size > 1024 * 1024
+    ) return false;
+    const pointers = JSON.parse(fs.readFileSync(pointerPath, "utf8"));
+    if (
+      !pointers || typeof pointers !== "object" || Array.isArray(pointers)
+      || Object.keys(pointers).some((key) => !["current", "previous", "known_good"].includes(key))
+      || typeof pointers.current !== "string"
+      || !safeId.test(pointers.current)
+      || !Array.isArray(pointers.known_good)
+      || pointers.known_good.length < 1
+      || pointers.known_good.length > 3
+      || new Set(pointers.known_good).size !== pointers.known_good.length
+      || pointers.known_good.some((slotId) => typeof slotId !== "string" || !safeId.test(slotId))
+      || !pointers.known_good.includes(pointers.current)
+      || (
+        pointers.previous !== undefined
+        && pointers.previous !== null
+        && (typeof pointers.previous !== "string" || !safeId.test(pointers.previous))
+      )
+    ) return false;
+    const slotPath = path.join(dataDir, "slots", pointers.current, ".slot.json");
+    const pythonPath = process.platform === "win32"
+      ? path.join(dataDir, "slots", pointers.current, "payload", "bin", "pack-python", "python.exe")
+      : path.join(dataDir, "slots", pointers.current, "payload", "bin", "pack-python", "bin", "python3");
+    const slotMetadata = fs.lstatSync(slotPath);
+    const pythonMetadata = fs.lstatSync(pythonPath);
+    if (
+      !slotMetadata.isFile() || slotMetadata.isSymbolicLink() || slotMetadata.size > 64 * 1024
+      || !pythonMetadata.isFile() || pythonMetadata.isSymbolicLink() || pythonMetadata.size < 1
+    ) return false;
+    const slot = JSON.parse(fs.readFileSync(slotPath, "utf8"));
+    const release = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    return (
+      typeof release.release_id === "string"
+      && /^release-stable-[0-9a-f]{24}$/.test(release.release_id)
+      && typeof release.version === "string"
+      && /^[0-9]+\.[0-9]+\.[0-9]+$/.test(release.version)
+      && typeof release.build_digest === "string"
+      && /^[0-9a-f]{64}$/.test(release.build_digest)
+      && slot.release_id === release.release_id
+      && slot.version === release.version
+      && slot.build_digest === release.build_digest
+    );
+  } catch {
+    return false;
+  }
+}
+
 function runtimeOwnerNonce(dataDir) {
   try {
     const receiptPath = path.join(dataDir, "bootstrap", "runtime-owner.json");
@@ -128,13 +185,13 @@ class BackendManager extends EventEmitter {
     if (this.packaged) {
       command = packagedBackendPath(this.resourcesPath);
       if (!command) throw new Error("The packaged e-Mate Bootstrap is missing.");
-      if (installedSlotExists(this.dataDir)) {
+      const releaseDir = path.join(this.resourcesPath, "runtime", "release");
+      if (!fs.existsSync(path.join(releaseDir, "release-manifest.json"))) {
+        throw new Error("The packaged e-Mate release seed is missing.");
+      }
+      if (installedReleaseMatches(this.dataDir, releaseDir)) {
         args = ["--launch-installed", "--install-root", this.dataDir, "--no-open"];
       } else {
-        const releaseDir = path.join(this.resourcesPath, "runtime", "release");
-        if (!fs.existsSync(path.join(releaseDir, "release-manifest.json"))) {
-          throw new Error("The packaged e-Mate release seed is missing.");
-        }
         args = ["--local-release", releaseDir, "--install-root", this.dataDir, "--no-open"];
       }
       cwd = this.dataDir;
@@ -224,6 +281,7 @@ class BackendManager extends EventEmitter {
 module.exports = {
   BackendManager,
   DEFAULT_RUNTIME_PORT,
+  installedReleaseMatches,
   installedSlotExists,
   packagedBackendPath,
   runtimeOwnerNonce,

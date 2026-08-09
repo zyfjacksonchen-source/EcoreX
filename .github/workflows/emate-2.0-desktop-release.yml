@@ -109,6 +109,7 @@ jobs:
             --web-dist "$GITHUB_WORKSPACE/desktop/dist" \
             --base-windows "$GITHUB_WORKSPACE/.runtime/base/EcoreX_0.3.2-webui-windows-x64.zip" \
             --base-macos "$GITHUB_WORKSPACE/.runtime/base/EcoreX_0.3.2-webui-macos-universal.zip" \
+            --predecessor-trust "$GITHUB_WORKSPACE/release/v1/desktop-predecessor-trust.json" \
             --go "$(command -v go)" \
             --output "$GITHUB_WORKSPACE/.runtime/seed"
 
