@@ -28,7 +28,7 @@ def test_public_download_site_static_gate_passes() -> None:
     evidence = json.loads(result.stdout)
     assert evidence["status"] == "passed"
     assert evidence["public_pointer"] == "unpublished"
-    assert evidence["hashed_asset_count"] == 5
+    assert evidence["hashed_asset_count"] == 10
 
 
 def test_public_download_site_uses_real_product_assets_and_dynamic_release_data() -> None:
@@ -42,7 +42,12 @@ def test_public_download_site_uses_real_product_assets_and_dynamic_release_data(
     assert "从自己干到通过agent快速落地想法。" in html
     assert "企业智能体桌面工作区" in html
     assert "emate-logo.e0bf52b1480f.png" in html
-    assert "emate-desktop-workspace.622f3434f88c.png" in html
+    assert "emate-desktop-workspace.622f3434f88c.jpg" in html
+    assert "emate-download-robot.9fbe832b9873.png" in html
+    assert "e-mate-hero-decor.d7f99a88447b.png" in html
+    assert "emate-download-icon.5014add964e1.svg" in html
+    assert "emate-platform-apple.0bed6ae6a1b9.png" in html
+    assert "emate-platform-windows.dd86c8094b5a.png" in html
     assert "创意中心" not in html
     assert 'href="/ecorex-agent/admin/"' in html
     assert 'href="/admin/"' not in html
@@ -51,6 +56,7 @@ def test_public_download_site_uses_real_product_assets_and_dynamic_release_data(
     assert "/e-mate/update/download-index.json" in javascript
     assert "normalizeDownloadIndex" in javascript
     assert "targetFromPlatformSignals" in javascript
+    assert 'label.textContent = "立即下载"' in javascript
     assert "WEBUI_RELEASE" not in javascript
     for version in ("1.0.0", "2.0.0"):
         assert version not in html

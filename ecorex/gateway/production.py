@@ -33,6 +33,11 @@ from ecorex.security.provider_tls import (
     validate_provider_ca_binding,
 )
 from ecorex.control_plane.management import AdminManagementRepository
+from ecorex.control_plane.device_identity import ManagedAccessTokenAuthority
+from ecorex.control_plane.device_identity_management import (
+    AdminManagementDeviceAccountDirectory,
+)
+from ecorex.control_plane.device_identity_schema import DeviceIdentitySchemaManager
 from ecorex.control_plane.management_schema import AdminManagementSchemaManager
 from ecorex.control_plane.management_models import MANAGED_MODEL_ORIGIN_PRESETS
 from ecorex.control_plane.usage_panel_service import build_account_usage_projection
@@ -805,7 +810,7 @@ class SingleNodeSQLiteResponsesProvider:
         try:
             receipt = GatewaySchemaManager(config.database_path).validate()
             validate_gateway_sqlite_health(config.database_path, full=True)
-            self._authenticator(config)
+            self._authenticator(config, secrets)
             provider = self._provider(
                 config, secrets, handoff_authority=SQLiteGatewayStore(config.database_path)
             )
@@ -840,7 +845,7 @@ class SingleNodeSQLiteResponsesProvider:
             # drifted schema fails startup and is never repaired by serve.
             validate_gateway_sqlite_health(config.database_path, full=True)
             store = SQLiteGatewayStore(config.database_path)
-            authenticator = self._authenticator(config)
+            authenticator = self._authenticator(config, secrets)
             provider = self._provider(config, secrets, handoff_authority=store)
             usage_accountant = self._usage_accountant(config, secrets)
             if not isinstance(provider, ProductionResponsesProvider):
@@ -874,7 +879,24 @@ class SingleNodeSQLiteResponsesProvider:
     @staticmethod
     def _authenticator(
         config: GatewayProductionConfig,
+        secrets: GatewaySecretProvider,
     ) -> Ed25519GatewayJWTAuthenticator:
+        access_token_is_current = None
+        if config.admin_management_enabled:
+            database_path = config.admin_management_database_path
+            assert database_path is not None
+            AdminManagementSchemaManager(database_path).validate()
+            DeviceIdentitySchemaManager(database_path).validate()
+            repository = AdminManagementRepository(
+                database_path,
+                encryption_key=_secret_bytes(
+                    secrets.read("model-config-encryption-key"), exact_length=32
+                ),
+            )
+            access_token_is_current = ManagedAccessTokenAuthority(
+                database_path,
+                AdminManagementDeviceAccountDirectory(repository),
+            ).is_current
         return Ed25519GatewayJWTAuthenticator(
             public_keys=parse_ed25519_public_keyring(
                 config.auth_public_keys_json
@@ -884,6 +906,7 @@ class SingleNodeSQLiteResponsesProvider:
             service_model_ids=(
                 None if config.admin_management_enabled else config.allowed_model_ids
             ),
+            access_token_is_current=access_token_is_current,
             max_token_lifetime_seconds=config.auth_max_token_lifetime_seconds,
             clock_skew_seconds=config.auth_clock_skew_seconds,
         )

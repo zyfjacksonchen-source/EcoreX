@@ -1031,7 +1031,10 @@ class _AdminManagementImageUsageProvider:
                 provider_created_at=job.created_at.isoformat(),
                 requested_model_id=requested_model_id,
                 provider_reported_model_id=usage.model_id,
+                actual_model_id=result.actual_model_id,
                 actual_provider_id=usage.provider,
+                fallback_from_model_id=result.fallback_from_model_id,
+                fallback_used=result.fallback_used,
                 job_status=job.status.value,
                 result_status=result.state.value,
             )

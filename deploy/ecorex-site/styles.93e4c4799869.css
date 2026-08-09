@@ -56,16 +56,16 @@ button, a { -webkit-tap-highlight-color: transparent; }
 main { overflow: hidden; }
 .hero {
   display: grid;
-  grid-template-columns: minmax(340px, 0.8fr) minmax(640px, 1.5fr);
+  grid-template-columns: minmax(340px, 0.76fr) minmax(640px, 1.58fr);
   align-items: center;
   gap: clamp(24px, 4vw, 72px);
   width: min(1380px, calc(100% - 64px));
-  min-height: 710px;
+  min-height: 760px;
   margin: 0 auto;
   padding: 44px 0 58px;
 }
 
-.hero-copy { position: relative; z-index: 2; }
+.hero-copy { position: relative; z-index: 4; transform: translateY(-17px); }
 .product-label {
   display: inline-flex;
   align-items: center;
@@ -97,6 +97,7 @@ h1 span { color: var(--orange); }
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 12px;
   min-width: 260px;
   min-height: 78px;
   padding: 0 28px;
@@ -108,11 +109,16 @@ h1 span { color: var(--orange); }
   font-size: 25px;
   font-weight: 780;
 }
+.primary-download img { width: 30px; height: 30px; }
 .primary-download:not(.is-disabled):hover { background: var(--orange-dark); transform: translateY(-2px); }
 .primary-download.is-disabled { cursor: wait; opacity: 0.64; }
-.hero-download small { color: var(--muted); font-size: 13px; }
+.hero-download small { display: none; }
 .platform-switch { display: flex; gap: 14px; margin-top: 26px; }
 .platform-switch button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   min-width: 138px;
   min-height: 58px;
   padding: 0 20px;
@@ -124,6 +130,7 @@ h1 span { color: var(--orange); }
   font-size: 17px;
   cursor: pointer;
 }
+.platform-switch img { width: 30px; height: 30px; object-fit: contain; }
 .platform-switch button[aria-pressed="true"] { border: 2px solid var(--orange); color: var(--orange-dark); }
 .primary-download:focus-visible, .platform-switch button:focus-visible, .download-link:focus-visible, .nav-links a:focus-visible {
   outline: 3px solid #2f75b8;
@@ -133,31 +140,36 @@ h1 span { color: var(--orange); }
 .product-stage {
   position: relative;
   min-width: 0;
-  padding: 52px 42px 88px;
-  border-radius: 96px 34px 88px 42px;
-  background: #151515;
-  box-shadow: var(--shadow);
+  min-height: 720px;
 }
+.hero-decoration { position: absolute; z-index: 1; top: -53px; left: -18%; width: 118%; height: auto; pointer-events: none; }
 .desktop-shot {
-  position: relative;
+  position: absolute;
   z-index: 2;
+  top: 62px;
+  left: 6.2%;
+  width: 83.3%;
+  aspect-ratio: 1.38;
   margin: 0;
   overflow: hidden;
   border: 1px solid rgba(52, 37, 26, 0.14);
-  border-radius: 18px;
+  border-radius: 16px;
   background: var(--surface);
   box-shadow: 0 24px 70px rgba(51, 29, 12, 0.22);
 }
-.desktop-shot img { display: block; width: 100%; height: auto; }
+.desktop-shot img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.hero-robot { position: absolute; z-index: 3; right: -0.5%; bottom: -37px; width: min(23.5%, 230px); height: auto; pointer-events: none; filter: drop-shadow(0 18px 20px rgba(66, 32, 12, 0.2)); }
 
 .proof-strip {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: clamp(22px, 4vw, 54px);
-  min-height: 130px;
+  min-height: 160px;
+  margin-top: -48px;
   padding: 24px 32px;
   border-top: 1px solid #f1e7dd;
+  border-radius: 50% 50% 0 0 / 34px 34px 0 0;
   background: var(--surface);
   font-size: clamp(20px, 2vw, 30px);
 }
@@ -209,11 +221,14 @@ h1 span { color: var(--orange); }
   .brand img { width: 154px; }
   .nav-links { gap: 18px; font-size: 14px; }
   .hero { grid-template-columns: 1fr; width: min(100% - 32px, 820px); padding-top: 46px; }
-  .hero-copy { text-align: center; }
+  .hero-copy { text-align: center; transform: none; }
   h1, .hero-lead { margin-right: auto; margin-left: auto; }
   .hero-download { justify-items: center; }
   .platform-switch { justify-content: center; }
-  .product-stage { padding-top: 12px; }
+  .product-stage { min-height: 620px; }
+  .hero-decoration { left: -5%; width: 110%; }
+  .desktop-shot { top: 96px; left: 8%; width: 84%; }
+  .hero-robot { right: 0; bottom: 6px; width: 22%; }
   .feature-grid, .download-grid, .help-grid { grid-template-columns: 1fr; }
 }
 
@@ -230,7 +245,10 @@ h1 span { color: var(--orange); }
   .primary-download { width: 100%; min-width: 0; min-height: 64px; font-size: 21px; }
   .platform-switch { display: grid; grid-template-columns: 1fr 1fr; }
   .platform-switch button { min-width: 0; min-height: 52px; }
-  .product-stage { padding-bottom: 52px; }
+  .product-stage { min-height: 420px; }
+  .hero-decoration { top: 12px; left: -18%; width: 136%; }
+  .desktop-shot { top: 74px; left: 5%; width: 90%; border-radius: 10px; }
+  .hero-robot { right: -2%; bottom: 12px; width: 25%; }
   .proof-strip { flex-wrap: wrap; gap: 10px 18px; min-height: 112px; font-size: 18px; }
   .feature-section, .downloads, .help-section { padding: 64px 0; }
 }

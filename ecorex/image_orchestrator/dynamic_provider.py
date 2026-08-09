@@ -196,6 +196,9 @@ class DynamicManagedImageProvider:
                     billed_units=usage.billed_units,
                 ),
                 error_code=result.error_code,
+                actual_model_id=result.actual_model_id,
+                fallback_from_model_id=result.fallback_from_model_id,
+                fallback_used=result.fallback_used,
             )
         finally:
             await self._release(key, entry)

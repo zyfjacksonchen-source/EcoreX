@@ -178,9 +178,14 @@ class OpenAICompatibleImageProvider:
             fallback_key = "image-fallback-" + hashlib.sha256(
                 idempotency_key.encode("utf-8")
             ).hexdigest()
-            return await self._submit_once(
+            result = await self._submit_once(
                 fallback_job,
                 idempotency_key=fallback_key,
+            )
+            return replace(
+                result,
+                fallback_from_model_id=job.request.model_id,
+                fallback_used=True,
             )
 
     async def _submit_once(
@@ -492,7 +497,9 @@ class OpenAICompatibleImageProvider:
                         raise ProviderUnavailable("image provider is unavailable")
                     if response.status_code < 200 or response.status_code >= 300:
                         error_body = await self._bounded_body(response, _ERROR_BYTES)
-                        if self._model_unavailable(error_body, model_id=model_id):
+                        if response.status_code not in {401, 403} and self._model_unavailable(
+                            error_body, model_id=model_id
+                        ):
                             raise ProviderModelUnavailable(
                                 "image provider model is unavailable"
                             )
@@ -558,6 +565,8 @@ class OpenAICompatibleImageProvider:
             mime_type=mime_type,
             sha256=result.sha256,
             usage=self._usage(job, value.get("usage")),
+            actual_model_id=job.request.model_id,
+            fallback_used=False,
         )
 
     def _usage(self, job: ImageJob, value: Any) -> ImageUsage:

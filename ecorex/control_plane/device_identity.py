@@ -197,6 +197,61 @@ def _clock() -> datetime:
     return datetime.now(UTC)
 
 
+class ManagedAccessTokenAuthority:
+    """Read the durable revocation/auth-epoch fact for an issued access JWT."""
+
+    def __init__(
+        self,
+        database_path: str | Path,
+        account_directory: DeviceAccountDirectory,
+    ) -> None:
+        self.path = Path(database_path).resolve()
+        self.account_directory = account_directory
+
+    def is_current(self, account_id: str, token_id: str) -> bool | None:
+        """Return None for non-device tokens, otherwise the current lease fact."""
+
+        connection = sqlite3.connect(self.path, timeout=30)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
+        try:
+            grant = connection.execute(
+                "SELECT grants.lease_id,flows.account_id FROM device_identity_grants grants "
+                "JOIN device_identity_flows flows USING(flow_id) WHERE grants.access_jti=? "
+                "UNION ALL SELECT lease_id,account_id FROM device_identity_refresh_grants "
+                "WHERE access_jti=?",
+                (token_id, token_id),
+            ).fetchone()
+            if grant is None:
+                return None
+            authority = connection.execute(
+                "SELECT account_id,auth_epoch FROM device_identity_grant_authority "
+                "WHERE lease_id=?",
+                (grant["lease_id"],),
+            ).fetchone()
+            revoked = (
+                connection.execute(
+                    "SELECT 1 FROM device_identity_revocations WHERE lease_id=?",
+                    (grant["lease_id"],),
+                ).fetchone()
+                is not None
+            )
+        finally:
+            connection.close()
+        if (
+            grant["account_id"] != account_id
+            or authority is None
+            or authority["account_id"] != account_id
+            or revoked
+        ):
+            return False
+        try:
+            current = self.account_directory.resolve(account_id)
+        except DeviceIdentityError:
+            return False
+        return int(authority["auth_epoch"]) == current.auth_epoch
+
+
 class ManagedDeviceIdentityBroker:
     """Single-node durable broker behind the strict Runtime HTTPS client."""
 
@@ -242,6 +297,9 @@ class ManagedDeviceIdentityBroker:
             DeviceIdentitySchemaManager(self.path).migrate()
         else:
             DeviceIdentitySchemaManager(self.path).validate()
+        self.access_token_authority = ManagedAccessTokenAuthority(
+            self.path, self.account_directory
+        )
 
     def begin(self, *, client_id: str, idempotency_key: str) -> DeviceChallenge:
         self._client(client_id)
@@ -904,37 +962,7 @@ class ManagedDeviceIdentityBroker:
     ) -> bool | None:
         """Return None for non-device tokens, otherwise the current lease fact."""
 
-        connection = self._connect()
-        try:
-            grant = connection.execute(
-                "SELECT grants.lease_id,flows.account_id FROM device_identity_grants grants "
-                "JOIN device_identity_flows flows USING(flow_id) WHERE grants.access_jti=? "
-                "UNION ALL SELECT lease_id,account_id FROM device_identity_refresh_grants "
-                "WHERE access_jti=?",
-                (token_id, token_id),
-            ).fetchone()
-            if grant is None:
-                return None
-            authority = connection.execute(
-                "SELECT account_id,auth_epoch FROM device_identity_grant_authority "
-                "WHERE lease_id=?",
-                (grant["lease_id"],),
-            ).fetchone()
-            revoked = self._lease_is_revoked(connection, str(grant["lease_id"]))
-        finally:
-            connection.close()
-        if (
-            grant["account_id"] != account_id
-            or authority is None
-            or authority["account_id"] != account_id
-            or revoked
-        ):
-            return False
-        try:
-            current = self.account_directory.resolve(account_id)
-        except DeviceIdentityError:
-            return False
-        return int(authority["auth_epoch"]) == current.auth_epoch
+        return self.access_token_authority.is_current(account_id, token_id)
 
     def revoke_account_sessions(
         self,
@@ -1546,5 +1574,6 @@ __all__ = [
     "DeviceIdentityUnavailable",
     "DeviceTokenResult",
     "DeviceRevocationResult",
+    "ManagedAccessTokenAuthority",
     "ManagedDeviceIdentityBroker",
 ]

@@ -42,6 +42,7 @@ class Ed25519GatewayJWTAuthenticator:
     issuer: str
     audience: str
     service_model_ids: frozenset[str] | None
+    access_token_is_current: Callable[[str, str], bool | None] | None = None
     max_token_lifetime_seconds: int = 900
     clock_skew_seconds: int = 30
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
@@ -55,6 +56,12 @@ class Ed25519GatewayJWTAuthenticator:
         ):
             raise GatewayAuthenticationConfigurationError(
                 "gateway model policy is invalid"
+            )
+        if self.access_token_is_current is not None and not callable(
+            self.access_token_is_current
+        ):
+            raise GatewayAuthenticationConfigurationError(
+                "gateway token authority is invalid"
             )
         try:
             verifier = Ed25519AccessTokenVerifier(
@@ -73,6 +80,11 @@ class Ed25519GatewayJWTAuthenticator:
 
     def authenticate(self, bearer_token: str) -> GatewayPrincipal:
         claims = self._verifier.verify(bearer_token)
+        if self.access_token_is_current is not None and (
+            claims.token_id is None
+            or self.access_token_is_current(claims.account_id, claims.token_id) is not True
+        ):
+            raise PermissionError("gateway access token is no longer current")
         entitlement = claims.entitlements
         if (
             entitlement.quota_period is None

@@ -142,19 +142,20 @@ function setPlatform(platform) {
 
 function setPrimary(index, target) {
   const link = document.querySelector("[data-primary-download]");
+  const label = link?.querySelector("[data-primary-label]");
   const detail = document.querySelector("[data-primary-detail]");
-  if (!link || !detail) return;
+  if (!link || !label || !detail) return;
   const download = index.downloads.find((item) => item.target === target);
   link.classList.remove("is-disabled");
   link.removeAttribute("aria-disabled");
   if (!download) {
-    link.textContent = "选择下载版本";
+    label.textContent = "选择下载版本";
     link.href = "#download-options";
     link.removeAttribute("download");
     detail.textContent = "请选择与你的电脑匹配的系统和芯片";
     return;
   }
-  link.textContent = "免费下载";
+  label.textContent = "立即下载";
   link.href = download.url;
   link.download = download.file_name;
   detail.textContent = `已为你识别 ${download.label} · ${index.version}`;
@@ -205,7 +206,8 @@ function renderIndex(index, target) {
 
 function renderFailure() {
   const primary = document.querySelector("[data-primary-download]");
-  if (primary) { primary.textContent = "暂时无法下载"; primary.classList.add("is-disabled"); primary.setAttribute("aria-disabled", "true"); }
+  const label = primary?.querySelector("[data-primary-label]");
+  if (primary && label) { label.textContent = "暂时无法下载"; primary.classList.add("is-disabled"); primary.setAttribute("aria-disabled", "true"); }
   const detail = document.querySelector("[data-primary-detail]");
   if (detail) detail.textContent = "发布信息尚未准备好，请稍后刷新";
   const grid = document.querySelector("[data-downloads]");

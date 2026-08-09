@@ -93,19 +93,48 @@ class ProviderResult:
     sha256: str | None = None
     usage: ImageUsage | None = None
     error_code: str | None = None
+    actual_model_id: str | None = None
+    fallback_from_model_id: str | None = None
+    fallback_used: bool | None = None
 
     def __post_init__(self) -> None:
         if self.provider_request_id is not None and not re.fullmatch(
             r"[A-Za-z0-9][A-Za-z0-9._:@/-]{0,511}", self.provider_request_id
         ):
             raise ValueError("provider request identity is invalid")
+        for value in (self.actual_model_id, self.fallback_from_model_id):
+            if value is not None and not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}", value
+            ):
+                raise ValueError("provider model provenance is invalid")
+        if (
+            (self.fallback_used is not None and not isinstance(self.fallback_used, bool))
+            or (self.fallback_from_model_id is not None and self.fallback_used is not True)
+            or (self.fallback_used is not None and self.actual_model_id is None)
+            or (
+                self.fallback_used is True
+                and (
+                    self.fallback_from_model_id is None
+                    or self.fallback_from_model_id == self.actual_model_id
+                )
+            )
+            or (self.fallback_used is False and self.fallback_from_model_id is not None)
+        ):
+            raise ValueError("provider fallback provenance is invalid")
         if self.state is ProviderState.COMPLETED:
             if not isinstance(self.payload, bytes) or not self.payload:
                 raise ValueError("completed provider result requires bytes")
             if self.mime_type is None or self.usage is None:
                 raise ValueError("completed provider result requires MIME and usage")
-        elif self.payload is not None or self.mime_type is not None or self.usage is not None:
-            raise ValueError("non-completed provider result cannot carry image bytes")
+        elif (
+            self.payload is not None
+            or self.mime_type is not None
+            or self.usage is not None
+            or self.actual_model_id is not None
+            or self.fallback_from_model_id is not None
+            or self.fallback_used is not None
+        ):
+            raise ValueError("non-completed provider result cannot carry image facts")
 
 
 @runtime_checkable

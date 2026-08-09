@@ -15,7 +15,7 @@ SITE = ROOT / "deploy" / "ecorex-site"
 HASHED_ASSET = re.compile(
     r"^(?P<stem>[A-Za-z0-9][A-Za-z0-9._-]*)\."
     r"(?P<digest>[0-9a-f]{12})\."
-    r"(?P<suffix>js|css|png|svg|webp|woff2)$"
+    r"(?P<suffix>js|css|jpg|png|svg|webp|woff2)$"
 )
 FORBIDDEN_LEGACY = (
     "install-webui.ps1",
@@ -178,6 +178,7 @@ def main() -> int:
             and '"windows-x64"' in javascript
             and '"macos-arm64"' in javascript
             and '"macos-x64"' in javascript
+            and 'label.textContent = "立即下载"' in javascript
             and "/e-mate/update/download-index.json" in javascript,
             "public download flow must validate the generated desktop index and detect the device",
             errors,

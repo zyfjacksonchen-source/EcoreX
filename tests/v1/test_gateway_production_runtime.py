@@ -15,6 +15,8 @@ import httpx
 import pytest
 
 from ecorex.security import Ed25519AccessTokenVerifier
+from ecorex.control_plane.device_identity_schema import DeviceIdentitySchemaManager
+from ecorex.control_plane.management_schema import AdminManagementSchemaManager
 from ecorex.gateway import (
     Ed25519GatewayJWTAuthenticator,
     GatewayEvent,
@@ -173,6 +175,36 @@ def test_gateway_dynamic_origin_presets_and_handoff_ttl_are_deployment_fixed(
         "gemini_chat",
         "doubao_chat",
     }
+
+
+def test_management_gateway_composes_current_access_token_authority(
+    tmp_path: Path,
+) -> None:
+    _private, keyring, _public = _key()
+    environment = _environment(tmp_path, keyring)
+    database_path = (tmp_path / "control-plane.sqlite3").resolve()
+    AdminManagementSchemaManager(database_path).migrate()
+    DeviceIdentitySchemaManager(database_path).migrate()
+    environment.update(
+        {
+            "ECOREX_GATEWAY_ADMIN_MANAGEMENT_ENABLED": "true",
+            "ECOREX_GATEWAY_ADMIN_MANAGEMENT_DATABASE_PATH": str(database_path),
+            "ECOREX_GATEWAY_MODEL_PROVIDER_ORIGINS_JSON": json.dumps(
+                {"ecorex_chat": "https://gpt.ecorex.invalid"}
+            ),
+            "ECOREX_GATEWAY_MODEL_CONFIG_ENCRYPTION_KEY_B64": base64.b64encode(
+                b"d" * 32
+            ).decode("ascii"),
+        }
+    )
+    config = GatewayProductionConfig.from_environment(environment)
+
+    authenticator = SingleNodeSQLiteResponsesProvider._authenticator(
+        config,
+        EnvironmentGatewaySecretProvider(environment),
+    )
+
+    assert callable(authenticator.access_token_is_current)
 
 
 def test_gateway_request_carries_the_authoritative_chat_model_policy() -> None:

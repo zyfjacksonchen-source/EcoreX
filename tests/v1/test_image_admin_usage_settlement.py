@@ -21,8 +21,18 @@ from ecorex.image_orchestrator.provider import ProviderResult, ProviderState
 class _CompletedProvider:
     provider_id = "managed-image"
 
-    def __init__(self, model_id: str = "gpt-image-2") -> None:
+    def __init__(
+        self,
+        model_id: str = "gpt-image-2",
+        *,
+        actual_model_id: str | None = None,
+        fallback_from_model_id: str | None = None,
+        fallback_used: bool | None = None,
+    ) -> None:
         self.model_id = model_id
+        self.actual_model_id = actual_model_id
+        self.fallback_from_model_id = fallback_from_model_id
+        self.fallback_used = fallback_used
 
     async def submit(self, job, *, idempotency_key):
         return self._result()
@@ -48,6 +58,9 @@ class _CompletedProvider:
             usage=ImageUsage(
                 "managed-image", self.model_id, output_units=1, billed_units=1
             ),
+            actual_model_id=self.actual_model_id,
+            fallback_from_model_id=self.fallback_from_model_id,
+            fallback_used=self.fallback_used,
         )
 
 
@@ -75,7 +88,12 @@ def test_admin_image_usage_settlement_is_exactly_once_across_recovery(tmp_path) 
         actor=actor,
     )
     provider = _AdminManagementImageUsageProvider(
-        _CompletedProvider("gpt-image-2-pro"), repository  # type: ignore[arg-type]
+        _CompletedProvider(
+            "gpt-image-2",
+            actual_model_id="gpt-image-2-pro",
+            fallback_used=False,
+        ),
+        repository,  # type: ignore[arg-type]
     )
     job = SimpleNamespace(
         job_id="imgjob_" + "1" * 32,
@@ -111,11 +129,11 @@ def test_admin_image_usage_settlement_is_exactly_once_across_recovery(tmp_path) 
         1,
         "org-1",
         "gpt-image-2",
+        "gpt-image-2",
         "gpt-image-2-pro",
-        None,
         "managed-image",
         None,
-        None,
+        0,
         "running",
         "completed",
     )
@@ -145,7 +163,13 @@ def test_admin_image_usage_records_reported_model_and_one_fact_per_batch_job(tmp
         actor=actor,
     )
     provider = _AdminManagementImageUsageProvider(
-        _CompletedProvider("gpt-image-2"), repository  # type: ignore[arg-type]
+        _CompletedProvider(
+            "gpt-image-2",
+            actual_model_id="gpt-image-2",
+            fallback_from_model_id="gpt-image-2-pro",
+            fallback_used=True,
+        ),
+        repository,  # type: ignore[arg-type]
     )
     jobs = [
         SimpleNamespace(
@@ -178,7 +202,10 @@ def test_admin_image_usage_records_reported_model_and_one_fact_per_batch_job(tmp
             provider_created_at=jobs[0].created_at.isoformat(),
             requested_model_id="gpt-image-2",
             provider_reported_model_id="gpt-image-2-pro",
+            actual_model_id="gpt-image-2",
             actual_provider_id="managed-image",
+            fallback_from_model_id="gpt-image-2-pro",
+            fallback_used=True,
             job_status="running",
             result_status="completed",
         )
@@ -192,6 +219,20 @@ def test_admin_image_usage_records_reported_model_and_one_fact_per_batch_job(tmp
     finally:
         connection.close()
     assert [tuple(row) for row in rows] == [
-        (jobs[0].job_id, "gpt-image-2", "gpt-image-2", None, None, None),
-        (jobs[1].job_id, "gpt-image-2", "gpt-image-2", None, None, None),
+        (
+            jobs[0].job_id,
+            "gpt-image-2",
+            "gpt-image-2",
+            "gpt-image-2",
+            "gpt-image-2-pro",
+            1,
+        ),
+        (
+            jobs[1].job_id,
+            "gpt-image-2",
+            "gpt-image-2",
+            "gpt-image-2",
+            "gpt-image-2-pro",
+            1,
+        ),
     ]

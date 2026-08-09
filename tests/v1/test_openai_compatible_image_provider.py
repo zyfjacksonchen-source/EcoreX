@@ -169,6 +169,9 @@ def test_generation_uses_fixed_inline_images_route_and_exact_model() -> None:
         assert result.usage is not None
         assert result.usage.input_units == 23
         assert result.usage.output_units == 41
+        assert result.actual_model_id == "gpt-image-2"
+        assert result.fallback_used is False
+        assert result.fallback_from_model_id is None
         await provider.health()
         assert [request.url.path for request in requests] == [
             "/v1/images/generations",
@@ -206,6 +209,9 @@ def test_pro_model_falls_back_once_only_after_definite_model_unavailable() -> No
         assert result.state is ProviderState.COMPLETED
         assert result.usage is not None
         assert result.usage.model_id == "gpt-image-2"
+        assert result.actual_model_id == "gpt-image-2"
+        assert result.fallback_used is True
+        assert result.fallback_from_model_id == "gpt-image-2-pro"
         assert [json.loads(request.content)["model"] for request in requests] == [
             "gpt-image-2-pro",
             "gpt-image-2",
@@ -242,7 +248,37 @@ def test_pro_model_does_not_fallback_after_generic_or_uncertain_failure() -> Non
         await client.aclose()
 
     asyncio.run(scenario(400))
+    asyncio.run(scenario(401))
+    asyncio.run(scenario(403))
     asyncio.run(scenario(503))
+
+
+def test_auth_and_policy_rejections_never_trigger_model_fallback() -> None:
+    async def scenario(status: int) -> None:
+        models: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            models.append(json.loads(request.content)["model"])
+            return httpx.Response(
+                status,
+                json={"error": {"code": "model_not_found"}},
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        provider = _provider(
+            client,
+            allowed_models=frozenset({"gpt-image-2-pro", "gpt-image-2"}),
+        )
+        with pytest.raises(ProviderRejected):
+            await provider.submit(
+                _job(model_id="gpt-image-2-pro"),
+                idempotency_key="provider-idempotency-0001",
+            )
+        assert models == ["gpt-image-2-pro"]
+        await client.aclose()
+
+    asyncio.run(scenario(401))
+    asyncio.run(scenario(403))
 
 
 def test_structured_retouch_reads_cas_and_sends_base_reference_and_mask(

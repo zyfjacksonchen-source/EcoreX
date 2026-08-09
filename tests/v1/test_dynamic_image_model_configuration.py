@@ -21,7 +21,7 @@ from ecorex.image_orchestrator.dynamic_provider import (
     DynamicManagedImageProvider,
 )
 from ecorex.image_orchestrator.cas import ImageContentStore
-from ecorex.image_orchestrator.models import ImageOperation, ImageSubmitRequest
+from ecorex.image_orchestrator.models import ImageOperation, ImageSubmitRequest, ImageUsage
 from ecorex.image_orchestrator.openai_provider import (
     OpenAICompatibleImageProvider,
 )
@@ -213,6 +213,28 @@ class _GatedProvider(_RecordingProvider):
         self.close_calls += 1
         self.closed_while_active = self.active_count != 0
         await super().aclose()
+
+
+class _FallbackProvenanceProvider(_RecordingProvider):
+    async def submit(self, job, *, idempotency_key: str) -> ProviderResult:
+        self.calls.append(
+            (
+                job.request.model_id,
+                self.configuration.api_key,
+                self.configuration.revision,
+            )
+        )
+        return ProviderResult(
+            ProviderState.COMPLETED,
+            payload=b"image",
+            mime_type="image/png",
+            usage=ImageUsage(
+                "upstream-image", "gpt-image-2", output_units=1, billed_units=1
+            ),
+            actual_model_id="gpt-image-2",
+            fallback_from_model_id="gpt-image-2-pro",
+            fallback_used=True,
+        )
 
 
 def test_image_jobs_freeze_tested_revision_and_cache_is_bounded(tmp_path: Path) -> None:
@@ -426,6 +448,61 @@ def test_dynamic_pro_image_revision_allows_only_its_exact_safe_fallback(
         {"gpt-image-2-pro", "gpt-image-2"}
     )
     asyncio.run(provider.aclose())
+
+
+def test_dynamic_provider_preserves_exact_upstream_fallback_provenance(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    _activate_new(
+        repository,
+        local_model_id="gpt-image-2",
+        modality="image_generation",
+        upstream_model_id="gpt-image-2-pro",
+        api_key="sk-image-version-one",
+        request_suffix="image-provenance",
+    )
+    image_database = tmp_path / "image-provenance.db"
+    SQLiteImageSchemaManager(image_database).migrate()
+    service = ImageOrchestrationService(
+        SQLiteImageJobStore(image_database),
+        allowed_models=frozenset({"gpt-image-2"}),
+        model_configuration_resolver=AdminImageModelConfigurationResolver(repository),
+    )
+    job, created = service.submit(
+        "account-1",
+        ImageSubmitRequest(
+            operation=ImageOperation.GENERATE,
+            model_id="gpt-image-2",
+            client_request_id="image-provider-provenance",
+            prompt="Create a provenance-safe office illustration",
+        ),
+    )
+    assert created
+    dynamic = DynamicManagedImageProvider(
+        repository,
+        provider_id="managed-image",
+        origins={"ecorex_image": "https://images.ecorex.example"},
+        timeout_seconds=120,
+        connect_timeout_seconds=5,
+        max_image_bytes=64 * 1024 * 1024,
+        max_connections=8,
+        max_concurrency=4,
+        provider_factory=lambda configuration, _origin: _FallbackProvenanceProvider(
+            configuration
+        ),
+    )
+
+    result = asyncio.run(
+        dynamic.submit(job, idempotency_key="provider-provenance-submit")
+    )
+
+    assert result.usage is not None
+    assert result.usage.model_id == "gpt-image-2"
+    assert result.actual_model_id == "gpt-image-2"
+    assert result.fallback_from_model_id == "gpt-image-2-pro"
+    assert result.fallback_used is True
+    asyncio.run(dynamic.aclose())
 
 
 def test_dynamic_provider_close_drains_in_flight_calls_exactly_once(

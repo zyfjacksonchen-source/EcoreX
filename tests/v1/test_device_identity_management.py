@@ -4,12 +4,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 import sqlite3
 
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import pytest
 
 from ecorex.control_plane.device_identity import (
     DeviceIdentitySecrets,
     DeviceRefreshRequired,
+    ManagedAccessTokenAuthority,
     ManagedDeviceIdentityBroker,
 )
 from ecorex.control_plane.device_identity_management import (
@@ -33,6 +35,7 @@ from ecorex.control_plane.management_models import (
 from ecorex.control_plane.management_schema import AdminManagementSchemaManager
 from ecorex.control_plane.models import ControlPrincipal
 from ecorex.release.signing import Ed25519MemorySigner
+from ecorex.gateway.production_auth import Ed25519GatewayJWTAuthenticator
 
 
 ACTOR = ControlPrincipal(
@@ -259,6 +262,21 @@ def test_tenant_policy_filters_catalog_and_invalidates_existing_access(
     assert broker.access_token_is_current(
         account_id="member-org", token_id=token_id
     ) is True
+    authenticator = Ed25519GatewayJWTAuthenticator(
+        {"access-key": access_private.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        )},
+        issuer="https://identity.ecorex.test",
+        audience="ecorex-product",
+        service_model_ids=None,
+        access_token_is_current=ManagedAccessTokenAuthority(
+            path, directory
+        ).is_current,
+        clock=lambda: datetime(2026, 7, 19, 10, 0, tzinfo=UTC),
+    )
+    assert grant.access_token is not None
+    assert authenticator.authenticate(str(grant.access_token)).account_id == "member-org"
 
     repository.update_tenant_model_policy(
         "org-policy",
@@ -273,7 +291,8 @@ def test_tenant_policy_filters_catalog_and_invalidates_existing_access(
     assert broker.access_token_is_current(
         account_id="member-org", token_id=token_id
     ) is False
-    assert grant.access_token is not None
+    with pytest.raises(PermissionError, match="no longer current"):
+        authenticator.authenticate(str(grant.access_token))
 
 
 def test_personal_tenant_policy_immediately_advances_user_auth_epoch(

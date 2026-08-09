@@ -681,7 +681,8 @@ def test_usage_panel_projects_image_provider_audit_metadata(
         INSERT INTO admin_ops_provider_usage_facts VALUES(
             'fact-image','image_service','image-job-1','image','account-one',0,1,
             '2026-07-18T10:03:00+08:00','org-image','gpt-image-2',
-            'gpt-image-2',NULL,'managed-image',NULL,NULL,'running','completed'
+            'gpt-image-2','gpt-image-2','managed-image','gpt-image-2-pro',1,
+            'running','completed'
         );
         """
     )
@@ -697,10 +698,10 @@ def test_usage_panel_projects_image_provider_audit_metadata(
     assert fact["organization_id"] == "org-image"
     assert fact["requested_model_id"] == "gpt-image-2"
     assert fact["provider_reported_model_id"] == "gpt-image-2"
-    assert fact["actual_model_id"] == "未公开"
+    assert fact["actual_model_id"] == "gpt-image-2"
     assert fact["actual_provider_id"] == "managed-image"
-    assert fact["fallback_from_model_id"] == ""
-    assert fact["fallback_used"] is None
+    assert fact["fallback_from_model_id"] == "gpt-image-2-pro"
+    assert fact["fallback_used"] is True
     assert fact["job_id"] == "image-job-1"
     assert fact["job_status"] == "running"
     assert fact["result_status"] == "completed"

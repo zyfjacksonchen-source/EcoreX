@@ -1240,13 +1240,13 @@ Shell Pack 默认超时与真实 pwd：2 passed
   每个 durable `job_id` 只结算一条 immutable fact，submit/recover 重放保持
   exact-once，批量任务仍按每个 Job 独立记账。租户取结算事务内的用户事实，
   因此后续用户改租户不会重写历史归属。
-- `DynamicManagedImageProvider` 当前会把底层 Provider 的 `usage.model_id`
-  规范化为本地模型槽，`ProviderResult` 没有明确的 fallback provenance。
-  本轮未获得修改 Provider/Core 合同的授权，因此绝不通过模型 ID 差异推测
-  `gpt-image-2-pro → gpt-image-2`：记录 `requested_model_id`、
-  `provider_reported_model_id` 和 `actual_provider_id`，`actual_model_id`、
-  `fallback_from_model_id`、`fallback_used` 保持 NULL/“未公开”。若后续需要真实
-  降级对账，必须另行明确授权 ProviderResult 增加不可歧义的 provenance 合同。
+- 用户随后明确批准一次最小 Core 合同例外，仅允许 `ProviderResult` 增加
+  `actual_model_id`、`fallback_from_model_id`、`fallback_used` 三项事实；没有改变
+  Provider、Dynamic Provider、Worker 或 Runtime 的模块设计。OpenAI 图片适配器
+  在实际请求成功点写入 upstream model，在既有且唯一的确定性
+  `gpt-image-2-pro → gpt-image-2` 安全降级点写入来源；Dynamic Provider 和管理结算
+  只透传，不比较本地槽位、不推断。401/403 即使伪装成 `model_not_found` 也不得
+  降级；没有 provenance 的其他 Provider 仍保持 NULL/“未公开”。
 - 现有 Usage 面板继续用完整 provider fact ledger 对 lifetime token/image 余额
   对账；所选日期范围同时投影图片明细，包括租户、Job、请求槽、Provider 报告值、
   实际模型公开状态、降级公开状态和 Job/Result 状态。旧 v5/简化表事实仍可查询，
@@ -1258,6 +1258,8 @@ Shell Pack 默认超时与真实 pwd：2 passed
 管理 schema / exact-once / 图片逐 Job / Usage 投影：27 passed
 管理 schema 相关回归：134 passed，8 skipped
 Python compile：passed
+Provider provenance 主路/降级/401/403/Dynamic/exact-once：31 passed
+图片 Provider/Orchestrator 扩展回归：66 passed，1 skipped
 ```
 
 # 2026-08-09 — 安装包品牌门禁展开扫描
@@ -1499,4 +1501,48 @@ Browser 1487×1058 同尺寸视觉比较：passed
 Browser 390×844 响应式首屏：passed
 macOS arm64 自动推荐、Windows 切换与卡片过滤：passed
 生产部署、公开下载回读、latest 切换：not run
+```
+
+# 2026-08-09 — e-Mate 下载页最终视觉还原与立即下载
+
+- 以用户最终提供的 1487×1058 参考图重新收敛首屏：保留当前真实 Renderer 截图，
+  补齐透明黑色丝带、轨迹、图片/报告/图表卡、文件夹和全身小芯资产；没有把参考图
+  整张当背景，也没有重新引入旧产品窗口。
+- 主按钮动态文案改为“立即下载”；补齐下载、macOS 和 Windows 图标。下载图标复用
+  已安装 Lucide 图标并在 `THIRD_PARTY_NOTICES.md` 补充 ISC 声明；平台图标直接取自
+  用户视觉源。全部公开 CSS、JS、PNG/JPEG/SVG 继续使用内容寻址文件名。
+- 动态版本、设备/芯片识别、三安装包索引和企业下载 URL 保持原实现。页面 DOM 不
+  固定产品版本；当前浏览器 fixture 只用于验收，不进入提交。
+- Browser 在 1487×1058 CSS viewport 验证产品框 x=597.1、y=218、w=742.7、
+  h=538.2；390×844 视口无横向溢出。控制台 warning/error 为 0。
+
+本轮定向验证：
+
+```text
+下载页 source/implementation 同画面对照：passed
+macOS arm64 自动推荐与“立即下载”绝对 URL：passed
+390×844 响应式、图标与无横向溢出：passed
+公开资源内容寻址与静态门禁：passed
+生产部署、GitHub Actions、latest 切换：not run
+```
+
+# 2026-08-09 — Gateway 管理改动下一请求即时生效
+
+- Gateway 管理模式现在复用 Control Plane 已有的设备访问令牌权威，不新增令牌、
+  数据表或并行认证链。每次请求在 Ed25519 验签后，按 JWT `jti` 回读既有设备租约、
+  撤销事实和签发时 `auth_epoch`，再用当前用户 revision、密码 credential revision
+  及租户模型策略重算 epoch；用户停权、密码修改或租户删模型后，旧 JWT 在下一次
+  Gateway 请求即被拒绝。
+- Control Plane 的 `ManagedDeviceIdentityBroker` 与 Gateway 共用同一个只读
+  `ManagedAccessTokenAuthority`，原有登录、刷新、签发和 Provider 模块设计不变。
+  Gateway 启动时校验共享管理库与设备身份 schema；管理模式没有可验证 `jti` 的
+  非设备令牌一律失败关闭。
+
+本轮定向验证：
+
+```text
+租户策略更新前/后同一已签发 JWT：允许 / 下一请求拒绝
+Gateway 生产组合绑定 current-token authority：passed
+Gateway/设备身份聚焦回归：39 passed
+Ruff：passed
 ```
