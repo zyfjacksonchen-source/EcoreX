@@ -2203,6 +2203,8 @@ Windows CI 的首轮跨平台回归在主动关闭不可信长响应时由 `Inco
 - 能力中心不再把企业文档/OAuth Connector 的不可用状态叠加到已经可配置的本机消息 Bot；
   若已有持久企业连接实例则继续显示其真实缺组件状态。本机通道缺失仍按真实
   `channelUnavailable` 显示，未打包的微信公众号仍无操作按钮。
+- 上述交互回归通过后，Desktop Release 的 accepted Renderer tree 门禁才推进到对应精确
+  Git tree；旧前端或未验收的新树仍会在三平台打包前失败关闭。
 
 定向验证：
 
@@ -2211,4 +2213,5 @@ Windows CI 的首轮跨平台回归在主动关闭不可信长响应时由 `Inco
 会话管理悬停真实路径：1 passed
 TypeScript/runtime contracts：passed
 Vite production build / git diff check：passed
+Workflow YAML / accepted Renderer tree：passed
 ```
