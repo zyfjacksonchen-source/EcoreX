@@ -2044,3 +2044,29 @@ macOS arm64/x64 + Windows x64 hash-lock wheel resolution：passed
 Ruff / py_compile / git diff check：passed
 新签名三平台候选与 Computer Use 复验：pending CI rebuild
 ```
+
+## 2026-08-09 补充 — 生产 Usage/Audit 2.0 同窗对账完成
+
+- 上一轮 2.0 Usage Panel 替换后能用纯日期完成同投影验证，但正式对账脚本传入带时区的 ISO
+  值；URL 中 `+08:00` 经 query 解码成为空格。`runtime-audit` 原本截取日期前十位，`data`
+  却把完整字符串判为非法并静默回退到 6 月默认窗口，造成两个端点比较了不同日期。根因不是
+  ledger 漂移或生产数据丢失。
+- `build_data_request_payload` 现在与审计端点使用相同的日期前缀合同。生产 deployer 不再
+  硬编码旧 1.0.5/v0.3.0 标识，改由 operator 显式传入预期产品版本与投影，并在回滚 receipt
+  中保留固定、脱敏的 schema/HTTP/KPI 失败码。
+- 生产源已通过备份、原子替换、systemd 重启、loopback 健康与同窗核对后保持激活；未触及
+  Control Plane/Gateway 数据库或流量路由。最终时间窗
+  `[2026-08-01T00:00:00+08:00, 2026-08-09T00:00:00+08:00)` 的 Usage 与 Runtime Audit
+  完全相等：395 tasks、887,608 tokens、302 canonical records，余额 mismatch/delta 均为 0。
+  `missing_provider_usage_count=42` 与 `unassociated_record_count=203` 是被显式保留的历史覆盖
+  缺口，不被伪装成完整 Provider 归因。
+
+定向验证：
+
+```text
+Usage/Audit ISO 日期合同与 deployer 当前版本合同：2 passed
+生产部署 receipt：status=passed；rolled_back=false；projection=e-mate-2.0-usage-1
+生产同窗 receipt：usage_audit_match=true；KPI/reconciliation exact match
+生产余额对账：account_balance_mismatch_count=0；token/image delta=0
+Ruff / git diff check：passed
+```

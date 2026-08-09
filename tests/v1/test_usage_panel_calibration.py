@@ -2,14 +2,37 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
+import runpy
 import sqlite3
 
 import pytest
 
+from ecorex import __version__ as PRODUCT_VERSION
 from ecorex.control_plane import usage_panel_service
 
 
 TZ = timezone(timedelta(hours=8))
+
+
+def test_production_deployer_accepts_the_current_usage_contract(monkeypatch) -> None:
+    root = Path(__file__).resolve().parents[2]
+    monkeypatch.syspath_prepend(str(root / "scripts"))
+    deployer = runpy.run_path(str(root / "scripts/deploy-v030-production-usage-panel.py"))
+    payload = Path(usage_panel_service.__file__).read_bytes()
+
+    assert deployer["_source_contract_matches"](
+        payload,
+        expected_version=PRODUCT_VERSION,
+        expected_projection=usage_panel_service.USAGE_PROJECTION_VERSION,
+    )
+    assert repr(usage_panel_service.USAGE_PROJECTION_VERSION) in deployer[
+        "_verify_program"
+    ](
+        "2026-08-01T00:00:00+08:00",
+        "2026-08-10T00:00:00+08:00",
+        usage_panel_service.USAGE_PROJECTION_VERSION,
+    )
 
 
 def _database(path: str) -> None:
@@ -543,9 +566,16 @@ def test_usage_and_audit_share_one_projection_and_reconciliation(
     audit = usage_panel_service.build_runtime_audit(
         {"start": ["2026-07-18"], "end": ["2026-07-19"]}
     )
+    iso_panel = usage_panel_service.build_data_request_payload(
+        {
+            "start": ["2026-07-18T00:00:00 08:00"],
+            "end": ["2026-07-19T00:00:00 08:00"],
+        }
+    )
 
     assert audit["projection_version"] == usage_panel_service.USAGE_PROJECTION_VERSION
     assert audit["kpis"] == panel["kpis"]
+    assert iso_panel["kpis"] == panel["kpis"]
     assert audit["runtimeAudit"]["usageKpis"] == panel["kpis"]
     assert audit["reconciliation"] == {
         "canonical_record_count": 2,

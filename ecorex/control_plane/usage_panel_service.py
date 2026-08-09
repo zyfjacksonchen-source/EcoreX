@@ -661,8 +661,8 @@ def validate_data_request(start: datetime, end: datetime) -> dict[str, int]:
 def build_data_request_payload(query: dict[str, list[str]]) -> dict:
     default_start = datetime(2026, 6, 22, tzinfo=TZ)
     default_end = datetime(2026, 6, 29, tzinfo=TZ)
-    start = parse_date(query.get("start", [""])[0], default_start)
-    end = parse_date(query.get("end", [""])[0], default_end)
+    start = parse_date(query.get("start", [""])[0][:10], default_start)
+    end = parse_date(query.get("end", [""])[0][:10], default_end)
     validate_data_request(start, end)
     return build_payload(start, end)
 

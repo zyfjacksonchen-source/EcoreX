@@ -28,6 +28,17 @@ def _sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def _source_contract_matches(
+    payload: bytes, *, expected_version: str, expected_projection: str
+) -> bool:
+    return (
+        f'VERSION = "{expected_version}"'.encode() in payload
+        and f'USAGE_PROJECTION_VERSION = "{expected_projection}"'.encode() in payload
+        and b'audit["usageKpis"]' in payload
+        and b'payload["reconciliation"]' in payload
+    )
+
+
 def _exec(client, command: str, *, timeout: int = 60) -> tuple[int, bytes, bytes]:
     stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
     stdin.channel.shutdown_write()
@@ -36,26 +47,50 @@ def _exec(client, command: str, *, timeout: int = 60) -> tuple[int, bytes, bytes
     return stdout.channel.recv_exit_status(), output, error
 
 
-def _verify_program(start: str, end: str) -> str:
+def _verify_program(start: str, end: str, expected_projection: str) -> str:
     return f'''import json
+import re
+import sys
+import urllib.error
 import urllib.request
 
-def load(url):
-    with urllib.request.urlopen(url, timeout=60) as response:
-        payload = response.read(64 * 1024 * 1024 + 1)
+def report_failure(error_type, error, _traceback):
+    code = error.args[0] if error.args and isinstance(error.args[0], str) else "verification_failed"
+    if re.fullmatch(r"[a-z0-9_]+", code) is None:
+        code = "verification_failed"
+    print(json.dumps({{"status": "failed", "code": code}}, sort_keys=True, separators=(",", ":")))
+    sys.exit(2)
+
+sys.excepthook = report_failure
+
+def load(url, label):
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response:
+            payload = response.read(64 * 1024 * 1024 + 1)
+    except urllib.error.HTTPError as error:
+        body = error.read(65537)
+        try:
+            detail = json.loads(body.decode("utf-8")).get("error", "")
+        except Exception:
+            detail = ""
+        if error.code == 500 and "no such column" in str(detail):
+            raise RuntimeError(label + "_schema_column_missing")
+        if error.code == 500 and "no such table" in str(detail):
+            raise RuntimeError(label + "_schema_table_missing")
+        raise RuntimeError(label + "_http_" + str(error.code))
     if len(payload) > 64 * 1024 * 1024:
-        raise RuntimeError("response_too_large")
+        raise RuntimeError(label + "_response_too_large")
     value = json.loads(payload.decode("utf-8"))
     if not isinstance(value, dict):
-        raise RuntimeError("response_invalid")
+        raise RuntimeError(label + "_response_invalid")
     return value
 
-health = load("http://127.0.0.1:18105/api/health")
-data = load("http://127.0.0.1:18105/api/data?start={start}&end={end}")
-audit = load("http://127.0.0.1:18105/api/runtime-audit?start={start}&end={end}&limit=12000")
+health = load("http://127.0.0.1:18105/api/health", "health")
+data = load("http://127.0.0.1:18105/api/data?start={start}&end={end}", "data")
+audit = load("http://127.0.0.1:18105/api/runtime-audit?start={start}&end={end}&limit=12000", "audit")
 if health.get("ok") is not True:
     raise RuntimeError("health_failed")
-if data.get("projection_version") != "v0.3.0-usage-1":
+if data.get("projection_version") != {expected_projection!r}:
     raise RuntimeError("projection_invalid")
 if data.get("projection_version") != audit.get("projection_version"):
     raise RuntimeError("projection_mismatch")
@@ -74,16 +109,26 @@ print(json.dumps({{
 '''
 
 
-def _run_verification(client, start: str, end: str) -> dict:
+def _run_verification(
+    client, start: str, end: str, expected_projection: str
+) -> dict:
     stdin, stdout, stderr = client.exec_command("python3 -", timeout=150)
-    stdin.write(_verify_program(start, end))
+    stdin.write(_verify_program(start, end, expected_projection))
     stdin.channel.shutdown_write()
     payload = stdout.read(1024 * 1024 + 1)
     error = stderr.read(4097)
     status = stdout.channel.recv_exit_status()
-    if status != 0 or error or len(payload) > 1024 * 1024:
+    if error or len(payload) > 1024 * 1024:
         raise RuntimeError("postdeploy_verification_failed")
-    value = json.loads(payload.decode("utf-8"))
+    try:
+        value = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise RuntimeError("postdeploy_verification_failed")
+    if status != 0:
+        code = value.get("code") if isinstance(value, dict) else None
+        if not isinstance(code, str) or re.fullmatch(r"[a-z0-9_]+", code) is None:
+            code = "failed"
+        raise RuntimeError(f"postdeploy_verification_{code}")
     if not isinstance(value, dict) or value.get("status") != "passed":
         raise RuntimeError("postdeploy_verification_failed")
     return value
@@ -148,15 +193,15 @@ def main() -> int:
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--start", required=True)
     parser.add_argument("--end", required=True)
+    parser.add_argument("--expected-version", required=True)
+    parser.add_argument("--expected-projection", required=True)
     args = parser.parse_args()
     source = args.source.resolve(strict=True)
     payload = source.read_bytes()
-    if (
-        not 1 <= len(payload) <= MAX_SOURCE_BYTES
-        or b'VERSION = "1.0.5"' not in payload
-        or b'USAGE_PROJECTION_VERSION = "v0.3.0-usage-1"' not in payload
-        or b'audit["usageKpis"]' not in payload
-        or b'payload["reconciliation"]' not in payload
+    if not 1 <= len(payload) <= MAX_SOURCE_BYTES or not _source_contract_matches(
+        payload,
+        expected_version=args.expected_version,
+        expected_projection=args.expected_projection,
     ):
         raise SystemExit("usage_source_invalid")
     after_sha = _sha256(payload)
@@ -197,7 +242,9 @@ def main() -> int:
         stage = "restart"
         _restart(client)
         stage = "verify"
-        verification = _run_verification(client, args.start, args.end)
+        verification = _run_verification(
+            client, args.start, args.end, args.expected_projection
+        )
     except Exception as error:
         reason = str(error)
         if re.fullmatch(r"[a-z0-9_]+", reason) is None:
