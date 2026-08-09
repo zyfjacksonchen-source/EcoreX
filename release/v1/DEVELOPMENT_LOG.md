@@ -2192,6 +2192,24 @@ Windows CI 的首轮跨平台回归在主动关闭不可信长响应时由 `Inco
 `ECONNRESET`；产品探针现在先完成 proof 判定、注册固定错误收敛，再销毁响应，测试 listener
 也显式收敛平台 TCP reset。该修复不放宽 proof、截止时间或连接关闭门禁。
 
+## 2026-08-10 补充 — Sandboxed preload 不再加载本地模块
+
+- 精确 `72fa4b1` macOS arm64 制品通过版本、架构、ZIP、SHA、路径与软链门禁后，真实启动日志
+  稳定报告 sandbox preload 无法加载相对模块 `notification-contract.cjs`。Electron 的 sandboxed
+  preload 只允许受限内置模块，因此整个 `eMateDesktop` 桥没有注入；任务完成通知跳转、版本、
+  更新和 Runtime 重启 IPC 均不可达。
+- preload 现直接保留同一条有界 `thr_` 标识校验，不再 `require` 本地文件；主进程通知去重仍复用
+  原 `notification-contract.cjs`。这是 Electron 信任边界内的最小修复，未改变 Runtime、通知事实源
+  或 Agent Core。
+
+定向验证：
+
+```text
+Electron shell / owner proof / notification contracts：passed
+TypeScript / runtime contracts：passed
+新签名三平台候选与真实 Computer Use：pending CI rebuild
+```
+
 ## 2026-08-10 补充 — 任务详情冷加载交互与通道状态收敛
 
 - 真实 Browser 对抗验收复现：任务更多菜单首次冷加载检查/重跑弹窗后，菜单与模态框交接会让

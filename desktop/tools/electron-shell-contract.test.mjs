@@ -63,6 +63,7 @@ test("desktop loads the existing loopback Runtime and never packages a second re
   assert.match(staging, /release-metadata\.json/);
   assert.match(staging, /sbom\.cdx\.json/);
   assert.match(preload, /contextBridge\.exposeInMainWorld\("eMateDesktop"/);
+  assert.doesNotMatch(preload, /require\(["']\.\//u);
   const pkg = JSON.parse(await load("package.json"));
   assert.equal(pkg.build.files.some((entry) => entry.includes("renderer")), false);
   assert.equal(pkg.build.extraResources[0].from, "runtime-bundle");

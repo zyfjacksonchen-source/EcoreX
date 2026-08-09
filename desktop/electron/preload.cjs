@@ -1,5 +1,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
-const { validThreadId } = require("./notification-contract.cjs");
+
+const THREAD_ID = /^thr_[A-Za-z0-9._:-]{1,252}$/;
+const validThreadId = (value) => typeof value === "string" && THREAD_ID.test(value);
 
 let openThreadCallback = null;
 let pendingThreadId = null;
