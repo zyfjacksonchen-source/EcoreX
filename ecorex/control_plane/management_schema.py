@@ -10,8 +10,8 @@ from pathlib import Path
 import sqlite3
 
 
-CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION = 6
-ADMIN_MANAGEMENT_MIGRATION_NAME = "provider-usage-audit-metadata"
+CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION = 7
+ADMIN_MANAGEMENT_MIGRATION_NAME = "stable-auth-revision"
 
 _INITIAL_MIGRATION_NAME = "initial-admin-management"
 _INITIAL_MIGRATION_CHECKSUM = (
@@ -349,8 +349,19 @@ ALTER TABLE admin_ops_provider_usage_facts ADD COLUMN result_status TEXT;
 """
 
 ADMIN_MANAGEMENT_MIGRATION_CHECKSUM = hashlib.sha256(
+    b"ecorex-admin-management-schema-v7\0stable-auth-revision"
+).hexdigest()
+
+_MIGRATION_V6_NAME = "provider-usage-audit-metadata"
+_MIGRATION_V6_CHECKSUM = hashlib.sha256(
     b"ecorex-admin-management-schema-v6\0provider-usage-audit-metadata"
 ).hexdigest()
+
+ADMIN_MANAGEMENT_SCHEMA_V7_SQL = """
+ALTER TABLE admin_ops_users ADD COLUMN auth_revision INTEGER NOT NULL DEFAULT 1
+CHECK(auth_revision > 0);
+UPDATE admin_ops_users SET auth_revision=revision;
+"""
 
 
 class AdminManagementSchemaError(RuntimeError):
@@ -395,6 +406,7 @@ def _expected_shape() -> str:
         connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V4_SQL)
         connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V5_SQL)
         connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V6_SQL)
+        connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V7_SQL)
         return _managed_shape(connection)
     finally:
         connection.close()
@@ -457,6 +469,7 @@ class AdminManagementSchemaManager:
                     (3, "provider-usage-facts", _MIGRATION_V3_CHECKSUM),
                     (4, _MIGRATION_V4_NAME, _MIGRATION_V4_CHECKSUM),
                     (5, _MIGRATION_V5_NAME, _MIGRATION_V5_CHECKSUM),
+                    (6, _MIGRATION_V6_NAME, _MIGRATION_V6_CHECKSUM),
                 )
                 if any(
                     tuple(row) != expected_prefix[index]
@@ -630,6 +643,23 @@ class AdminManagementSchemaManager:
                     "version,migration_name,migration_checksum,installed_at"
                     ") VALUES(6,?,?,?)",
                     (
+                        _MIGRATION_V6_NAME,
+                        _MIGRATION_V6_CHECKSUM,
+                        installed_at,
+                    ),
+                )
+            rows = connection.execute(
+                "SELECT version,migration_name,migration_checksum "
+                "FROM admin_ops_schema_migrations ORDER BY version"
+            ).fetchall()
+            if len(rows) == 6:
+                _execute_sql(connection, ADMIN_MANAGEMENT_SCHEMA_V7_SQL)
+                installed_at = datetime.now(UTC).isoformat()
+                connection.execute(
+                    "INSERT INTO admin_ops_schema_migrations("
+                    "version,migration_name,migration_checksum,installed_at"
+                    ") VALUES(7,?,?,?)",
+                    (
                         ADMIN_MANAGEMENT_MIGRATION_NAME,
                         ADMIN_MANAGEMENT_MIGRATION_CHECKSUM,
                         installed_at,
@@ -678,7 +708,15 @@ class AdminManagementSchemaManager:
             raise AdminManagementSchemaError(
                 "admin management schema history is invalid"
             )
-        initial, migration_v2, migration_v3, migration_v4, migration_v5, value = row
+        (
+            initial,
+            migration_v2,
+            migration_v3,
+            migration_v4,
+            migration_v5,
+            migration_v6,
+            value,
+        ) = row
         if (
             int(initial[0]) != 1
             or str(initial[1]) != _INITIAL_MIGRATION_NAME
@@ -695,6 +733,9 @@ class AdminManagementSchemaManager:
             or int(migration_v5[0]) != 5
             or str(migration_v5[1]) != _MIGRATION_V5_NAME
             or str(migration_v5[2]) != _MIGRATION_V5_CHECKSUM
+            or int(migration_v6[0]) != 6
+            or str(migration_v6[1]) != _MIGRATION_V6_NAME
+            or str(migration_v6[2]) != _MIGRATION_V6_CHECKSUM
             or
             int(value[0]) != CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION
             or str(value[1]) != ADMIN_MANAGEMENT_MIGRATION_NAME
@@ -720,6 +761,7 @@ __all__ = [
     "ADMIN_MANAGEMENT_SCHEMA_V4_SQL",
     "ADMIN_MANAGEMENT_SCHEMA_V5_SQL",
     "ADMIN_MANAGEMENT_SCHEMA_V6_SQL",
+    "ADMIN_MANAGEMENT_SCHEMA_V7_SQL",
     "AdminManagementSchemaError",
     "AdminManagementSchemaManager",
     "AdminManagementSchemaReceipt",

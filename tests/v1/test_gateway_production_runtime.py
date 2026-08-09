@@ -15,7 +15,10 @@ import httpx
 import pytest
 
 from ecorex.security import Ed25519AccessTokenVerifier
-from ecorex.control_plane.device_identity_schema import DeviceIdentitySchemaManager
+from ecorex.control_plane.device_identity_schema import (
+    DeviceIdentitySchemaError,
+    DeviceIdentitySchemaManager,
+)
 from ecorex.control_plane.management_schema import AdminManagementSchemaManager
 from ecorex.gateway import (
     Ed25519GatewayJWTAuthenticator,
@@ -184,7 +187,6 @@ def test_management_gateway_composes_current_access_token_authority(
     environment = _environment(tmp_path, keyring)
     database_path = (tmp_path / "control-plane.sqlite3").resolve()
     AdminManagementSchemaManager(database_path).migrate()
-    DeviceIdentitySchemaManager(database_path).migrate()
     environment.update(
         {
             "ECOREX_GATEWAY_ADMIN_MANAGEMENT_ENABLED": "true",
@@ -198,11 +200,15 @@ def test_management_gateway_composes_current_access_token_authority(
         }
     )
     config = GatewayProductionConfig.from_environment(environment)
+    provider = SingleNodeSQLiteResponsesProvider()
+    secrets = EnvironmentGatewaySecretProvider(environment)
 
-    authenticator = SingleNodeSQLiteResponsesProvider._authenticator(
-        config,
-        EnvironmentGatewaySecretProvider(environment),
-    )
+    with pytest.raises(DeviceIdentitySchemaError):
+        provider._authenticator(config, secrets)
+
+    DeviceIdentitySchemaManager(database_path).migrate()
+
+    authenticator = provider._authenticator(config, secrets)
 
     assert callable(authenticator.access_token_is_current)
 

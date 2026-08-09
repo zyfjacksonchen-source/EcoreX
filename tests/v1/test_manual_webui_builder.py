@@ -87,6 +87,13 @@ def test_manual_webui_runtime_config_is_canonical_and_rebound(tmp_path: Path) ->
         "architecture": "arm64",
     }
     assert value["release_public_keys"] == {"v1": "public"}
+    assert value["audit"] == {
+        "endpoint": "https://dl.ecoremedia.net/api/v1/audit/records",
+        "allowed_hosts": ["dl.ecoremedia.net"],
+        "dispatch_seconds": 5,
+        "raw_retention_days": 30,
+        "aggregate_retention_days": 180,
+    }
     assert value["capability_packs"] == [
         {
             "artifact": "ecorex-capability-pack-2.0.0.zip",

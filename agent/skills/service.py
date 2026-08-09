@@ -157,7 +157,7 @@ def _purpose_group_for(row: dict) -> str:
 
     text = " ".join(
         _normalize_skill_text(row.get(key))
-        for key in ("name", "display_name", "displayName", "description", "source", "origin", "path", "primary_env")
+        for key in ("name", "display_name", "displayName", "description", "source", "origin", "primary_env")
     )
     if re.search(r"lark|feishu|飞书|calendar|mail|approval|attendance|contact|wiki|base|minutes|okr|task|协作|日历|邮箱|审批", text):
         return "collaboration"

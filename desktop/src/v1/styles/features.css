@@ -981,19 +981,6 @@
   border-radius: var(--radius-workbench);
 }
 
-.ex-home-composer .ex-composer-meta {
-  position: absolute;
-  z-index: var(--z-sticky);
-  top: 72px;
-  right: 84px;
-  width: auto;
-  min-height: 32px;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  gap: 0;
-}
-
 .ex-home-composer .ex-composer textarea {
   min-height: 66px;
 }
@@ -1004,10 +991,6 @@
 
 .ex-home-composer .ex-composer-model-trigger {
   margin-left: auto;
-}
-
-.ex-home-composer .ex-send-tools {
-  padding-left: 120px;
 }
 
 .ex-home-composer .ex-usage-summary {
@@ -3050,20 +3033,9 @@
   min-width: 64px;
 }
 
-.ex-composer-meta {
-  width: min(760px, 100%);
-  min-height: 20px;
-  margin: var(--space-1) auto 0;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: var(--space-3);
-}
-
 .ex-composer-note {
-  grid-column: 1 / -1;
-  grid-row: 2;
   margin: 0;
+  padding: 0 var(--space-3) var(--space-2);
   color: var(--color-ink-subtle);
   text-align: center;
   font-size: var(--text-caption-size);
@@ -3107,9 +3079,6 @@
 }
 
 .ex-usage-summary {
-  grid-column: 2;
-  grid-row: 1;
-  justify-self: end;
   width: 28px;
   height: 28px;
   padding: 0;
@@ -3953,18 +3922,24 @@ button.ex-artifact-primary {
   gap: var(--space-1);
 }
 
-.ex-settings-page-nav a {
+.ex-settings-page-nav button {
   min-height: var(--target-desktop);
   padding: 0 var(--space-3);
+  border: 0;
   border-radius: var(--radius-control);
   display: flex;
   align-items: center;
   color: var(--color-ink-muted);
+  background: transparent;
+  font: inherit;
   text-decoration: none;
+  cursor: pointer;
 }
 
-.ex-settings-page-nav a:hover,
-.ex-settings-page-nav a:focus-visible {
+.ex-settings-page-nav button:hover,
+.ex-settings-page-nav button:focus-visible,
+.ex-settings-page-nav button[aria-current="page"] {
+  outline: 0;
   color: var(--color-ink);
   background: var(--color-hover);
 }
@@ -4043,7 +4018,7 @@ button.ex-artifact-primary {
     flex-direction: row;
     overflow-x: auto;
   }
-  .ex-settings-page-nav a { flex: none; }
+  .ex-settings-page-nav button { flex: none; }
   .ex-settings-page-content { padding-inline: var(--space-3); }
   .ex-profile-avatar-row { align-items: flex-start; flex-wrap: wrap; }
 }
@@ -4384,10 +4359,6 @@ button.ex-artifact-primary {
   .ex-composer-tools,
   .ex-send-tools {
     justify-content: space-between;
-  }
-
-  .ex-composer-meta {
-    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .ex-artifact {

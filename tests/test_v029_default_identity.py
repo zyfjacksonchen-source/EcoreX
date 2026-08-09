@@ -15,6 +15,7 @@ OLD_ECOREX_PERSONA = (
 
 def test_default_identity_templates_seed_xiaoxin_without_identity_questions():
     assert "小芯" in workspace._AGENT_TEMPLATE_ZH
+    assert "我是智能体小芯，来自 e-Mate Agent" in workspace._AGENT_TEMPLATE_ZH
     assert "同学" in workspace._AGENT_TEMPLATE_ZH
     assert "专业" in workspace._AGENT_TEMPLATE_ZH
     assert "严谨" in workspace._AGENT_TEMPLATE_ZH
@@ -60,11 +61,11 @@ def test_legacy_assistant_self_name_is_sanitized_to_xiaoxin():
 def test_provider_built_in_self_identity_is_sanitized_to_xiaoxin():
     text = "我是小芯，一个由 Google Deepmind 团队研发的 AI 助手。可以帮你处理文件。"
     sanitized = sanitize_assistant_identity(text)
-    assert sanitized == "我是小芯，EcoreX WebUI 的 AI 助手。可以帮你处理文件。"
+    assert sanitized == "我是智能体小芯，来自 e-Mate Agent。可以帮你处理文件。"
     assert "Google" not in sanitized
     assert "Deepmind" not in sanitized
 
     text = "我是小芯，是基于 Google DeepMind 团队研发的 Antigravity 智能体架构的 AI 助手。"
     sanitized = sanitize_assistant_identity(text)
-    assert sanitized == "我是小芯，EcoreX WebUI 的 AI 助手。"
+    assert sanitized == "我是智能体小芯，来自 e-Mate Agent。"
     assert "Antigravity" not in sanitized

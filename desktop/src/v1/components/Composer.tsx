@@ -451,6 +451,43 @@ export function Composer({
                 }}
               />
             </Suspense>
+            <Tooltip.Root delayDuration={500}>
+              <Tooltip.Trigger asChild>
+                <button
+                  type="button"
+                  className="ex-permission-inline"
+                  data-testid="composer-connections"
+                  aria-label="打开外部连接与通道"
+                  onClick={onOpenConnections}
+                >
+                  <Cable aria-hidden="true" />外部连接
+                </button>
+              </Tooltip.Trigger>
+              <Tooltip.Portal>
+                <Tooltip.Content className="ex-tooltip ex-permission-tooltip" side="top" sideOffset={8}>
+                  <span>连接飞书、邮箱等外部服务，并管理消息通道。</span>
+                  <Tooltip.Arrow className="ex-tooltip-arrow" />
+                </Tooltip.Content>
+              </Tooltip.Portal>
+            </Tooltip.Root>
+            <Tooltip.Root delayDuration={900}>
+              <Tooltip.Trigger asChild>
+                <button
+                  type="button"
+                  className="ex-permission-inline"
+                  onClick={onOpenPermissionSettings}
+                >
+                  <ShieldCheck aria-hidden="true" />{permissionLabel}
+                </button>
+              </Tooltip.Trigger>
+              <Tooltip.Portal>
+                <Tooltip.Content className="ex-tooltip ex-permission-tooltip" side="top" sideOffset={8}>
+                  <span>{permissionDescription}</span>
+                  <span>需要权限或信息时会询问；长任务可排队，重启后继续。</span>
+                  <Tooltip.Arrow className="ex-tooltip-arrow" />
+                </Tooltip.Content>
+              </Tooltip.Portal>
+            </Tooltip.Root>
           </div>
           <div className="ex-send-tools" data-active={active ? "true" : "false"}>
             {active ? (
@@ -484,6 +521,34 @@ export function Composer({
                 <Square aria-hidden="true" />
               </IconButton>
             ) : null}
+            <Tooltip.Root delayDuration={500}>
+              <Tooltip.Trigger asChild>
+                <button className="ex-usage-summary" type="button" aria-label={`查看用量。上下文 ${contextLabel}`}>
+                  <svg className="ex-context-ring" viewBox="0 0 20 20" aria-hidden="true">
+                    <circle className="ex-context-ring-track" cx="10" cy="10" r="7" pathLength="100" />
+                    <circle
+                      className="ex-context-ring-value"
+                      cx="10"
+                      cy="10"
+                      r="7"
+                      pathLength="100"
+                      strokeDasharray={`${contextPercent} 100`}
+                    />
+                  </svg>
+                  <span className="ex-visually-hidden">额度与上下文用量</span>
+                </button>
+              </Tooltip.Trigger>
+              <Tooltip.Portal>
+                <Tooltip.Content className="ex-tooltip ex-usage-tooltip" side="top" sideOffset={8}>
+                  <span><b>今日</b>{formatTokens(usage?.today.total_tokens)}</span>
+                  <span><b>本周</b>{formatTokens(usage?.week.total_tokens)}</span>
+                  <span><b>上下文</b>{contextLabel}</span>
+                  <span><b>额度</b>{remainingLabel}{remainingLabel === "—" ? "" : quotaUnit}</span>
+                  <span><b>范围</b>{usageScopeLabel}</span>
+                  <Tooltip.Arrow className="ex-tooltip-arrow" />
+                </Tooltip.Content>
+              </Tooltip.Portal>
+            </Tooltip.Root>
             <button
               className="ex-send-button"
               type="button"
@@ -499,78 +564,11 @@ export function Composer({
           </div>
         </div>
         {attachmentError ? <p className="ex-composer-attachment-error" role="status">{attachmentError}</p> : null}
-      </div>
-      <div className="ex-composer-meta">
-        <Tooltip.Root delayDuration={500}>
-          <Tooltip.Trigger asChild>
-            <button
-              type="button"
-              className="ex-permission-inline"
-              data-testid="composer-connections"
-              aria-label="打开外部连接与通道"
-              onClick={onOpenConnections}
-            >
-              <Cable aria-hidden="true" />外部连接
-            </button>
-          </Tooltip.Trigger>
-          <Tooltip.Portal>
-            <Tooltip.Content className="ex-tooltip ex-permission-tooltip" side="top" sideOffset={8}>
-              <span>连接飞书、邮箱等外部服务，并管理消息通道。</span>
-              <Tooltip.Arrow className="ex-tooltip-arrow" />
-            </Tooltip.Content>
-          </Tooltip.Portal>
-        </Tooltip.Root>
-        <Tooltip.Root delayDuration={900}>
-          <Tooltip.Trigger asChild>
-            <button
-              type="button"
-              className="ex-permission-inline"
-              onClick={onOpenPermissionSettings}
-            >
-              <ShieldCheck aria-hidden="true" />{permissionLabel}
-            </button>
-          </Tooltip.Trigger>
-          <Tooltip.Portal>
-            <Tooltip.Content className="ex-tooltip ex-permission-tooltip" side="top" sideOffset={8}>
-              <span>{permissionDescription}</span>
-              <span>需要权限或信息时会询问；长任务可排队，重启后继续。</span>
-              <Tooltip.Arrow className="ex-tooltip-arrow" />
-            </Tooltip.Content>
-          </Tooltip.Portal>
-        </Tooltip.Root>
         {!modelAvailable ? (
           <p className="ex-composer-note is-error" id="ecorex-composer-note" role="status">
             {sendUnavailableReason || "模型服务未连接；可查看历史和本地产物。"}
           </p>
         ) : null}
-        <Tooltip.Root delayDuration={500}>
-          <Tooltip.Trigger asChild>
-            <button className="ex-usage-summary" type="button" aria-label={`查看用量。上下文 ${contextLabel}`}>
-              <svg className="ex-context-ring" viewBox="0 0 20 20" aria-hidden="true">
-                <circle className="ex-context-ring-track" cx="10" cy="10" r="7" pathLength="100" />
-                <circle
-                  className="ex-context-ring-value"
-                  cx="10"
-                  cy="10"
-                  r="7"
-                  pathLength="100"
-                  strokeDasharray={`${contextPercent} 100`}
-                />
-              </svg>
-              <span className="ex-visually-hidden">额度与上下文用量</span>
-            </button>
-          </Tooltip.Trigger>
-          <Tooltip.Portal>
-            <Tooltip.Content className="ex-tooltip ex-usage-tooltip" side="top" sideOffset={8}>
-              <span><b>今日</b>{formatTokens(usage?.today.total_tokens)}</span>
-              <span><b>本周</b>{formatTokens(usage?.week.total_tokens)}</span>
-              <span><b>上下文</b>{contextLabel}</span>
-              <span><b>额度</b>{remainingLabel}{remainingLabel === "—" ? "" : quotaUnit}</span>
-              <span><b>范围</b>{usageScopeLabel}</span>
-              <Tooltip.Arrow className="ex-tooltip-arrow" />
-            </Tooltip.Content>
-          </Tooltip.Portal>
-        </Tooltip.Root>
       </div>
     </div>
   );

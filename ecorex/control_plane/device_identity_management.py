@@ -75,7 +75,8 @@ class AdminManagementDeviceAccountDirectory:
         connection = self.repository._connect()
         try:
             credential = connection.execute(
-                "SELECT users.status,users.revision,credentials.credential_version "
+                "SELECT users.status,users.auth_revision,"
+                "credentials.credential_version "
                 "FROM admin_ops_users users LEFT JOIN "
                 "admin_ops_password_credentials credentials USING(account_id) "
                 "WHERE users.account_id=?",
@@ -106,14 +107,14 @@ class AdminManagementDeviceAccountDirectory:
                 "images_remaining": image_remaining,
             },
             auth_epoch=self._auth_epoch(
-                int(credential["revision"]),
+                int(credential["auth_revision"]),
                 int(credential["credential_version"] or 0),
             ),
         )
 
     @staticmethod
-    def _auth_epoch(user_revision: int, credential_revision: int) -> int:
-        material = f"{user_revision}:{credential_revision}".encode("ascii")
+    def _auth_epoch(auth_revision: int, credential_revision: int) -> int:
+        material = f"{auth_revision}:{credential_revision}".encode("ascii")
         return int.from_bytes(
             hashlib.sha256(b"emate-auth-epoch-v1\0" + material).digest()[:8],
             "big",

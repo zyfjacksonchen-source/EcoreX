@@ -421,7 +421,8 @@ class AdminManagementRepository:
         try:
             cursor = connection.execute(
                 "UPDATE admin_ops_users SET display_name=?,email=?,organization_id=?,"
-                "status=?,token_limit=?,image_limit=?,revision=revision+1,updated_at=? "
+                "status=?,token_limit=?,image_limit=?,revision=revision+1,"
+                "auth_revision=auth_revision+1,updated_at=? "
                 "WHERE account_id=? AND revision=?",
                 (
                     request.display_name,
@@ -1456,13 +1457,15 @@ class AdminManagementRepository:
                 raise AdminManagementConflict("tenant model policy revision changed")
         if organization_id.startswith("personal:"):
             connection.execute(
-                "UPDATE admin_ops_users SET revision=revision+1,updated_at=? "
+                "UPDATE admin_ops_users SET revision=revision+1,"
+                "auth_revision=auth_revision+1,updated_at=? "
                 "WHERE account_id=? AND organization_id IS NULL",
                 (now, organization_id.removeprefix("personal:")),
             )
         else:
             connection.execute(
-                "UPDATE admin_ops_users SET revision=revision+1,updated_at=? "
+                "UPDATE admin_ops_users SET revision=revision+1,"
+                "auth_revision=auth_revision+1,updated_at=? "
                 "WHERE organization_id=?",
                 (now, organization_id),
             )

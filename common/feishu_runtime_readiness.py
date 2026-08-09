@@ -87,7 +87,7 @@ def feishu_dependency_status(config: Mapping[str, Any] | None = None) -> Dict[st
         "credentialValid": "unknown",
         "remoteConnectivityProbed": False,
         "remediation": (
-            "Install lark-oapi into the active EcoreX WebUI Python runtime and restart WebUI."
+            "Install lark-oapi into the active e-Mate Python runtime and restart e-Mate."
             if status == "missing"
             else ""
         ),

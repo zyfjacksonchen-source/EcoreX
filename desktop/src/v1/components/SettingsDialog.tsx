@@ -73,6 +73,8 @@ interface SettingsDialogProps {
   onActivateUpdate: () => Promise<boolean>;
 }
 
+type SettingsPage = "profile" | "general" | "knowledge" | "memory";
+
 export function SettingsDialog({
   open,
   bootstrap,
@@ -136,6 +138,7 @@ export function SettingsDialog({
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [activePage, setActivePage] = useState<SettingsPage>("profile");
   const passwordRequestId = useRef<string | null>(null);
   const extensionSummary = extensionCatalogSummary(extensions);
   const updateReady = isVerifiedRuntimeUpdateReady(bootstrap?.update);
@@ -290,14 +293,25 @@ export function SettingsDialog({
       </header>
       <div className="ex-settings-page-layout">
         <nav className="ex-settings-page-nav" aria-label="设置分区">
-          <a href="#settings-profile">个人资料</a>
-          <a href="#settings-general">常规设置</a>
-          <a href="#settings-knowledge">知识</a>
-          <a href="#settings-memory">记忆</a>
+          {([
+            ["profile", "个人资料"],
+            ["general", "常规设置"],
+            ["knowledge", "知识"],
+            ["memory", "记忆"],
+          ] as const).map(([page, label]) => (
+            <button
+              type="button"
+              aria-current={activePage === page ? "page" : undefined}
+              key={page}
+              onClick={() => setActivePage(page)}
+            >
+              {label}
+            </button>
+          ))}
         </nav>
         <div className="ex-settings-page-content">
 
-          <section className="ex-settings-section" id="settings-profile">
+          <section className="ex-settings-section" id="settings-profile" hidden={activePage !== "profile"}>
             <h2>个人资料</h2>
             <div className="ex-profile-avatar-row">
               <span className="ex-profile-avatar-preview">
@@ -345,7 +359,7 @@ export function SettingsDialog({
             ) : null}
           </section>
 
-          <section className="ex-settings-section" id="settings-general">
+          <section className="ex-settings-section" id="settings-general" hidden={activePage !== "general"}>
             <h2>常规设置</h2>
             <div className="ex-settings-row">
               <span className="ex-settings-icon"><FolderOutput aria-hidden="true" /></span>
@@ -422,7 +436,7 @@ export function SettingsDialog({
             ) : null}
           </section>
 
-          <section className="ex-settings-section">
+          <section className="ex-settings-section" hidden={activePage !== "general"}>
             <h2>系统状态</h2>
             <div className="ex-settings-row">
               <span className="ex-settings-icon"><Activity aria-hidden="true" /></span>
@@ -497,7 +511,7 @@ export function SettingsDialog({
             </details>
           </section>
 
-          <section className="ex-settings-section">
+          <section className="ex-settings-section" hidden={activePage !== "general"}>
             <h2>扩展</h2>
             <div className="ex-settings-row">
               <span className="ex-settings-icon"><Blocks aria-hidden="true" /></span>
@@ -527,7 +541,7 @@ export function SettingsDialog({
             </p>
           </section>
 
-          <section className="ex-settings-section" id="settings-knowledge">
+          <section className="ex-settings-section" id="settings-knowledge" hidden={activePage !== "knowledge"}>
             <h2>知识</h2>
             <div className="ex-settings-row">
               <span className="ex-settings-icon"><BookOpenText aria-hidden="true" /></span>
@@ -537,7 +551,7 @@ export function SettingsDialog({
             <p className="ex-settings-note">点击后会进入当前会话，由小芯先读取真实知识目录，再按你的确认执行修改。</p>
           </section>
 
-          <section className="ex-settings-section" id="settings-memory">
+          <section className="ex-settings-section" id="settings-memory" hidden={activePage !== "memory"}>
             <h2>记忆</h2>
             <div className="ex-settings-row">
               <span className="ex-settings-icon"><Brain aria-hidden="true" /></span>
@@ -625,7 +639,7 @@ export function SettingsDialog({
             ) : null}
           </section>
 
-          <section className="ex-settings-section">
+          <section className="ex-settings-section" hidden={activePage !== "general"}>
             <h2>旧版凭证</h2>
             <div className="ex-settings-row">
               <span className="ex-settings-icon"><KeyRound aria-hidden="true" /></span>
@@ -725,7 +739,7 @@ export function SettingsDialog({
             ) : null}
           </section>
 
-          <section className="ex-settings-section">
+          <section className="ex-settings-section" hidden={activePage !== "general"}>
             <h2>权限</h2>
             <div className="ex-settings-row">
               <span className="ex-settings-icon"><Shield aria-hidden="true" /></span>
@@ -816,7 +830,7 @@ export function SettingsDialog({
             ) : null}
           </section>
 
-          <section className="ex-settings-section">
+          <section className="ex-settings-section" hidden={activePage !== "general"}>
             <h2>版本</h2>
             <div className="ex-settings-row">
               <div>

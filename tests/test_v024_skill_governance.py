@@ -95,6 +95,16 @@ def test_builtin_skills_are_default_enabled_toggleable_and_purpose_grouped(monke
         assert image["purpose_group"] == "image_media"
 
 
+def test_skill_purpose_group_ignores_parent_directory_names():
+    from agent.skills.service import _purpose_group_for
+
+    assert _purpose_group_for({
+        "name": "image-generation",
+        "description": "Generate and edit images through the native image tool.",
+        "path": "/Users/example/Documents/workspace/skills/image-generation/SKILL.md",
+    }) == "image_media"
+
+
 def test_builtin_skill_close_persists_across_refresh_and_service_boundaries(monkeypatch):
     with tempfile.TemporaryDirectory(prefix="ecorex-v024-skill-lock-") as tmp:
         live_state = {"office-pdf": True}

@@ -278,6 +278,25 @@ def test_tenant_policy_filters_catalog_and_invalidates_existing_access(
     assert grant.access_token is not None
     assert authenticator.authenticate(str(grant.access_token)).account_id == "member-org"
 
+    original_epoch = directory.resolve("member-org").auth_epoch
+    original_revision = repository.get_user("member-org").revision
+    repository.record_provider_usage(
+        source_service="managed_gateway",
+        source_id="member-org-first-completed-turn",
+        usage_kind="chat",
+        account_id="member-org",
+        input_tokens=1,
+        output_tokens=1,
+        total_tokens=2,
+        provider_created_at="2026-07-19T10:00:01+00:00",
+    )
+    assert repository.get_user("member-org").revision == original_revision + 1
+    assert directory.resolve("member-org").auth_epoch == original_epoch
+    assert broker.access_token_is_current(
+        account_id="member-org", token_id=token_id
+    ) is True
+    assert authenticator.authenticate(str(grant.access_token)).account_id == "member-org"
+
     repository.update_tenant_model_policy(
         "org-policy",
         UpdateTenantModelPolicyRequest(

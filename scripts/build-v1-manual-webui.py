@@ -373,6 +373,13 @@ def _runtime_config(
             "architecture": architecture,
         }
         value["release_public_keys"] = dict(release_keys)
+        value["audit"] = {
+            "endpoint": "https://dl.ecoremedia.net/api/v1/audit/records",
+            "allowed_hosts": ["dl.ecoremedia.net"],
+            "dispatch_seconds": 5,
+            "raw_retention_days": 30,
+            "aggregate_retention_days": 180,
+        }
         packs = value["capability_packs"]
         for pack in packs:
             pack["artifact"] = str(pack["artifact"]).replace(BASE_VERSION, __version__)

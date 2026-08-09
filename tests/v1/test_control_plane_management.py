@@ -575,7 +575,7 @@ def test_management_schema_migrates_v1_model_origin_presets(tmp_path: Path) -> N
         connection.close()
 
     receipt = AdminManagementSchemaManager(path).migrate()
-    assert receipt.migration_version == 6
+    assert receipt.migration_version == 7
     connection = sqlite3.connect(path)
     try:
         columns = {
@@ -605,6 +605,9 @@ def test_management_schema_migrates_v1_model_origin_presets(tmp_path: Path) -> N
                 "PRAGMA table_info(admin_ops_provider_usage_facts)"
             )
         }
+        auth_revisions = connection.execute(
+            "SELECT account_id,auth_revision FROM admin_ops_users ORDER BY account_id"
+        ).fetchall()
     finally:
         connection.close()
     assert "provider_origin_preset" in columns
@@ -633,10 +636,14 @@ def test_management_schema_migrates_v1_model_origin_presets(tmp_path: Path) -> N
             1,
         ),
     ]
+    assert auth_revisions == [
+        ("existing-org-user", 1),
+        ("existing-personal-user", 1),
+    ]
 
 
-def test_management_schema_v6_preserves_v5_provider_facts(tmp_path: Path) -> None:
-    path = tmp_path / "control-plane-v5.db"
+def test_management_schema_v7_preserves_v6_provider_facts(tmp_path: Path) -> None:
+    path = tmp_path / "control-plane-v6.db"
     connection = sqlite3.connect(path)
     try:
         connection.executescript(management_schema.ADMIN_MANAGEMENT_SCHEMA_SQL)
@@ -644,6 +651,7 @@ def test_management_schema_v6_preserves_v5_provider_facts(tmp_path: Path) -> Non
         connection.executescript(management_schema.ADMIN_MANAGEMENT_SCHEMA_V3_SQL)
         connection.executescript(management_schema.ADMIN_MANAGEMENT_SCHEMA_V4_SQL)
         connection.executescript(management_schema.ADMIN_MANAGEMENT_SCHEMA_V5_SQL)
+        connection.executescript(management_schema.ADMIN_MANAGEMENT_SCHEMA_V6_SQL)
         connection.executemany(
             "INSERT INTO admin_ops_schema_migrations VALUES(?,?,?,?)",
             (
@@ -652,18 +660,22 @@ def test_management_schema_v6_preserves_v5_provider_facts(tmp_path: Path) -> Non
                 (3, "provider-usage-facts", management_schema._MIGRATION_V3_CHECKSUM, "2026-07-16T00:00:00+00:00"),
                 (4, management_schema._MIGRATION_V4_NAME, management_schema._MIGRATION_V4_CHECKSUM, "2026-07-16T00:00:00+00:00"),
                 (5, management_schema._MIGRATION_V5_NAME, management_schema._MIGRATION_V5_CHECKSUM, "2026-07-16T00:00:00+00:00"),
+                (6, management_schema._MIGRATION_V6_NAME, management_schema._MIGRATION_V6_CHECKSUM, "2026-07-16T00:00:00+00:00"),
             ),
         )
         connection.execute(
             "INSERT INTO admin_ops_users VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 "account-v5", "Existing User", "v5@example.test", "org-v5",
-                "active", 0, 0, 10, 1, 1,
+                "active", 0, 0, 10, 1, 7,
                 "2026-07-16T00:00:00+00:00", "2026-07-16T00:00:00+00:00",
             ),
         )
         connection.execute(
-            "INSERT INTO admin_ops_provider_usage_facts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO admin_ops_provider_usage_facts("
+            "fact_id,source_service,source_id,usage_kind,account_id,input_tokens,"
+            "output_tokens,total_tokens,image_count,payload_sha256,provider_created_at,"
+            "recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 "fact-v5", "image_service", "job-v5", "image", "account-v5",
                 0, 0, 0, 1, "0" * 64,
@@ -676,13 +688,17 @@ def test_management_schema_v6_preserves_v5_provider_facts(tmp_path: Path) -> Non
 
     receipt = AdminManagementSchemaManager(path).migrate()
 
-    assert receipt.migration_version == 6
+    assert receipt.migration_version == 7
     connection = sqlite3.connect(path)
     try:
         row = connection.execute(
             "SELECT source_id,image_count,organization_id,actual_model_id,"
             "fallback_used,result_status FROM admin_ops_provider_usage_facts"
         ).fetchone()
+        auth_revision = connection.execute(
+            "SELECT auth_revision FROM admin_ops_users WHERE account_id='account-v5'"
+        ).fetchone()
     finally:
         connection.close()
     assert row == ("job-v5", 1, None, None, None, None)
+    assert auth_revision == (7,)

@@ -37,7 +37,7 @@ def sanitize_assistant_identity(text: Any) -> Any:
     value = text
     for pattern in _OLD_IDENTITY_PATTERNS:
         value = pattern.sub(ASSISTANT_DISPLAY_NAME, value)
-    replacement = f"我是{ASSISTANT_DISPLAY_NAME}，EcoreX WebUI 的 AI 助手。"
+    replacement = f"我是智能体{ASSISTANT_DISPLAY_NAME}，来自 e-Mate Agent。"
     for pattern in _PROVIDER_SELF_IDENTITY_PATTERNS:
         value = pattern.sub(replacement, value)
     return value

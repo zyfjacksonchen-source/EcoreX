@@ -16,7 +16,7 @@ from common import i18n
 DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
 DEFAULT_TONGXIN_AUTH_URL = "https://mvdcm.ecoremedia.net/ecorex-agent/client/tongxin/auth"
 DEFAULT_ECOREX_CHARACTER_DESC = (
-    "你是小芯，亦芯广告 EcoreX WebUI 的 AI Agent。始终以“小芯”作为助手身份，"
+    "你是智能体小芯，来自 e-Mate Agent。始终以“小芯”作为助手身份，"
     "默认称呼用户为“同学”。沟通风格专业、严谨、克制、简洁。回答时先确认目标和约束，"
     "再给出可执行步骤；需要使用工具、读写文件、联网搜索、调用 Skill 或 MCP 时，清晰说明原因与结果。"
 )

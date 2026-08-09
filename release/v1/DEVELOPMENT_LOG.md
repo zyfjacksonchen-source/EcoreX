@@ -1546,3 +1546,80 @@ Gateway 生产组合绑定 current-token authority：passed
 Gateway/设备身份聚焦回归：39 passed
 Ruff：passed
 ```
+
+# 2026-08-09 — 真实桌面首验缺陷收敛与首版全量验收门禁
+
+- 从 Actions `95df539` 的 macOS arm64 安装包真实安装并启动 e-Mate，完成测试账号
+  登录；默认目录只展示 Luna/max、DeepSeek、豆包与 Sol，Gemini 继续保留为不可用
+  槽位且不进入客户端目录。第一轮 Luna/max 真实请求成功，消息正文、小芯身份、会话
+  和完成终态均由 Runtime 事实投影。
+- 第二轮真实请求稳定失败为 `gatewayauthenticationerror`。生产只读对账确认第一轮
+  Usage 结算把用户普通并发 revision 从 148 推进到 149，而设备令牌权威错误地把该
+  revision 同时当作认证 epoch，因此一次成功用量就会废掉当前访问令牌。管理 schema
+  仅新增 v7 `auth_revision` 并按旧 `revision` 回填；用户资料、状态、额度、密码和租户
+  策略继续使旧令牌下一请求失效，Provider Token/图片用量结算只推进并发 revision，
+  不再把正常使用误判为权限变更。该修复位于企业管理适配层，没有改 CowAgent Core
+  架构或 Gateway 协议。
+- 正式聊天 Composer 的模型、外部连接、完全访问、用量和发送动作已经收进同一个
+  输入框工具栏；窄窗口禁止把这些元控件换行堆到输入框外。设置页把个人资料、常规、
+  知识和记忆改为互斥独立页面；记忆继续使用真实 snapshot/reset/undo API，知识继续
+  通过当前会话的 Agent/Skill 管理，不伪造 Runtime 尚未提供的知识树、图谱和导入列表。
+- Skill 用途分类不再把绝对路径中的 `Documents` 等目录名当作办公语义；批量图片继续
+  使用稳定 `t任务序-i图片序` 命名。首版真实验收新增连续两轮上下文、生图后“上一张”
+  续改、批量后“第 N 张”续改，以及刷新/重启后的 thread、parent execution、artifact
+  reference 和 revision lineage 对账。
+- 默认身份文案统一为“我是智能体小芯，来自 e-Mate Agent”，默认专业严谨并称呼用户
+  为“同学”；旧 Provider 自报身份的可见清洗结果也不再回写旧产品名。
+- 客户端审计上传合同与生产 `/api/v1/audit/records` 已经存在，但 predecessor
+  `runtime-config.audit` 一直为 null。2.0 builder 现在只在 Product 边界注入该现有
+  HTTPS 端点，继续使用已登录 managed session，不新增或下发审计 Secret；本地加密
+  outbox、30 天原始事实和 180 天聚合保留合同保持不变。
+- 通道真实预检确认 13/13 connector 均因 `runtime-config.connectors=null` 而安全关闭；
+  飞书/腾讯文档 begin 均在本地以 503 `connector_unavailable` 失败，未触达外部、未写入
+  凭据。仓库已有完整 Managed Connector 客户端合同，但没有远端 Connector Gateway、
+  OAuth client 凭据或签名 Runtime 配置；在这些真实外部依赖补齐前，连接、断线、重试
+  和撤销仍是发布阻断，不能用可点击但必失败的假适配器代替。
+
+本轮定向验证：
+
+```text
+管理 schema v1/v5/v6 -> v7 与连续令牌权威：17 passed
+Gateway 生产认证/管理组合：24 passed
+Renderer Composer/设置聚焦 E2E：2 passed
+Renderer 产品语言/功能合同：23 passed；TypeScript：passed
+Skill/Office/imagegen 联合回归：38 passed
+Gallery/失败槽位/恢复：13 passed
+连续上下文与生图续改合同：5 passed
+默认身份回归：6 passed
+真实通道目录与 fail-closed：passed；真实 OAuth/断连/重试：blocked
+新候选构建、真实连续对话、生改图、发布、latest：pending
+```
+
+# 2026-08-09 — 客户端能力合同与生产注入对账
+
+- 按 Runtime 外部服务合同、Actions 环境配置与公网路由三方对账。模型
+  Gateway、账号登录、生图、分享和更新发现已有生产路由；Gemini 只保留
+  租户可选槽位，没有活动配置或可用 Key，按要求不进客户端目录。
+- 审计上传服务与密钥已在 Control Plane，缺口仅是客户端
+  `runtime-config.audit=null`；2.0 builder 已在既有 Product 边界注入，无需新凭据。
+- 账号改密 `/v1/account/password` 与 Skill Hub
+  `/ecorex-agent/client/skill-hub/v1/*` 的客户端/服务端合同都已存在，但
+  生产 Nginx 未转发，公网只读探测分别返回 405 和 404。现只在现有
+  Control Plane 路由边界补两个精确反代，限制方法/请求大小并关闭请求缓冲，
+  未改 Core。
+- 通道合同仍缺 Connector Gateway、签名 Runtime 配置及 OAuth 应用凭据；
+  远程 MCP/OAuth 合同仍无任何已验证 binding/registration；OTLP 追踪合同仍无
+  collector 与 Runtime 配置。三者继续失败关闭，不伪造可用状态。
+- 2.0 更新 feed 合同已存在，但 GitHub 环境只有发布公钥和旧平台配置，
+  没有可调用的 2.0 public-bootstrap authority signer；`v2.0.0` Release 仍未存在，
+  不得在缺少 authority/freshness 签名时切换 `latest`。
+
+本轮定向证据：
+
+```text
+安装候选 Runtime config：audit/tracing/connectors = null
+Actions 三平台保护配置：audit/tracing/connectors = null
+公网无凭据路由探测：gateway/device/image/share/audit/release = 服务端路由存在
+公网缺口：account/password = 405；skill-hub = 404；connectors = 404；OTLP = 无 collector
+GitHub：v2.0.0 Release = absent；Connector/OAuth 凭据名 = absent
+```

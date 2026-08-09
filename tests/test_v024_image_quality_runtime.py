@@ -897,8 +897,8 @@ def test_imagegen_batch_ready_events_use_session_summary_file_names(monkeypatch,
     })
 
     expected_names = [
-        "轮播图-写入-20260703-165501-01.png",
-        "轮播图-写入-20260703-165501-02.png",
+        "轮播图-写入-20260703-165501-t01-i01.png",
+        "轮播图-写入-20260703-165501-t02-i01.png",
     ]
     assert result.status == "success"
     assert [Path(item["url"]).name for item in result.result["images"]] == expected_names

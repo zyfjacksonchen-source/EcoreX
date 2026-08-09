@@ -1093,6 +1093,35 @@ def test_session_login_nginx_limits_have_correct_scope_and_route_contract() -> N
     assert "limit_req_zone " not in routes
     assert "limit_conn_zone " not in routes
 
+    assert routes.count("location = /v1/account/password {") == 1
+    password = routes.split("location = /v1/account/password {", 1)[1].split(
+        "\n}", 1
+    )[0]
+    for directive in (
+        "client_max_body_size 64k;",
+        "limit_except POST { deny all; }",
+        "access_log off;",
+        "proxy_set_header Authorization $http_authorization;",
+        "proxy_request_buffering off;",
+        "proxy_buffering off;",
+    ):
+        assert directive in password
+
+    assert routes.count(
+        "location ^~ /ecorex-agent/client/skill-hub/v1/ {"
+    ) == 1
+    skill_hub = routes.split(
+        "location ^~ /ecorex-agent/client/skill-hub/v1/ {", 1
+    )[1].split("\n}", 1)[0]
+    for directive in (
+        "client_max_body_size 100m;",
+        "limit_except GET POST { deny all; }",
+        "proxy_set_header Authorization $http_authorization;",
+        "proxy_request_buffering off;",
+        "proxy_buffering off;",
+    ):
+        assert directive in skill_hub
+
 
 def test_session_login_nginx_limit_zone_conflicts_fail_closed() -> None:
     conflicting = (

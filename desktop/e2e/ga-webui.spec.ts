@@ -368,8 +368,20 @@ test("Composer stays at the workspace bottom and moves into the new-task home", 
   await expect(normalComposer).toBeVisible();
   await expect(normalComposer.locator("textarea")).toHaveAttribute("placeholder", "给小芯发送消息，支持粘贴图片或文件");
   expect(await normalComposer.evaluate((element) => getComputedStyle(element).borderTopStyle)).toBe("none");
+  const composerBox = await normalComposer.locator(".ex-composer").boundingBox();
+  expect(composerBox).not.toBeNull();
+  for (const control of [
+    normalComposer.getByRole("button", { name: "选择模型" }),
+    normalComposer.getByRole("button", { name: "打开外部连接与通道" }),
+    normalComposer.locator(".ex-permission-inline").filter({ hasText: /访问/u }),
+  ]) {
+    const controlBox = await control.boundingBox();
+    expect(controlBox).not.toBeNull();
+    expect(controlBox!.y).toBeGreaterThanOrEqual(composerBox!.y);
+    expect(controlBox!.y + controlBox!.height).toBeLessThanOrEqual(composerBox!.y + composerBox!.height);
+  }
   await expect(guardedPage.locator(".ex-permission-tooltip")).toHaveCount(0);
-  await normalComposer.locator(".ex-permission-inline").focus();
+  await normalComposer.locator(".ex-permission-inline").first().focus();
   await expect(guardedPage.locator(".ex-permission-tooltip")).toBeVisible();
   const [workspaceBox, normalComposerBox] = await Promise.all([workspace.boundingBox(), normalComposer.boundingBox()]);
   expect(workspaceBox).not.toBeNull();
@@ -729,6 +741,9 @@ test("settings persist output location, memory reset undo, and full-access revoc
   await guardedPage.getByRole("button", { name: "设置", exact: true }).click();
   const dialog = guardedPage.getByTestId("settings-workspace");
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "个人资料", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "知识", exact: true })).toBeHidden();
+  await expect(dialog.getByRole("heading", { name: "记忆", exact: true })).toBeHidden();
 
   await dialog.locator('input[type="file"][accept*="image/png"]').setInputFiles({
     name: "avatar.png",
@@ -737,6 +752,7 @@ test("settings persist output location, memory reset undo, and full-access revoc
   });
   await expect(dialog.getByRole("img", { name: "当前头像" })).toBeVisible();
 
+  await dialog.getByRole("button", { name: "常规设置", exact: true }).click();
   const outputLocation = dialog.getByLabel("默认产物保存位置");
   await expect(outputLocation).toHaveValue("documents");
   await outputLocation.selectOption("downloads");
@@ -744,6 +760,14 @@ test("settings persist output location, memory reset undo, and full-access revoc
   await dialog.getByRole("button", { name: "选择文件夹" }).click();
   await expect(outputLocation).toHaveValue("workspace");
 
+  await dialog.getByRole("button", { name: "知识", exact: true }).click();
+  await expect(dialog.getByRole("heading", { name: "知识", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "记忆", exact: true })).toBeHidden();
+  await expect(dialog.getByRole("button", { name: "在会话中管理" })).toBeVisible();
+
+  await dialog.getByRole("button", { name: "记忆", exact: true }).click();
+  await expect(dialog.getByRole("heading", { name: "记忆", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "知识", exact: true })).toBeHidden();
   const memorySection = dialog.getByRole("heading", { name: "记忆", exact: true }).locator("..");
   await memorySection.getByRole("button", { name: "一键重置" }).click();
   await memorySection.getByRole("button", { name: "确认重置" }).click();
@@ -751,6 +775,7 @@ test("settings persist output location, memory reset undo, and full-access revoc
   await memorySection.getByRole("button", { name: "撤销重置" }).click();
   await expect(memorySection.getByText("2 项可重置的偏好和资料记忆", { exact: true })).toBeVisible();
 
+  await dialog.getByRole("button", { name: "常规设置", exact: true }).click();
   const permissionSection = dialog.getByRole("heading", { name: "权限", exact: true }).locator("..");
   await permissionSection.getByRole("switch", { name: "关闭完全访问" }).click();
   await expect(permissionSection.getByText("默认权限", { exact: true })).toBeVisible();
