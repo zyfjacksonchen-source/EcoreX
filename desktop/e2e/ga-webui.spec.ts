@@ -353,7 +353,9 @@ test("terminal replies expose durable elapsed time and truthful quick copy feedb
 test("conversation pinning persists through the backend catalog", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "artifact");
   const task = guardedPage.getByRole("button", { name: "打开任务：季度资料整理" });
-  await guardedPage.getByRole("button", { name: "管理任务：季度资料整理" }).click();
+  const manageTask = guardedPage.getByRole("button", { name: "管理任务：季度资料整理" });
+  await manageTask.locator("..").hover();
+  await manageTask.click();
   await guardedPage.getByRole("menuitem", { name: "置顶会话" }).click();
   await expect(task.locator(".ex-task-pin")).toBeVisible();
 
@@ -653,6 +655,7 @@ test("scheduled tasks and external connections enter the real conversation and c
   await expect(guardedPage.getByRole("heading", { name: "能力中心" })).toBeVisible();
 
   const dingtalk = channels.locator("article.ex-connector-row").filter({ hasText: "钉钉" });
+  await expect(dingtalk).not.toContainText("当前安装未包含这个连接所需的组件");
   await dingtalk.getByRole("button", { name: "配置账号" }).click();
   await expect(dingtalk.getByLabel("连接名称")).toBeVisible();
   await expect(dingtalk.getByLabel("Client ID")).toBeVisible();
@@ -683,6 +686,7 @@ test("scheduled tasks and external connections enter the real conversation and c
   await expect(weixinQr).toHaveCount(0);
 
   const telegram = channels.locator("article.ex-connector-row").filter({ hasText: "Telegram" });
+  await expect(telegram).not.toContainText("当前安装未包含这个连接所需的组件");
   await telegram.getByRole("button", { name: "配置账号" }).click();
   await telegram.getByLabel("连接名称").fill("办公通知机器人");
   const secret = telegram.locator('input[type="password"]');
@@ -966,6 +970,54 @@ test("task inspection keeps implementation details collapsed and explicitly star
   await expect(dialog.getByText("权限记录 ID", { exact: true })).toBeHidden();
   await dialog.getByRole("button", { name: "关闭并查看新结果" }).click();
   await expect(dialog).toBeHidden();
+});
+
+test("closing a cold lazy task dialog releases the workspace for every task-detail control", async ({ guardedPage }) => {
+  await openThreadScenario(guardedPage, "replay");
+  await guardedPage.route("**/*.js", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    await route.continue();
+  });
+
+  await guardedPage.getByRole("button", { name: "打开任务更多菜单" }).click();
+  await guardedPage.getByRole("menuitem", { name: "任务检查与重新运行" }).click();
+  await expect(guardedPage.getByRole("heading", { name: "正在打开任务检查与重新运行" })).toBeVisible();
+  const replay = guardedPage.getByRole("dialog", { name: "任务检查与重新运行" });
+  await expect(replay).toBeVisible();
+  await replay.getByRole("button", { name: "关闭任务检查" }).click();
+  await expect(guardedPage.locator("body")).not.toHaveCSS("pointer-events", "none");
+
+  await guardedPage.getByRole("button", { name: "选择模型" }).click();
+  await expect(guardedPage.getByRole("menu", { name: "选择模型" })).toBeVisible();
+  await guardedPage.getByRole("menuitemradio", { name: "GPT-5.6 Luna · 最大推理" }).click();
+
+  const usage = guardedPage.getByRole("button", { name: /查看用量/u });
+  await usage.click();
+  await expect(usage).toHaveAttribute("aria-pressed", "true");
+  await expect(guardedPage.locator(".ex-usage-tooltip")).toBeVisible();
+  await usage.click();
+  await expect(usage).toHaveAttribute("aria-pressed", "false");
+  await guardedPage.mouse.move(0, 0);
+  await expect(guardedPage.locator(".ex-usage-tooltip")).toBeHidden();
+
+  const manageTask = guardedPage.getByRole("button", { name: "管理任务：季度资料整理" });
+  await manageTask.locator("..").hover();
+  await manageTask.click();
+  await expect(guardedPage.getByRole("menuitem", { name: "重命名" })).toBeVisible();
+  await guardedPage.keyboard.press("Escape");
+
+  await guardedPage.locator(".ex-workspace-bottom .ex-permission-inline").filter({ hasText: /访问/u }).click();
+  const settings = guardedPage.getByTestId("settings-workspace");
+  await expect(settings).toBeVisible();
+  await settings.getByRole("button", { name: "关闭设置" }).click();
+
+  await guardedPage.getByRole("button", { name: "打开外部连接与通道" }).click();
+  await expect(guardedPage.getByTestId("capability-channels")).toBeVisible();
+  await guardedPage.getByRole("button", { name: "打开任务：季度资料整理" }).click();
+  await expect(guardedPage.getByRole("region", { name: "对话" })).toBeVisible();
+
+  await guardedPage.getByRole("button", { name: "新建任务" }).click();
+  await expect(guardedPage.locator(".ex-home-dashboard")).toBeVisible();
 });
 
 test("reasoning stays visible until replacement and terminal facts clear the first-turn indicator", async ({ guardedPage }) => {

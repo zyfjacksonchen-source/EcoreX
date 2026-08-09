@@ -2191,3 +2191,23 @@ git diff check：passed
 Windows CI 的首轮跨平台回归在主动关闭不可信长响应时由 `IncomingMessage` 发出
 `ECONNRESET`；产品探针现在先完成 proof 判定、注册固定错误收敛，再销毁响应，测试 listener
 也显式收敛平台 TCP reset。该修复不放宽 proof、截止时间或连接关闭门禁。
+
+## 2026-08-10 补充 — 任务详情冷加载交互与通道状态收敛
+
+- 真实 Browser 对抗验收复现：任务更多菜单首次冷加载检查/重跑弹窗后，菜单与模态框交接会让
+  `body` 遗留 `pointer-events: none`，后续模型、权限、外部连接、任务管理和新建任务均无法点击。
+  根因修复只把菜单触发的模态框开启延迟到下一帧，让原菜单先完成关闭与页面锁释放；没有改
+  Radix 模态语义或 CowAgent Core。
+- Composer 用量按钮保留悬停摘要，并增加真实点击开关、`aria-expanded`/`aria-pressed` 与
+  Escape/失焦关闭，消除可见但点击无反馈的控件。
+- 能力中心不再把企业文档/OAuth Connector 的不可用状态叠加到已经可配置的本机消息 Bot；
+  本机通道缺失仍按真实 `channelUnavailable` 显示，未打包的微信公众号仍无操作按钮。
+
+定向验证：
+
+```text
+冷加载任务详情全路径、Composer 用量、定时任务与外部通道：3 passed
+会话管理悬停真实路径：1 passed
+TypeScript/runtime contracts：passed
+Vite production build / git diff check：passed
+```

@@ -105,6 +105,8 @@ export function Composer({
     imageUrl: string | null;
   }>>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [usageHoverOpen, setUsageHoverOpen] = useState(false);
+  const [usagePinned, setUsagePinned] = useState(false);
   const [selectedMentions, setSelectedMentions] = useState<CapabilityMentionProjection[]>([]);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionRange, setMentionRange] = useState<{ start: number; end: number } | null>(null);
@@ -132,6 +134,7 @@ export function Composer({
   const usageScopeLabel = usage?.complete_across_devices
     ? "账号累计"
     : "仅此设备";
+  const usageOpen = usageHoverOpen || usagePinned;
   const sendLabel = submitting ? "发送中" : sendFailed ? "重试发送" : "发送";
   const selectedChatModel = chatModels.find((model) => model.model_id === chatModel);
   const mentionOptions = useMemo(() => {
@@ -521,9 +524,20 @@ export function Composer({
                 <Square aria-hidden="true" />
               </IconButton>
             ) : null}
-            <Tooltip.Root delayDuration={500}>
+            <Tooltip.Root delayDuration={500} open={usageOpen} onOpenChange={setUsageHoverOpen}>
               <Tooltip.Trigger asChild>
-                <button className="ex-usage-summary" type="button" aria-label={`查看用量。上下文 ${contextLabel}`}>
+                <button
+                  className="ex-usage-summary"
+                  type="button"
+                  aria-label={`查看用量。上下文 ${contextLabel}`}
+                  aria-expanded={usageOpen}
+                  aria-pressed={usagePinned}
+                  onBlur={() => setUsagePinned(false)}
+                  onClick={() => {
+                    setUsageHoverOpen(false);
+                    setUsagePinned((open) => !open);
+                  }}
+                >
                   <svg className="ex-context-ring" viewBox="0 0 20 20" aria-hidden="true">
                     <circle className="ex-context-ring-track" cx="10" cy="10" r="7" pathLength="100" />
                     <circle
@@ -539,7 +553,12 @@ export function Composer({
                 </button>
               </Tooltip.Trigger>
               <Tooltip.Portal>
-                <Tooltip.Content className="ex-tooltip ex-usage-tooltip" side="top" sideOffset={8}>
+                <Tooltip.Content
+                  className="ex-tooltip ex-usage-tooltip"
+                  side="top"
+                  sideOffset={8}
+                  onEscapeKeyDown={() => setUsagePinned(false)}
+                >
                   <span><b>今日</b>{formatTokens(usage?.today.total_tokens)}</span>
                   <span><b>本周</b>{formatTokens(usage?.week.total_tokens)}</span>
                   <span><b>上下文</b>{contextLabel}</span>

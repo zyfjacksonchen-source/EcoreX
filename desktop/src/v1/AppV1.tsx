@@ -551,7 +551,7 @@ export function AppV1() {
             onSelect={() => {
               captureFeatureTrigger(replayReturnFocusRef);
               warmFeature(loadReplayDialog);
-              setReplayOpen(true);
+              window.requestAnimationFrame(() => setReplayOpen(true));
             }}
           >
             <History aria-hidden="true" />
@@ -568,7 +568,7 @@ export function AppV1() {
             onSelect={() => {
               captureFeatureTrigger(settingsReturnFocusRef);
               warmFeature(loadSettingsDialog);
-              setSettingsOpen(true);
+              window.requestAnimationFrame(() => setSettingsOpen(true));
             }}
           >
             <Settings2 aria-hidden="true" />
