@@ -1753,6 +1753,8 @@ def test_missing_session_starts_unauthenticated_with_model_execution_closed(
     assert server.composition.device_authorization is not None
     assert server.app.state.runtime_settings.require_managed_session is True
     assert server.app.state.model_worker_supervisor is None
+    assert server.app.state.channel_runtime_dispatcher is None
+    assert server.app.state.channel_self_service.adapters == {}
 
 
 def test_expired_signed_session_keeps_local_shell_but_not_model_worker(

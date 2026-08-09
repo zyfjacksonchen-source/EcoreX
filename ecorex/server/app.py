@@ -45,6 +45,7 @@ from ecorex.runtime.api import create_app as register_runtime
 from ecorex.projects import ProjectWorkspaceAuthority
 from ecorex.session import (
     ManagedDeviceAuthorizationService,
+    ManagedSessionError,
     ManagedSessionRefreshService,
     ManagedSessionService,
 )
@@ -563,6 +564,32 @@ def _managed_wechat_adapters(
     return result
 
 
+def _message_channel_adapters(settings: ProductServerSettings) -> dict[str, Any]:
+    if settings.model_gateway is None or settings.acceptance_preview:
+        return {}
+    if settings.managed_session_service is not None:
+        try:
+            settings.managed_session_service.read_snapshot()
+        except ManagedSessionError:
+            return {}
+    elif not settings.allow_unmanaged_session_for_testing:
+        return {}
+    database = Path(settings.database_path).expanduser().resolve()
+    return {
+        "dingtalk": DingTalkStreamAdapter(database.with_name("channel-dingtalk-v1.db")),
+        "discord": DiscordGatewayAdapter(database.with_name("channel-discord-v1.db")),
+        "feishu": FeishuMessageBotAdapter(database.with_name("channel-feishu-v1.db")),
+        "qq": QQBotGatewayAdapter(database.with_name("channel-qq-v1.db")),
+        "slack": SlackSocketModeAdapter(database.with_name("channel-slack-v1.db")),
+        "telegram": TelegramBotAdapter(database.with_name("channel-telegram-v1.db")),
+        "wecom_bot": WeComBotLongConnectionAdapter(
+            database.with_name("channel-wecom-bot-v1.db")
+        ),
+        "weixin": WeixinILinkAdapter(database.with_name("channel-weixin-v1.db")),
+        **_managed_wechat_adapters(settings),
+    }
+
+
 def create_product_app(settings: ProductServerSettings) -> FastAPI:
     bundle = load_verified_web_bundle(
         web_root=settings.web_root,
@@ -711,53 +738,7 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         model_worker_concurrency=settings.model_worker_concurrency,
         update_service=settings.update_service,
         connector_adapters=settings.connector_adapters,
-        channel_lifecycle_adapters=(
-            {
-                "dingtalk": DingTalkStreamAdapter(
-                    Path(settings.database_path).expanduser().resolve().with_name(
-                        "channel-dingtalk-v1.db"
-                    )
-                ),
-                "discord": DiscordGatewayAdapter(
-                    Path(settings.database_path).expanduser().resolve().with_name(
-                        "channel-discord-v1.db"
-                    )
-                ),
-                "feishu": FeishuMessageBotAdapter(
-                    Path(settings.database_path).expanduser().resolve().with_name(
-                        "channel-feishu-v1.db"
-                    )
-                ),
-                "qq": QQBotGatewayAdapter(
-                    Path(settings.database_path).expanduser().resolve().with_name(
-                        "channel-qq-v1.db"
-                    )
-                ),
-                "slack": SlackSocketModeAdapter(
-                    Path(settings.database_path).expanduser().resolve().with_name(
-                        "channel-slack-v1.db"
-                    )
-                ),
-                "telegram": TelegramBotAdapter(
-                    Path(settings.database_path).expanduser().resolve().with_name(
-                        "channel-telegram-v1.db"
-                    )
-                ),
-                "wecom_bot": WeComBotLongConnectionAdapter(
-                    Path(settings.database_path).expanduser().resolve().with_name(
-                        "channel-wecom-bot-v1.db"
-                    )
-                ),
-                "weixin": WeixinILinkAdapter(
-                    Path(settings.database_path).expanduser().resolve().with_name(
-                        "channel-weixin-v1.db"
-                    )
-                ),
-                **_managed_wechat_adapters(settings),
-            }
-            if settings.model_gateway is not None and not settings.acceptance_preview
-            else {}
-        ),
+        channel_lifecycle_adapters=_message_channel_adapters(settings),
         connector_vault=settings.connector_vault,
         connector_oauth_return_uri=(
             settings.origin + "/api/v1/connectors/oauth/callback"

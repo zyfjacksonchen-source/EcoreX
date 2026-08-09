@@ -2066,6 +2066,26 @@ macOS Product 默认组合不调用 Keychain：passed
 新签名候选首次安装与 Computer Use：pending CI rebuild
 ```
 
+## 2026-08-09 补充 — 未登录首启延迟装配消息通道
+
+- 本机加密 Vault 候选在全新 HOME 中已创建 `0600` key/密文文件并完成 Bootstrap 健康确认，
+  证明 Keychain 阻断已关闭。Runtime 随后在 `runtime_registration` 正确失败关闭；对同一签名
+  slot 的无 Secret 诊断定位为：未登录时没有 Agent worker，但 Product 已提前传入 11 个
+  可绑定消息通道适配器。
+- Product 组合现在仅在受管会话签名快照有效后装配消息通道。未登录、过期会话和 acceptance
+  preview 均不构造、不恢复、不启动任何外部通道；登录安装新 lease 后仍沿用现有受控重启，
+  在下一次启动把同一组适配器绑定到唯一 ChannelRuntimeDispatcher/Agent worker。
+- Runtime 对“存在可绑定通道但没有 Agent worker”的严格拒绝保持不变；未修改 Core、通道协议、
+  凭据格式或生命周期实现。
+
+定向验证：
+
+```text
+未登录 Product：model worker none；channel dispatcher none；adapter map empty
+有效受管会话 Product：11 adapters；dispatcher bound
+新签名候选首次安装与 Computer Use：pending CI rebuild
+```
+
 ## 2026-08-09 补充 — 生产 Usage/Audit 2.0 同窗对账完成
 
 - 上一轮 2.0 Usage Panel 替换后能用纯日期完成同投影验证，但正式对账脚本传入带时区的 ISO
