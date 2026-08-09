@@ -8,6 +8,7 @@ import pytest
 
 from ecorex.connectors import (
     EphemeralEncryptedCredentialVault,
+    LocalEncryptedCredentialVault,
     MacOSKeychainCredentialVault,
     WindowsCredentialVault,
     production_credential_vault,
@@ -114,3 +115,19 @@ def test_acceptance_vault_survives_restart_without_plaintext(tmp_path) -> None:
         )
     second.delete("ecorex/session/test")
     assert not path.exists()
+
+
+def test_local_desktop_vault_survives_restart_without_keychain_or_plaintext(
+    tmp_path,
+) -> None:
+    reference = "ecorex/session/test"
+    material = {"access_token": "TOP-SECRET", "refresh_token": "REFRESH-SECRET"}
+
+    first = LocalEncryptedCredentialVault(tmp_path)
+    first.put(reference, material)
+    second = LocalEncryptedCredentialVault(tmp_path)
+
+    assert second.get(reference) == material
+    assert b"TOP-SECRET" not in (tmp_path / ".credential-vault").read_bytes()
+    assert (tmp_path / ".credential-vault.key").stat().st_mode & 0o077 == 0
+    assert (tmp_path / ".credential-vault").stat().st_mode & 0o077 == 0

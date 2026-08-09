@@ -58,6 +58,7 @@ from ecorex.integration.pack_python import resolve_pack_python
 from ecorex.connectors import (
     CredentialVault,
     EphemeralEncryptedCredentialVault,
+    LocalEncryptedCredentialVault,
     ManagedConnectorGatewayAdapter,
     production_credential_vault,
 )
@@ -1010,6 +1011,8 @@ def load_product_runtime(
                 database_path.parent / RUNTIME_ACCEPTANCE_VAULT_FILENAME,
                 key=preview_vault_key,
             )
+        elif host_platform == "macos" and vault_factory is production_credential_vault:
+            vault = LocalEncryptedCredentialVault(database_path.parent)
         else:
             vault = vault_factory()
     except Exception:

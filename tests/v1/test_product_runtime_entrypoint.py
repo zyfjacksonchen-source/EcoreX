@@ -25,6 +25,7 @@ from ecorex.bootstrap import RUNTIME_RELOAD_EXIT_CODE
 from ecorex.connectors import (
     EphemeralEncryptedCredentialVault,
     InMemoryCredentialVault,
+    LocalEncryptedCredentialVault,
 )
 from ecorex.observability.audit import AuditIntegrityError
 from ecorex.pack_catalog import (
@@ -992,6 +993,26 @@ def test_acceptance_preview_keeps_session_model_and_image_but_disables_business_
             host_platform=product["platform"],
             host_architecture=product["architecture"],
         )
+
+
+def test_unsigned_macos_product_uses_local_vault_without_platform_keychain(
+    tmp_path: Path,
+) -> None:
+    if os.name == "nt":
+        pytest.skip("macOS product composition is not built on Windows")
+    product = _stage_product(tmp_path)
+
+    composition = load_product_runtime(
+        payload_root=product["payload"],
+        environment={"ECOREX_BOOTSTRAPPED": "1"},
+        host_platform=product["platform"],
+        host_architecture=product["architecture"],
+    )
+    try:
+        assert isinstance(composition.managed_session.vault, LocalEncryptedCredentialVault)
+        assert (product["database"].parent / ".credential-vault.key").exists()
+    finally:
+        composition.close_unstarted()
 
 
 def test_real_signed_slot_builds_product_app_and_uvicorn_config(tmp_path: Path) -> None:

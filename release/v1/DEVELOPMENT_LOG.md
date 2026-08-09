@@ -2045,6 +2045,27 @@ Ruff / py_compile / git diff check：passed
 新签名三平台候选与 Computer Use 复验：pending CI rebuild
 ```
 
+## 2026-08-09 补充 — 未签名 macOS 改用 e-Mate 本机加密凭据库
+
+- `5e240d7` 的新签名 macOS arm64 候选再次完成 Bootstrap 健康确认，但 Runtime 首次写入
+  新 e-Mate Keychain 服务时得到 OSStatus `-60006`。本机 SDK 与 `security error` 均确认该
+  状态是“授权被用户取消”；界面没有出现可接管的密码框，因此未继续依赖系统钥匙串。
+- 按用户确认，正式 macOS 产品组合改为 e-Mate 数据目录内的本机加密凭据库。凭据正文使用
+  现有 AES-GCM 文件 Vault，密钥与密文分别以 owner-only `0600` 文件持久化，原子替换、
+  `O_NOFOLLOW`、单硬链接与长度门禁继续生效；前端、错误和日志不返回 Secret。CowAgent 的
+  明文 `config.json` 方案没有复用。
+- 改动只发生在 macOS Product 凭据组合边界；Windows Credential Manager、Agent Runtime、
+  通道/MCP/审计合同均未改。旧 CowAgent 本地模型 Key/Web 密码仍不迁移。
+
+定向验证：
+
+```text
+本机加密 Vault 重启恢复、密文无明文、key/vault 权限 0600：passed
+macOS Product 默认组合不调用 Keychain：passed
+聚焦回归：2 passed
+新签名候选首次安装与 Computer Use：pending CI rebuild
+```
+
 ## 2026-08-09 补充 — 生产 Usage/Audit 2.0 同窗对账完成
 
 - 上一轮 2.0 Usage Panel 替换后能用纯日期完成同投影验证，但正式对账脚本传入带时区的 ISO

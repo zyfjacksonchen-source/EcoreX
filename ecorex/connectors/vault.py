@@ -1,4 +1,4 @@
-"""Credential vault boundary backed by the operating-system credential store.
+"""Credential vault boundary backed by an encrypted product or platform store.
 
 The serialized credential document is never returned in error messages and is
 never written to SQLite.  Backend injection is intentionally supported so the
@@ -153,7 +153,7 @@ class RejectingCredentialVault:
 
 
 class InMemoryCredentialVault:
-    """Test-only vault. Production composition must use the OS keychain."""
+    """Test-only vault. Production composition must use a persistent vault."""
 
     def __init__(self) -> None:
         self._values: dict[str, dict[str, str]] = {}
@@ -319,6 +319,64 @@ class EphemeralEncryptedCredentialVault:
                 temporary.unlink(missing_ok=True)
             for index in range(len(plaintext)):
                 plaintext[index] = 0
+
+
+class LocalEncryptedCredentialVault(EphemeralEncryptedCredentialVault):
+    """Encrypted desktop vault backed by owner-only files, not an OS keychain."""
+
+    _KEY_FILENAME = ".credential-vault.key"
+    _VAULT_FILENAME = ".credential-vault"
+
+    def __init__(self, directory: str | os.PathLike[str]) -> None:
+        root = Path(os.path.abspath(directory))
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        super().__init__(root / self._VAULT_FILENAME, key=self._key(root))
+
+    @classmethod
+    def _key(cls, root: Path) -> bytes:
+        path = root / cls._KEY_FILENAME
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(path, flags)
+        except FileNotFoundError:
+            candidate = os.urandom(32)
+            try:
+                descriptor = os.open(
+                    path,
+                    os.O_WRONLY
+                    | os.O_CREAT
+                    | os.O_EXCL
+                    | getattr(os, "O_NOFOLLOW", 0),
+                    0o600,
+                )
+            except FileExistsError:
+                return cls._key(root)
+            try:
+                offset = 0
+                while offset < len(candidate):
+                    written = os.write(descriptor, candidate[offset:])
+                    if written <= 0:
+                        raise OSError("local credential vault key write was incomplete")
+                    offset += written
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            return candidate
+        try:
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or metadata.st_mode & 0o077
+                or metadata.st_size != 32
+            ):
+                raise RuntimeError("local credential vault key is invalid")
+            material = os.read(descriptor, 33)
+        finally:
+            os.close(descriptor)
+        if len(material) != 32:
+            raise RuntimeError("local credential vault key is invalid")
+        return material
 
 
 class _WindowsCredentialBackend:
@@ -639,6 +697,7 @@ __all__ = [
     "CredentialVault",
     "EphemeralEncryptedCredentialVault",
     "InMemoryCredentialVault",
+    "LocalEncryptedCredentialVault",
     "MacOSKeychainCredentialVault",
     "RejectingCredentialVault",
     "SerializedCredentialVault",
