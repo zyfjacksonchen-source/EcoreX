@@ -69,6 +69,7 @@ jobs:
           node --test \
             tools/ga-mock-server.test.mjs \
             tools/product-language-contract.test.mjs
+          npx playwright install chromium
           npx playwright test \
             --config=playwright.config.ts \
             e2e/ga-webui.spec.ts \
