@@ -26,6 +26,8 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
+from ecorex import __version__
+
 from .models import (
     GatewayAccountUsageProjection,
     GatewayEvent,
@@ -1994,7 +1996,7 @@ def create_managed_gateway_app(
 
     app = FastAPI(
         title="e-Mate Managed Model Gateway",
-        version="2.0.0",
+        version=__version__,
         docs_url=None,
         redoc_url=None,
         openapi_url="/api/v1/openapi.json",

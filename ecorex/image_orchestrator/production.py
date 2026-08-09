@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from ecorex import __version__
 from ecorex.control_plane.management import AdminManagementRepository
 from ecorex.control_plane.management_schema import AdminManagementSchemaManager
 from ecorex.security.provider_tls import (
@@ -1180,7 +1181,7 @@ def create_image_production_app(
 
     app = FastAPI(
         title="e-Mate Image Orchestrator",
-        version="2.0.0",
+        version=__version__,
         docs_url=None,
         redoc_url=None,
         openapi_url="/api/v1/openapi.json" if include_api else None,

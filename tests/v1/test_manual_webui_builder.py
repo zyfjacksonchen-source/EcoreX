@@ -8,6 +8,7 @@ import zipfile
 
 import pytest
 
+from ecorex import __version__
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "build-v1-manual-webui.py"
@@ -86,7 +87,7 @@ def test_manual_webui_runtime_config_is_canonical_and_rebound(
         allow_nan=False,
     ).encode("utf-8")
     assert value["identity"] == {
-        "version": "2.0.0",
+        "version": __version__,
         "platform": "macos",
         "architecture": "arm64",
     }
@@ -101,8 +102,8 @@ def test_manual_webui_runtime_config_is_canonical_and_rebound(
     assert value["connectors"] is None
     assert value["capability_packs"] == [
         {
-            "artifact": "ecorex-capability-pack-2.0.0.zip",
-            "manifest": "ecorex-capability-pack-2.0.0.json",
+            "artifact": f"ecorex-capability-pack-{__version__}.zip",
+            "manifest": f"ecorex-capability-pack-{__version__}.json",
         }
     ]
 
@@ -144,7 +145,7 @@ def test_manual_webui_release_sources_are_one_ordered_set() -> None:
         ("cdn", 2),
     ]
     assert sources[0].base_url.startswith("https://gh-proxy.com/")
-    assert sources[1].base_url.endswith("/EcoreX/releases/download/v2.0.0")
+    assert sources[1].base_url.endswith(f"/EcoreX/releases/download/v{__version__}")
     assert sources[2].base_url == "https://mvdcm.ecoremedia.net/e-mate/update"
 
 

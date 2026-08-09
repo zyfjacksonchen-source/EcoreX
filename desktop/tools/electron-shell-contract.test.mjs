@@ -7,11 +7,15 @@ import updateContract from "../electron/update-contract.cjs";
 
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const load = (relative) => readFile(path.join(desktop, relative), "utf8");
+const productVersion = async () => (await readFile(
+  path.resolve(desktop, "../ecorex/_version.py"),
+  "utf8",
+)).match(/__version__ = "([^"]+)"/)?.[1];
 
 test("desktop identity and unsigned release targets are explicit", async () => {
   const pkg = JSON.parse(await load("package.json"));
   assert.equal(pkg.name, "e-mate-desktop");
-  assert.equal(pkg.version, "2.0.0");
+  assert.equal(pkg.version, await productVersion());
   assert.equal(pkg.main, "electron/main.cjs");
   assert.equal(pkg.build.appId, "net.ecoremedia.emate");
   assert.equal(pkg.build.productName, "e-Mate");

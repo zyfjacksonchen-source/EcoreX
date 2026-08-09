@@ -19,13 +19,18 @@ def test_production_deployer_accepts_the_current_usage_contract(monkeypatch) -> 
     root = Path(__file__).resolve().parents[2]
     monkeypatch.syspath_prepend(str(root / "scripts"))
     deployer = runpy.run_path(str(root / "scripts/deploy-v030-production-usage-panel.py"))
-    payload = Path(usage_panel_service.__file__).read_bytes()
+    payload = deployer["_materialize_source"](
+        Path(usage_panel_service.__file__).read_bytes(),
+        expected_version=PRODUCT_VERSION,
+    )
 
     assert deployer["_source_contract_matches"](
         payload,
         expected_version=PRODUCT_VERSION,
         expected_projection=usage_panel_service.USAGE_PROJECTION_VERSION,
     )
+    assert b"from ecorex import __version__" not in payload
+    compile(payload, "usage_panel_api.py", "exec")
     assert repr(usage_panel_service.USAGE_PROJECTION_VERSION) in deployer[
         "_verify_program"
     ](

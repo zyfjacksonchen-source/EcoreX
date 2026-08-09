@@ -11,10 +11,11 @@ import threading
 
 import pytest
 
+from ecorex import __version__
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "deploy-emate-desktop-feed.py"
-VERSION = "2.0.0"
+VERSION = __version__
 COMMIT = "a" * 40
 RELEASE_ID = "release-stable-test"
 BUILD_DIGEST = hashlib.sha256(b"build").hexdigest()
@@ -44,9 +45,9 @@ def _feed(tmp_path: Path, *, previous: bool = True) -> tuple[Path, Path, dict[st
         os.symlink(OLD_TARGET, root / "current")
 
     files = {
-        "latest.yml": b"version: 2.0.0\n",
-        "latest-mac.yml": b"version: 2.0.0\n",
-        "download-index.json": b'{"version":"2.0.0"}\n',
+        "latest.yml": f"version: {VERSION}\n".encode(),
+        "latest-mac.yml": f"version: {VERSION}\n".encode(),
+        "download-index.json": json.dumps({"version": VERSION}).encode() + b"\n",
         "public-bootstrap-index.json": b'{"schema":"public-bootstrap"}\n',
         f"runtime/{RELEASE_ID}/release-manifest.json": MANIFEST,
     }

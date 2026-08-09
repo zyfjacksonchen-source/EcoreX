@@ -17,6 +17,7 @@ HASHED_ASSET = re.compile(
     r"(?P<digest>[0-9a-f]{12})\."
     r"(?P<suffix>js|css|jpg|png|svg|webp|woff2)$"
 )
+SEMVER_LITERAL = re.compile(r"(?<![A-Za-z0-9.])\d+\.\d+\.\d+(?![A-Za-z0-9.])")
 FORBIDDEN_LEGACY = (
     "install-webui.ps1",
     "install-webui.sh",
@@ -187,10 +188,8 @@ def main() -> int:
             and "featureNav.textContent = `${major}.${minor} 新功能`" in javascript
             and "releaseLabel.textContent = `当前版本 ${index.version}" in javascript
             and "WEBUI_RELEASE" not in javascript
-            and "2.0.0" not in html
-            and "2.0.0" not in javascript
-            and "1.0.0" not in html
-            and "1.0.0" not in javascript,
+            and SEMVER_LITERAL.search(html) is None
+            and SEMVER_LITERAL.search(javascript) is None,
             "public product versions must come from the desktop feed",
             errors,
         )

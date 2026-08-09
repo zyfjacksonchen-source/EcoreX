@@ -22,6 +22,7 @@ SERVICE = "ecorex-usage-panel-api.service"
 SERVER_ROOT = "/srv/ecorex-agent-usage-panel/server"
 REMOTE_SOURCE = f"{SERVER_ROOT}/usage_panel_api.py"
 MAX_SOURCE_BYTES = 1024 * 1024
+VERSION_BINDING = b"from ecorex import __version__\n\nVERSION = __version__"
 
 
 def _sha256(value: bytes) -> str:
@@ -36,6 +37,17 @@ def _source_contract_matches(
         and f'USAGE_PROJECTION_VERSION = "{expected_projection}"'.encode() in payload
         and b'audit["usageKpis"]' in payload
         and b'payload["reconciliation"]' in payload
+    )
+
+
+def _materialize_source(payload: bytes, *, expected_version: str) -> bytes:
+    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", expected_version) is None:
+        raise ValueError("usage_version_invalid")
+    if payload.count(VERSION_BINDING) != 1:
+        raise ValueError("usage_version_binding_invalid")
+    return payload.replace(
+        VERSION_BINDING,
+        f'VERSION = "{expected_version}"'.encode(),
     )
 
 
@@ -197,7 +209,12 @@ def main() -> int:
     parser.add_argument("--expected-projection", required=True)
     args = parser.parse_args()
     source = args.source.resolve(strict=True)
-    payload = source.read_bytes()
+    try:
+        payload = _materialize_source(
+            source.read_bytes(), expected_version=args.expected_version
+        )
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
     if not 1 <= len(payload) <= MAX_SOURCE_BYTES or not _source_contract_matches(
         payload,
         expected_version=args.expected_version,

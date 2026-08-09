@@ -10,6 +10,7 @@ import sys
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from ecorex import __version__
 from ecorex.release import (
     ArtifactBuildInput,
     ArtifactKind,
@@ -24,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "prepare-emate-desktop-feed.py"
 NGINX = ROOT / "deploy" / "e-mate" / "nginx" / "update-feed.conf"
 COMMIT = "a" * 40
-VERSION = "2.0.0"
+VERSION = __version__
 
 
 def _sha512(path: Path) -> str:
@@ -239,7 +240,11 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
     workflow = (
         ROOT / ".github" / "workflows" / "emate-2.0-desktop-release.yml"
     ).read_text()
-    assert "- codex/e-mate-2.0.0" in workflow
+    assert "- codex/e-mate-*" in workflow
+    assert "needs.runtime.outputs.version" in workflow
+    assert 'package["version"] == branch_version == __version__' in workflow
+    assert '--expected-version "${{ needs.runtime.outputs.version }}"' in workflow
+    assert "e-mate-2.0.0-runtime-seed" not in workflow
     assert "workflow_dispatch:" in workflow
     assert '"desktop/release/latest-mac-$arch.yml"' in workflow
     assert "name: verify and merge desktop feed" in workflow

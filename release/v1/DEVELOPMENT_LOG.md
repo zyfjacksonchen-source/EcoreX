@@ -2135,3 +2135,27 @@ Connector Vault 聚焦回归：7 passed
 git diff check：passed
 新签名三平台候选与 Computer Use 复验：pending CI rebuild
 ```
+
+## 2026-08-10 补充 — 修正版发行身份统一为 2.0.1
+
+- 公开 `v2.0.0` tag、Release 与既有资产保持不可变；其 tag 仍绑定已发布提交，未覆盖、删除或
+  重签。包含本机加密 Vault、未登录通道延迟装配等修复的新候选按正常升级语义使用 `2.0.1`，
+  避免 Electron updater 与 Bootstrap 把“同版本不同目标”误判为回滚或拒绝。
+- Python `ecorex.__version__` 继续作为产品版本唯一源。Electron package/lock 与它严格对账；
+  Gateway、Image Orchestrator、Usage 面板及 Runtime builder 均直接读取该源，不再各自保存产品
+  版本常量。
+- Desktop Release workflow 从分支名与 Python/Electron 版本动态核对发行身份，并把同一 job
+  output 传给 Runtime、三平台制品和 feed gate；安装包、Artifact 与 feed 不再散落硬编码版本。
+  下载页继续只从受校验的 `download-index.json` 展示版本，静态门禁改为拒绝任意 SemVer 字面量。
+- Usage 面板仍保持单文件生产部署：部署器在上传边界把同一 Python 产品版本物化为字面量并移除
+  包导入，随后才做独立脚本合同校验；不会要求线上旧单文件环境额外安装 `ecorex`。
+
+定向验证：
+
+```text
+版本源、Usage 面板、Runtime builder、desktop feed/deployer、下载页：39 passed
+Electron shell/update/通知合同：7 passed
+公开下载页静态门禁：passed（10 个内容寻址资产）
+Workflow YAML / git diff check：passed
+2.0.1 三平台签名 Runtime、安装态与真实用户验收：pending CI rebuild
+```

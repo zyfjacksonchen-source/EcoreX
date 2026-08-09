@@ -41,7 +41,10 @@ from ecorex.integration.pack_python import (  # noqa: E402
     build_pack_python_manifest,
     resolve_pack_python,
 )
-from ecorex.product_version import stable_release_sequence  # noqa: E402
+from ecorex.product_version import (  # noqa: E402
+    is_stable_release_version,
+    stable_release_sequence,
+)
 from ecorex.release import (  # noqa: E402
     ArtifactBuildInput,
     ArtifactKind,
@@ -1048,7 +1051,7 @@ def _verify_outer(
 
 
 def build(args: argparse.Namespace) -> dict[str, Any]:
-    if __version__ != "2.0.0":
+    if not is_stable_release_version(__version__):
         _fail("manual_webui_version_invalid")
     source = args.source.resolve(strict=True)
     web_dist = args.web_dist.resolve(strict=True)
