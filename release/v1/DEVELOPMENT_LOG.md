@@ -2018,3 +2018,29 @@ Workflow YAML/依赖锁/飞书部署合同：passed
 Admin v7 / Connector Gateway / 微信回调 Schema：not deployed
 当前 Usage/Audit 同窗对账：failed closed（projection_mismatch）
 ```
+
+## 2026-08-09 补充 — 未签名 macOS 首次安装 Runtime 闭包修复
+
+- 经用户动作时确认后，用 Computer Use 分别以现有数据目录和全新隔离 HOME 启动 CI 的
+  `e-Mate.app`。两次都在登录前由 Bootstrap 正确失败关闭；没有出现 Keychain 密码框，
+  没有改写现有 `~/.emate`。直接复现 `ecorex.bootstrap.install_local` 捕获到首个原始异常为
+  `ModuleNotFoundError: qrcode`，不是 Gatekeeper 或空的 macOS sandbox helper identity。
+- 根因是 2.0 手工 WebUI builder 只替换 predecessor `python311.zip` 中的 `ecorex/`，但新增
+  微信扫码和飞书消息通道依赖没有进入签名 Core。builder 现在从已安装的 hash-lock 版本覆盖
+  纯 Python 的 qrcode、lark-channel、requests 依赖，并按目标平台使用同一
+  `runtime.lock --require-hashes` 提取 PyCryptodome；不在首启联网安装依赖。
+- 微信二维码依赖改为授权动作内按需导入，避免任何可选通道依赖再次阻断 Bootstrap 安装器。
+  与宿主架构匹配的签名 Core 在构建签名前必须隔离导入安装器、lark-channel、qrcode，并
+  实际生成 PNG data URL；失败则不产生 Runtime seed。
+
+定向验证：
+
+```text
+原 CI macOS arm64 首启（现有/全新 HOME）：均失败关闭，原始根因 qrcode missing
+修复后 predecessor Core 本地覆盖探针：install_local/lark_channel/qrcode import passed
+修复后二维码 PNG data URL：passed
+macOS arm64/x64 + Windows x64 hash-lock wheel resolution：passed
+微信 + Bootstrap 聚焦回归：10 passed
+Ruff / py_compile / git diff check：passed
+新签名三平台候选与 Computer Use 复验：pending CI rebuild
+```

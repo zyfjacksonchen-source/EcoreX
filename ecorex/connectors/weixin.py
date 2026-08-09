@@ -20,8 +20,6 @@ from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 import httpx
-import qrcode
-
 from ecorex import __version__
 
 from .channel_runtime import (
@@ -859,6 +857,10 @@ def _chunks(text: str) -> tuple[str, ...]:
 
 
 def _qr_png_data_url(value: str) -> str:
+    try:
+        import qrcode
+    except ImportError:
+        raise ChannelDeviceAuthorizationError("weixin_qrcode_dependency_missing") from None
     qr = qrcode.QRCode(
         error_correction=qrcode.constants.ERROR_CORRECT_L,
         box_size=6,

@@ -14,9 +14,11 @@ import argparse
 import base64
 from datetime import UTC, datetime
 import hashlib
+from importlib import metadata
 import json
 import os
 from pathlib import Path, PurePosixPath
+import platform as host_platform
 import re
 import shutil
 import stat
@@ -82,6 +84,14 @@ MAX_EXPANDED = 2 * 1024 * 1024 * 1024
 WINDOWS_PACKAGE = f"e-Mate_{__version__}-runtime-windows-x64.zip"
 MACOS_PACKAGE = f"e-Mate_{__version__}-runtime-macos-universal.zip"
 RECEIPT_SCHEMA = "emate.desktop-runtime-build-receipt.v2"
+PURE_RUNTIME_OVERLAYS = {
+    "charset-normalizer": ("charset_normalizer", "3.4.9"),
+    "lark-channel-sdk": ("lark_channel", "1.2.0"),
+    "qrcode": ("qrcode", "8.2"),
+    "requests": ("requests", "2.32.5"),
+    "requests-toolbelt": ("requests_toolbelt", "1.0.0"),
+    "urllib3": ("urllib3", "2.7.0"),
+}
 
 
 class ManualWebUIBuildError(RuntimeError):
@@ -312,7 +322,111 @@ def _tracked_source_files(source: Path, directory: str) -> tuple[Path, ...]:
     return result
 
 
+def _pure_runtime_overlay_files() -> tuple[tuple[str, Path], ...]:
+    files: list[tuple[str, Path]] = []
+    for distribution_name, (package_name, expected_version) in sorted(
+        PURE_RUNTIME_OVERLAYS.items()
+    ):
+        try:
+            distribution = metadata.distribution(distribution_name)
+            package = Path(distribution.locate_file(package_name)).resolve(strict=True)
+        except (metadata.PackageNotFoundError, OSError, RuntimeError):
+            _fail("manual_webui_runtime_overlay_missing")
+        if distribution.version != expected_version or not package.is_dir():
+            _fail("manual_webui_runtime_overlay_invalid")
+        package_files: list[tuple[str, Path]] = []
+        for path in sorted(package.rglob("*")):
+            relative = path.relative_to(package)
+            if (
+                "__pycache__" in relative.parts
+                or "tests" in relative.parts
+                or path.suffix.casefold()
+                in {".dll", ".dylib", ".pyc", ".pyd", ".so"}
+            ):
+                continue
+            if path.is_symlink():
+                _fail("manual_webui_runtime_overlay_invalid")
+            if path.is_file():
+                package_files.append((f"{package_name}/{relative.as_posix()}", path))
+        if f"{package_name}/__init__.py" not in {name for name, _ in package_files}:
+            _fail("manual_webui_runtime_overlay_invalid")
+        files.extend(package_files)
+    return tuple(files)
+
+
+def _install_pycryptodome_overlay(
+    source: Path,
+    core: Path,
+    root: Path,
+    *,
+    platform: str,
+    architecture: str,
+) -> None:
+    target_platform = {
+        ("macos", "arm64"): "macosx_11_0_arm64",
+        ("macos", "x64"): "macosx_10_13_x86_64",
+        ("windows", "x64"): "win_amd64",
+    }.get((platform, architecture))
+    if target_platform is None:
+        _fail("manual_webui_runtime_overlay_invalid")
+    with tempfile.TemporaryDirectory(
+        dir=root, prefix=f".{platform}-{architecture}-runtime-overlay-"
+    ) as raw:
+        staging = Path(raw)
+        _run(
+            (
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--isolated",
+                "--disable-pip-version-check",
+                "--no-input",
+                "--no-deps",
+                "--require-hashes",
+                "--only-binary=:all:",
+                "--platform",
+                target_platform,
+                "--python-version",
+                "3.11",
+                "--implementation",
+                "cp",
+                "--target",
+                str(staging),
+                "-r",
+                str(source / "requirements" / "locks" / "runtime.lock"),
+            ),
+            cwd=source,
+            timeout=300,
+            code="manual_webui_runtime_overlay_install_failed",
+        )
+        package = staging / "Crypto"
+        destination = core / "bin" / "pack-python"
+        destination = destination / (
+            "Lib/site-packages" if platform == "windows" else "lib/python3.11/site-packages"
+        )
+        if not package.is_dir() or (destination / "Crypto").exists():
+            _fail("manual_webui_runtime_overlay_invalid")
+        for path in sorted(package.rglob("*")):
+            relative = path.relative_to(package)
+            if "__pycache__" in relative.parts or "SelfTest" in relative.parts or path.suffix == ".pyc":
+                continue
+            if path.is_symlink():
+                _fail("manual_webui_runtime_overlay_invalid")
+            if not path.is_file():
+                continue
+            target = destination / "Crypto" / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("rb") as input_stream, target.open("xb") as output_stream:
+                shutil.copyfileobj(input_stream, output_stream, 1024 * 1024)
+            target.chmod(0o644)
+
+
 def _replace_product_imports(archive_path: Path, source: Path) -> None:
+    runtime_overlays = _pure_runtime_overlay_files()
+    overlay_prefixes = tuple(
+        f"{package}/" for package, _ in PURE_RUNTIME_OVERLAYS.values()
+    )
     descriptor, temporary_name = tempfile.mkstemp(
         dir=archive_path.parent, prefix=f".{archive_path.name}.", suffix=".tmp"
     )
@@ -328,7 +442,11 @@ def _replace_product_imports(archive_path: Path, source: Path) -> None:
         ) as new:
             _safe_members(old)
             for member in old.infolist():
-                if member.is_dir() or member.filename.startswith("ecorex/"):
+                if (
+                    member.is_dir()
+                    or member.filename.startswith("ecorex/")
+                    or member.filename.startswith(overlay_prefixes)
+                ):
                     continue
                 new.writestr(member, old.read(member), compresslevel=9)
             for path in _tracked_source_files(source, "ecorex"):
@@ -338,7 +456,20 @@ def _replace_product_imports(archive_path: Path, source: Path) -> None:
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.external_attr = (stat.S_IFREG | 0o644) << 16
                 new.writestr(info, path.read_bytes(), compresslevel=9)
+            for relative, path in runtime_overlays:
+                info = zipfile.ZipInfo(relative, FIXED_TIME)
+                info.create_system = 3
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = (stat.S_IFREG | 0o644) << 16
+                new.writestr(info, path.read_bytes(), compresslevel=9)
         os.replace(temporary, archive_path)
+        with zipfile.ZipFile(archive_path) as archive:
+            members = _safe_members(archive)
+        if any(
+            f"{package}/__init__.py" not in members
+            for package, _ in PURE_RUNTIME_OVERLAYS.values()
+        ):
+            _fail("manual_webui_runtime_overlay_invalid")
     except ManualWebUIBuildError:
         raise
     except (OSError, RuntimeError, zipfile.BadZipFile):
@@ -431,6 +562,13 @@ def _prepare_stages(
         imports = tuple(core.rglob("python311.zip"))
         if len(imports) != 1:
             _fail("manual_webui_pack_python_invalid")
+        _install_pycryptodome_overlay(
+            source,
+            core,
+            target_root,
+            platform=platform,
+            architecture=architecture,
+        )
         _replace_product_imports(imports[0], source)
         _replace_builtin_skills(core, source)
         _runtime_config(
@@ -445,9 +583,32 @@ def _prepare_stages(
                     core, platform=platform, architecture=architecture
                 )
             )
-            resolve_pack_python(core, platform=platform, architecture=architecture)
+            interpreter, _ = resolve_pack_python(
+                core, platform=platform, architecture=architecture
+            )
         except Exception:
             _fail("manual_webui_pack_python_rebind_failed")
+        host_architecture = {
+            "arm64": "arm64",
+            "aarch64": "arm64",
+            "x86_64": "x64",
+            "amd64": "x64",
+        }.get(host_platform.machine().casefold())
+        if sys.platform == "darwin" and platform == "macos" and architecture == host_architecture:
+            _run(
+                (
+                    str(interpreter),
+                    "-I",
+                    "-B",
+                    "-c",
+                    "import ecorex.bootstrap.install_local, lark_channel, qrcode; "
+                    "from ecorex.connectors.weixin import _qr_png_data_url; "
+                    "assert _qr_png_data_url('https://weixin.qq.com/q/emate').startswith('data:image/png;base64,')",
+                ),
+                cwd=core,
+                timeout=30,
+                code="manual_webui_product_import_probe_failed",
+            )
         packs: dict[str, Path] = {}
         for pack_id in sorted(PACK_TOOLS):
             pack = target_root / "packs" / pack_id
