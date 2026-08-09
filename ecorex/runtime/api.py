@@ -47,6 +47,7 @@ from ecorex.capabilities import (
 from ecorex.capabilities.planner import availability_reasons
 from ecorex.connectors import (
     ChannelCredentialOwner,
+    ChannelRuntimeDispatcher,
     ChannelSelfService,
     ConnectorAuthKind,
     ConnectorComposition,
@@ -1607,20 +1608,16 @@ def create_app(
         else None
     )
     connector_registry = connector_composition.service.registry
+    channel_owner = ChannelCredentialOwner(
+        account_id=settings.account_id,
+        organization_id=managed_organization_id or "personal-local",
+    )
     channel_self_service = ChannelSelfService(
-        owner=ChannelCredentialOwner(
-            account_id=settings.account_id,
-            organization_id=managed_organization_id or "personal-local",
-        ),
+        owner=channel_owner,
         vault=connector_vault,
         adapters=settings.channel_lifecycle_adapters,
         audit_sink=lambda event: connector_event_sink.publish(
             channel_audit_outbox_event(event)
-        ),
-        oauth_available=(
-            frozenset({"feishu"})
-            if connector_registry.has_adapter("feishu")
-            else frozenset()
         ),
         stop_timeout_seconds=settings.lifecycle_shutdown_seconds,
     )
@@ -2159,6 +2156,24 @@ def create_app(
             close_gateway_on_stop=settings.close_model_gateway_on_shutdown,
         )
     app.state.model_worker_supervisor = worker_supervisor
+    bindable_channel_adapters = tuple(
+        adapter
+        for adapter in settings.channel_lifecycle_adapters.values()
+        if callable(getattr(adapter, "bind_runtime", None))
+    )
+    channel_runtime_dispatcher = None
+    if bindable_channel_adapters:
+        if worker_supervisor is None:
+            raise ValueError("message channel adapters require the Agent worker")
+        channel_runtime_dispatcher = ChannelRuntimeDispatcher(
+            owner=channel_owner,
+            composition=composition,
+            kernel=kernel,
+            worker=worker_supervisor,
+        )
+        for adapter in bindable_channel_adapters:
+            adapter.bind_runtime(channel_owner, channel_runtime_dispatcher)
+    app.state.channel_runtime_dispatcher = channel_runtime_dispatcher
     gateway_lifecycle = (
         _AsyncResourceCloser(settings.model_gateway)
         if settings.model_gateway is not None
@@ -2711,10 +2726,10 @@ def create_app(
         # Stop producers first, flush durable delivery while the Runtime epoch
         # is still healthy, close the invariant gate, then close transports.
         (3, "runtime_invariant", invariant_supervisor),
-        (1, "agent_worker", worker_supervisor),
+        (2, "agent_worker", worker_supervisor),
         (1, "mcp", composition.mcp_supervisor),
         (1, "mcp_oauth", mcp_oauth_service),
-        (4, "channel_self_service", channel_self_service),
+        (1, "channel_self_service", channel_self_service),
         (4, "model_gateway", gateway_lifecycle),
         (4, "image_gateway", image_client_lifecycle),
         (1, "retouch_worker", retouch_supervisor),

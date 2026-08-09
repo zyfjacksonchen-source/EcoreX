@@ -54,6 +54,7 @@ from .audit import (
     create_cloud_audit_router,
 )
 from .connector_gateway import FeishuConnectorGateway
+from .wechat_callback_gateway import WechatCallbackGateway
 from .admin_web import (
     AdminResumeAdapter,
     create_admin_resume_router,
@@ -715,6 +716,7 @@ def create_control_plane_app(
     skill_hub_registry: SkillHubRegistry | None = None,
     skill_hub_bundle_store: LocalSkillBundleStore | None = None,
     feishu_connector_gateway: FeishuConnectorGateway | None = None,
+    wechat_callback_gateway: WechatCallbackGateway | None = None,
 ) -> FastAPI:
     hub = UpdateSignalHub()
     resolved_model_tester = (
@@ -763,6 +765,8 @@ def create_control_plane_app(
                 await closer()
             if feishu_connector_gateway is not None:
                 await feishu_connector_gateway.aclose()
+            if wechat_callback_gateway is not None:
+                await wechat_callback_gateway.aclose()
 
     app = FastAPI(
         title="e-Mate Control Plane",
@@ -795,6 +799,7 @@ def create_control_plane_app(
     app.state.release_replica_service = release_replica_service
     app.state.skill_hub_registry = skill_hub_registry
     app.state.feishu_connector_gateway = feishu_connector_gateway
+    app.state.wechat_callback_gateway = wechat_callback_gateway
 
     def principal(request: Request) -> ControlPrincipal:
         try:
@@ -890,6 +895,12 @@ def create_control_plane_app(
     if feishu_connector_gateway is not None:
         app.include_router(
             feishu_connector_gateway.create_router(
+                principal_dependency=principal,
+            )
+        )
+    if wechat_callback_gateway is not None:
+        app.include_router(
+            wechat_callback_gateway.create_router(
                 principal_dependency=principal,
             )
         )
@@ -1009,7 +1020,7 @@ def create_control_plane_app(
             )
         if request.url.path in {"/api/v1/shares", "/api/v1/audit/records"} or request.url.path.startswith(
             "/api/v1/connectors/"
-        ):
+        ) or request.url.path.startswith("/api/v1/channels/wechat/"):
             # Share validation inputs can contain full conversation text.  The
             # framework's default response echoes invalid values, so redact the
             # entire payload at this trust boundary.
@@ -1021,14 +1032,18 @@ def create_control_plane_app(
                             "invalid_share_snapshot"
                             if request.url.path == "/api/v1/shares"
                             else "invalid_connector_request"
-                            if request.url.path.startswith("/api/v1/connectors/")
+                            if request.url.path.startswith(
+                                ("/api/v1/connectors/", "/api/v1/channels/wechat/")
+                            )
                             else "invalid_audit_record"
                         ),
                         "message": (
                             "share snapshot is invalid"
                             if request.url.path == "/api/v1/shares"
                             else "managed connector request is invalid"
-                            if request.url.path.startswith("/api/v1/connectors/")
+                            if request.url.path.startswith(
+                                ("/api/v1/connectors/", "/api/v1/channels/wechat/")
+                            )
                             else "audit record is invalid"
                         ),
                     }

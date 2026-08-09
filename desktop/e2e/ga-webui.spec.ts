@@ -653,8 +653,25 @@ test("scheduled tasks and external connections enter the real conversation and c
   await expect(guardedPage.getByRole("heading", { name: "能力中心" })).toBeVisible();
 
   const unavailable = channels.locator("article.ex-connector-row").filter({ hasText: "钉钉" });
-  await expect(unavailable.getByRole("button", { name: "暂不可连接" })).toBeDisabled();
+  await expect(unavailable.getByRole("status")).toContainText("当前安装暂不支持这个通道");
+  await expect(unavailable.getByRole("button")).toHaveCount(0);
   await expect(unavailable.getByRole("button", { name: "配置账号" })).toHaveCount(0);
+
+  const weixin = channels.locator("article.ex-connector-row").filter({ hasText: /^微信/u });
+  await weixin.getByRole("button", { name: "扫码登录" }).click();
+  await expect(weixin.getByText("微信中的发送者名称来自所登录账号，请先将账号名称设为 e-Mate。"))
+    .toBeVisible();
+  const weixinQr = weixin.getByTestId("weixin-device-qr");
+  await expect(weixinQr).toBeVisible();
+  await expect(weixinQr).toHaveAttribute("src", /^data:image\/png;base64,/u);
+  await expect(weixin.getByTestId("weixin-device-code")).toContainText("https://weixin.qq.com/");
+  await expect(weixin.getByText("已扫码，请在手机上确认")).toBeVisible();
+  await expect(weixin.getByRole("button", { name: "重新获取登录码" })).toBeVisible();
+  await expect(weixinQr).toHaveCount(0);
+  await weixin.getByRole("button", { name: "重新获取登录码" }).click();
+  await expect(weixinQr).toBeVisible();
+  await expect(weixin.getByText("已连接", { exact: true })).toBeVisible();
+  await expect(weixinQr).toHaveCount(0);
 
   const telegram = channels.locator("article.ex-connector-row").filter({ hasText: "Telegram" });
   await telegram.getByRole("button", { name: "配置账号" }).click();

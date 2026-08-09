@@ -1806,3 +1806,134 @@ Web production build/bundle gate：passed
 通道与远程 MCP GA Chromium：2 passed
 ecorex-only python311.zip 隔离导入：passed
 ```
+
+## 2026-08-09 补充 — GitHub 发布网络通道
+
+- 按产品所有者要求，后续 GitHub API、Git push、Actions 制品上传与下载优先走
+  本机系统代理 `127.0.0.1:7993`，避免大制品直连短读和超时。已完成的原子文件不重复
+  下载；只有未完成连接和 Range 重试切换到代理。
+- PAT 仍只在进程内存中使用。GitHub API 请求可携带授权头；重定向到对象存储的制品
+  下载不得转发 PAT。所有下载继续以 API size、ZIP CRC、SHA-256 和签名验证为完成
+  条件，代理可用性不会放宽任何完整性门禁。
+
+## 2026-08-09 补充 — Telegram 用户自配消息通道
+
+- 在既有 `ChannelSelfService`、`ChannelRuntimeDispatcher` 和 Agent worker 上增加
+  Telegram Bot 长轮询 transport；没有新 Runtime、旧 Bridge 或本地公网 listener。
+  Bot Token 只经 OS Credential Vault 单向保存，Product 未登录或 acceptance preview
+  不注入 adapter，无 Agent worker 时组合直接失败关闭。
+- 连接测试真实调用 Telegram `getMe` 与 `getWebhookInfo`。发现用户已经设置 webhook
+  时返回 `telegram_webhook_active`，绝不自动删除用户原有 webhook。启用后以最长 2 秒
+  `getUpdates` 持久推进 offset，入站消息进入同一 Runtime Thread/Turn；终态回复经
+  `sendMessage` 发送。
+- transport-private SQLite 按 `organization_id+account_id` 哈希分区并使用 0600 权限，
+  仅它保留投递所需 chat id；Runtime 事实只保存会话/消息哈希。出站按确定性 key
+  持久去重，供应商响应不确定时标记 uncertain 并停止盲重试；网络断开投影为降级并
+  有界退避，停止时间保持在 5 秒生命周期门禁内。
+
+定向验证：
+
+```text
+Telegram transport/lifecycle/tenant/idempotency/webhook/Runtime/Product/preview：46 passed
+Python compile + git diff check：passed
+真实 Telegram Bot Token：not run（由用户在生产客户端自行配置后验收）
+```
+
+## 2026-08-09 补充 — 飞书、钉钉、Slack 与 Discord 用户自配消息通道
+
+- 飞书继续使用 Cow 兼容的 `feishu` 通道 ID，但不再把消息 Bot 错分为 OAuth。
+  ConnectorService 仍独立管理“文档与云空间授权”；ChannelSelfService 管理“消息 Bot”
+  的企业自建应用 App ID 与 App Secret，同一卡片分区展示且凭据互不复用。消息 Bot
+  使用官方 `lark-channel-sdk==1.2.0` WebSocket 通道，官方 wheel SHA-256 为
+  `c08690572a099377cdeddc3a2a1402d9645879ad137e780d80060053dc8c1570`；MIT、
+  内含 Protocol Buffers BSD-3-Clause 声明、四套 Python 锁和 Runtime 闭包均已固定。
+- 钉钉复用 CowAgent 2.1.5 已验证的 Stream Mode open/sessionWebhook 协议，但将
+  入站消息接入唯一 ChannelRuntimeDispatcher，不复用旧 Bridge。实现直接使用已锁定的
+  httpx 与 websockets，未为同一 wire contract 增加 aiohttp/官方 SDK 依赖；回调先写入
+  0600 租户 journal 再 ACK，sessionWebhook 仅接受钉钉官方 HTTPS 主机。
+- Slack 使用官方 Socket Mode 合同：xapp token 只建立
+  `apps.connections.open` WebSocket，xoxb token 只用于 `auth.test` 与
+  `chat.postMessage`。事件先进入 0600 租户 journal 再 ACK，重放不重复创建 Turn；
+  断线重新申请 Socket URL，一次启动只创建一个 Socket，发送响应不确定时不盲重试。
+- Discord 使用 Gateway v10 与 REST v10；只接收私聊或明确提及 Bot 的群消息，不申请
+  `MESSAGE_CONTENT` 特权 Intent。Gateway session/sequence、入站去重与 delivery nonce
+  持久化在 0600 租户数据库；心跳 ACK、Resume、供应商重连和有界停止均复用同一
+  ChannelRuntimeDispatcher，不引入公网 listener 或第二 Runtime。
+- 企微智能机器人使用官方 AI Bot 长连接合同
+  `wss://openws.work.weixin.qq.com`，通过 `aibot_subscribe` 校验用户 Bot ID/Secret，
+  处理 `aibot_msg_callback` 并用 `aibot_send_msg` 回发终态 Markdown。被新的客户端接管
+  时按 `disconnected_event` 停止，不与新连接争抢；文本、语音转写与混合消息文本进入
+  Runtime，当前 Runtime 不支持的图片/文件消息保持忽略且不生成虚假占位。
+- QQ 机器人通过官方 AccessToken、Gateway WebSocket 和被动消息 REST 合同接入 C2C
+  与群聊 @ 消息。出站按官方 5,000 UTF-16 单元分块，C2C 最多 4 块、群聊最多 5 块，
+  `msg_seq` 从 1 稳定递增；超过官方总容量在首次发送前失败关闭，不截断、不切换主动
+  消息。每块使用独立持久 delivery key，后续块响应不确定时不会重发已确认的前块。
+- 三个平台的 Secret 都只经现有 OS Credential Vault 单向保存；Runtime 仅保留外部会话
+  与消息标识哈希，原始平台会话标识只存在于各 transport-private 数据库。Product 只在
+  已认证且 Agent worker 可用时注入真实 adapter；acceptance preview 和未登录状态继续
+  失败关闭。
+
+定向验证：
+
+```text
+Feishu/DingTalk/Telegram/Slack/Discord/WeCom Bot/QQ + ChannelSelfService + Runtime dispatcher + Product：passed
+DingTalk + ChannelSelfService + Runtime dispatcher：16 passed
+QQ transport + Runtime dispatcher（含 UTF-16 分块/回复次数/不确定恢复）：12 passed
+飞书官方 SDK 在锁定 httpx 0.27.2 / websockets 15.0.1 闭包内导入与配置：passed
+真实平台凭据与供应商消息往返：not run（由用户在生产客户端配置后逐平台验收）
+```
+
+## 2026-08-09 补充 — 微信系回调与扫码通道生产边界
+
+- 通过强制代理 `127.0.0.1:7993` 逐文件核对 CowAgent 2.1.5
+  `e3ac1b952500f60934862c6bf0bd0de91b415ed8`。其企微自建应用、微信客服、公众号和
+  公众号客服都在本机绑定 `0.0.0.0` 等待公网回调，并把平台密钥写入全局
+  `config.json`；这不是桌面安装后即可获得的公网能力，e-Mate 不复用本机公网监听、
+  明文密钥或旧 ChannelManager。
+- 当前四个回调通道在没有受管 HTTPS ingress、provider 签名/AES 校验、opaque binding
+  的租户路由、落盘后应答、离线 inbox 和出站幂等之前保持
+  `adapter_not_packaged`。微信客服还需要按 `open_kfid` 持久 cursor；公众号被动回复
+  只能有界等待真实 Runtime 终态或直接 ACK，不能照搬旧实现的“思考中”假进度；同一
+  App ID 的公众号被动模式与客服模式必须互斥。
+- 微信个人号 `weixin` 使用 iLink 设备扫码和长轮询，不需要公网回调，但现有自助通道
+  合同尚缺 begin/poll/cancel/refresh/confirmed 设备授权动作和 QR 投影。在同一
+  ChannelSelfService 补齐该合同之前继续失败关闭；不得另走 ConnectorService 形成两个
+  身份/状态源。后续 token 只能进入 OS Vault，cursor 与最新 `context_token` 只能进入
+  组织和账号分区的 0600 transport 数据库。
+- 前端对上述未形成闭环的通道只显示非交互状态说明，移除了“暂不可连接/暂不可配置”
+  等禁用按钮；可执行按钮只在后端真实 action 为 true 时出现。
+
+定向验证：
+
+```text
+微信系未打包通道失败关闭（无实例、无 action、拒绝写入凭据）：1 passed
+真实微信/企微/公众号凭据与公网回调：not run（需受管 ingress 与用户自有账户）
+```
+
+## 2026-08-09 补充 — 外部通道 e-Mate 身份与微信闭环
+
+- 外部通道不再继承 CowAgent 身份。Telegram 在启用时通过官方 `setMyName` 把 Bot
+  名称设置为 `e-Mate`；Discord 在启用时通过官方 `PATCH /users/@me` 校验并设置 Bot
+  用户名为 `e-Mate`。两项改名都属于连接成功的硬条件，供应商拒绝时不会继续伪装成
+  已连接。
+- 飞书、钉钉、Slack、企微智能机器人、QQ 及微信系平台没有与当前用户凭据相匹配的
+  受支持改名 API，客户端在保存连接前明确要求用户在对应平台的应用、机器人或账号
+  资料中把显示名设为 `e-Mate`；不得通过消息正文前缀伪造发送者名称。微信/企微受管
+  回调绑定返回同一 `external_display_name=e-Mate` 设置要求，Secret 不进入响应。
+- 微信个人号已在同一 ChannelSelfService 补齐 iLink begin/poll/cancel/refresh/confirmed
+  设备授权合同和真实二维码投影，确认后 token 只写入 OS Vault，cursor、最新
+  `context_token` 与投递幂等事实仅写入租户 0600 transport 数据库；`-14` 会强制重登。
+- 企微自建应用、微信客服和公众号客服改由受管 HTTPS callback gateway 完成签名/AES
+  校验、opaque binding 租户路由、durable inbox/lease、KF cursor、出站幂等与审计
+  outbox，再投影到唯一 ChannelRuntimeDispatcher。公众号被动回复仍因真实终态时间窗
+  不可保证而保持失败关闭，不生成“思考中”假进度。
+
+定向验证：
+
+```text
+Telegram + Discord 外部身份、transport 与投递回归：12 passed
+微信 iLink 后端聚焦：17 passed；Renderer TypeScript/语言合同/GA 路径：passed
+微信回调 schema/gateway/catalog：11 passed；Server Product + Control Plane：40 passed
+产品语言合同：12 passed；Ruff + git diff check：passed
+真实平台账号显示名与消息往返：not run（由用户在生产客户端配置或扫码后验收）
+```

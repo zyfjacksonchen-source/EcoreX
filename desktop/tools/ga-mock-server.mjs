@@ -906,6 +906,9 @@ function scenarioState(name) {
     connectorLoginCheckCount: 0,
     connectorLoginCancelCount: 0,
     channelInstances: new Map(),
+    weixinDeviceFlow: null,
+    weixinDevicePolls: 0,
+    weixinDeviceRefreshes: 0,
     userMcpServers: new Map(),
     mcpOAuthAuthorized: new Set(),
     interactionRespondCount: 0,
@@ -1376,6 +1379,7 @@ function connectorCatalog() {
 
 function channelConnectorCatalog(state) {
   const instance = state.channelInstances.get("telegram") ?? null;
+  const weixinInstance = state.channelInstances.get("weixin") ?? null;
   const item = (channelId, label, overrides = {}) => ({
     channel_id: channelId,
     label,
@@ -1412,6 +1416,13 @@ function channelConnectorCatalog(state) {
         adapter_available: true,
         unavailable_reason: null,
         actions: { save: true, test: Boolean(instance), enable: Boolean(instance && !instance.enabled), disable: Boolean(instance?.enabled), retry: Boolean(instance), disconnect: Boolean(instance), auth_begin: false },
+      }),
+      item("weixin", "微信", {
+        auth_kind: "device_code",
+        instance: weixinInstance,
+        adapter_available: true,
+        unavailable_reason: null,
+        actions: { save: false, test: false, enable: false, disable: Boolean(weixinInstance?.enabled), retry: false, disconnect: Boolean(weixinInstance), auth_begin: true },
       }),
       item("dingtalk", "钉钉", {
         fields: [
@@ -2063,6 +2074,56 @@ async function handleApi(holder, req, res, url) {
   if (path === "/api/v1/connectors" && req.method === "GET") return json(res, 200, connectorCatalog());
   if (path === "/api/v1/connectors/channels" && req.method === "GET") {
     return json(res, 200, channelConnectorCatalog(state));
+  }
+  if (path === "/api/v1/connectors/channels/weixin/auth/begin" && req.method === "POST") {
+    state.weixinDevicePolls = 0;
+    state.weixinDeviceRefreshes = 0;
+    state.weixinDeviceFlow = {
+      channel_id: "weixin",
+      flow_id: "wxauth_0123456789abcdef0123456789abcdef",
+      status: "pending",
+      verification_url: "https://weixin.qq.com/q/emate-ga",
+      qr_image_data_url: `data:image/png;base64,${PNG.toString("base64")}`,
+      expires_at: new Date(Date.now() + 8 * 60_000).toISOString(),
+    };
+    return json(res, 200, state.weixinDeviceFlow);
+  }
+  const weixinAuthMatch = path.match(/^\/api\/v1\/connectors\/channels\/weixin\/auth\/(wxauth_[0-9a-f]{32})\/(poll|cancel|refresh)$/u);
+  if (weixinAuthMatch && req.method === "POST") {
+    if (!state.weixinDeviceFlow || state.weixinDeviceFlow.flow_id !== weixinAuthMatch[1]) {
+      return apiError(res, 404, "weixin_device_flow_not_found", "Weixin flow not found");
+    }
+    const action = weixinAuthMatch[2];
+    if (action === "cancel") {
+      state.weixinDeviceFlow = { ...state.weixinDeviceFlow, status: "cancelled", verification_url: null, qr_image_data_url: null };
+    } else if (action === "refresh") {
+      state.weixinDevicePolls = 0;
+      state.weixinDeviceRefreshes += 1;
+      state.weixinDeviceFlow = { ...state.weixinDeviceFlow, status: "pending", verification_url: "https://weixin.qq.com/q/emate-ga-refresh", qr_image_data_url: `data:image/png;base64,${PNG.toString("base64")}` };
+    } else {
+      state.weixinDevicePolls += 1;
+      if (state.weixinDevicePolls === 1) state.weixinDeviceFlow = { ...state.weixinDeviceFlow, status: "scanned" };
+      else if (state.weixinDeviceRefreshes === 0) {
+        state.weixinDeviceFlow = { ...state.weixinDeviceFlow, status: "expired", verification_url: null, qr_image_data_url: null };
+      }
+      else {
+        const instance = {
+          instance_id: "channel-instance-weixin",
+          channel_id: "weixin",
+          display_name: "微信",
+          configured_fields: [],
+          missing_fields: [],
+          enabled: true,
+          state: "connected",
+          health: "connected",
+          last_error_code: null,
+          updated_at: new Date().toISOString(),
+        };
+        state.channelInstances.set("weixin", instance);
+        state.weixinDeviceFlow = { ...state.weixinDeviceFlow, status: "confirmed", verification_url: null, qr_image_data_url: null, instance };
+      }
+    }
+    return json(res, 200, state.weixinDeviceFlow);
   }
   const channelInstanceMatch = path.match(/^\/api\/v1\/connectors\/channels\/([^/]+)\/instance$/u);
   if (channelInstanceMatch && req.method === "PUT") {

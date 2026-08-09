@@ -581,6 +581,16 @@ export interface ChannelConnectorCatalogResponse {
   items: ChannelConnectorCatalogItem[];
 }
 
+export interface ChannelDeviceAuthorizationProjection {
+  channel_id: string;
+  flow_id: string;
+  status: "pending" | "scanned" | "confirmed" | "expired" | "cancelled";
+  verification_url: string | null;
+  qr_image_data_url: string | null;
+  expires_at: string;
+  instance?: ChannelConnectorInstanceProjection;
+}
+
 export type ExtensionKind =
   | "skill"
   | "mcp_server"

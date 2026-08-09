@@ -12,10 +12,10 @@ from ecorex.protocol import (
     CreateTurnRequest,
     ItemKind,
     ItemStatus,
-    TERMINAL_TURN_STATUSES,
     ThreadProjection,
     ThreadProjectionResponse,
     TurnMutationResponse,
+    TurnStatus,
 )
 
 from .channel_catalog import CHANNEL_CATALOG, normalize_channel_name
@@ -25,6 +25,25 @@ from .channel_self_service import ChannelCredentialOwner
 _CONTRACT_VERSION = "channel-runtime-dispatch-v1"
 _MAX_EXTERNAL_ID = 512
 _MAX_MESSAGE_TEXT = 1_000_000
+_UNSENDABLE_TERMINAL_STATUSES = frozenset(
+    {
+        TurnStatus.FAILED,
+        TurnStatus.CANCELLED,
+        TurnStatus.INTERRUPTED,
+        TurnStatus.SUPERSEDED,
+    }
+)
+
+
+class ChannelTurnTerminalFailure(RuntimeError):
+    """A Runtime terminal fact that must close delivery without sending text."""
+
+    def __init__(self, status: TurnStatus) -> None:
+        if status not in _UNSENDABLE_TERMINAL_STATUSES:
+            raise ValueError("channel Turn terminal failure status is invalid")
+        self.status = status
+        self.code = f"channel_turn_{status.value}"
+        super().__init__(self.code)
 
 
 class _PreparedTurn(Protocol):
@@ -206,7 +225,9 @@ class ChannelRuntimeDispatcher:
         )
         if turn is None:
             raise ValueError("channel Turn is missing")
-        if turn.status not in TERMINAL_TURN_STATUSES:
+        if turn.status in _UNSENDABLE_TERMINAL_STATUSES:
+            raise ChannelTurnTerminalFailure(turn.status)
+        if turn.status not in {TurnStatus.COMPLETED, TurnStatus.PARTIAL}:
             return None
         assistant = next(
             (
@@ -286,5 +307,6 @@ __all__ = [
     "ChannelOutboundText",
     "ChannelRuntimeDispatcher",
     "ChannelTextTransport",
+    "ChannelTurnTerminalFailure",
     "ChannelTurnReceipt",
 ]

@@ -2,6 +2,9 @@ from .builtin import builtin_connector_definitions, builtin_connector_registry
 from .channel_self_service import (
     ChannelAuditEvent,
     ChannelCredentialOwner,
+    ChannelDeviceAuthorization,
+    ChannelDeviceAuthorizationError,
+    ChannelDeviceLifecycleAdapter,
     ChannelLifecycleAdapter,
     ChannelSelfService,
     ChannelSelfServiceError,
@@ -14,6 +17,7 @@ from .channel_runtime import (
     ChannelOutboundText,
     ChannelRuntimeDispatcher,
     ChannelTextTransport,
+    ChannelTurnTerminalFailure,
     ChannelTurnReceipt,
 )
 from .api import create_connector_router
@@ -66,6 +70,15 @@ from .repository import (
     SQLiteConnectorRepository,
 )
 from .service import ConnectorOutboxDeliveryHealth, ConnectorService
+from .dingtalk import DingTalkStreamAdapter
+from .discord import DiscordGatewayAdapter
+from .feishu import FeishuMessageBotAdapter
+from .qq import QQBotGatewayAdapter
+from .slack import SlackSocketModeAdapter
+from .telegram import TelegramBotAdapter
+from .wecom_bot import WeComBotLongConnectionAdapter
+from .wechat_callback import ManagedWechatCallbackAdapter, ManagedWechatCallbackClient
+from .weixin import WeixinILinkAdapter
 from .vault import (
     BinaryCredentialBackend,
     CredentialVault,
@@ -84,6 +97,9 @@ __all__ = [
     "BinaryCredentialBackend",
     "ChannelAuditEvent",
     "ChannelCredentialOwner",
+    "ChannelDeviceAuthorization",
+    "ChannelDeviceAuthorizationError",
+    "ChannelDeviceLifecycleAdapter",
     "ChannelLifecycleAdapter",
     "ChannelInboundMessage",
     "ChannelOutboundText",
@@ -92,6 +108,7 @@ __all__ = [
     "ChannelSelfServiceError",
     "ChannelState",
     "ChannelTextTransport",
+    "ChannelTurnTerminalFailure",
     "ChannelTurnReceipt",
     "ConnectorActionSpec",
     "ConnectorAdapter",
@@ -128,13 +145,23 @@ __all__ = [
     "ConnectorTier",
     "ConnectorUnavailable",
     "CredentialVault",
+    "DingTalkStreamAdapter",
+    "DiscordGatewayAdapter",
     "EphemeralEncryptedCredentialVault",
+    "FeishuMessageBotAdapter",
     "InMemoryCredentialVault",
     "MacOSKeychainCredentialVault",
     "RejectingCredentialVault",
+    "QQBotGatewayAdapter",
     "RevocableConnectorAdapter",
     "SQLiteConnectorRepository",
     "SerializedCredentialVault",
+    "SlackSocketModeAdapter",
+    "TelegramBotAdapter",
+    "WeComBotLongConnectionAdapter",
+    "ManagedWechatCallbackAdapter",
+    "ManagedWechatCallbackClient",
+    "WeixinILinkAdapter",
     "WindowsCredentialVault",
     "builtin_connector_definitions",
     "builtin_connector_registry",

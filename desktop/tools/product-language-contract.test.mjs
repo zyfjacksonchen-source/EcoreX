@@ -18,6 +18,7 @@ const composer = source("../src/v1/components/Composer.tsx");
 const homeDashboard = source("../src/v1/components/HomeDashboard.tsx");
 const runtimeSession = source("../src/v1/state/useRuntimeSession.ts");
 const modelSelector = source("../src/v1/components/ComposerModelSelector.tsx");
+const connectorPopover = source("../src/v1/components/ConnectorPopover.tsx");
 const timeline = source("../src/v1/components/Timeline.tsx");
 const sidebar = source("../src/v1/components/Sidebar.tsx");
 const login = source("../src/v1/components/LoginPage.tsx");
@@ -120,10 +121,22 @@ test("settings and external connections stay on real product contracts", () => {
   assert.match(composer, /data-testid="composer-connections"[\s\S]*?onClick=\{onOpenConnections\}/u);
   assert.match(app, /setOpenChannelsKey\(\(value\) => value \+ 1\)[\s\S]*?setSkillsOpen\(true\)/u);
   assert.match(extensionManager, /data-testid="capability-channels"/u);
+  assert.match(connectorPopover, /微信中的发送者名称来自所登录账号，请先将账号名称设为 e-Mate。/u);
+  assert.match(connectorPopover, /外部软件显示名由对应平台的应用或机器人资料决定；连接前请将名称设为 e-Mate。/u);
+  assert.doesNotMatch(connectorPopover, /CowAgent/u);
+  assert.doesNotMatch(connectorPopover, /修改微信账号名/u);
   assert.doesNotMatch(app, /<IconButton label="通知">/u);
 });
 
-test("e-Mate 2.1.47 theme values and brand actions are separate semantic tokens", () => {
+test("Feishu document OAuth and message Bot remain separate user flows", () => {
+  assert.match(connectorPopover, /<strong>文档与云空间授权<\/strong>/u);
+  assert.match(connectorPopover, /<strong>消息 Bot<\/strong>/u);
+  assert.match(connectorPopover, /isFeishu && !connectorUnavailable/u);
+  assert.match(connectorPopover, /selfServiceChannel\.adapter_available \|\| selfServiceChannel\.instance/u);
+  assert.match(connectorPopover, /App ID 与 App Secret/u);
+});
+
+test("e-Mate theme values and brand actions are separate semantic tokens", () => {
   assert.match(tokens, /--color-canvas:\s*oklch\(0\.966318 0\.003973 106\.474\);/u);
   assert.match(tokens, /--color-workspace-surface:\s*oklch\(0\.984548 0\.002637 106\.448\);/u);
   assert.match(tokens, /--color-surface:\s*oklch\(0\.966318 0\.003973 106\.474\);/u);

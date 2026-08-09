@@ -103,10 +103,41 @@ def test_catalog_is_typed_secret_free_and_fail_closed_without_pack() -> None:
             "configured": False,
         }
     ]
-    assert feishu["auth_kind"] == "oauth2"
-    assert feishu["fields"] == []
+    assert feishu["auth_kind"] == "app_credentials"
+    assert [field["key"] for field in feishu["fields"]] == [
+        "feishu_app_id",
+        "feishu_app_secret",
+    ]
     assert feishu["actions"]["save"] is False
     assert feishu["actions"]["auth_begin"] is False
+
+
+def test_feishu_message_bot_is_not_misclassified_as_document_oauth() -> None:
+    service = ChannelSelfService(
+        owner=ChannelCredentialOwner("account-a", "organization-a"),
+        vault=InMemoryCredentialVault(),
+        adapters={"feishu": _Adapter()},
+    )
+
+    saved = service.save(
+        "feishu",
+        display_name="飞书消息 Bot",
+        config={"feishu_app_id": "cli_test_value"},
+        secrets={"feishu_app_secret": "write-only-secret"},
+        request_id="save-feishu-bot",
+    )
+    feishu = next(
+        item for item in service.catalog()["items"] if item["channel_id"] == "feishu"
+    )
+
+    assert saved["configured_fields"] == [
+        "feishu_app_id",
+        "feishu_app_secret",
+    ]
+    assert feishu["auth_kind"] == "app_credentials"
+    assert feishu["actions"]["save"] is True
+    assert feishu["actions"]["auth_begin"] is False
+    assert "write-only-secret" not in repr(feishu)
 
 
 def test_secret_is_one_way_tenant_scoped_and_lifecycle_is_real() -> None:

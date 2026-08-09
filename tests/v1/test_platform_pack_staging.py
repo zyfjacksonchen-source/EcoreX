@@ -1911,6 +1911,8 @@ def test_pack_sources_and_stage_scripts_have_no_placeholder_markers() -> None:
 
 def test_platform_stager_binds_installed_runtime_inventory_to_hash_lock() -> None:
     stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    assert "lark-channel-sdk" in stager["_RUNTIME_DISTRIBUTIONS"]
+    assert "qrcode" in stager["_RUNTIME_DISTRIBUTIONS"]
     versions = stager["_active_lock_versions"](
         ROOT / "requirements" / "locks" / "runtime.lock"
     )

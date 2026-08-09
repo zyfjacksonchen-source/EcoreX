@@ -44,6 +44,18 @@ from .connector_gateway_schema import (
     ConnectorGatewaySchemaManager,
     ConnectorGatewaySchemaReceipt,
 )
+from .wechat_callback_gateway import (
+    WechatCallbackError,
+    WechatCallbackGateway,
+    WechatProviderClient,
+)
+from .wechat_callback_schema import (
+    CURRENT_WECHAT_CALLBACK_SCHEMA_VERSION,
+    WECHAT_CALLBACK_SCHEMA_SHA256,
+    WechatCallbackSchemaError,
+    WechatCallbackSchemaManager,
+    WechatCallbackSchemaReceipt,
+)
 from .client import (
     AdminControlPlaneClient,
     AdminCredentialProvider,

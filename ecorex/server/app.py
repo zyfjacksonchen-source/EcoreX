@@ -22,7 +22,19 @@ from ecorex.capabilities import (
     build_capability_handler_set,
     builtin_capability_registry,
 )
-from ecorex.connectors import ManagedConnectorGatewayAdapter
+from ecorex.connectors import (
+    DingTalkStreamAdapter,
+    DiscordGatewayAdapter,
+    FeishuMessageBotAdapter,
+    ManagedConnectorGatewayAdapter,
+    ManagedWechatCallbackAdapter,
+    ManagedWechatCallbackClient,
+    QQBotGatewayAdapter,
+    SlackSocketModeAdapter,
+    TelegramBotAdapter,
+    WeComBotLongConnectionAdapter,
+    WeixinILinkAdapter,
+)
 from ecorex.connectors import builtin_connector_registry
 from ecorex.extensions import compose_extension_service
 from ecorex.gateway import ManagedModelGatewayClient, ModelGateway
@@ -529,6 +541,28 @@ def _secret(factory: SecretFactory, *, label: str) -> str:
     return value
 
 
+def _managed_wechat_adapters(
+    settings: ProductServerSettings,
+) -> dict[str, ManagedWechatCallbackAdapter]:
+    if settings.managed_session_service is None or settings.acceptance_preview:
+        return {}
+    connector_endpoint = "https://dl.ecoremedia.net/api/v1/connectors"
+    database = Path(settings.database_path).expanduser().resolve()
+    result: dict[str, ManagedWechatCallbackAdapter] = {}
+    for channel_id in ("wechatcom_app", "wechat_kf", "wechatmp_service"):
+        client = ManagedWechatCallbackClient(
+            connector_endpoint=connector_endpoint,
+            allowed_hosts=frozenset({"dl.ecoremedia.net"}),
+            session=settings.managed_session_service,
+        )
+        result[channel_id] = ManagedWechatCallbackAdapter(
+            channel_id,
+            database.with_name(f"channel-{channel_id}-v1.db"),
+            client=client,
+        )
+    return result
+
+
 def create_product_app(settings: ProductServerSettings) -> FastAPI:
     bundle = load_verified_web_bundle(
         web_root=settings.web_root,
@@ -677,6 +711,53 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         model_worker_concurrency=settings.model_worker_concurrency,
         update_service=settings.update_service,
         connector_adapters=settings.connector_adapters,
+        channel_lifecycle_adapters=(
+            {
+                "dingtalk": DingTalkStreamAdapter(
+                    Path(settings.database_path).expanduser().resolve().with_name(
+                        "channel-dingtalk-v1.db"
+                    )
+                ),
+                "discord": DiscordGatewayAdapter(
+                    Path(settings.database_path).expanduser().resolve().with_name(
+                        "channel-discord-v1.db"
+                    )
+                ),
+                "feishu": FeishuMessageBotAdapter(
+                    Path(settings.database_path).expanduser().resolve().with_name(
+                        "channel-feishu-v1.db"
+                    )
+                ),
+                "qq": QQBotGatewayAdapter(
+                    Path(settings.database_path).expanduser().resolve().with_name(
+                        "channel-qq-v1.db"
+                    )
+                ),
+                "slack": SlackSocketModeAdapter(
+                    Path(settings.database_path).expanduser().resolve().with_name(
+                        "channel-slack-v1.db"
+                    )
+                ),
+                "telegram": TelegramBotAdapter(
+                    Path(settings.database_path).expanduser().resolve().with_name(
+                        "channel-telegram-v1.db"
+                    )
+                ),
+                "wecom_bot": WeComBotLongConnectionAdapter(
+                    Path(settings.database_path).expanduser().resolve().with_name(
+                        "channel-wecom-bot-v1.db"
+                    )
+                ),
+                "weixin": WeixinILinkAdapter(
+                    Path(settings.database_path).expanduser().resolve().with_name(
+                        "channel-weixin-v1.db"
+                    )
+                ),
+                **_managed_wechat_adapters(settings),
+            }
+            if settings.model_gateway is not None and not settings.acceptance_preview
+            else {}
+        ),
         connector_vault=settings.connector_vault,
         connector_oauth_return_uri=(
             settings.origin + "/api/v1/connectors/oauth/callback"

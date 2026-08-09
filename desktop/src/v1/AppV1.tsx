@@ -750,6 +750,9 @@ export function AppV1() {
                   onSaveConfiguration: runtime.saveChannelConnector,
                   onChannelAction: runtime.mutateChannelConnector,
                   onChannelDisconnect: runtime.disconnectChannelConnector,
+                  deviceAuthorizations: runtime.channelDeviceAuthorizations,
+                  onBeginDeviceAuthorization: runtime.beginChannelDeviceAuthorization,
+                  onDeviceAuthorizationAction: runtime.mutateChannelDeviceAuthorization,
                   onClearError: runtime.clearConnectorError,
                   onClearNotice: runtime.clearConnectorNotice,
                 }}

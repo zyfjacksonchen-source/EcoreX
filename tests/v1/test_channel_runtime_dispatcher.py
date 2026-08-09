@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
 import time
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,8 +11,19 @@ from ecorex.connectors import (
     ChannelCredentialOwner,
     ChannelInboundMessage,
     ChannelRuntimeDispatcher,
+    ChannelTurnTerminalFailure,
+    ChannelTurnReceipt,
+    DingTalkStreamAdapter,
+    DiscordGatewayAdapter,
+    FeishuMessageBotAdapter,
+    QQBotGatewayAdapter,
+    SlackSocketModeAdapter,
+    TelegramBotAdapter,
+    WeComBotLongConnectionAdapter,
 )
+from ecorex.connectors.qq import _JournalEvent as _QQJournalEvent
 from ecorex.gateway import GatewayEvent
+from ecorex.protocol import ItemKind, ItemStatus, TurnStatus
 from ecorex.runtime import RuntimeSettings, create_app
 
 
@@ -141,3 +154,183 @@ def test_channel_dispatcher_reuses_runtime_continuity_and_facts(tmp_path) -> Non
                 conversation_id="wrong-chat",
                 transport=transport,
             )
+
+
+@pytest.mark.parametrize(
+    ("status", "sendable"),
+    [
+        (TurnStatus.COMPLETED, True),
+        (TurnStatus.PARTIAL, True),
+        (TurnStatus.FAILED, False),
+        (TurnStatus.CANCELLED, False),
+        (TurnStatus.INTERRUPTED, False),
+        (TurnStatus.SUPERSEDED, False),
+    ],
+)
+def test_channel_dispatcher_never_sends_old_text_for_unsuccessful_turns(
+    status: TurnStatus,
+    sendable: bool,
+) -> None:
+    receipt = ChannelTurnReceipt(
+        channel_id="telegram",
+        thread_id="thread-1",
+        turn_id="turn-1",
+        client_message_id="message-1",
+        conversation_sha256="conversation-hash",
+    )
+    kernel = SimpleNamespace(
+        projection=lambda _thread_id: SimpleNamespace(
+            turns=[SimpleNamespace(turn_id="turn-1", status=status)],
+            items=[
+                SimpleNamespace(
+                    turn_id="turn-1",
+                    item_id="item-1",
+                    kind=ItemKind.MESSAGE,
+                    status=ItemStatus.COMPLETED,
+                    content={"role": "assistant", "text": "旧助手文本"},
+                )
+            ],
+        )
+    )
+    dispatcher = ChannelRuntimeDispatcher(
+        owner=ChannelCredentialOwner("account-a", "organization-a"),
+        composition=SimpleNamespace(permission_account_id="account-a"),
+        kernel=kernel,
+        worker=SimpleNamespace(),
+    )
+
+    if sendable:
+        assert dispatcher.project_outbound(receipt) is not None
+        return
+
+    with pytest.raises(ChannelTurnTerminalFailure) as caught:
+        dispatcher.project_outbound(receipt)
+    assert caught.value.status is status
+    assert caught.value.code == f"channel_turn_{status.value}"
+
+
+class _TerminalDispatcher:
+    def deliver(self, *_args, **_kwargs) -> bool:
+        raise ChannelTurnTerminalFailure(TurnStatus.FAILED)
+
+
+@pytest.mark.parametrize(
+    ("channel_id", "adapter_type", "mode", "table", "raw_columns"),
+    [
+        ("telegram", TelegramBotAdapter, "pending", "telegram_pending", ()),
+        ("feishu", FeishuMessageBotAdapter, "pending", "feishu_pending", ()),
+        (
+            "slack",
+            SlackSocketModeAdapter,
+            "journal",
+            "slack_events",
+            ("conversation_id", "message_id", "text"),
+        ),
+        (
+            "discord",
+            DiscordGatewayAdapter,
+            "journal",
+            "discord_events",
+            ("conversation_id", "message_id", "text"),
+        ),
+        (
+            "dingtalk",
+            DingTalkStreamAdapter,
+            "journal",
+            "dingtalk_events",
+            ("conversation_id", "message_id", "text", "reply_url"),
+        ),
+        (
+            "wecom_bot",
+            WeComBotLongConnectionAdapter,
+            "journal",
+            "wecom_bot_events",
+            ("conversation_id", "message_id", "text"),
+        ),
+        (
+            "qq",
+            QQBotGatewayAdapter,
+            "journal",
+            "qq_events",
+            ("target_id", "reply_message_id", "marker", "text"),
+        ),
+    ],
+)
+def test_channel_adapters_terminalize_failed_turns_without_raw_replay(
+    tmp_path,
+    channel_id,
+    adapter_type,
+    mode,
+    table,
+    raw_columns,
+) -> None:
+    database_path = tmp_path / f"{channel_id}.db"
+    adapter = adapter_type(database_path)
+    adapter.bind_runtime(
+        ChannelCredentialOwner("account-a", "organization-a"),
+        _TerminalDispatcher(),
+    )
+    store = adapter._store
+    receipt = ChannelTurnReceipt(
+        channel_id=channel_id,
+        thread_id="thread-1",
+        turn_id="turn-1",
+        client_message_id="message-1",
+        conversation_sha256="conversation-hash",
+    )
+
+    if mode == "pending":
+        if channel_id == "telegram":
+            store.add_pending(receipt, "raw-conversation", 2)
+        else:
+            store.add_pending(receipt, "raw-conversation")
+        adapter._drain_pending()
+        assert store.pending() == ()
+        with sqlite3.connect(database_path) as connection:
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+        return
+
+    if channel_id == "slack":
+        store.record(
+            envelope_id="envelope-1",
+            conversation_id="raw-conversation",
+            message_id="raw-message",
+            text="raw-text",
+        )
+    elif channel_id == "dingtalk":
+        store.record(
+            conversation_id="raw-conversation",
+            message_id="raw-message",
+            text="raw-text",
+            reply_url="https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend",
+        )
+    elif channel_id == "qq":
+        store.record(
+            _QQJournalEvent(
+                event_key="event-1",
+                conversation_id="c2c:dXNlci0x",
+                reply_message_id="raw-message",
+                text="raw-text",
+            ),
+            route="c2c",
+            target_id="user-1",
+            marker="raw-marker",
+            seq=1,
+        )
+    else:
+        store.record(
+            conversation_id="raw-conversation",
+            message_id="raw-message",
+            text="raw-text",
+        )
+    store.set_outbound(store.received()[0].event_key, receipt)
+    adapter._drain_outbound()
+
+    with sqlite3.connect(database_path) as connection:
+        columns = ", ".join(("state", *raw_columns))
+        row = connection.execute(f"SELECT {columns} FROM {table}").fetchone()
+        assert row == ("failed", *("" for _ in raw_columns))
+        if channel_id == "qq":
+            assert connection.execute(
+                "SELECT error_code FROM qq_events"
+            ).fetchone()[0] == "qq_turn_failed"

@@ -3,6 +3,8 @@ import {
   Ban,
   CheckCircle2,
   CircleAlert,
+  Copy,
+  ExternalLink,
   FileText,
   Link2,
   LoaderCircle,
@@ -20,6 +22,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   ChannelConnectorCatalogItem,
+  ChannelDeviceAuthorizationProjection,
   ConnectorCatalogItem,
   ConnectorHealth,
   ConnectorInstanceProjection,
@@ -70,6 +73,12 @@ export interface ConnectorCatalogPanelProps {
     action: "test" | "enable" | "disable" | "retry",
   ) => Promise<boolean>;
   onChannelDisconnect: (item: ChannelConnectorCatalogItem) => Promise<boolean>;
+  deviceAuthorizations: Record<string, ChannelDeviceAuthorizationProjection>;
+  onBeginDeviceAuthorization: (item: ChannelConnectorCatalogItem) => Promise<boolean>;
+  onDeviceAuthorizationAction: (
+    item: ChannelConnectorCatalogItem,
+    action: "cancel" | "refresh",
+  ) => Promise<boolean>;
   onClearError: () => void;
   onClearNotice: () => void;
 }
@@ -84,7 +93,110 @@ const busyLabels: Record<ConnectorOperationState["kind"], string> = {
   enabling: "启用中",
   disabling: "停用中",
   retrying: "重试中",
+  authorizing: "登录中",
 };
+
+function safeDeviceVerificationUrl(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const parsed = new URL(value);
+    if (
+      !["https:", "weixin:"].includes(parsed.protocol)
+      || parsed.username
+      || parsed.password
+    ) return null;
+    return parsed.href;
+  } catch {
+    return null;
+  }
+}
+
+function DeviceAuthorization({
+  item,
+  flow,
+  operation,
+  onBegin,
+  onAction,
+}: {
+  item: ChannelConnectorCatalogItem;
+  flow: ChannelDeviceAuthorizationProjection | null;
+  operation: ConnectorOperationState | null;
+  onBegin: ConnectorCatalogPanelProps["onBeginDeviceAuthorization"];
+  onAction: ConnectorCatalogPanelProps["onDeviceAuthorizationAction"];
+}) {
+  const [copied, setCopied] = useState(false);
+  const verificationUrl = flow?.verification_url ?? null;
+  const externalUrl = safeDeviceVerificationUrl(verificationUrl);
+  const active = flow?.status === "pending" || flow?.status === "scanned";
+  const expired = flow?.status === "expired" || flow?.status === "cancelled";
+  const busy = operation?.kind === "authorizing";
+
+  const copy = async () => {
+    if (!verificationUrl) return;
+    try {
+      await navigator.clipboard.writeText(verificationUrl);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2_000);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="ex-channel-device-auth">
+      {active ? (
+        <div className="ex-channel-device-code" role="status">
+          <strong>{flow.status === "scanned" ? "已扫码，请在手机上确认" : "微信扫码登录"}</strong>
+          {flow.qr_image_data_url ? (
+            <img
+              src={flow.qr_image_data_url}
+              alt="微信扫码登录二维码"
+              data-testid="weixin-device-qr"
+            />
+          ) : null}
+          <code data-testid="weixin-device-code">{verificationUrl}</code>
+          <span>登录码为短期公开信息；确认后只在系统凭据库保存登录令牌。</span>
+          <span>微信中的发送者名称来自所登录账号，请先将账号名称设为 e-Mate。</span>
+          <div className="ex-channel-configuration-actions">
+            <button className="ex-button" type="button" onClick={() => void copy()}>
+              <Copy aria-hidden="true" />
+              {copied ? "已复制" : "复制登录码"}
+            </button>
+            {externalUrl ? (
+              <button
+                className="ex-button"
+                type="button"
+                onClick={() => window.open(externalUrl, "_blank", "noopener,noreferrer")}
+              >
+                <ExternalLink aria-hidden="true" />
+                在微信中打开
+              </button>
+            ) : null}
+            <button className="ex-button" type="button" disabled={busy} onClick={() => void onAction(item, "cancel")}>
+              <X aria-hidden="true" />
+              取消登录
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {!active ? (
+        <div className="ex-connector-connect-row">
+          {expired ? (
+            <button className="ex-button is-primary" type="button" disabled={busy} onClick={() => void onAction(item, "refresh")}>
+              <RefreshCw aria-hidden="true" />
+              {busy ? busyLabels.authorizing : "重新获取登录码"}
+            </button>
+          ) : (
+            <button className="ex-button is-primary" type="button" disabled={busy} onClick={() => void onBegin(item)}>
+              <Link2 aria-hidden="true" />
+              {busy ? busyLabels.authorizing : item.instance ? "重新扫码登录" : "扫码登录"}
+            </button>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function HealthIcon({ health }: { health: ConnectorHealth }) {
   if (health === "connected") return <CheckCircle2 aria-hidden="true" />;
@@ -237,6 +349,11 @@ function ChannelConfiguration({
               {configurationEditable
                 ? "密钥只在本次保存时提交，保存后立即清空，页面不会读取或回显。"
                 : "通道运行中不能修改配置；请先停用，再编辑并重新启用。"}
+            </p>
+          ) : null}
+          {configurationEnabled ? (
+            <p className="ex-channel-secret-note">
+              外部软件显示名由对应平台的应用或机器人资料决定；连接前请将名称设为 e-Mate。
             </p>
           ) : null}
           <div className="ex-channel-configuration-actions">
@@ -407,6 +524,9 @@ export function ConnectorCatalogPanel({
   onSaveConfiguration,
   onChannelAction,
   onChannelDisconnect,
+  deviceAuthorizations,
+  onBeginDeviceAuthorization,
+  onDeviceAuthorizationAction,
   onClearError,
   onClearNotice,
 }: ConnectorCatalogPanelProps) {
@@ -504,22 +624,31 @@ export function ConnectorCatalogPanel({
                   const connectorId = item.definition.connector_id;
                   const operation = operations[connectorId] ?? null;
                   const channel = channels.get(connectorId) ?? null;
+                  const isFeishu = connectorId === "feishu";
                   const selfServiceChannel = channel
                     && ["app_credentials", "api_token"].includes(channel.auth_kind)
+                    && (isFeishu || channel.adapter_available || channel.instance)
+                      ? channel
+                      : null;
+                  const deviceChannel = channel?.auth_kind === "device_code"
                     && (channel.adapter_available || channel.instance)
                       ? channel
                       : null;
-                  const unavailable = channel
+                  const channelUnavailable = channel
                     ? channel.adapter_available
-                      ? channel.auth_kind === "device_code"
-                        ? "当前版本暂不能在页面完成此账号登录。"
-                        : null
+                      ? null
                       : channel.unavailable_reason === "dependency_missing"
                         ? "当前安装缺少这个通道所需的运行组件。"
                         : "当前安装暂不支持这个通道。"
-                    : connectorUnavailableMessage(item);
+                    : null;
+                  const connectorUnavailable = connectorUnavailableMessage(item);
+                  const unavailable = isFeishu || deviceChannel
+                    ? null
+                    : channelUnavailable ?? connectorUnavailable;
                   const overallHealth = connectorOverallHealth(item);
-                  const visibleHealth = selfServiceChannel?.instance?.health ?? overallHealth;
+                  const visibleHealth = selfServiceChannel?.instance?.health
+                    ?? deviceChannel?.instance?.health
+                    ?? overallHealth;
                   return (
                     <article className="ex-connector-row" key={connectorId} data-health={visibleHealth}>
                       <span className="ex-connector-icon" aria-hidden="true">
@@ -534,7 +663,13 @@ export function ConnectorCatalogPanel({
                           {selfServiceChannel || !item.instances.length ? <ConnectorStatus health={visibleHealth} /> : null}
                         </div>
                         <p>{item.definition.description}</p>
-                        {!selfServiceChannel ? item.instances.map((instance) => (
+                        {isFeishu ? (
+                          <div className="ex-connector-subsection-heading">
+                            <strong>文档与云空间授权</strong>
+                            <span>使用个人飞书账号授权文档和云空间能力</span>
+                          </div>
+                        ) : null}
+                        {item.instances.map((instance) => (
                           <InstanceRow
                             key={instance.instance_id}
                             item={item}
@@ -545,39 +680,81 @@ export function ConnectorCatalogPanel({
                             onHealthCheck={onHealthCheck}
                             onRequestDisconnect={requestDisconnect}
                           />
-                        )) : null}
-                        {selfServiceChannel ? (
-                          <ChannelConfiguration
-                            item={selfServiceChannel}
-                            configurationEnabled={selfServiceChannel.adapter_available}
-                            operation={operation}
-                            onSave={onSaveConfiguration}
-                            onAction={onChannelAction}
-                            onDisconnect={onChannelDisconnect}
-                          />
+                        ))}
+                        {isFeishu && connectorUnavailable ? (
+                          <p className="ex-connector-unavailable" role="status">
+                            {connectorUnavailable}
+                          </p>
                         ) : null}
-                        {unavailable ? (
-                          <>
-                            <p
-                              id={`connector-unavailable-${connectorId}`}
-                              className="ex-connector-unavailable"
+                        {isFeishu && !connectorUnavailable ? (
+                          <div className="ex-connector-connect-row">
+                            <button
+                              className={`ex-button ex-connector-action${item.instances.length ? "" : " is-primary"}`}
+                              type="button"
+                              disabled={Boolean(operation)}
+                              onClick={() => void onConnect(item)}
                             >
-                              {unavailable}
-                            </p>
-                            <div className="ex-connector-connect-row">
-                              <button
-                                className="ex-button ex-connector-action"
-                                type="button"
-                                disabled
-                                aria-describedby={`connector-unavailable-${connectorId}`}
-                              >
-                                <Ban aria-hidden="true" />
-                                暂不可连接
-                              </button>
-                            </div>
+                              <Link2 aria-hidden="true" />
+                              {operation?.kind === "connecting"
+                                ? busyLabels.connecting
+                                : item.instances.length
+                                  ? "添加账号"
+                                  : "连接"}
+                            </button>
+                          </div>
+                        ) : null}
+                        {selfServiceChannel ? (
+                          <>
+                            {isFeishu ? (
+                              <div className="ex-connector-subsection-heading">
+                                <strong>消息 Bot</strong>
+                                <span>使用企业自建应用的 App ID 与 App Secret 收发消息</span>
+                              </div>
+                            ) : null}
+                            {selfServiceChannel.adapter_available || selfServiceChannel.instance ? (
+                              <ChannelConfiguration
+                                item={selfServiceChannel}
+                                configurationEnabled={selfServiceChannel.adapter_available}
+                                operation={operation}
+                                onSave={onSaveConfiguration}
+                                onAction={onChannelAction}
+                                onDisconnect={onChannelDisconnect}
+                              />
+                            ) : null}
+                            {isFeishu && channelUnavailable ? (
+                              <p className="ex-connector-unavailable" role="status">
+                                {channelUnavailable}
+                              </p>
+                            ) : null}
                           </>
                         ) : null}
-                        {!unavailable && !selfServiceChannel ? (
+                        {deviceChannel ? (
+                          <>
+                            <DeviceAuthorization
+                              item={deviceChannel}
+                              flow={deviceAuthorizations[deviceChannel.channel_id] ?? null}
+                              operation={operation}
+                              onBegin={onBeginDeviceAuthorization}
+                              onAction={onDeviceAuthorizationAction}
+                            />
+                            {deviceChannel.instance ? (
+                              <ChannelConfiguration
+                                item={deviceChannel}
+                                configurationEnabled={false}
+                                operation={operation}
+                                onSave={onSaveConfiguration}
+                                onAction={onChannelAction}
+                                onDisconnect={onChannelDisconnect}
+                              />
+                            ) : null}
+                          </>
+                        ) : null}
+                        {unavailable ? (
+                          <p className="ex-connector-unavailable" role="status">
+                            {unavailable}
+                          </p>
+                        ) : null}
+                        {!unavailable && !selfServiceChannel && !deviceChannel && !isFeishu ? (
                           <div className="ex-connector-connect-row">
                             <button
                               className={`ex-button ex-connector-action${item.instances.length ? "" : " is-primary"}`}

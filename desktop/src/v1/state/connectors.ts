@@ -17,7 +17,8 @@ export type ConnectorOperationKind =
   | "testing"
   | "enabling"
   | "disabling"
-  | "retrying";
+  | "retrying"
+  | "authorizing";
 
 export interface ConnectorOperationState {
   connectorId: string;

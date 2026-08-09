@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   BootstrapResponse,
   ChannelConnectorCatalogItem,
+  ChannelDeviceAuthorizationProjection,
   ChannelConnectorInstanceProjection,
   ConnectorCatalogItem,
   ConnectorCatalogResponse,
@@ -59,6 +60,7 @@ export function useConnectorSession({
 }: UseConnectorSessionOptions) {
   const [connectorCatalog, setConnectorCatalog] = useState<ConnectorCatalogItem[]>([]);
   const [channelConnectorCatalog, setChannelConnectorCatalog] = useState<ChannelConnectorCatalogItem[]>([]);
+  const [channelDeviceAuthorizations, setChannelDeviceAuthorizations] = useState<Record<string, ChannelDeviceAuthorizationProjection>>({});
   const [connectorCatalogState, setConnectorCatalogState] = useState<ConnectorCatalogLoadState>("idle");
   const [connectorError, setConnectorError] = useState<string | null>(null);
   const [connectorNotice, setConnectorNotice] = useState<string | null>(null);
@@ -513,9 +515,138 @@ export function useConnectorSession({
     }
   }, [beginOperation, client, finishOperation, formatError, refreshConnectors, replaceChannelInstance]);
 
+  const pollChannelDeviceAuthorization = useCallback(async (
+    item: ChannelConnectorCatalogItem,
+    initial: ChannelDeviceAuthorizationProjection,
+  ) => {
+    const controller = new AbortController();
+    pollers.current.get(item.channel_id)?.abort();
+    pollers.current.set(item.channel_id, controller);
+    let current = initial;
+    let failures = 0;
+    try {
+      while (
+        !controller.signal.aborted
+        && ["pending", "scanned"].includes(current.status)
+      ) {
+        await connectorDelay(1_000, controller.signal);
+        try {
+          current = await client.mutateChannelDeviceAuthorization(
+            item.channel_id,
+            current.flow_id,
+            "poll",
+          );
+          failures = 0;
+          setChannelDeviceAuthorizations((value) => ({
+            ...value,
+            [item.channel_id]: current,
+          }));
+          if (current.instance) replaceChannelInstance(item.channel_id, current.instance);
+        } catch (error) {
+          if (isAbortError(error)) throw error;
+          failures += 1;
+          if (failures === 3) {
+            setConnectorNotice(`${item.label} 登录状态同步暂时中断，e-Mate 正在重试。`);
+          }
+          continue;
+        }
+      }
+      if (current.status === "confirmed") {
+        await refreshConnectors(undefined, true);
+        setConnectorError(null);
+        setConnectorNotice(`${item.label} 已连接，登录凭据已安全保存。`);
+      } else if (current.status === "expired") {
+        setConnectorNotice(`${item.label} 登录码已过期，请重新获取。`);
+      }
+    } catch (error) {
+      if (!isAbortError(error)) {
+        setConnectorError(`${item.label} 登录状态同步失败：${formatError(error)} 请重试。`);
+      }
+    } finally {
+      if (pollers.current.get(item.channel_id) === controller) {
+        pollers.current.delete(item.channel_id);
+      }
+    }
+  }, [client, formatError, refreshConnectors, replaceChannelInstance]);
+
+  const beginChannelDeviceAuthorization = useCallback(async (
+    item: ChannelConnectorCatalogItem,
+  ) => {
+    const operation = beginOperation(item.channel_id, null, "authorizing");
+    if (!operation) return false;
+    let succeeded = false;
+    setConnectorError(null);
+    try {
+      const flow = await client.beginChannelDeviceAuthorization(
+        item.channel_id,
+        operation.clientRequestId,
+      );
+      setChannelDeviceAuthorizations((current) => ({
+        ...current,
+        [item.channel_id]: flow,
+      }));
+      setConnectorNotice(`${item.label} 登录码已生成，请使用微信完成确认。`);
+      void pollChannelDeviceAuthorization(item, flow);
+      succeeded = true;
+      return true;
+    } catch (error) {
+      setConnectorError(`${item.label} 登录码获取失败：${formatError(error)} 请重试。`);
+      return false;
+    } finally {
+      finishOperation(operation, succeeded);
+    }
+  }, [beginOperation, client, finishOperation, formatError, pollChannelDeviceAuthorization]);
+
+  const mutateChannelDeviceAuthorization = useCallback(async (
+    item: ChannelConnectorCatalogItem,
+    action: "cancel" | "refresh",
+  ) => {
+    const current = channelDeviceAuthorizations[item.channel_id];
+    if (!current) return false;
+    const operation = beginOperation(item.channel_id, null, "authorizing");
+    if (!operation) return false;
+    let succeeded = false;
+    setConnectorError(null);
+    try {
+      const flow = await client.mutateChannelDeviceAuthorization(
+        item.channel_id,
+        current.flow_id,
+        action,
+        operation.clientRequestId,
+      );
+      setChannelDeviceAuthorizations((value) => ({
+        ...value,
+        [item.channel_id]: flow,
+      }));
+      if (action === "cancel") {
+        pollers.current.get(item.channel_id)?.abort();
+        setConnectorNotice(`${item.label} 本次扫码登录已取消。`);
+      } else {
+        setConnectorNotice(`${item.label} 登录码已刷新，请重新扫码。`);
+        void pollChannelDeviceAuthorization(item, flow);
+      }
+      succeeded = true;
+      return true;
+    } catch (error) {
+      const label = action === "cancel" ? "取消" : "刷新";
+      setConnectorError(`${item.label} 登录${label}失败：${formatError(error)} 请重试。`);
+      return false;
+    } finally {
+      finishOperation(operation, succeeded);
+    }
+  }, [
+    beginOperation,
+    channelDeviceAuthorizations,
+    client,
+    finishOperation,
+    formatError,
+    pollChannelDeviceAuthorization,
+  ]);
+
   return {
     connectorCatalog,
     channelConnectorCatalog,
+    channelDeviceAuthorizations,
     connectorCatalogState,
     connectorError,
     connectorNotice,
@@ -533,5 +664,7 @@ export function useConnectorSession({
     saveChannelConnector,
     mutateChannelConnector,
     disconnectChannelConnector,
+    beginChannelDeviceAuthorization,
+    mutateChannelDeviceAuthorization,
   };
 }

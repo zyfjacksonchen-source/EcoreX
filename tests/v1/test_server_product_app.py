@@ -53,6 +53,15 @@ from ecorex.update import (
 ORIGIN = "http://127.0.0.1:8765"
 
 
+class _ProductGateway:
+    async def stream(self, _request):
+        raise AssertionError("idle Product worker must not call the model gateway")
+        yield  # pragma: no cover
+
+    async def aclose(self) -> None:
+        return None
+
+
 def _signature(private_key: Ed25519PrivateKey, payload: bytes) -> SignatureEnvelope:
     return SignatureEnvelope(
         algorithm="ed25519",
@@ -349,6 +358,40 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
     assert asset.headers["etag"]
 
 
+def test_product_composes_message_channels_with_the_agent_runtime(tmp_path: Path) -> None:
+    signed = _write_signed_bundle(tmp_path)
+    app = create_product_app(
+        replace(
+            _settings(tmp_path, signed),
+            model_gateway=_ProductGateway(),
+            connector_vault=InMemoryCredentialVault(),
+        )
+    )
+    service = app.state.channel_self_service
+    catalog = {item["channel_id"]: item for item in service.catalog()["items"]}
+    channel_ids = {
+        "dingtalk",
+        "discord",
+        "feishu",
+        "qq",
+        "slack",
+        "telegram",
+        "wecom_bot",
+    }
+
+    assert all(
+        catalog[channel_id]["adapter_available"] for channel_id in channel_ids
+    )
+    assert all(catalog[channel_id]["instance"] is None for channel_id in channel_ids)
+    assert app.state.channel_runtime_dispatcher is not None
+    assert all(
+        service.adapters[channel_id].health().health.value == "disabled"
+        for channel_id in channel_ids
+    )
+    with TestClient(app, base_url=ORIGIN):
+        assert service.adapters["telegram"].health().health.value == "disabled"
+
+
 def test_installed_payload_builtin_skill_search_read_run_chain(tmp_path: Path) -> None:
     signed = _write_signed_bundle(tmp_path)
     builtin_skill_root = tmp_path / "payload" / "skills"
@@ -453,7 +496,12 @@ def test_acceptance_preview_is_visible_and_blocks_external_mutations(
     monkeypatch,
 ):
     signed = _write_signed_bundle(tmp_path)
-    settings = replace(_settings(tmp_path, signed), acceptance_preview=True)
+    settings = replace(
+        _settings(tmp_path, signed),
+        acceptance_preview=True,
+        model_gateway=_ProductGateway(),
+        connector_vault=InMemoryCredentialVault(),
+    )
     monkeypatch.setattr(
         "ecorex.server.app.ProjectWorkspaceAuthority",
         lambda _database: (_ for _ in ()).throw(
@@ -461,6 +509,13 @@ def test_acceptance_preview_is_visible_and_blocks_external_mutations(
         ),
     )
     app = create_product_app(settings)
+    telegram = next(
+        item
+        for item in app.state.channel_self_service.catalog()["items"]
+        if item["channel_id"] == "telegram"
+    )
+    assert telegram["adapter_available"] is False
+    assert app.state.channel_runtime_dispatcher is None
     with TestClient(app, base_url=ORIGIN) as client:
         index = client.get("/")
         assert '"mode":"acceptance-preview"' in index.text

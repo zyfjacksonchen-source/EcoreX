@@ -6,6 +6,7 @@ import type {
   BootstrapResponse,
   CapabilityMentionCatalog,
   ChannelConnectorCatalogResponse,
+  ChannelDeviceAuthorizationProjection,
   ChannelConnectorInstanceProjection,
   ConversationUsageProjection,
   ConnectorAuthChallenge,
@@ -857,6 +858,36 @@ export class RuntimeClient {
   ): Promise<ChannelConnectorInstanceProjection> {
     return this.json(
       `/api/v1/connectors/channels/${encodeURIComponent(channelId)}/${action}`,
+      {
+        method: "POST",
+        headers: { "X-EcoreX-Client-Request-ID": clientRequestId },
+      },
+      true,
+    );
+  }
+
+  beginChannelDeviceAuthorization(
+    channelId: string,
+    clientRequestId = createClientRequestId("channel_device_begin"),
+  ): Promise<ChannelDeviceAuthorizationProjection> {
+    return this.json(
+      `/api/v1/connectors/channels/${encodeURIComponent(channelId)}/auth/begin`,
+      {
+        method: "POST",
+        headers: { "X-EcoreX-Client-Request-ID": clientRequestId },
+      },
+      true,
+    );
+  }
+
+  mutateChannelDeviceAuthorization(
+    channelId: string,
+    flowId: string,
+    action: "poll" | "cancel" | "refresh",
+    clientRequestId = createClientRequestId(`channel_device_${action}`),
+  ): Promise<ChannelDeviceAuthorizationProjection> {
+    return this.json(
+      `/api/v1/connectors/channels/${encodeURIComponent(channelId)}/auth/${encodeURIComponent(flowId)}/${action}`,
       {
         method: "POST",
         headers: { "X-EcoreX-Client-Request-ID": clientRequestId },

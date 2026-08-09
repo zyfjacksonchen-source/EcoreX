@@ -58,6 +58,8 @@ from .app import ControlPlaneServiceLifecycle, create_control_plane_app
 from .audit import CloudAuditRepository
 from .connector_gateway import FeishuConnectorGateway
 from .connector_gateway_schema import ConnectorGatewaySchemaManager
+from .wechat_callback_gateway import WechatCallbackGateway
+from .wechat_callback_schema import WechatCallbackSchemaManager
 from .bootstrap_index_service import (
     BootstrapIndexPublicationService,
     FilesystemPublicIndexObjectStore,
@@ -146,6 +148,7 @@ _SECRET_NAMES = {
     "feishu-app-id": "ECOREX_CP_FEISHU_APP_ID",
     "feishu-app-secret": "ECOREX_CP_FEISHU_APP_SECRET",
     "feishu-token-encryption-key": "ECOREX_CP_FEISHU_TOKEN_ENCRYPTION_KEY_B64",
+    "wechat-callback-encryption-key": "ECOREX_CP_WECHAT_CALLBACK_ENCRYPTION_KEY_B64",
 }
 _S3_SETTING_NAMES = frozenset(
     {
@@ -416,6 +419,7 @@ class ControlPlaneProductionConfig:
     direct_release_id: str | None = None
     direct_release_instruction_sha256: str | None = field(default=None, repr=False)
     feishu_connector_enabled: bool = False
+    wechat_callback_enabled: bool = False
 
     def __post_init__(self) -> None:
         try:
@@ -521,6 +525,7 @@ class ControlPlaneProductionConfig:
             or not 1 <= self.rollback_signer_timeout_seconds <= 120
             or not 30 <= self.model_activation_timeout_seconds <= 600
             or not isinstance(self.feishu_connector_enabled, bool)
+            or not isinstance(self.wechat_callback_enabled, bool)
         ):
             raise ProductionConfigurationError(
                 "Control Plane production configuration is invalid"
@@ -1354,6 +1359,11 @@ class ControlPlaneProductionConfig:
                 "ECOREX_CP_FEISHU_CONNECTOR_ENABLED",
                 default=False,
             ),
+            wechat_callback_enabled=_boolean(
+                values,
+                "ECOREX_CP_WECHAT_CALLBACK_ENABLED",
+                default=False,
+            ),
         )
 
 
@@ -1510,6 +1520,7 @@ class ControlPlaneProductionBundle:
     skill_hub_registry: SkillHubRegistry
     skill_hub_bundle_store: LocalSkillBundleStore
     feishu_connector_gateway: FeishuConnectorGateway | None
+    wechat_callback_gateway: WechatCallbackGateway | None
     lifecycle: "SingleNodeControlPlaneLifecycle"
     config: ControlPlaneProductionConfig
 
@@ -1534,6 +1545,7 @@ class ControlPlaneProductionBundle:
             skill_hub_registry=self.skill_hub_registry,
             skill_hub_bundle_store=self.skill_hub_bundle_store,
             feishu_connector_gateway=self.feishu_connector_gateway,
+            wechat_callback_gateway=self.wechat_callback_gateway,
         )
 
 
@@ -1858,6 +1870,25 @@ def _feishu_connector_gateway(
     )
 
 
+def _wechat_callback_gateway(
+    config: ControlPlaneProductionConfig,
+    secrets: SecretProvider,
+    audit_repository: CloudAuditRepository,
+) -> WechatCallbackGateway:
+    if not config.wechat_callback_enabled:
+        raise ProductionConfigurationError("WeChat callback gateway is not enabled")
+    return WechatCallbackGateway(
+        config.database_path,
+        encryption_key=_secret_bytes(
+            secrets.read("wechat-callback-encryption-key"), exact_length=32
+        ),
+        audit_repository=audit_repository,
+        public_callback_base_url=(
+            "https://dl.ecoremedia.net/api/v1/channels/wechat/callback"
+        ),
+    )
+
+
 class SingleNodeSQLiteS3Provider:
     def __init__(
         self,
@@ -1899,6 +1930,8 @@ class SingleNodeSQLiteS3Provider:
                     DeviceIdentitySchemaManager(config.database_path).migrate()
                 if config.feishu_connector_enabled:
                     ConnectorGatewaySchemaManager(config.database_path).migrate()
+                if config.wechat_callback_enabled:
+                    WechatCallbackSchemaManager(config.database_path).migrate()
                 skill_hub_registry = SkillHubRegistry(
                     config.database_path,
                     author_key=_skill_hub_author_key(secrets),
@@ -1948,6 +1981,8 @@ class SingleNodeSQLiteS3Provider:
             DeviceIdentitySchemaManager(config.database_path).validate()
         if config.feishu_connector_enabled:
             ConnectorGatewaySchemaManager(config.database_path).validate()
+        if config.wechat_callback_enabled:
+            WechatCallbackSchemaManager(config.database_path).validate()
         skill_hub_registry = SkillHubRegistry(
             config.database_path,
             author_key=_skill_hub_author_key(secrets),
@@ -2048,6 +2083,21 @@ class SingleNodeSQLiteS3Provider:
                     ),
                 )
                 asyncio.run(gateway.aclose())
+            if config.wechat_callback_enabled:
+                gateway = _wechat_callback_gateway(
+                    config,
+                    secrets,
+                    CloudAuditRepository(
+                        config.database_path,
+                        encryption_key=audit_encryption,
+                        integrity_key=audit_integrity,
+                        retention=AuditRetentionPolicy(
+                            raw_days=config.audit_raw_days,
+                            aggregate_days=config.audit_aggregate_days,
+                        ),
+                    ),
+                )
+                asyncio.run(gateway.aclose())
         finally:
             storage.close()
         return ProductionSchemaReport(
@@ -2095,6 +2145,7 @@ class SingleNodeSQLiteS3Provider:
         model_connection_tester: HTTPSModelConnectionTester | None = None
         release_replica_service: CDNReleaseReplicaService | None = None
         feishu_connector_gateway: FeishuConnectorGateway | None = None
+        wechat_callback_gateway: WechatCallbackGateway | None = None
         try:
             volume.validate_wal()
             ControlPlaneSchemaManager(config.database_path).validate()
@@ -2105,6 +2156,8 @@ class SingleNodeSQLiteS3Provider:
                 DeviceIdentitySchemaManager(config.database_path).validate()
             if config.feishu_connector_enabled:
                 ConnectorGatewaySchemaManager(config.database_path).validate()
+            if config.wechat_callback_enabled:
+                WechatCallbackSchemaManager(config.database_path).validate()
             skill_hub_registry = SkillHubRegistry(
                 config.database_path,
                 author_key=_skill_hub_author_key(secrets),
@@ -2186,6 +2239,11 @@ class SingleNodeSQLiteS3Provider:
                 if config.feishu_connector_enabled
                 else None
             )
+            wechat_callback_gateway = (
+                _wechat_callback_gateway(config, secrets, audit_repository)
+                if config.wechat_callback_enabled
+                else None
+            )
             if config.release_replica_enabled:
                 assert config.release_replica_storage_root is not None
                 assert config.release_replica_public_root is not None
@@ -2262,6 +2320,7 @@ class SingleNodeSQLiteS3Provider:
                 skill_hub_registry=skill_hub_registry,
                 skill_hub_bundle_store=skill_hub_bundle_store,
                 feishu_connector_gateway=feishu_connector_gateway,
+                wechat_callback_gateway=wechat_callback_gateway,
                 lifecycle=lifecycle,
                 config=config,
             )
@@ -2269,6 +2328,11 @@ class SingleNodeSQLiteS3Provider:
             if feishu_connector_gateway is not None:
                 try:
                     asyncio.run(feishu_connector_gateway.aclose())
+                except Exception:
+                    pass
+            if wechat_callback_gateway is not None:
+                try:
+                    asyncio.run(wechat_callback_gateway.aclose())
                 except Exception:
                     pass
             if model_connection_tester is not None:

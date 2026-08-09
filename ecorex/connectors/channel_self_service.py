@@ -101,6 +101,43 @@ class ChannelLifecycleAdapter(Protocol):
         ...
 
 
+@dataclass(frozen=True, slots=True)
+class ChannelDeviceAuthorization:
+    """One short-lived public device flow plus private confirmed material."""
+
+    flow_id: str
+    status: str
+    verification_url: str | None
+    qr_image_data_url: str | None
+    expires_at: datetime
+    config: Mapping[str, Any] | None = None
+    secrets: Mapping[str, str] | None = None
+
+
+class ChannelDeviceLifecycleAdapter(ChannelLifecycleAdapter, Protocol):
+    def begin_authorization(self) -> ChannelDeviceAuthorization:
+        ...
+
+    def poll_authorization(self, flow_id: str) -> ChannelDeviceAuthorization:
+        ...
+
+    def cancel_authorization(self, flow_id: str) -> ChannelDeviceAuthorization:
+        ...
+
+    def refresh_authorization(self, flow_id: str) -> ChannelDeviceAuthorization:
+        ...
+
+    def consume_authorization(self, flow_id: str) -> None:
+        ...
+
+
+class ChannelDeviceAuthorizationError(RuntimeError):
+    def __init__(self, code: str, http_status: int = 502) -> None:
+        super().__init__(code)
+        self.code = code
+        self.http_status = http_status
+
+
 class ChannelSelfServiceError(RuntimeError):
     def __init__(self, code: str, http_status: int) -> None:
         super().__init__(code)
@@ -127,7 +164,7 @@ class ChannelSelfService:
         vault: CredentialVault,
         adapters: Mapping[str, ChannelLifecycleAdapter] | None = None,
         audit_sink: Callable[[ChannelAuditEvent], None] | None = None,
-        oauth_channels: frozenset[str] = frozenset({"feishu"}),
+        oauth_channels: frozenset[str] = frozenset(),
         oauth_available: frozenset[str] = frozenset(),
         stop_timeout_seconds: float = 5.0,
     ) -> None:
@@ -161,6 +198,7 @@ class ChannelSelfService:
             stored = self._read(channel_id)
             fields = self._fields(channel_id)
             oauth = channel_id in self.oauth_channels
+            device = self._auth_kind(channel_id) is ConnectorAuthKind.DEVICE_CODE
             adapter_available = (
                 channel_id in self.oauth_available
                 if oauth
@@ -190,12 +228,13 @@ class ChannelSelfService:
                     ],
                     "instance": instance,
                     "actions": {
-                        "save": bool(adapter_available and not oauth),
-                        "test": bool(adapter_available and configured and not oauth),
+                        "save": bool(adapter_available and not oauth and not device),
+                        "test": bool(adapter_available and configured and not oauth and not device),
                         "enable": bool(
                             adapter_available
                             and configured
                             and not oauth
+                            and not device
                             and not instance["enabled"]
                         ),
                         "disable": bool(
@@ -204,9 +243,9 @@ class ChannelSelfService:
                             and not oauth
                             and instance["enabled"]
                         ),
-                        "retry": bool(adapter_available and configured and not oauth),
+                        "retry": bool(adapter_available and configured and not oauth and not device),
                         "disconnect": bool(instance and not oauth),
-                        "auth_begin": bool(oauth and adapter_available),
+                        "auth_begin": bool((oauth or device) and adapter_available),
                     },
                 }
             )
@@ -280,6 +319,8 @@ class ChannelSelfService:
         request_id: str | None,
     ) -> dict[str, Any]:
         channel_id = self._writable_channel(channel_id)
+        if self._auth_kind(channel_id) is ConnectorAuthKind.DEVICE_CODE:
+            raise ChannelSelfServiceError("channel_device_authorization_required", 409)
         if channel_id not in self.adapters:
             raise ChannelSelfServiceError("channel_adapter_unavailable", 503)
         request_id = _request_id(request_id)
@@ -433,6 +474,183 @@ class ChannelSelfService:
             self._states.pop(channel_id, None)
         self._audit(channel_id, "disconnect", "succeeded", request_id, (), None)
 
+    def begin_authorization(
+        self, channel_id: str, *, request_id: str | None
+    ) -> dict[str, Any]:
+        channel_id, adapter = self._device_adapter(channel_id)
+        request_id = _request_id(request_id)
+        result = self._call_device(
+            channel_id, "auth_begin", request_id, adapter.begin_authorization
+        )
+        self._audit(channel_id, "auth_begin", "succeeded", request_id, (), None)
+        return self._device_projection(channel_id, result)
+
+    def poll_authorization(
+        self, channel_id: str, flow_id: str, *, request_id: str | None
+    ) -> dict[str, Any]:
+        channel_id, adapter = self._device_adapter(channel_id)
+        request_id = _request_id(request_id)
+        flow_id = _device_flow_id(flow_id)
+        result = self._call_device(
+            channel_id,
+            "auth_poll",
+            request_id,
+            lambda: adapter.poll_authorization(flow_id),
+        )
+        instance = None
+        if result.status == "confirmed":
+            replacing = self._read(channel_id)
+            if (
+                replacing is not None
+                and (result.config is not None or result.secrets is not None)
+            ):
+                self._stop(
+                    channel_id,
+                    action="auth_replace",
+                    request_id=request_id,
+                )
+            stored = (
+                self._confirmed_device_record(channel_id, result)
+                if result.config is not None or result.secrets is not None
+                else self._required_stored(channel_id)
+            )
+            if result.config is not None or result.secrets is not None:
+                adapter.consume_authorization(flow_id)
+                started = self._call_adapter(
+                    channel_id,
+                    "auth_start",
+                    request_id,
+                    lambda: adapter.start(self._material(stored)),
+                )
+                with self._lock:
+                    self._states[channel_id] = (
+                        _state_for_health(started.health),
+                        started.health,
+                        _error_code(started.error_code),
+                    )
+            instance = self._projection(channel_id, stored)
+        self._audit(channel_id, "auth_poll", "succeeded", request_id, (), None)
+        projection = self._device_projection(channel_id, result)
+        if instance is not None:
+            projection["instance"] = instance
+        return projection
+
+    def cancel_authorization(
+        self, channel_id: str, flow_id: str, *, request_id: str | None
+    ) -> dict[str, Any]:
+        channel_id, adapter = self._device_adapter(channel_id)
+        request_id = _request_id(request_id)
+        result = self._call_device(
+            channel_id,
+            "auth_cancel",
+            request_id,
+            lambda: adapter.cancel_authorization(_device_flow_id(flow_id)),
+        )
+        self._audit(channel_id, "auth_cancel", "succeeded", request_id, (), None)
+        return self._device_projection(channel_id, result)
+
+    def refresh_authorization(
+        self, channel_id: str, flow_id: str, *, request_id: str | None
+    ) -> dict[str, Any]:
+        channel_id, adapter = self._device_adapter(channel_id)
+        request_id = _request_id(request_id)
+        result = self._call_device(
+            channel_id,
+            "auth_refresh",
+            request_id,
+            lambda: adapter.refresh_authorization(_device_flow_id(flow_id)),
+        )
+        self._audit(channel_id, "auth_refresh", "succeeded", request_id, (), None)
+        return self._device_projection(channel_id, result)
+
+    def _device_adapter(
+        self, channel_id: str
+    ) -> tuple[str, ChannelDeviceLifecycleAdapter]:
+        channel_id = normalize_channel_name(channel_id)
+        if channel_id not in CHANNEL_CATALOG:
+            raise ChannelSelfServiceError("channel_not_found", 404)
+        if self._auth_kind(channel_id) is not ConnectorAuthKind.DEVICE_CODE:
+            raise ChannelSelfServiceError("channel_device_authorization_unsupported", 409)
+        adapter = self.adapters.get(channel_id)
+        if adapter is None or not all(
+            callable(getattr(adapter, name, None))
+            for name in (
+                "begin_authorization",
+                "poll_authorization",
+                "cancel_authorization",
+                "refresh_authorization",
+                "consume_authorization",
+            )
+        ):
+            raise ChannelSelfServiceError("channel_adapter_unavailable", 503)
+        return channel_id, adapter  # type: ignore[return-value]
+
+    def _call_device(
+        self,
+        channel_id: str,
+        operation: str,
+        request_id: str | None,
+        call: Callable[[], ChannelDeviceAuthorization],
+    ) -> ChannelDeviceAuthorization:
+        try:
+            result = call()
+        except ChannelDeviceAuthorizationError as error:
+            self._audit(channel_id, operation, "failed", request_id, (), error.code)
+            raise ChannelSelfServiceError(error.code, error.http_status) from None
+        except Exception:
+            self._audit(
+                channel_id,
+                operation,
+                "failed",
+                request_id,
+                (),
+                "channel_adapter_failed",
+            )
+            raise ChannelSelfServiceError("channel_adapter_failed", 502) from None
+        _validate_device_authorization(result)
+        return result
+
+    def _confirmed_device_record(
+        self, channel_id: str, result: ChannelDeviceAuthorization
+    ) -> _StoredChannel:
+        if result.config is None or result.secrets is None:
+            raise ChannelSelfServiceError("channel_adapter_result_invalid", 502)
+        public_fields, secret_fields = self._stored_field_maps(channel_id)
+        if set(result.config) != set(public_fields) or set(result.secrets) != set(secret_fields):
+            raise ChannelSelfServiceError("channel_adapter_result_invalid", 502)
+        stored = _StoredChannel(
+            display_name=_display_name("", channel_id),
+            enabled=True,
+            config={
+                key: self._field_value(public_fields[key], value)
+                for key, value in result.config.items()
+            },
+            secrets={key: _secret_value(value) for key, value in result.secrets.items()},
+            updated_at=datetime.now(UTC),
+        )
+        self._vault_put(channel_id, stored)
+        return stored
+
+    def _device_projection(
+        self, channel_id: str, result: ChannelDeviceAuthorization
+    ) -> dict[str, Any]:
+        return {
+            "channel_id": channel_id,
+            "flow_id": result.flow_id,
+            "status": result.status,
+            "verification_url": (
+                result.verification_url
+                if result.status in {"pending", "scanned"}
+                else None
+            ),
+            "qr_image_data_url": (
+                result.qr_image_data_url
+                if result.status in {"pending", "scanned"}
+                else None
+            ),
+            "expires_at": result.expires_at.astimezone(UTC).isoformat(),
+        }
+
     def _ready(
         self, channel_id: str, request_id: str | None
     ) -> tuple[str, _StoredChannel, ChannelLifecycleAdapter]:
@@ -568,7 +786,7 @@ class ChannelSelfService:
             secrets = json.loads(payload["secrets_json"])
             if not isinstance(config, dict) or not isinstance(secrets, dict):
                 raise ValueError
-            public_fields, secret_fields = self._field_maps(channel_id)
+            public_fields, secret_fields = self._stored_field_maps(channel_id)
             if set(config) - set(public_fields) or set(secrets) - set(secret_fields):
                 raise ValueError
             config = {
@@ -690,6 +908,20 @@ class ChannelSelfService:
             target[str(field["key"])] = field
         return public, secret
 
+    def _stored_field_maps(
+        self, channel_id: str
+    ) -> tuple[dict[str, Mapping[str, Any]], dict[str, Mapping[str, Any]]]:
+        public, secret = self._field_maps(channel_id)
+        if channel_id == "weixin":
+            public.update(
+                {
+                    key: {"key": key, "type": "text"}
+                    for key in ("weixin_base_url", "weixin_bot_id", "weixin_user_id")
+                }
+            )
+            secret["weixin_token"] = {"key": "weixin_token", "type": "secret"}
+        return public, secret
+
     def _fields(self, channel_id: str) -> tuple[Mapping[str, Any], ...]:
         definition = CHANNEL_CATALOG[channel_id]
         fields = tuple(
@@ -756,9 +988,8 @@ class ChannelSelfService:
         )
         return "channel_" + hashlib.sha256(source.encode("utf-8")).hexdigest()[:32]
 
-    @staticmethod
-    def _auth_kind(channel_id: str) -> ConnectorAuthKind:
-        if channel_id == "feishu":
+    def _auth_kind(self, channel_id: str) -> ConnectorAuthKind:
+        if channel_id in self.oauth_channels:
             return ConnectorAuthKind.OAUTH2
         if channel_id == "weixin":
             return ConnectorAuthKind.DEVICE_CODE
@@ -846,6 +1077,45 @@ def create_channel_self_service_router(service: ChannelSelfService) -> APIRouter
     action("retry", service.retry)
     action("health", service.health)
 
+    @router.post("/{channel_id}/auth/begin")
+    def auth_begin(
+        channel_id: str,
+        client_request_id: str | None = Header(
+            default=None, alias="X-EcoreX-Client-Request-ID"
+        ),
+    ) -> dict[str, Any]:
+        return _api(
+            service.begin_authorization,
+            channel_id,
+            request_id=client_request_id,
+        )
+
+    def auth_action(
+        name: str, operation: Callable[..., dict[str, Any]]
+    ) -> None:
+        def endpoint(
+            channel_id: str,
+            flow_id: str,
+            client_request_id: str | None = Header(
+                default=None, alias="X-EcoreX-Client-Request-ID"
+            ),
+        ) -> dict[str, Any]:
+            return _api(
+                operation,
+                channel_id,
+                flow_id,
+                request_id=client_request_id,
+            )
+
+        endpoint.__name__ = f"channel_auth_{name}"
+        router.add_api_route(
+            f"/{{channel_id}}/auth/{{flow_id}}/{name}", endpoint, methods=["POST"]
+        )
+
+    auth_action("poll", service.poll_authorization)
+    auth_action("cancel", service.cancel_authorization)
+    auth_action("refresh", service.refresh_authorization)
+
     @router.delete(
         "/{channel_id}/instance", status_code=status.HTTP_204_NO_CONTENT
     )
@@ -893,6 +1163,48 @@ def _request_id(value: str | None) -> str | None:
         return None
     if not _REQUEST_ID_RE.fullmatch(value):
         raise ChannelSelfServiceError("channel_request_id_invalid", 422)
+    return value
+
+
+def _device_flow_id(value: Any) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.startswith("wxauth_")
+        or len(value) != 39
+        or any(character not in "0123456789abcdef" for character in value[7:])
+    ):
+        raise ChannelSelfServiceError("channel_device_flow_invalid", 422)
+    return value
+
+
+def _validate_device_authorization(value: Any) -> ChannelDeviceAuthorization:
+    if not isinstance(value, ChannelDeviceAuthorization):
+        raise ChannelSelfServiceError("channel_adapter_result_invalid", 502)
+    _device_flow_id(value.flow_id)
+    if value.status not in {"pending", "scanned", "confirmed", "expired", "cancelled"}:
+        raise ChannelSelfServiceError("channel_adapter_result_invalid", 502)
+    if not isinstance(value.expires_at, datetime) or value.expires_at.tzinfo is None:
+        raise ChannelSelfServiceError("channel_adapter_result_invalid", 502)
+    if value.status in {"pending", "scanned"}:
+        if (
+            not isinstance(value.verification_url, str)
+            or not value.verification_url
+            or len(value.verification_url) > 8192
+            or any(character in value.verification_url for character in ("\x00", "\r", "\n"))
+        ):
+            raise ChannelSelfServiceError("channel_adapter_result_invalid", 502)
+        if (
+            not isinstance(value.qr_image_data_url, str)
+            or not value.qr_image_data_url.startswith("data:image/png;base64,")
+            or len(value.qr_image_data_url) > 512 * 1024
+        ):
+            raise ChannelSelfServiceError("channel_adapter_result_invalid", 502)
+    elif value.verification_url is not None or value.qr_image_data_url is not None:
+        raise ChannelSelfServiceError("channel_adapter_result_invalid", 502)
+    if value.status != "confirmed" and (
+        value.config is not None or value.secrets is not None
+    ):
+        raise ChannelSelfServiceError("channel_adapter_result_invalid", 502)
     return value
 
 
