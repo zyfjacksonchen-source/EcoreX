@@ -1369,9 +1369,17 @@ function connectorCatalog() {
       { definition: definition("tencent-docs", "腾讯文档"), adapter_available: true, instances: [], unavailable_reason: null },
       ...betaChannels.map(([connectorId, displayName]) => ({
         definition: definition(connectorId, displayName, "beta"),
-        adapter_available: true,
-        instances: [],
-        unavailable_reason: null,
+        adapter_available: !["dingtalk", "telegram"].includes(connectorId),
+        instances: connectorId === "dingtalk" ? [{
+          instance_id: "managed-dingtalk-stale",
+          connector_id: connectorId,
+          account_display_name: "历史钉钉连接",
+          health: "error",
+          granted_scopes: [],
+          available_actions: [],
+          last_error_code: "adapter_not_installed",
+        }] : [],
+        unavailable_reason: ["dingtalk", "telegram"].includes(connectorId) ? "adapter_not_installed" : null,
       })),
     ],
   };

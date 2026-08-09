@@ -644,7 +644,9 @@ export function ConnectorCatalogPanel({
                   const connectorUnavailable = connectorUnavailableMessage(item);
                   const unavailable = isFeishu || deviceChannel
                     ? null
-                    : channelUnavailable ?? (selfServiceChannel ? null : connectorUnavailable);
+                    : channelUnavailable ?? (
+                      selfServiceChannel && item.instances.length === 0 ? null : connectorUnavailable
+                    );
                   const overallHealth = connectorOverallHealth(item);
                   const visibleHealth = selfServiceChannel?.instance?.health
                     ?? deviceChannel?.instance?.health

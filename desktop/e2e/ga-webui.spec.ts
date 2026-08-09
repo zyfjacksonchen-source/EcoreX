@@ -655,7 +655,7 @@ test("scheduled tasks and external connections enter the real conversation and c
   await expect(guardedPage.getByRole("heading", { name: "能力中心" })).toBeVisible();
 
   const dingtalk = channels.locator("article.ex-connector-row").filter({ hasText: "钉钉" });
-  await expect(dingtalk).not.toContainText("当前安装未包含这个连接所需的组件");
+  await expect(dingtalk).toContainText("当前安装未包含这个连接所需的组件");
   await dingtalk.getByRole("button", { name: "配置账号" }).click();
   await expect(dingtalk.getByLabel("连接名称")).toBeVisible();
   await expect(dingtalk.getByLabel("Client ID")).toBeVisible();

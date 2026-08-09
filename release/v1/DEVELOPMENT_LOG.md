@@ -2201,7 +2201,8 @@ Windows CI 的首轮跨平台回归在主动关闭不可信长响应时由 `Inco
 - Composer 用量按钮保留悬停摘要，并增加真实点击开关、`aria-expanded`/`aria-pressed` 与
   Escape/失焦关闭，消除可见但点击无反馈的控件。
 - 能力中心不再把企业文档/OAuth Connector 的不可用状态叠加到已经可配置的本机消息 Bot；
-  本机通道缺失仍按真实 `channelUnavailable` 显示，未打包的微信公众号仍无操作按钮。
+  若已有持久企业连接实例则继续显示其真实缺组件状态。本机通道缺失仍按真实
+  `channelUnavailable` 显示，未打包的微信公众号仍无操作按钮。
 
 定向验证：
 
