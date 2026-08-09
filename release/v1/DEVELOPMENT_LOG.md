@@ -2159,3 +2159,31 @@ Electron shell/update/通知合同：7 passed
 Workflow YAML / git diff check：passed
 2.0.1 三平台签名 Runtime、安装态与真实用户验收：pending CI rebuild
 ```
+
+## 2026-08-10 补充 — Loopback Runtime 所有权改为挑战应答
+
+- 对抗审查复现了旧所有权探针的反射缺陷：Electron 会把持久 owner nonce 发给尚未认证的
+  `127.0.0.1:8765` listener，本机抢占端口的进程可读取该值并在同一响应中伪造 `verified`，
+  使桌面加载非 Runtime 页面。
+- 探针现由 Electron 每次生成 256-bit 随机 challenge；Runtime 使用仅存在于 owner receipt 与
+  已验证进程环境中的 secret 对域分离消息计算 HMAC-SHA256。Electron 只接受等长、常量时间
+  验证通过的 proof，从不再把 secret 发送给待认证 listener。端口抢占进程看到 challenge 也无法
+  构造 proof；独立绝对截止时间同时阻止 listener 用慢速响应头无限拖住启动。原生 Bootstrap
+  的热打开探针复用同一挑战应答，Host/loopback 与 owner receipt 边界保持不变。
+- Electron 在读取 proof 响应头后立即关闭不可信响应；错误 proof 搭配永不结束的响应体不能在
+  轮询期间累积 socket、文件描述符或内存。
+- 改动只发生在 Electron/Product loopback 所有权合同，未改变 Agent Runtime、通道、模型或
+  Bootstrap slot 架构。下一候选必须重建后再做真实首次启动。
+
+定向验证：
+
+```text
+恶意 listener 返回旧 verified 且尝试读取 nonce：rejected；nonce not disclosed
+真实 Electron/Python/Go HMAC challenge-response：accepted
+持续滴入不完整响应头：1.5 秒绝对截止后 rejected
+错误 proof + 永不结束响应体：rejected；socket closed
+Product app + 平台 Vault 聚焦回归：28 passed
+Electron shell/owner proof/通知合同：8 passed
+Go Bootstrap 全套：passed
+git diff check：passed
+```

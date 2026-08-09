@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -40,6 +41,7 @@ const (
 	maxFiles           = 50_000
 	artifactChunkBytes = 8 * 1024 * 1024
 	productWebUIURL    = "http://127.0.0.1:8765/"
+	runtimeOwnerDomain = "e-mate.runtime-owner.v1\x00"
 )
 
 var (
@@ -1162,14 +1164,23 @@ func runtimeUIReadyAt(client *http.Client, root, webUIURL string) bool {
 	if err != nil {
 		return false
 	}
-	ownerRequest.Header.Set("X-EcoreX-Owner-Nonce", ownerNonce)
+	challengeRaw := make([]byte, 32)
+	if _, err := rand.Read(challengeRaw); err != nil {
+		return false
+	}
+	challenge := base64.RawURLEncoding.EncodeToString(challengeRaw)
+	ownerRequest.Header.Set("X-EcoreX-Owner-Challenge", challenge)
 	ownerResponse, err := client.Do(ownerRequest)
 	if err != nil {
 		return false
 	}
 	ownerResponse.Body.Close()
+	proof, proofOK := runtimeOwnerProof(ownerNonce, challenge)
+	supplied, decodeErr := base64.RawURLEncoding.Strict().DecodeString(
+		ownerResponse.Header.Get("X-EcoreX-Runtime-Owner"),
+	)
 	if ownerResponse.StatusCode != http.StatusNoContent ||
-		ownerResponse.Header.Get("X-EcoreX-Runtime-Owner") != "verified" ||
+		!proofOK || decodeErr != nil || !hmac.Equal(supplied, proof) ||
 		ownerResponse.Header.Get("Cache-Control") != "no-store" {
 		return false
 	}
@@ -1192,6 +1203,18 @@ func runtimeUIReadyAt(client *http.Client, root, webUIURL string) bool {
 	return bytes.Contains(payload, []byte("window.__ECOREX_RUNTIME__=Object.freeze(")) &&
 		bytes.Contains(payload, []byte(`"releaseId":"`+releaseID+`"`)) &&
 		bytes.Contains(payload, []byte(`"version":"`+version+`"`))
+}
+
+func runtimeOwnerProof(ownerNonce, challenge string) ([]byte, bool) {
+	key, err := base64.RawURLEncoding.Strict().DecodeString(ownerNonce)
+	challengeRaw, challengeErr := base64.RawURLEncoding.Strict().DecodeString(challenge)
+	if err != nil || len(key) != 32 || challengeErr != nil || len(challengeRaw) != 32 {
+		return nil, false
+	}
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(runtimeOwnerDomain))
+	_, _ = mac.Write([]byte(challenge))
+	return mac.Sum(nil), true
 }
 
 func issueRuntimeOwnerReceipt(root string) (string, error) {

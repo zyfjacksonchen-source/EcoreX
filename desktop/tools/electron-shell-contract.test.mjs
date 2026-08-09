@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { createHmac } from "node:crypto";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import http from "node:http";
+import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import backendContract from "../electron/backend.cjs";
 import updateContract from "../electron/update-contract.cjs";
 
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -61,6 +66,73 @@ test("desktop loads the existing loopback Runtime and never packages a second re
   const pkg = JSON.parse(await load("package.json"));
   assert.equal(pkg.build.files.some((entry) => entry.includes("renderer")), false);
   assert.equal(pkg.build.extraResources[0].from, "runtime-bundle");
+});
+
+test("loopback owner proof never discloses its secret to an untrusted listener", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "emate-owner-proof-"));
+  const nonce = Buffer.alloc(32, 7).toString("base64url");
+  await mkdir(path.join(dataDir, "bootstrap"));
+  await writeFile(
+    path.join(dataDir, "bootstrap", "runtime-owner.json"),
+    JSON.stringify({ schema_version: 1, nonce }),
+  );
+  const listen = async (server) => {
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return server.address().port;
+  };
+  const close = (server) => new Promise((resolve) => server.close(resolve));
+  const servers = [];
+  try {
+    let disclosed;
+    let markAttackerClosed;
+    const attackerClosed = new Promise((resolve) => { markAttackerClosed = resolve; });
+    const attacker = http.createServer((request, response) => {
+      disclosed = request.headers["x-ecorex-owner-nonce"];
+      request.socket.once("close", markAttackerClosed);
+      response.writeHead(200, { "X-EcoreX-Runtime-Owner": "verified" });
+      response.write("untrusted body stays open");
+    });
+    servers.push(attacker);
+    const attackerPort = await listen(attacker);
+    assert.equal(await backendContract.runtimeResponds(attackerPort, dataDir), false);
+    assert.equal(disclosed, undefined);
+    let closeDeadline;
+    const closed = await Promise.race([
+      attackerClosed.then(() => true),
+      new Promise((resolve) => { closeDeadline = setTimeout(() => resolve(false), 500); }),
+    ]);
+    clearTimeout(closeDeadline);
+    assert.equal(closed, true);
+
+    const runtime = http.createServer((request, response) => {
+      const challenge = request.headers["x-ecorex-owner-challenge"];
+      const proof = createHmac("sha256", Buffer.from(nonce, "base64url"))
+        .update("e-mate.runtime-owner.v1\0", "ascii")
+        .update(challenge, "ascii")
+        .digest("base64url");
+      response.writeHead(204, { "X-EcoreX-Runtime-Owner": proof });
+      response.end();
+    });
+    servers.push(runtime);
+    const runtimePort = await listen(runtime);
+    assert.equal(await backendContract.runtimeResponds(runtimePort, dataDir), true);
+
+    const drip = net.createServer((socket) => {
+      socket.once("data", () => {
+        socket.write("HTTP/1.1 204 No Content\r\nX-Drip: ");
+        const interval = setInterval(() => socket.write("x"), 100);
+        socket.once("close", () => clearInterval(interval));
+      });
+    });
+    servers.push(drip);
+    const dripPort = await listen(drip);
+    const started = Date.now();
+    assert.equal(await backendContract.runtimeResponds(dripPort, dataDir), false);
+    assert.ok(Date.now() - started < 2_500);
+  } finally {
+    await Promise.all(servers.filter((server) => server.listening).map(close));
+    await rm(dataDir, { recursive: true, force: true });
+  }
 });
 
 test("mac metadata parsing only offers newer stable releases", () => {

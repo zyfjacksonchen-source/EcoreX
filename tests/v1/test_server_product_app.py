@@ -32,6 +32,7 @@ from ecorex.server import (
     build_uvicorn_config,
     create_product_app,
 )
+from ecorex.server.app import _runtime_owner_proof
 from ecorex.session import (
     Ed25519SessionLeaseVerifier,
     ManagedSessionLeaseClaims,
@@ -638,9 +639,10 @@ def test_product_app_labels_runtime_registration_failure(tmp_path, monkeypatch):
     assert "native-runtime-registration-secret" not in str(failure.value)
 
 
-def test_runtime_owner_endpoint_requires_exact_process_nonce(tmp_path):
+def test_runtime_owner_endpoint_proves_process_secret_without_disclosing_it(tmp_path):
     signed = _write_signed_bundle(tmp_path)
     nonce = "A" * 43
+    challenge = "B" * 43
     app = create_product_app(_settings(tmp_path, signed, runtime_owner_nonce=nonce))
     client = TestClient(app, base_url=ORIGIN)
 
@@ -651,13 +653,16 @@ def test_runtime_owner_endpoint_requires_exact_process_nonce(tmp_path):
     )
     accepted = client.get(
         "/api/v1/runtime-owner",
-        headers={"X-EcoreX-Owner-Nonce": nonce},
+        headers={"X-EcoreX-Owner-Challenge": challenge},
     )
 
     assert missing.status_code == 404
     assert wrong.status_code == 404
     assert accepted.status_code == 204
-    assert accepted.headers["x-ecorex-runtime-owner"] == "verified"
+    assert accepted.headers["x-ecorex-runtime-owner"] == _runtime_owner_proof(
+        nonce, challenge
+    )
+    assert nonce not in accepted.headers.values()
     assert accepted.headers["cache-control"] == "no-store"
 
 

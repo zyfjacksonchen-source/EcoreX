@@ -1245,11 +1245,19 @@ func TestOrphanRuntimeIsOpenedWithoutRotatingItsOwnerNonce(t *testing.T) {
 		response.Header().Set("Cache-Control", "no-store")
 		switch request.URL.Path {
 		case "/api/v1/runtime-owner":
-			if request.Header.Get("X-EcoreX-Owner-Nonce") != nonce {
+			if request.Header.Get("X-EcoreX-Owner-Nonce") != "" {
+				t.Fatal("Runtime owner secret was disclosed to the listener")
+			}
+			challenge := request.Header.Get("X-EcoreX-Owner-Challenge")
+			proof, ok := runtimeOwnerProof(nonce, challenge)
+			if !ok {
 				http.NotFound(response, request)
 				return
 			}
-			response.Header().Set("X-EcoreX-Runtime-Owner", "verified")
+			response.Header().Set(
+				"X-EcoreX-Runtime-Owner",
+				base64.RawURLEncoding.EncodeToString(proof),
+			)
 			response.WriteHeader(http.StatusNoContent)
 		case "/":
 			_, _ = fmt.Fprintf(

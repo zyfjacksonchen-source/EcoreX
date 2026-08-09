@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import ipaddress
 import json
 import os
@@ -64,6 +67,7 @@ from .errors import ServerConfigurationError
 SecretFactory = Callable[[int], str]
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _RUNTIME_OWNER_NONCE = re.compile(r"^[A-Za-z0-9_-]{43}$")
+_RUNTIME_OWNER_PROOF_DOMAIN = b"e-mate.runtime-owner.v1\0"
 _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
@@ -93,6 +97,16 @@ def _origin(host: str, port: int) -> str:
     if port == 80:
         return f"http://{authority}"
     return f"http://{authority}:{port}"
+
+
+def _runtime_owner_proof(secret: str, challenge: str) -> str:
+    key = base64.urlsafe_b64decode(secret + "=")
+    digest = hmac.new(
+        key,
+        _RUNTIME_OWNER_PROOF_DOMAIN + challenge.encode("ascii"),
+        hashlib.sha256,
+    ).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
 @dataclass(frozen=True, slots=True)
@@ -789,12 +803,12 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         include_in_schema=False,
     )
     async def runtime_owner(request: Request) -> Response:
-        supplied = request.headers.get("X-EcoreX-Owner-Nonce", "")
+        challenge = request.headers.get("X-EcoreX-Owner-Challenge", "")
         expected = settings.runtime_owner_nonce
         if (
             expected is None
-            or not isinstance(supplied, str)
-            or not secrets.compare_digest(supplied, expected)
+            or not isinstance(challenge, str)
+            or _RUNTIME_OWNER_NONCE.fullmatch(challenge) is None
         ):
             return _apply_security_headers(
                 JSONResponse(
@@ -808,7 +822,9 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
                 status_code=204,
                 headers={
                     "Cache-Control": "no-store",
-                    "X-EcoreX-Runtime-Owner": "verified",
+                    "X-EcoreX-Runtime-Owner": _runtime_owner_proof(
+                        expected, challenge
+                    ),
                 },
             )
         )

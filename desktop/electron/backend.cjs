@@ -1,5 +1,6 @@
 const { spawn } = require("node:child_process");
 const { EventEmitter } = require("node:events");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
@@ -54,21 +55,39 @@ function runtimeResponds(port, dataDir) {
       resolve(false);
       return;
     }
+    const challenge = crypto.randomBytes(32).toString("base64url");
+    const expected = crypto.createHmac("sha256", Buffer.from(nonce, "base64url"))
+      .update("e-mate.runtime-owner.v1\0", "ascii")
+      .update(challenge, "ascii")
+      .digest();
+    let settled = false;
+    let deadline;
+    const finish = (accepted) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      resolve(accepted);
+    };
     const request = http.get({
       hostname: "127.0.0.1",
       port,
       path: "/api/v1/runtime-owner",
-      timeout: 1_500,
-      headers: { "X-EcoreX-Owner-Nonce": nonce },
+      headers: { "X-EcoreX-Owner-Challenge": challenge },
     }, (response) => {
-      response.resume();
-      resolve(
+      const supplied = response.headers["x-ecorex-runtime-owner"];
+      const proof = typeof supplied === "string" ? Buffer.from(supplied, "base64url") : Buffer.alloc(0);
+      response.destroy();
+      finish(
         response.statusCode === 204
-        && response.headers["x-ecorex-runtime-owner"] === "verified",
+        && proof.length === expected.length
+        && crypto.timingSafeEqual(proof, expected),
       );
     });
-    request.once("timeout", () => request.destroy());
-    request.once("error", () => resolve(false));
+    deadline = setTimeout(() => {
+      request.destroy();
+      finish(false);
+    }, 1_500);
+    request.once("error", () => finish(false));
   });
 }
 
