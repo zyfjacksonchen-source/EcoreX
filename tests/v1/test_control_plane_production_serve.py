@@ -706,6 +706,54 @@ def test_failed_asgi_startup_closes_s3_and_releases_instance_lock(
     replacement.lifecycle.force_close()
 
 
+def test_feishu_gateway_production_composition_reuses_control_plane_auth(
+    tmp_path: Path,
+) -> None:
+    config, secrets, auth_private = _material(tmp_path)
+    config = replace(config, feishu_connector_enabled=True)
+    secrets.values.update(
+        {
+            "feishu-app-id": "cli_test",
+            "feishu-app-secret": "server-only-secret",
+            "feishu-token-encryption-key": base64.b64encode(b"f" * 32).decode(),
+        }
+    )
+    provider = SingleNodeSQLiteS3Provider(FakeS3Factory())
+    provider.migrate(config, secrets)
+    provider.check(config, secrets)
+    bundle = provider.compose(config, secrets)
+    assert bundle.feishu_connector_gateway is not None
+    assert ControlPlaneProductionConfig.from_environment(
+        _environment(config)
+    ).feishu_connector_enabled is True
+
+    verifier = "v" * 64
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()
+    ).rstrip(b"=").decode()
+    with TestClient(bundle.create_app()) as client:
+        response = client.post(
+            "/api/v1/connectors/feishu/auth/begin",
+            headers={
+                "Authorization": "Bearer " + _jwt(auth_private),
+                "Idempotency-Key": "connflow_production",
+            },
+            json={
+                "flow_id": "connflow_production",
+                "auth_kind": "oauth2",
+                "return_uri": (
+                    "http://127.0.0.1:8765/api/v1/connectors/oauth/callback"
+                ),
+                "state": "state_0123456789abcdef",
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["connector_id"] == "feishu"
+    bundle.lifecycle.force_close()
+
+
 def test_schema_check_rejects_unencrypted_or_public_s3(tmp_path: Path) -> None:
     config, secrets, _private = _material(tmp_path)
     bootstrap = SingleNodeSQLiteS3Provider(FakeS3Factory())
@@ -860,6 +908,9 @@ def _environment(config: ControlPlaneProductionConfig) -> dict[str, str]:
         "ECOREX_CP_BACKUP_RETAIN_COUNT": str(config.backup_retain_count),
         "ECOREX_CP_MODEL_ACTIVATION_TIMEOUT_SECONDS": str(
             config.model_activation_timeout_seconds
+        ),
+        "ECOREX_CP_FEISHU_CONNECTOR_ENABLED": (
+            "true" if config.feishu_connector_enabled else "false"
         ),
     }
     if config.share_storage_mode == "attested-encrypted-local-cas":

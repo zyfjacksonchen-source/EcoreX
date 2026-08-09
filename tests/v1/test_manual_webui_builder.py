@@ -39,7 +39,11 @@ def test_manual_webui_builder_pins_and_rechecks_base_package(
         builder["_base_package"](package, "windows")
 
 
-def test_manual_webui_runtime_config_is_canonical_and_rebound(tmp_path: Path) -> None:
+def test_manual_webui_runtime_config_is_canonical_and_rebound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ECOREX_V1_FEISHU_CONNECTOR_ENABLED", raising=False)
     builder = _builder()
     core = tmp_path / "core"
     core.mkdir()
@@ -94,12 +98,39 @@ def test_manual_webui_runtime_config_is_canonical_and_rebound(tmp_path: Path) ->
         "raw_retention_days": 30,
         "aggregate_retention_days": 180,
     }
+    assert value["connectors"] is None
     assert value["capability_packs"] == [
         {
             "artifact": "ecorex-capability-pack-2.0.0.zip",
             "manifest": "ecorex-capability-pack-2.0.0.json",
         }
     ]
+
+
+def test_manual_webui_runtime_enables_feishu_only_by_explicit_release_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    builder = _builder()
+    core = tmp_path / "core"
+    core.mkdir()
+    (core / "runtime-config.json").write_text(
+        json.dumps({"capability_packs": []}), encoding="utf-8"
+    )
+    monkeypatch.setenv("ECOREX_V1_FEISHU_CONNECTOR_ENABLED", "true")
+
+    builder["_runtime_config"](
+        core,
+        platform="windows",
+        architecture="x64",
+        release_keys={"v1": "public"},
+    )
+
+    assert json.loads((core / "runtime-config.json").read_text())["connectors"] == {
+        "endpoint": "https://dl.ecoremedia.net/api/v1/connectors",
+        "allowed_hosts": ["dl.ecoremedia.net"],
+        "enabled_connectors": ["feishu"],
+    }
 
 
 def test_manual_webui_release_sources_are_one_ordered_set() -> None:

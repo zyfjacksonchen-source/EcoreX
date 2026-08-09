@@ -30,6 +30,20 @@ from .audit_schema import (
     migrate_cloud_audit_database,
     validate_cloud_audit_database,
 )
+from .connector_gateway import (
+    FEISHU_OAUTH_RETURN_URI,
+    FEISHU_SCOPES,
+    ConnectorGatewayError,
+    FeishuConnectorGateway,
+    FeishuProviderClient,
+)
+from .connector_gateway_schema import (
+    CONNECTOR_GATEWAY_SCHEMA_SHA256,
+    CURRENT_CONNECTOR_GATEWAY_SCHEMA_VERSION,
+    ConnectorGatewaySchemaError,
+    ConnectorGatewaySchemaManager,
+    ConnectorGatewaySchemaReceipt,
+)
 from .client import (
     AdminControlPlaneClient,
     AdminCredentialProvider,

@@ -53,6 +53,7 @@ from .audit import (
     CloudAuditRepository,
     create_cloud_audit_router,
 )
+from .connector_gateway import FeishuConnectorGateway
 from .admin_web import (
     AdminResumeAdapter,
     create_admin_resume_router,
@@ -713,6 +714,7 @@ def create_control_plane_app(
     release_replica_service: CDNReleaseReplicaService | None = None,
     skill_hub_registry: SkillHubRegistry | None = None,
     skill_hub_bundle_store: LocalSkillBundleStore | None = None,
+    feishu_connector_gateway: FeishuConnectorGateway | None = None,
 ) -> FastAPI:
     hub = UpdateSignalHub()
     resolved_model_tester = (
@@ -759,6 +761,8 @@ def create_control_plane_app(
             closer = getattr(resolved_model_tester, "aclose", None)
             if callable(closer):
                 await closer()
+            if feishu_connector_gateway is not None:
+                await feishu_connector_gateway.aclose()
 
     app = FastAPI(
         title="e-Mate Control Plane",
@@ -790,6 +794,7 @@ def create_control_plane_app(
     app.state.device_identity_broker = device_identity_broker
     app.state.release_replica_service = release_replica_service
     app.state.skill_hub_registry = skill_hub_registry
+    app.state.feishu_connector_gateway = feishu_connector_gateway
 
     def principal(request: Request) -> ControlPrincipal:
         try:
@@ -880,6 +885,12 @@ def create_control_plane_app(
                 audit_repository,
                 principal_dependency=principal,
                 admin_dependency=audit_admin,
+            )
+        )
+    if feishu_connector_gateway is not None:
+        app.include_router(
+            feishu_connector_gateway.create_router(
+                principal_dependency=principal,
             )
         )
     if release_replica_service is not None:
@@ -996,7 +1007,9 @@ def create_control_plane_app(
                     }
                 },
             )
-        if request.url.path in {"/api/v1/shares", "/api/v1/audit/records"}:
+        if request.url.path in {"/api/v1/shares", "/api/v1/audit/records"} or request.url.path.startswith(
+            "/api/v1/connectors/"
+        ):
             # Share validation inputs can contain full conversation text.  The
             # framework's default response echoes invalid values, so redact the
             # entire payload at this trust boundary.
@@ -1007,11 +1020,15 @@ def create_control_plane_app(
                         "code": (
                             "invalid_share_snapshot"
                             if request.url.path == "/api/v1/shares"
+                            else "invalid_connector_request"
+                            if request.url.path.startswith("/api/v1/connectors/")
                             else "invalid_audit_record"
                         ),
                         "message": (
                             "share snapshot is invalid"
                             if request.url.path == "/api/v1/shares"
+                            else "managed connector request is invalid"
+                            if request.url.path.startswith("/api/v1/connectors/")
                             else "audit record is invalid"
                         ),
                     }

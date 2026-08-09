@@ -18,6 +18,8 @@ jobs:
     name: signed Runtime seed
     if: ${{ github.repository == 'zyfjacksonchen-source/EcoreX' && github.ref == 'refs/heads/codex/e-mate-2.0.0' }}
     runs-on: macos-15
+    env:
+      ECOREX_V1_FEISHU_CONNECTOR_ENABLED: "true"
     steps:
       - name: Check out the exact source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -76,6 +78,14 @@ jobs:
           manifest = json.loads((root / 'release-manifest.json').read_text())
           targets = ('windows-x64', 'macos-arm64', 'macos-x64')
           for target in targets:
+              core = next(value for value in manifest['artifacts'] if value['artifact_id'] == f'core-{target}')
+              with zipfile.ZipFile(root / core['file_name']) as archive:
+                  runtime_config = json.loads(archive.read('runtime-config.json'))
+              assert runtime_config['connectors'] == {
+                  'endpoint': 'https://dl.ecoremedia.net/api/v1/connectors',
+                  'allowed_hosts': ['dl.ecoremedia.net'],
+                  'enabled_connectors': ['feishu'],
+              }
               artifact_id = f'bootstrap-{target}'
               item = next(value for value in manifest['artifacts'] if value['artifact_id'] == artifact_id)
               destination = pathlib.Path('.runtime/bootstraps') / target

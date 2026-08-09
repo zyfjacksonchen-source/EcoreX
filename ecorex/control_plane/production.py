@@ -56,6 +56,8 @@ from ecorex.extensions import LocalSkillBundleStore
 
 from .app import ControlPlaneServiceLifecycle, create_control_plane_app
 from .audit import CloudAuditRepository
+from .connector_gateway import FeishuConnectorGateway
+from .connector_gateway_schema import ConnectorGatewaySchemaManager
 from .bootstrap_index_service import (
     BootstrapIndexPublicationService,
     FilesystemPublicIndexObjectStore,
@@ -141,6 +143,9 @@ _SECRET_NAMES = {
     "model-config-encryption-key": "ECOREX_CP_MODEL_CONFIG_ENCRYPTION_KEY_B64",
     "device-derivation-key": "ECOREX_CP_DEVICE_DERIVATION_KEY_B64",
     "device-legacy-credential-pepper": "ECOREX_CP_DEVICE_LEGACY_PEPPER_B64",
+    "feishu-app-id": "ECOREX_CP_FEISHU_APP_ID",
+    "feishu-app-secret": "ECOREX_CP_FEISHU_APP_SECRET",
+    "feishu-token-encryption-key": "ECOREX_CP_FEISHU_TOKEN_ENCRYPTION_KEY_B64",
 }
 _S3_SETTING_NAMES = frozenset(
     {
@@ -410,6 +415,7 @@ class ControlPlaneProductionConfig:
     direct_release_admission_enabled: bool = False
     direct_release_id: str | None = None
     direct_release_instruction_sha256: str | None = field(default=None, repr=False)
+    feishu_connector_enabled: bool = False
 
     def __post_init__(self) -> None:
         try:
@@ -514,6 +520,7 @@ class ControlPlaneProductionConfig:
             or not 1 <= self.publication_signer_timeout_seconds <= 120
             or not 1 <= self.rollback_signer_timeout_seconds <= 120
             or not 30 <= self.model_activation_timeout_seconds <= 600
+            or not isinstance(self.feishu_connector_enabled, bool)
         ):
             raise ProductionConfigurationError(
                 "Control Plane production configuration is invalid"
@@ -1342,6 +1349,11 @@ class ControlPlaneProductionConfig:
             direct_release_instruction_sha256=(
                 direct_instruction if direct_release_enabled else None
             ),
+            feishu_connector_enabled=_boolean(
+                values,
+                "ECOREX_CP_FEISHU_CONNECTOR_ENABLED",
+                default=False,
+            ),
         )
 
 
@@ -1497,6 +1509,7 @@ class ControlPlaneProductionBundle:
     release_replica_service: CDNReleaseReplicaService | None
     skill_hub_registry: SkillHubRegistry
     skill_hub_bundle_store: LocalSkillBundleStore
+    feishu_connector_gateway: FeishuConnectorGateway | None
     lifecycle: "SingleNodeControlPlaneLifecycle"
     config: ControlPlaneProductionConfig
 
@@ -1520,6 +1533,7 @@ class ControlPlaneProductionBundle:
             release_replica_service=self.release_replica_service,
             skill_hub_registry=self.skill_hub_registry,
             skill_hub_bundle_store=self.skill_hub_bundle_store,
+            feishu_connector_gateway=self.feishu_connector_gateway,
         )
 
 
@@ -1826,6 +1840,24 @@ def _direct_release_policy(
     )
 
 
+def _feishu_connector_gateway(
+    config: ControlPlaneProductionConfig,
+    secrets: SecretProvider,
+    audit_repository: CloudAuditRepository,
+) -> FeishuConnectorGateway:
+    if not config.feishu_connector_enabled:
+        raise ProductionConfigurationError("Feishu connector is not enabled")
+    return FeishuConnectorGateway(
+        config.database_path,
+        app_id=secrets.read("feishu-app-id"),
+        app_secret=secrets.read("feishu-app-secret"),
+        encryption_key=_secret_bytes(
+            secrets.read("feishu-token-encryption-key"), exact_length=32
+        ),
+        audit_repository=audit_repository,
+    )
+
+
 class SingleNodeSQLiteS3Provider:
     def __init__(
         self,
@@ -1865,6 +1897,8 @@ class SingleNodeSQLiteS3Provider:
                 ).migrate()
                 if config.device_identity_enabled:
                     DeviceIdentitySchemaManager(config.database_path).migrate()
+                if config.feishu_connector_enabled:
+                    ConnectorGatewaySchemaManager(config.database_path).migrate()
                 skill_hub_registry = SkillHubRegistry(
                     config.database_path,
                     author_key=_skill_hub_author_key(secrets),
@@ -1912,6 +1946,8 @@ class SingleNodeSQLiteS3Provider:
         management = AdminManagementSchemaManager(config.database_path).validate()
         if config.device_identity_enabled:
             DeviceIdentitySchemaManager(config.database_path).validate()
+        if config.feishu_connector_enabled:
+            ConnectorGatewaySchemaManager(config.database_path).validate()
         skill_hub_registry = SkillHubRegistry(
             config.database_path,
             author_key=_skill_hub_author_key(secrets),
@@ -1997,6 +2033,21 @@ class SingleNodeSQLiteS3Provider:
                     secrets=_ControlPlaneDeviceIdentitySecrets(secrets),
                     initialize=False,
                 )
+            if config.feishu_connector_enabled:
+                gateway = _feishu_connector_gateway(
+                    config,
+                    secrets,
+                    CloudAuditRepository(
+                        config.database_path,
+                        encryption_key=audit_encryption,
+                        integrity_key=audit_integrity,
+                        retention=AuditRetentionPolicy(
+                            raw_days=config.audit_raw_days,
+                            aggregate_days=config.audit_aggregate_days,
+                        ),
+                    ),
+                )
+                asyncio.run(gateway.aclose())
         finally:
             storage.close()
         return ProductionSchemaReport(
@@ -2043,6 +2094,7 @@ class SingleNodeSQLiteS3Provider:
         bootstrap_index_service: BootstrapIndexPublicationService | None = None
         model_connection_tester: HTTPSModelConnectionTester | None = None
         release_replica_service: CDNReleaseReplicaService | None = None
+        feishu_connector_gateway: FeishuConnectorGateway | None = None
         try:
             volume.validate_wal()
             ControlPlaneSchemaManager(config.database_path).validate()
@@ -2051,6 +2103,8 @@ class SingleNodeSQLiteS3Provider:
             AdminManagementSchemaManager(config.database_path).validate()
             if config.device_identity_enabled:
                 DeviceIdentitySchemaManager(config.database_path).validate()
+            if config.feishu_connector_enabled:
+                ConnectorGatewaySchemaManager(config.database_path).validate()
             skill_hub_registry = SkillHubRegistry(
                 config.database_path,
                 author_key=_skill_hub_author_key(secrets),
@@ -2127,6 +2181,11 @@ class SingleNodeSQLiteS3Provider:
                     aggregate_days=config.audit_aggregate_days,
                 ),
             )
+            feishu_connector_gateway = (
+                _feishu_connector_gateway(config, secrets, audit_repository)
+                if config.feishu_connector_enabled
+                else None
+            )
             if config.release_replica_enabled:
                 assert config.release_replica_storage_root is not None
                 assert config.release_replica_public_root is not None
@@ -2202,10 +2261,16 @@ class SingleNodeSQLiteS3Provider:
                 release_replica_service=release_replica_service,
                 skill_hub_registry=skill_hub_registry,
                 skill_hub_bundle_store=skill_hub_bundle_store,
+                feishu_connector_gateway=feishu_connector_gateway,
                 lifecycle=lifecycle,
                 config=config,
             )
         except BaseException:
+            if feishu_connector_gateway is not None:
+                try:
+                    asyncio.run(feishu_connector_gateway.aclose())
+                except Exception:
+                    pass
             if model_connection_tester is not None:
                 try:
                     asyncio.run(model_connection_tester.aclose())

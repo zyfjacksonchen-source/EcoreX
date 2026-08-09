@@ -1623,3 +1623,79 @@ Actions 三平台保护配置：audit/tracing/connectors = null
 公网缺口：account/password = 405；skill-hub = 404；connectors = 404；OTLP = 无 collector
 GitHub：v2.0.0 Release = absent；Connector/OAuth 凭据名 = absent
 ```
+
+# 2026-08-09 — 飞书首个真实 Managed Connector Product/Cloud 闭环
+
+- 未改 CowAgent Core、ConnectorService 或既有 `ManagedConnectorGatewayAdapter`
+  合同。飞书 Gateway 直接挂载到现有 Control Plane 的
+  `/api/v1/connectors/feishu/*`，复用同一 managed-session JWT、账号/组织
+  principal、设备令牌即时撤销权威、SQLite WAL 和 Usage 已用的 Cloud Audit，
+  不新增域名、身份系统或假 adapter。
+- OAuth 使用当前飞书 v2 合同：授权入口
+  `https://accounts.feishu.cn/open-apis/authen/v1/authorize`，query 使用
+  `client_id`、固定 `S256` PKCE；换取和刷新均使用
+  `POST https://open.feishu.cn/open-apis/authen/v2/oauth/token`。刷新令牌按单次
+  轮换保存，提前失效的 access token 只强制刷新并重试一次；其他 4xx 不绕过，
+  429/5xx 保持既有 retryable 事实。
+- 客户端只得到随机 `fgrant_*` 不透明句柄。`access_token`、`refresh_token`、
+  app secret 和幂等响应均使用独立 32-byte 服务端密钥加密落库，不进入响应、
+  日志、审计、Runtime 配置或安装包；revoke 会立即销毁 token envelope 并按
+  账号及 `organization_id` 拒绝后续访问。
+- 首版真实动作闭环为 `documents.read`、`documents.write`、`drive.search` 和
+  `messages.send`，返回继续满足现有 closed schemas。为避免跨 HTTP 的伪事务
+  造成用户数据丢失，文档正文只允许写入用户预先创建且当前无正文块的文档；已含正文的
+  覆盖请求在任何写入前以 `document_content_replace_unsupported` 失败关闭，
+  现有文档标题仍可真实更新。后续若要正文替换，必须先引入可恢复的持久阶段合同。
+- Runtime 默认仍为 `connectors=null`；正式 2.0 CI 显式设置
+  `ECOREX_V1_FEISHU_CONNECTOR_ENABLED=true`，并逐个解包 Windows x64、macOS
+  arm64/x64 的 Core，断言 endpoint、allowlist 和 `enabled_connectors=[feishu]`。
+  服务端仅在 `ECOREX_CP_FEISHU_CONNECTOR_ENABLED=true` 且三个 Secret 全部存在
+  时组合 Gateway；否则不建路由、不迁移该增量 schema 并继续失败关闭。
+
+飞书开放平台首次真实验收前必须配置：
+
+```text
+Redirect URI:
+http://127.0.0.1:8765/api/v1/connectors/oauth/callback
+
+User OAuth scopes:
+docx:document
+docx:document:readonly
+drive:drive:readonly
+im:message
+im:message.send_as_user
+offline_access
+
+Server-only Secret names:
+ECOREX_CP_FEISHU_APP_ID
+ECOREX_CP_FEISHU_APP_SECRET
+ECOREX_CP_FEISHU_TOKEN_ENCRYPTION_KEY_B64
+```
+
+飞书应用还必须启用机器人能力、发布一个包含上述权限的应用版本，并把扫码测试
+账号加入应用可用范围；发送消息固定使用该用户 OAuth 的 user access token，不与
+tenant/bot token 混用。首版只支持部署方在服务端配置的一个自建飞书应用，由飞书
+应用自身的可用范围限制可登录租户与用户；不支持租户 BYO App，也不增加租户到
+app_id/app_secret 的映射表。真实扫码、凭据注入和生产激活留给有凭据的验收步骤。
+正式候选的发布顺序是硬门禁：先向服务端注入 Secret、启用 Gateway 并确认
+`/health/ready` 返回 200，再分发已内置 `enabled_connectors=[feishu]` 的桌面端；
+Cloud 尚未就绪时不得让客户端可见合同先于服务端上线。
+现有冻结 Core 把搜索动作声明为 `drive:drive:readonly`；飞书另有更小的
+`drive:drive.search:readonly`，但本次不越过用户设定的 Core 冻结规则修改既有
+required-scopes 合同。该最小权限债务需在产品所有者单独批准 Core 合同变更后处理，
+验收不得把专用 scope 伪报成已经授予。
+当前单节点 Gateway 允许 5 分钟后接管残留的 active 幂等记录，但还没有独立 attempt
+owner/lease；这是进程极慢或暂停超过 5 分钟时的重复执行风险。现有写动作继续依赖
+飞书 `client_token`/消息 `uuid` 去重，后续若观察到真实超时再在 Product 数据层补租约，
+本次不为未观测的多副本场景扩写 Core 或新协调服务。
+
+本轮定向验证：
+
+```text
+Gateway OAuth/PKCE/v2 exchange/refresh rotate/四动作/revoke/租户隔离/密文落库：2 passed
+manual Runtime config 与既有 managed adapter 回归：16 passed
+Control Plane 生产组合（含 Feishu enabled/disabled）回归：20 passed
+上述聚焦联合：38 passed
+Python compile + git diff check：passed
+真实扫码/飞书 API/生产激活：not run（等待用户凭据）
+```

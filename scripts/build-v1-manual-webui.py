@@ -380,6 +380,20 @@ def _runtime_config(
             "raw_retention_days": 30,
             "aggregate_retention_days": 180,
         }
+        connector_enabled = os.environ.get(
+            "ECOREX_V1_FEISHU_CONNECTOR_ENABLED", "false"
+        )
+        if connector_enabled not in {"true", "false"}:
+            _fail("manual_webui_connector_config_invalid")
+        value["connectors"] = (
+            {
+                "endpoint": "https://dl.ecoremedia.net/api/v1/connectors",
+                "allowed_hosts": ["dl.ecoremedia.net"],
+                "enabled_connectors": ["feishu"],
+            }
+            if connector_enabled == "true"
+            else None
+        )
         packs = value["capability_packs"]
         for pack in packs:
             pack["artifact"] = str(pack["artifact"]).replace(BASE_VERSION, __version__)
