@@ -51,6 +51,29 @@ jobs:
           npm ci --prefix desktop
           npm run build:web --prefix desktop
 
+      - name: Gate the accepted e-Mate source contracts
+        run: |
+          python scripts/install-v1-python-profile.py --profile dev
+          python -m pytest -q -p no:cacheprovider \
+            tests/v1/test_public_download_site.py \
+            tests/v1/test_emate_feed_deploy.py \
+            tests/v1/test_callback_channel_boundary.py \
+            tests/v1/test_server_product_app.py::test_product_composes_message_channels_with_the_agent_runtime \
+            tests/v1/test_server_product_app.py::test_product_settings_inject_cloud_authoritative_session
+          python scripts/check-v1-public-download-site.py
+
+      - name: Gate the accepted e-Mate interaction contracts
+        working-directory: desktop
+        run: |
+          npm run typecheck
+          node --test \
+            tools/ga-mock-server.test.mjs \
+            tools/product-language-contract.test.mjs
+          npx playwright test \
+            --config=playwright.config.ts \
+            e2e/ga-webui.spec.ts \
+            --grep "scheduled tasks and external connections"
+
       - name: Fetch pinned predecessor Runtime closure
         run: |
           mkdir -p .runtime/base

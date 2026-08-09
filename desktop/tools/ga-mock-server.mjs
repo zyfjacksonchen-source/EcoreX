@@ -1429,7 +1429,11 @@ function channelConnectorCatalog(state) {
           { key: "dingtalk_client_id", label: "Client ID", type: "text", required: true, secret: false, configured: false },
           { key: "dingtalk_client_secret", label: "Client Secret", type: "secret", required: true, secret: true, configured: false },
         ],
+        adapter_available: true,
+        unavailable_reason: null,
+        actions: { save: true, test: false, enable: false, disable: false, retry: false, disconnect: false, auth_begin: false },
       }),
+      item("wechatmp", "微信公众号"),
     ],
   };
 }

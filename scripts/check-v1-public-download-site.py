@@ -133,9 +133,8 @@ def main() -> int:
     _require(
         "<title>e-Mate 下载与安装</title>" in html
         and "企业智能体桌面工作区" in html
-        and "每次继续" in html
-        and "上次的" in html
-        and "进度" in html
+        and "每次继续" not in html
+        and "上次的" not in html
         and "Agent工作新范式" in html
         and "从自己干到通过agent快速落地想法。" in html
         and 'data-primary-download aria-disabled="true"' in html

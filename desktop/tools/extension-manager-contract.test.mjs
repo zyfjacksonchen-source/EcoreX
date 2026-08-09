@@ -6,6 +6,10 @@ const component = readFileSync(
   new URL("../src/v1/components/SkillsWorkspace.tsx", import.meta.url),
   "utf8",
 );
+const userMcp = readFileSync(
+  new URL("../src/v1/components/UserMCPPanel.tsx", import.meta.url),
+  "utf8",
+);
 const settings = readFileSync(
   new URL("../src/v1/components/SettingsDialog.tsx", import.meta.url),
   "utf8",
@@ -95,10 +99,11 @@ test("WebUI Skill Hub exposes real detail, download, upload, and Runtime install
 });
 
 test("unconfigured MCP is an explicit empty state rather than a fake capability", () => {
-  assert.match(component, /item\.kind === "mcp_server"/u);
-  assert.match(component, /data-empty-state="mcp-unconfigured"/u);
-  assert.match(component, /MCP 未配置/u);
-  assert.match(component, /不会把未配置的服务显示为可用能力/u);
+  assert.match(component, /<UserMCPPanel/u);
+  assert.match(userMcp, /client\.userMcpServers/u);
+  assert.match(userMcp, /loaded && !items\.length/u);
+  assert.match(userMcp, /尚未添加远程 MCP/u);
+  assert.match(userMcp, /测试通过后即可启用工具/u);
 });
 
 test("local Skill import derives identity and keeps Hub publishing advanced", () => {

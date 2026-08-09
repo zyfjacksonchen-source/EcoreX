@@ -4171,7 +4171,6 @@ button.ex-artifact-primary {
   align-items: center;
   color: var(--color-ink-muted);
   background: transparent;
-  font: inherit;
   text-decoration: none;
   cursor: pointer;
 }

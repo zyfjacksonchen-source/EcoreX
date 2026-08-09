@@ -244,3 +244,12 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
     assert '"desktop/release/latest-mac-$arch.yml"' in workflow
     assert "name: verify and merge desktop feed" in workflow
     assert "scripts/prepare-emate-desktop-feed.py" in workflow
+    for required_gate in (
+        "tests/v1/test_public_download_site.py",
+        "tests/v1/test_emate_feed_deploy.py",
+        "test_product_composes_message_channels_with_the_agent_runtime",
+        "npm run typecheck",
+        "tools/ga-mock-server.test.mjs",
+        "scheduled tasks and external connections",
+    ):
+        assert required_gate in workflow

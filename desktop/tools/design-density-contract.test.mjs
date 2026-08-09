@@ -65,6 +65,7 @@ const CONTEXT_CONTROL_OWNERS = [
   "ex-retouch-region-list",
   "ex-skills-tabs",
   "ex-skill-category-grid",
+  "ex-settings-page-nav",
 ];
 const CONTEXT_CONTROL_SELECTORS = [
   ".ex-composer-attachment button",
@@ -73,10 +74,12 @@ const CONTEXT_CONTROL_SELECTORS = [
   ".ex-retouch-region-list > button",
   ".ex-skills-tabs button",
   ".ex-skill-category-grid button",
+  ".ex-settings-page-nav button",
 ];
 const STRUCTURAL_BUTTON_EXCEPTIONS = [
   "ex-sidebar-scrim",
   "ex-retouch-result-media",
+  "ex-image-gallery-media",
   "ex-input-attachment-preview-trigger",
   "ex-timeline-jump-button",
   "ex-process-toggle",

@@ -237,6 +237,56 @@ def _settings(
     )
 
 
+def _installed_managed_session(
+    tmp_path: Path,
+) -> tuple[ManagedSessionService, SignedManagedSessionLease]:
+    session_key = Ed25519PrivateKey.generate()
+    session_public = session_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    now = datetime.now(UTC).replace(microsecond=0)
+    access_token = "product-managed-access-token"
+    refresh_token = "product-managed-refresh-token"
+    claims = ManagedSessionLeaseClaims(
+        lease_id="product-session-lease",
+        account_id="product-account",
+        organization_id="product-organization",
+        display_name="产品用户",
+        roles=("member",),
+        model_allowlist=("ecorex-chat",),
+        quota={"managed_requests": 50},
+        admin_denies=("shell",),
+        issued_at=now - timedelta(minutes=1),
+        expires_at=now + timedelta(hours=1),
+        revision=1,
+        access_token_sha256=token_digest(access_token),
+        refresh_token_sha256=token_digest(refresh_token),
+    )
+    lease = SignedManagedSessionLease(
+        claims=claims,
+        signature=SessionLeaseSignature(
+            algorithm="ed25519",
+            key_id="product-session-key",
+            value=base64.b64encode(session_key.sign(claims.canonical_payload())).decode(
+                "ascii"
+            ),
+        ),
+    )
+    service = ManagedSessionService(
+        tmp_path / "runtime.db",
+        vault=InMemoryCredentialVault(),
+        verifier=Ed25519SessionLeaseVerifier({"product-session-key": session_public}),
+    )
+    service.install(
+        lease,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        client_request_id="product-managed-login",
+    )
+    return service, lease
+
+
 def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
     signed = _write_signed_bundle(tmp_path)
     secrets = iter(
@@ -360,11 +410,13 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
 
 def test_product_composes_message_channels_with_the_agent_runtime(tmp_path: Path) -> None:
     signed = _write_signed_bundle(tmp_path)
+    managed_session, _lease = _installed_managed_session(tmp_path)
     app = create_product_app(
         replace(
             _settings(tmp_path, signed),
             model_gateway=_ProductGateway(),
-            connector_vault=InMemoryCredentialVault(),
+            managed_session_service=managed_session,
+            connector_vault=managed_session.vault,
         )
     )
     service = app.state.channel_self_service
@@ -377,12 +429,20 @@ def test_product_composes_message_channels_with_the_agent_runtime(tmp_path: Path
         "slack",
         "telegram",
         "wecom_bot",
+        "wechat_kf",
+        "wechatcom_app",
+        "wechatmp_service",
+        "weixin",
     }
 
+    assert set(service.adapters) == channel_ids
     assert all(
         catalog[channel_id]["adapter_available"] for channel_id in channel_ids
     )
     assert all(catalog[channel_id]["instance"] is None for channel_id in channel_ids)
+    assert catalog["wechatmp"]["adapter_available"] is False
+    assert catalog["wechatmp"]["unavailable_reason"] == "adapter_not_packaged"
+    assert not any(catalog["wechatmp"]["actions"].values())
     assert app.state.channel_runtime_dispatcher is not None
     assert all(
         service.adapters[channel_id].health().health.value == "disabled"
@@ -657,50 +717,7 @@ def test_product_app_rejects_legacy_feishu_cli_as_a_core_tool(tmp_path):
 
 def test_product_settings_inject_cloud_authoritative_session(tmp_path):
     signed = _write_signed_bundle(tmp_path)
-    session_key = Ed25519PrivateKey.generate()
-    session_public = session_key.public_key().public_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw,
-    )
-    now = datetime.now(UTC).replace(microsecond=0)
-    access_token = "product-managed-access-token"
-    refresh_token = "product-managed-refresh-token"
-    claims = ManagedSessionLeaseClaims(
-        lease_id="product-session-lease",
-        account_id="product-account",
-        organization_id="product-organization",
-        display_name="产品用户",
-        roles=("member",),
-        model_allowlist=("ecorex-chat",),
-        quota={"managed_requests": 50},
-        admin_denies=("shell",),
-        issued_at=now - timedelta(minutes=1),
-        expires_at=now + timedelta(hours=1),
-        revision=1,
-        access_token_sha256=token_digest(access_token),
-        refresh_token_sha256=token_digest(refresh_token),
-    )
-    lease = SignedManagedSessionLease(
-        claims=claims,
-        signature=SessionLeaseSignature(
-            algorithm="ed25519",
-            key_id="product-session-key",
-            value=base64.b64encode(session_key.sign(claims.canonical_payload())).decode(
-                "ascii"
-            ),
-        ),
-    )
-    service = ManagedSessionService(
-        tmp_path / "runtime.db",
-        vault=InMemoryCredentialVault(),
-        verifier=Ed25519SessionLeaseVerifier({"product-session-key": session_public}),
-    )
-    service.install(
-        lease,
-        access_token=access_token,
-        refresh_token=refresh_token,
-        client_request_id="product-managed-login",
-    )
+    service, lease = _installed_managed_session(tmp_path)
     settings = replace(
         _settings(tmp_path, signed),
         managed_session_service=service,

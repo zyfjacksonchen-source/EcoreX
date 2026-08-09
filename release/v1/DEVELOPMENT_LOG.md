@@ -1937,3 +1937,84 @@ Telegram + Discord 外部身份、transport 与投递回归：12 passed
 产品语言合同：12 passed；Ruff + git diff check：passed
 真实平台账号显示名与消息往返：not run（由用户在生产客户端配置或扫码后验收）
 ```
+
+## 2026-08-09 补充 — 桌面 Feed receipt 围栏激活器
+
+- 新增独立的 `scripts/deploy-emate-desktop-feed.py`，只接受
+  `status=activation-ready` 的 `feed-stage-receipt.json`。激活前逐项核对版本、源码提交、
+  release/build/manifest/feed 身份，并验证候选目录完整 inventory 的路径、角色、size 与
+  SHA-256；候选树中的额外文件、链接/reparse、越界路径、跨文件系统目标均失败关闭。
+- 激活复用 `ecorex.update.locking.ProductFileLock`，用候选目录的相对 symlink 经临时路径
+  `os.replace` 原子切换 `current`。显式 command 或 HTTP(S) readback 必须返回与候选
+  `public-bootstrap-index.json` 完全一致的字节；失败时仅在 `current` 仍指向本候选的围栏
+  成立后原子恢复 previous，并输出严格七字段 activate/rollback receipt。
+- 本次仅新增本地部署执行器、聚焦测试和本记录；没有调用签名器、生成 public index、
+  连接生产、部署或切换 `/srv/e-mate-update/current`。
+
+定向验证：
+
+```text
+e-Mate feed activation/rollback/inventory/HTTP readback：8 passed
+Ruff + git diff check：passed
+生产 readback 与 current 切换：not run（本次范围明确禁止连接生产）
+```
+
+## 2026-08-09 补充 — 下载页最终文案与桌面发布前置门禁
+
+- 下载页按最终验收稿删除“每次继续/上次的进度”标题，主标题固定为
+  “Agent工作新范式”，副文案保留“从自己干到通过agent快速落地想法。”；产品展示继续使用
+  当前真实 e-Mate 桌面截图。下载按钮和三平台版本只读取受校验的
+  `download-index.json`，没有把版本号写入页面代码。
+- 设备识别新增移动 Apple 设备失败关闭：iPhone、iPad、iPod 不再误判为 macOS；未知设备
+  展示三平台选择而不自动下载错误安装包。重建后的脚本使用内容哈希
+  `site.be768b5d99e6.js`，旧哈希入口已删除。
+- `emate-2.0-desktop-release.yml` 在签名 Runtime 与三平台打包之前新增源码/交互门禁：下载页、
+  Feed 激活器、11 个真实通道组合、公众号被动模式失败关闭、TypeScript 合同、GA mock、产品
+  语言以及“定时任务→外部通道”Playwright 路径。测试只使用临时目录，不调用生产 Feed
+  激活命令。
+- Codex 内置 Browser 本轮返回 `Browser is not available: iab`，本机 8765 也没有可信 Runtime
+  监听，因此没有伪造真实 UI 通过记录。公开站点与更新路径仍由旧 SPA 回退为 HTML；在
+  public bootstrap 与 Feed 达到 `activation-ready`、公开回读逐字节通过前不得切换 `latest`。
+- 前端全量合同复跑时同步清理了三处漂移：图片 Gallery 的预览媒体按钮作为结构化媒体控件
+  进入密度门禁例外；设置分区导航继续复用统一控件基线；MCP 空态合同改为验证当前真实的
+  `UserMCPPanel` 读取、测试后启用链路，不再引用已删除的旧扩展目录分支。
+
+定向验证：
+
+```text
+下载页合同/静态门禁：5 passed；hashed assets=10
+Feed 激活/回滚：8 passed；通道 Product 组合：3 passed
+GA mock + 产品语言：23 passed；TypeScript：passed；目标 Playwright：1 passed
+Workflow YAML/依赖锁/飞书部署合同：passed
+桌面 v1 全量合同：237 passed
+真实 Browser/桌面安装态：not run（Browser backend 与可信 Runtime 均不可用）
+```
+
+## 2026-08-09 补充 — 生产 Schema 与 Usage/Audit 只读对账
+
+- 通过仓库既有受限生产 operator 在主机 loopback 执行只读回读；未读取或输出 Secret、用户
+  明细、模型 Key，未执行迁移、服务重启或流量切换。当前云端活动槽为 `blue`，release
+  `emate-cloud-v2.0.0-95df539`，源码提交
+  `95df539e63e681299ff8c844d7e60b91082936a5`；Control Plane、Gateway、Image API 和
+  Image Worker 均为 active，两份 SQLite `quick_check=ok`。
+- 生产 Schema 当前为 Control 1、Admin Management 6、Device Identity 2、Gateway 4；
+  当前源码要求 Admin Management 7，且 Connector Gateway 与微信回调 Schema 尚未部署。
+  旧基线数据没有减少：用户 41、管理审计 300、Provider facts 179、Gateway requests 223、
+  model attempts 6；租户策略 41。该证据只证明数据保留与现有服务健康，不能替代 v7 迁移和
+  Connector/微信真实凭据验收。
+- Usage Panel 仍指向 `20260805223000-v0.3.0-emate-c5ed3e1a`，服务版本 1.0.5。对
+  `[2026-08-01T00:00:00+08:00, 2026-08-10T00:00:00+08:00)` 执行同窗
+  `/api/data` 与 `/api/runtime-audit` 对账时正确失败关闭：Usage 为 256 tasks /
+  1,671,474 tokens，Audit 为 396 tasks / 888,638 tokens；canonical records 分别为
+  411 与 303，KPI 和 reconciliation 均不相等。发布终门禁保持阻断，必须先部署当前
+  Usage 投影、完成 Admin v7 增量迁移并重新生成完全相等的脱敏 receipt，禁止用历史
+  2026-08-04 对账结果冒充本次通过。
+
+定向验证：
+
+```text
+生产四服务 active；Control/Gateway SQLite quick_check：passed
+历史计数不下降：passed
+Admin v7 / Connector Gateway / 微信回调 Schema：not deployed
+当前 Usage/Audit 同窗对账：failed closed（projection_mismatch）
+```

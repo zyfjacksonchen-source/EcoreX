@@ -652,12 +652,21 @@ test("scheduled tasks and external connections enter the real conversation and c
   await expect(channels).toBeVisible();
   await expect(guardedPage.getByRole("heading", { name: "能力中心" })).toBeVisible();
 
-  const unavailable = channels.locator("article.ex-connector-row").filter({ hasText: "钉钉" });
+  const dingtalk = channels.locator("article.ex-connector-row").filter({ hasText: "钉钉" });
+  await dingtalk.getByRole("button", { name: "配置账号" }).click();
+  await expect(dingtalk.getByLabel("连接名称")).toBeVisible();
+  await expect(dingtalk.getByLabel("Client ID")).toBeVisible();
+  await expect(dingtalk.getByLabel("Client Secret")).toHaveAttribute("type", "password");
+  await expect(dingtalk.getByRole("button", { name: "保存配置" })).toBeDisabled();
+
+  const unavailable = channels.locator("article.ex-connector-row").filter({ hasText: "微信公众号" });
   await expect(unavailable.getByRole("status")).toContainText("当前安装暂不支持这个通道");
   await expect(unavailable.getByRole("button")).toHaveCount(0);
   await expect(unavailable.getByRole("button", { name: "配置账号" })).toHaveCount(0);
 
-  const weixin = channels.locator("article.ex-connector-row").filter({ hasText: /^微信/u });
+  const weixin = channels.locator("article.ex-connector-row").filter({
+    has: guardedPage.locator(".ex-connector-title > strong", { hasText: /^微信$/u }),
+  });
   await weixin.getByRole("button", { name: "扫码登录" }).click();
   await expect(weixin.getByText("微信中的发送者名称来自所登录账号，请先将账号名称设为 e-Mate。"))
     .toBeVisible();

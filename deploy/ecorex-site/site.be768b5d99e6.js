@@ -60,7 +60,8 @@ export function targetFromPlatformSignals({ source = "", architecture = "", rend
   source = String(source).toLowerCase();
   architecture = String(architecture).toLowerCase();
   renderer = String(renderer).toLowerCase();
-  if (/mac|iphone|ipad|ipod/.test(source)) {
+  if (/iphone|ipad|ipod/.test(source)) return null;
+  if (/mac/.test(source)) {
     if (/(?:^|\W)(?:arm|arm64|aarch64)(?:\W|$)|apple silicon/.test(`${source} ${architecture}`)
       || /apple (?:m[1-9]|a[1-9][0-9])|apple gpu/.test(renderer)) return "macos-arm64";
     if (/x86_64|x86-64|amd64/.test(`${source} ${architecture}`)) return "macos-x64";
@@ -128,15 +129,19 @@ function formatBytes(value) {
 function preferredPlatform(target) {
   if (target?.startsWith("windows")) return "windows";
   if (target?.startsWith("macos")) return "macos";
-  return /mac|iphone|ipad|ipod/i.test(`${navigator.platform || ""} ${navigator.userAgent || ""}`) ? "macos" : "windows";
+  const source = `${navigator.platform || ""} ${navigator.userAgent || ""}`;
+  if (/iphone|ipad|ipod/i.test(source)) return null;
+  if (/mac/i.test(source)) return "macos";
+  return /win/i.test(source) ? "windows" : null;
 }
 
 function setPlatform(platform) {
+  const known = platform === "macos" || platform === "windows";
   document.querySelectorAll("[data-platform]").forEach((button) => {
-    button.setAttribute("aria-pressed", String(button.dataset.platform === platform));
+    button.setAttribute("aria-pressed", String(known && button.dataset.platform === platform));
   });
   document.querySelectorAll("[data-download-target]").forEach((card) => {
-    card.hidden = card.dataset.downloadPlatform !== platform;
+    card.hidden = known && card.dataset.downloadPlatform !== platform;
   });
 }
 

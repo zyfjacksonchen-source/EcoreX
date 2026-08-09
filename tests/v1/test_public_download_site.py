@@ -35,9 +35,8 @@ def test_public_download_site_uses_real_product_assets_and_dynamic_release_data(
     html = (SITE / "index.html").read_text(encoding="utf-8")
     javascript = next(SITE.glob("site.*.js")).read_text(encoding="utf-8")
 
-    assert "每次继续" in html
-    assert "上次的" in html
-    assert "进度" in html
+    assert "每次继续" not in html
+    assert "上次的" not in html
     assert "Agent工作新范式" in html
     assert "从自己干到通过agent快速落地想法。" in html
     assert "企业智能体桌面工作区" in html
@@ -166,6 +165,8 @@ assert.equal(contract.targetFromPlatformSignals({ source: "Windows NT" }), "wind
 assert.equal(contract.targetFromPlatformSignals({ source: "MacIntel", architecture: "arm" }), "macos-arm64");
 assert.equal(contract.targetFromPlatformSignals({ source: "MacIntel", architecture: "x86_64" }), "macos-x64");
 assert.equal(contract.targetFromPlatformSignals({ source: "MacIntel" }), null);
+assert.equal(contract.targetFromPlatformSignals({ source: "iPhone", architecture: "arm64" }), null);
+assert.equal(contract.targetFromPlatformSignals({ source: "iPad", renderer: "Apple M2" }), null);
 assert.deepEqual(contract.indexSources({ hostname: "127.0.0.1", pathname: "/" }), ["./download-index.json"]);
 assert.deepEqual(contract.indexSources({ hostname: "mvdcm.ecoremedia.net", pathname: "/e-mate/" }), ["/e-mate/update/download-index.json"]);
 assert.deepEqual(contract.indexSources({ hostname: "dl.ecoremedia.net", pathname: "/ecorex-agent/" }), ["https://mvdcm.ecoremedia.net/e-mate/update/download-index.json"]);
