@@ -2070,3 +2070,27 @@ Usage/Audit ISO 日期合同与 deployer 当前版本合同：2 passed
 生产余额对账：account_balance_mismatch_count=0；token/image delta=0
 Ruff / git diff check：passed
 ```
+
+## 2026-08-09 补充 — e-Mate OS 凭据命名空间首次启动修复
+
+- CI run `31318549117` 的 Runtime seed、Windows x64、macOS arm64/x64 与 Feed 汇总五个
+  job 全部通过；macOS arm64 Actions artifact SHA-256 为
+  `71a2b89c79289ac82286fdfb99fc3977857a8c63d7ff73337c5170d151f28a69`。解包后应用为
+  arm64、版本 2.0.0、bundle id `net.ecoremedia.emate`、ad-hoc 签名；内嵌 Runtime manifest
+  与 15 个目标平台 Artifact 的 Ed25519/文件校验全部通过。
+- 经用户确认后，Computer Use 在全新隔离 HOME 真实运行该未签名应用。Bootstrap 完成
+  manifest、Artifact、slot 与启动健康校验，journal sequence 12 为
+  `bootstrap_health_confirmed`；随后 Runtime 在 `runtime_registration` 失败关闭。
+- 对同一签名 slot 做不落 Secret 的诊断复现，原始异常为 `credential vault write failed`。
+  本机 Keychain 已有旧服务 `com.ecorex.connector-credentials` 的同一审计引用，而新的
+  e-Mate 服务尚不存在；未签名新 Runtime 无权更新旧项。Win/mac 生产 Vault 现在使用
+  `e-Mate:`、用户名 `e-Mate` 与 `net.ecoremedia.emate.connector-credentials`，不迁移或
+  读取旧本地密钥，也不改 CredentialVault 架构。
+
+定向验证：
+
+```text
+Connector Vault 聚焦回归：7 passed
+git diff check：passed
+新签名三平台候选与 Computer Use 复验：pending CI rebuild
+```

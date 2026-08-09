@@ -80,6 +80,17 @@ def test_macos_vault_uses_security_framework_without_secret_argv() -> None:
     assert "add-generic-password" not in source
 
 
+def test_platform_vaults_use_emate_product_identity() -> None:
+    assert vault_module._WindowsCredentialBackend._target("test") == "e-Mate:test"
+    assert 'credential.UserName = "e-Mate"' in inspect.getsource(
+        vault_module._WindowsCredentialBackend
+    )
+    assert (
+        vault_module._MacOSKeychainBackend._SERVICE
+        == "net.ecoremedia.emate.connector-credentials"
+    )
+
+
 def test_acceptance_vault_survives_restart_without_plaintext(tmp_path) -> None:
     path = tmp_path / "acceptance.vault"
     key = os.urandom(32)

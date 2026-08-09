@@ -366,7 +366,7 @@ class _WindowsCredentialBackend:
 
     @staticmethod
     def _target(reference: str) -> str:
-        return "EcoreX:" + reference
+        return "e-Mate:" + reference
 
     def put(self, reference: str, payload: bytes) -> None:
         if len(payload) > 5 * 512:
@@ -378,7 +378,7 @@ class _WindowsCredentialBackend:
         credential.CredentialBlobSize = len(payload)
         credential.CredentialBlob = ctypes.cast(blob, ctypes.POINTER(ctypes.c_ubyte))
         credential.Persist = self._CRED_PERSIST_LOCAL_MACHINE
-        credential.UserName = "EcoreX"
+        credential.UserName = "e-Mate"
         try:
             if not self._cred_write(ctypes.byref(credential), 0):
                 raise OSError(ctypes.get_last_error())
@@ -408,7 +408,7 @@ class _WindowsCredentialBackend:
 class _MacOSKeychainBackend:
     """Store generic passwords through Security.framework's SecItem API."""
 
-    _SERVICE = "com.ecorex.connector-credentials"
+    _SERVICE = "net.ecoremedia.emate.connector-credentials"
     _ERR_SUCCESS = 0
     _ERR_DUPLICATE_ITEM = -25299
     _ERR_ITEM_NOT_FOUND = -25300
