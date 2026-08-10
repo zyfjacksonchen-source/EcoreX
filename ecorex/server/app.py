@@ -42,7 +42,8 @@ from ecorex.connectors import builtin_connector_registry
 from ecorex.extensions import compose_extension_service
 from ecorex.gateway import ManagedModelGatewayClient, ModelGateway
 from ecorex.integration import ManagedImageOrchestrationClient
-from ecorex.observability import ManagedOTLPHTTPTraceExporter
+from ecorex.observability import AuditIntegrityError, ManagedOTLPHTTPTraceExporter
+from ecorex.observability.recovery import is_unreadable_observability_error
 from ecorex.runtime import RuntimeSettings
 from ecorex.runtime.api import create_app as register_runtime
 from ecorex.projects import ProjectWorkspaceAuthority
@@ -781,6 +782,13 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
     )
     try:
         register_runtime(settings=runtime_settings, app=app)
+    except AuditIntegrityError as error:
+        if is_unreadable_observability_error(error):
+            raise
+        raise ServerConfigurationError(
+            "Runtime API could not be composed",
+            stage_code="runtime_registration",
+        ) from None
     except (ServerConfigurationError, RuntimeError, ValueError):
         raise ServerConfigurationError(
             "Runtime API could not be composed",

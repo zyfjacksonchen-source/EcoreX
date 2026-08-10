@@ -2286,6 +2286,9 @@ Workflow YAML / accepted Renderer tree：passed
   可读或已对账。
 - 恢复后的 Runtime 创建安装级本机密钥；后续启动直接复用该密钥，不再访问钥匙串。Activation
   probe 保持只读，不能触发备份或清理。
+- 真实签名候选首次验证暴露 Product 组合边界会把该完整性事实归并成通用
+  `runtime_registration`；现仅对 `AuditIntegrityError` 保持原类型透传，其余注册失败仍按原固定
+  stage 脱敏。这样 CLI 的唯一恢复入口可以收到事实并执行上述有界恢复。
 
 定向验证：
 

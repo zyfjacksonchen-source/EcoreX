@@ -23,6 +23,7 @@ from ecorex.capabilities import (
 from ecorex.connectors import InMemoryCredentialVault
 from ecorex.extensions import SkillReadFact, SkillSearchFact
 from ecorex.integration import ImageGenerationToolHandler
+from ecorex.observability import AuditIntegrityError
 from ecorex.server import (
     BundleIntegrityError,
     ProductServerSettings,
@@ -637,6 +638,31 @@ def test_product_app_labels_runtime_registration_failure(tmp_path, monkeypatch):
 
     assert failure.value.stage_code == "runtime_registration"
     assert "native-runtime-registration-secret" not in str(failure.value)
+
+
+def test_product_app_preserves_unreadable_observability_signal(tmp_path, monkeypatch):
+    signed = _write_signed_bundle(tmp_path)
+
+    def unreadable_observability(**_kwargs):
+        raise AuditIntegrityError("stored audit payload authentication failed")
+
+    monkeypatch.setattr("ecorex.server.app.register_runtime", unreadable_observability)
+    with pytest.raises(AuditIntegrityError, match="payload authentication failed"):
+        create_product_app(_settings(tmp_path, signed))
+
+
+def test_product_app_redacts_other_audit_integrity_failures(tmp_path, monkeypatch):
+    signed = _write_signed_bundle(tmp_path)
+
+    def invalid_observability(**_kwargs):
+        raise AuditIntegrityError("native-observability-secret")
+
+    monkeypatch.setattr("ecorex.server.app.register_runtime", invalid_observability)
+    with pytest.raises(ServerConfigurationError) as failure:
+        create_product_app(_settings(tmp_path, signed))
+
+    assert failure.value.stage_code == "runtime_registration"
+    assert "native-observability-secret" not in str(failure.value)
 
 
 def test_runtime_owner_endpoint_proves_process_secret_without_disclosing_it(tmp_path):
