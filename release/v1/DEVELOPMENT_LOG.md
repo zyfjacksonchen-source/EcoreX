@@ -2271,3 +2271,27 @@ TypeScript/runtime contracts：passed
 Vite production build / git diff check：passed
 Workflow YAML / accepted Renderer tree：passed
 ```
+
+## 2026-08-10 补充 — 取消旧钥匙串读取并隔离不可解密审计派生数据
+
+- 用户明确决定跳过钥匙串方案。2.0.1 不再装配或调用 2.0.0 的 macOS Keychain / Windows
+  旧凭据命名空间，也不尝试用旧账号密钥重加密审计数据；正常凭据与新审计密钥继续只使用
+  e‑Mate 本机加密 Vault。
+- 若现有审计或 Trace outbox 无法由安装级密钥验证，Runtime 抛出唯一固定的完整性事实，复用
+  现有一次性恢复路径：先取得 SQLite 写锁，在同一保护期内用 online backup 保存完整数据库并按表
+  对账，再持久化 `pending` 回执并只清空六个审计/Trace 派生表；提交后将回执推进为
+  `completed`。备份、回执及两级新建目录项都在提交前 `fsync`；并发写不能落在备份与清理
+  之间，最终回执失败也会保留完整备份和不确定状态。
+  会话、记忆、项目、附件、Artifact 和任务事实不在清理范围；旧密文仍保留在备份中，不伪称
+  可读或已对账。
+- 恢复后的 Runtime 创建安装级本机密钥；后续启动直接复用该密钥，不再访问钥匙串。Activation
+  probe 保持只读，不能触发备份或清理。
+
+定向验证：
+
+```text
+密钥解析 / 写锁保护完整备份 / 故障回执 / 仅派生表隔离 / Product 单次重组 / macOS 本机 Vault：22 passed
+Ruff / py_compile / git diff check：passed
+真实数据克隆 77 条派生记录备份、业务表计数不变、本机密钥双启动：passed
+Computer Use 与新签名三平台候选：pending
+```

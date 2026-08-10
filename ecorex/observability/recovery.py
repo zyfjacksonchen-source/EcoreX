@@ -55,14 +55,15 @@ def quarantine_unreadable_observability(
 
     The caller has already classified a fixed ``AuditIntegrityError``.  This
     function still refuses links, special files and insufficient disk space,
-    commits the cleanup in one SQLite transaction, then verifies the live
-    database before returning its durable receipt.
+    keeps backup and cleanup under one SQLite writer fence, verifies before
+    commit, then returns its durable receipt.
     """
 
     database = _require_database(database_path)
     state_root = database.parent
     backup_root = state_root / "observability-quarantine"
     _ensure_real_directory(backup_root, create=True)
+    _fsync_directory(state_root)
     _require_disk_space(backup_root, database.stat().st_size)
     created_at = datetime.now(UTC).replace(microsecond=0)
     quarantine = backup_root / (
@@ -73,39 +74,55 @@ def quarantine_unreadable_observability(
     )
     quarantine.mkdir(mode=0o700)
     _ensure_real_directory(quarantine, create=False)
+    _fsync_directory(backup_root)
     backup_path = quarantine / "runtime-before-observability-recovery.sqlite3"
+    receipt_path = quarantine / "recovery-receipt.json"
 
-    _backup_database(database, backup_path)
     connection = sqlite3.connect(database)
     try:
         connection.execute("PRAGMA foreign_keys = ON")
-        tables = _present_tables(connection)
-        removed_rows = _row_counts(connection, tables)
         connection.execute("BEGIN IMMEDIATE")
         try:
+            tables = _present_tables(connection)
+            removed_rows = _row_counts(connection, tables)
+            _backup_database(database, backup_path)
+            if _database_row_counts(backup_path, tables) != removed_rows:
+                raise RuntimeError("observability recovery backup is incomplete")
+            receipt = {
+                "schema_version": _SCHEMA_VERSION,
+                "reason": "audit_key_mismatch",
+                "created_at": created_at.isoformat().replace("+00:00", "Z"),
+                "backup_sha256": _sha256_file(backup_path),
+                "backup_size_bytes": backup_path.stat().st_size,
+                "removed_rows": removed_rows,
+            }
+            _atomic_json(
+                receipt_path,
+                {
+                    **receipt,
+                    "state": "pending",
+                    "live_cleanup_committed": None,
+                },
+            )
             for table in tables:
                 connection.execute(f'DELETE FROM "{table}"')
+            remaining_rows = _row_counts(connection, tables)
+            integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+            if any(remaining_rows.values()) or integrity != "ok":
+                raise RuntimeError("observability quarantine verification failed")
             connection.commit()
         except BaseException:
             connection.rollback()
             raise
-        remaining_rows = _row_counts(connection, tables)
-        integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
     finally:
         connection.close()
-    if any(remaining_rows.values()) or integrity != "ok":
-        raise RuntimeError("observability quarantine verification failed")
 
-    receipt_path = quarantine / "recovery-receipt.json"
     _atomic_json(
         receipt_path,
         {
-            "schema_version": _SCHEMA_VERSION,
-            "reason": "audit_key_mismatch",
-            "created_at": created_at.isoformat().replace("+00:00", "Z"),
-            "backup_sha256": _sha256_file(backup_path),
-            "backup_size_bytes": backup_path.stat().st_size,
-            "removed_rows": removed_rows,
+            **receipt,
+            "state": "completed",
+            "live_cleanup_committed": True,
             "remaining_rows": remaining_rows,
             "integrity": integrity,
         },
@@ -171,6 +188,8 @@ def _backup_database(source_path: Path, destination_path: Path) -> None:
             raise RuntimeError("observability recovery backup is invalid")
     finally:
         verification.close()
+    with destination_path.open("rb") as stream:
+        os.fsync(stream.fileno())
 
 
 def _present_tables(connection: sqlite3.Connection) -> tuple[str, ...]:
@@ -191,6 +210,14 @@ def _row_counts(
     }
 
 
+def _database_row_counts(path: Path, tables: tuple[str, ...]) -> dict[str, int]:
+    connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    try:
+        return _row_counts(connection, tables)
+    finally:
+        connection.close()
+
+
 def _atomic_json(path: Path, value: object) -> None:
     payload = (
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -203,8 +230,19 @@ def _atomic_json(path: Path, value: object) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
+        _fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _sha256_file(path: Path) -> str:

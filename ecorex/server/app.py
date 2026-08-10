@@ -177,9 +177,6 @@ class ProductServerSettings:
         default_factory=dict, repr=False, compare=False
     )
     connector_vault: Any | None = field(default=None, repr=False, compare=False)
-    legacy_audit_vault_factory: Any | None = field(
-        default=None, repr=False, compare=False
-    )
     connector_maintenance_seconds: float = 15.0
     share_publisher: Any | None = field(default=None, repr=False, compare=False)
     share_public_hosts: frozenset[str] = frozenset()
@@ -757,7 +754,6 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         connector_adapters=settings.connector_adapters,
         channel_lifecycle_adapters=_message_channel_adapters(settings),
         connector_vault=settings.connector_vault,
-        legacy_audit_vault_factory=settings.legacy_audit_vault_factory,
         connector_oauth_return_uri=(
             settings.origin + "/api/v1/connectors/oauth/callback"
         ),

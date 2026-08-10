@@ -60,7 +60,6 @@ from ecorex.connectors import (
     EphemeralEncryptedCredentialVault,
     LocalEncryptedCredentialVault,
     ManagedConnectorGatewayAdapter,
-    legacy_production_credential_vault,
     production_credential_vault,
 )
 from ecorex.gateway import ManagedModelGatewayClient
@@ -1329,13 +1328,6 @@ def load_product_runtime(
             output_default_location="documents",
             update_service=None if acceptance_preview else update.service,
             connector_vault=vault,
-            legacy_audit_vault_factory=(
-                legacy_production_credential_vault
-                if not acceptance_preview
-                and host_platform in {"macos", "windows"}
-                and vault_factory is production_credential_vault
-                else None
-            ),
             connector_adapters=connector_adapters,
             share_publisher=None if acceptance_preview else share_publisher,
             share_public_hosts=(

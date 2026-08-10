@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import base64
-import hashlib
-import json
 from datetime import UTC, datetime
 
 import pytest
@@ -12,7 +9,7 @@ from ecorex.connectors import (
     InMemoryCredentialVault,
     RejectingCredentialVault,
 )
-from ecorex.observability import AuditOutbox, AuditPayloadCipher
+from ecorex.observability import AuditIntegrityError, AuditOutbox, AuditPayloadCipher
 from ecorex.runtime import RuntimeKernel, RuntimeSettings
 from ecorex.runtime import api as runtime_api
 
@@ -74,45 +71,6 @@ def _persist_encrypted_audit_row(
         )
 
 
-def _persist_encrypted_trace_row(
-    kernel: RuntimeKernel, account_id: str, *, key: bytes
-) -> None:
-    batch_id = f"tracebatch-{account_id}"
-    thread_id = f"thread-{account_id}"
-    segment_id = f"turn-{account_id}"
-    plaintext = json.dumps(
-        {"resourceSpans": []}, sort_keys=True, separators=(",", ":")
-    )
-    associated_data = "\x1f".join((batch_id, account_id, thread_id, segment_id))
-    encrypted = AuditPayloadCipher(key).encrypt(
-        plaintext, associated_data=associated_data
-    )
-    with kernel.database.transaction() as connection:
-        connection.execute(
-            "INSERT INTO observability_trace_outbox("
-            "batch_id,account_id,thread_id,segment_kind,segment_id,through_seq,"
-            "event_digest,chunk_index,chunk_count,span_count,payload_json,"
-            "payload_format,payload_sha256,created_at"
-            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                batch_id,
-                account_id,
-                thread_id,
-                "turn",
-                segment_id,
-                1,
-                "f" * 64,
-                0,
-                1,
-                1,
-                encrypted,
-                AuditPayloadCipher.FORMAT,
-                hashlib.sha256(plaintext.encode("utf-8")).hexdigest(),
-                "2026-07-12T00:00:00+00:00",
-            ),
-        )
-
-
 def test_projection_only_local_key_resolution_is_ephemeral_and_zero_write(
     tmp_path,
     monkeypatch,
@@ -168,7 +126,7 @@ def test_projection_only_os_vault_never_creates_missing_secret(tmp_path, monkeyp
     assert vault.put_calls == 0
 
     _persist_encrypted_audit_row(kernel, settings.account_id)
-    with pytest.raises(RuntimeError, match="cannot unlock the encrypted audit outbox"):
+    with pytest.raises(AuditIntegrityError, match="payload authentication failed"):
         runtime_api._resolve_audit_encryption_key(
             settings,
             kernel=kernel,
@@ -226,64 +184,21 @@ def test_acceptance_audit_key_survives_login_account_rebind(tmp_path, monkeypatc
     assert list(tmp_path.glob(".*.audit-key")) == []
 
 
-def test_product_audit_key_migrates_once_from_legacy_account_vault(
-    tmp_path, monkeypatch
-) -> None:
-    settings = _settings(tmp_path)
-    kernel = RuntimeKernel(settings.database_path)
-    first_key = b"a" * 32
-    second_key = b"c" * 32
-    _persist_encrypted_audit_row(kernel, "previous-account", key=first_key)
-    _persist_encrypted_audit_row(kernel, "other-previous-account", key=second_key)
-    _persist_encrypted_trace_row(kernel, "previous-account", key=first_key)
-    settings.account_id = "current-account"
-    target = _MemoryVault()
-    legacy = _MemoryVault()
-    legacy.put(
-        runtime_api._account_audit_key_reference("previous-account"),
-        {"aes256_gcm_key": base64.urlsafe_b64encode(first_key).decode("ascii")},
-    )
-    legacy.put(
-        runtime_api._account_audit_key_reference("other-previous-account"),
-        {"aes256_gcm_key": base64.urlsafe_b64encode(second_key).decode("ascii")},
-    )
-    settings.legacy_audit_vault_factory = lambda: legacy
-    monkeypatch.setattr(runtime_api.sys, "platform", "darwin")
-
-    migrated = runtime_api._resolve_audit_encryption_key(
-        settings, kernel=kernel, credential_vault=target
-    )
-    assert runtime_api._observability_rows_unlock_with_key(kernel, migrated)
-    assert runtime_api._INSTALLATION_AUDIT_KEY_REFERENCE in target.values
-
-    settings.legacy_audit_vault_factory = lambda: (_ for _ in ()).throw(RuntimeError())
-    assert runtime_api._resolve_audit_encryption_key(
-        settings, kernel=kernel, credential_vault=target
-    ) == migrated
-
-
-def test_product_audit_key_rejects_legacy_material_that_cannot_decrypt_rows(
+def test_product_audit_key_defers_unreadable_rows_to_quarantine(
     tmp_path, monkeypatch
 ) -> None:
     settings = _settings(tmp_path)
     kernel = RuntimeKernel(settings.database_path)
     _persist_encrypted_audit_row(kernel, "previous-account")
+    settings.account_id = "current-account"
     target = _MemoryVault()
-    legacy = _MemoryVault()
-    legacy.put(
-        runtime_api._account_audit_key_reference("previous-account"),
-        {
-            "aes256_gcm_key": base64.urlsafe_b64encode(b"b" * 32).decode("ascii")
-        },
-    )
-    settings.legacy_audit_vault_factory = lambda: legacy
     monkeypatch.setattr(runtime_api.sys, "platform", "darwin")
     with kernel.database.reader() as connection:
         before = connection.execute(
             "SELECT payload_json FROM observability_audit_outbox"
         ).fetchall()
 
-    with pytest.raises(RuntimeError, match="cannot unlock"):
+    with pytest.raises(AuditIntegrityError, match="payload authentication failed"):
         runtime_api._resolve_audit_encryption_key(
             settings, kernel=kernel, credential_vault=target
         )
