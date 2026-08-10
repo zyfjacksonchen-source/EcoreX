@@ -96,8 +96,6 @@ class WorkspaceContentService:
         self._verify_directory(self.workspace_root, "workspace")
         if self.root.exists():
             self._verify_directory(self.root, "knowledge")
-        if create_root and self.database is not None:
-            self._initialize_requests()
 
     @staticmethod
     def _verify_directory(path: Path, label: str) -> None:
@@ -122,27 +120,6 @@ class WorkspaceContentService:
             else:
                 raise WorkspaceContentUnavailable("knowledge directory is unavailable")
         self._verify_directory(self.root, "knowledge")
-
-    def _initialize_requests(self) -> None:
-        if self.database is None:
-            return
-        try:
-            with self.database.transaction() as connection:
-                connection.execute(
-                    "CREATE TABLE IF NOT EXISTS knowledge_mutation_requests ("
-                    "client_request_id TEXT PRIMARY KEY,operation TEXT NOT NULL,"
-                    "request_sha256 TEXT NOT NULL,status TEXT NOT NULL "
-                    "CHECK(status IN ('pending','completed')),plan_json TEXT NOT NULL,"
-                    "created_at TEXT NOT NULL,updated_at TEXT NOT NULL)"
-                )
-                connection.execute(
-                    "CREATE TRIGGER IF NOT EXISTS knowledge_requests_identity_immutable "
-                    "BEFORE UPDATE OF client_request_id,operation,request_sha256,plan_json,created_at "
-                    "ON knowledge_mutation_requests BEGIN "
-                    "SELECT RAISE(ABORT,'knowledge request identity is immutable'); END"
-                )
-        except sqlite3.Error as error:
-            raise WorkspaceContentUnavailable("knowledge request authority is unavailable") from error
 
     @staticmethod
     def _request_fingerprint(operation: str, payload: Any) -> str:

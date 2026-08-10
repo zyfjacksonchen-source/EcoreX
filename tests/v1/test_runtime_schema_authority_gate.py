@@ -23,7 +23,7 @@ def test_runtime_schema_authority_gate_passes() -> None:
     result = json.loads(completed.stdout)
     assert result == {
         "fragment_count": 20,
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "passed",
         "violations": [],
     }

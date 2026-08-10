@@ -54,6 +54,16 @@ def _allowed(path: Path) -> bool:
             "ecorex/gateway/schema.py",
             "ecorex/image_orchestrator/postgres_schema.py",
             "ecorex/image_orchestrator/sqlite_schema.py",
+            "ecorex/connectors/dingtalk.py",
+            "ecorex/connectors/discord.py",
+            "ecorex/connectors/feishu.py",
+            "ecorex/connectors/qq.py",
+            "ecorex/connectors/slack.py",
+            "ecorex/connectors/telegram.py",
+            "ecorex/connectors/wechat_callback.py",
+            "ecorex/connectors/wecom_bot.py",
+            "ecorex/connectors/weixin.py",
+            "ecorex/extensions/user_mcp.py",
         }
         or relative.startswith("ecorex/runtime/schema_fragments/")
         or relative.startswith("ecorex/control_plane/")
@@ -112,9 +122,11 @@ def violations() -> list[str]:
 
 def main() -> int:
     found = violations()
+    from ecorex.runtime.database import SCHEMA_VERSION
+
     result = {
         "fragment_count": len(EXPECTED_FRAGMENTS),
-        "schema_version": 1,
+        "schema_version": SCHEMA_VERSION,
         "status": "failed" if found else "passed",
         "violations": found,
     }

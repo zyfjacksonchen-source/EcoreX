@@ -29,13 +29,16 @@ from ecorex.runtime.storage_migrations import (
     dry_run_storage_migration,
     load_live_storage_migration_receipt,
     migration_receipt_path,
+    product_storage_migration_manifest,
 )
+from ecorex.runtime.schema_catalog import compiled_product_schema_digest
 from ecorex.runtime.database import SCHEMA_VERSION, SQLiteDatabase
 from ecorex.server import (
     ProductRuntimeConfig,
     ProductRuntimeConfigurationError,
     load_product_runtime,
 )
+from ecorex.workspace_content import WorkspaceContentService
 from ecorex.server import config as product_config_module
 from ecorex.update import Ed25519SignatureVerifier, ReleaseChannel, SlotStore
 from tests.v1.test_product_runtime_entrypoint import (
@@ -97,6 +100,316 @@ def _current_plan(database: Path) -> StorageMigrationManifest:
     )
 
 
+def test_workspace_content_composition_preserves_live_migration_receipt(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "runtime.sqlite3"
+    database = SQLiteDatabase(database_path)
+    database.initialize()
+    manifest = StorageMigrationManifest.current(SCHEMA_VERSION)
+    identity = _identity()
+    receipts = tmp_path / "receipts"
+    preflight = dry_run_storage_migration(
+        database_path,
+        manifest=manifest,
+        identity=identity,
+        receipt_root=receipts,
+        phase="live_preflight",
+    )
+    live = apply_live_storage_migration(
+        database_path,
+        manifest=manifest,
+        identity=identity,
+        receipt_root=receipts,
+        preflight=preflight,
+    )
+
+    WorkspaceContentService(tmp_path / "workspace", database=database)
+
+    assert load_live_storage_migration_receipt(
+        database_path,
+        manifest=manifest,
+        identity=identity,
+        receipt_root=receipts,
+    ) == live
+
+
+def _predecessor_database(
+    path: Path, *, legacy_knowledge: bool = False
+) -> tuple[int, str]:
+    database = SQLiteDatabase(path)
+    with database.transaction() as connection:
+        connection.execute(
+            "INSERT INTO memory_meta(key,value) VALUES ('upgrade-proof','retained')"
+        )
+        connection.execute("DROP TABLE knowledge_mutation_requests")
+        if legacy_knowledge:
+            connection.execute(
+                "CREATE TABLE knowledge_mutation_requests ("
+                "client_request_id TEXT PRIMARY KEY,operation TEXT NOT NULL,"
+                "request_sha256 TEXT NOT NULL,status TEXT NOT NULL "
+                "CHECK(status IN ('pending','completed')),plan_json TEXT NOT NULL,"
+                "created_at TEXT NOT NULL,updated_at TEXT NOT NULL)"
+            )
+            connection.execute(
+                "CREATE TRIGGER knowledge_requests_identity_immutable "
+                "BEFORE UPDATE OF client_request_id,operation,request_sha256,"
+                "plan_json,created_at ON knowledge_mutation_requests BEGIN "
+                "SELECT RAISE(ABORT,'knowledge request identity is immutable'); END"
+            )
+            connection.execute(
+                "INSERT INTO knowledge_mutation_requests VALUES "
+                "('legacy-request','create_document','sha','completed',"
+                "'\"legacy.md\"','created','updated')"
+            )
+        connection.execute(
+            "UPDATE runtime_meta SET value='1' WHERE key='storage_schema_version'"
+        )
+        connection.execute(
+            "UPDATE runtime_meta SET value=? WHERE key='product_schema_sha256'",
+            ("0" * 64,),
+        )
+        count = connection.execute("SELECT COUNT(*) FROM memory_meta").fetchone()[0]
+        digest = connection.execute(
+            "SELECT value FROM runtime_meta WHERE key='product_schema_sha256'"
+        ).fetchone()[0]
+    return count, digest
+
+
+def test_product_v1_to_v2_migration_preserves_data_and_restarts(tmp_path: Path) -> None:
+    database = tmp_path / "runtime.sqlite3"
+    before_count, _before_digest = _predecessor_database(database)
+    manifest = product_storage_migration_manifest()
+    identity = _identity()
+    receipts = tmp_path / "receipts"
+
+    preflight = dry_run_storage_migration(
+        database,
+        manifest=manifest,
+        identity=identity,
+        receipt_root=receipts,
+        phase="live_preflight",
+    )
+    live = apply_live_storage_migration(
+        database,
+        manifest=manifest,
+        identity=identity,
+        receipt_root=receipts,
+        preflight=preflight,
+    )
+
+    assert live.source_schema_version == 1
+    assert live.target_schema_version == SCHEMA_VERSION == 2
+    backups = tuple((receipts / "backups").glob("*.sqlite3"))
+    assert len(backups) == 1
+    assert hashlib.sha256(backups[0].read_bytes()).hexdigest() == preflight.source_database_sha256
+    assert backups[0].stat().st_mode & 0o777 == 0o600
+    connection = sqlite3.connect(database)
+    try:
+        assert connection.execute("PRAGMA quick_check").fetchone() == ("ok",)
+        assert connection.execute("SELECT COUNT(*) FROM memory_meta").fetchone()[0] == before_count
+        assert connection.execute(
+            "SELECT value FROM runtime_meta WHERE key='product_schema_sha256'"
+        ).fetchone() == (compiled_product_schema_digest(),)
+    finally:
+        connection.close()
+    SQLiteDatabase(database)
+
+
+def test_product_v1_to_v2_adopts_legacy_knowledge_requests(tmp_path: Path) -> None:
+    database = tmp_path / "runtime.sqlite3"
+    _predecessor_database(database, legacy_knowledge=True)
+    manifest = product_storage_migration_manifest()
+    identity = _identity()
+    receipts = tmp_path / "receipts"
+    preflight = dry_run_storage_migration(
+        database,
+        manifest=manifest,
+        identity=identity,
+        receipt_root=receipts,
+        phase="live_preflight",
+    )
+    apply_live_storage_migration(
+        database,
+        manifest=manifest,
+        identity=identity,
+        receipt_root=receipts,
+        preflight=preflight,
+    )
+
+    restarted = SQLiteDatabase(database)
+    with restarted.reader() as connection:
+        assert [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT client_request_id,status,plan_json "
+                "FROM knowledge_mutation_requests"
+            ).fetchall()
+        ] == [("legacy-request", "completed", '"legacy.md"')]
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='trigger' "
+            "AND name='knowledge_requests_identity_immutable'"
+        ).fetchone() is None
+
+
+def test_product_v1_to_v2_rejects_unknown_legacy_knowledge_schema(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "runtime.sqlite3"
+    _predecessor_database(database, legacy_knowledge=True)
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute(
+            "CREATE INDEX unexpected_knowledge_index "
+            "ON knowledge_mutation_requests(status)"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(StorageMigrationError, match="indexes are invalid"):
+        dry_run_storage_migration(
+            database,
+            manifest=product_storage_migration_manifest(),
+            identity=_identity(),
+            receipt_root=tmp_path / "receipts",
+            phase="live_preflight",
+        )
+    connection = sqlite3.connect(database)
+    try:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM knowledge_mutation_requests"
+        ).fetchone() == (1,)
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE name='unexpected_knowledge_index'"
+        ).fetchone() == (1,)
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("legacy_knowledge", (False, True))
+def test_product_v1_to_v2_migration_rolls_back_on_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_knowledge: bool,
+) -> None:
+    from ecorex.runtime import storage_migrations as migrations
+
+    database = tmp_path / "runtime.sqlite3"
+    before_count, before_digest = _predecessor_database(
+        database, legacy_knowledge=legacy_knowledge
+    )
+    manifest = product_storage_migration_manifest()
+    identity = _identity()
+    receipts = tmp_path / "receipts"
+    preflight = dry_run_storage_migration(
+        database,
+        manifest=manifest,
+        identity=identity,
+        receipt_root=receipts,
+        phase="live_preflight",
+    )
+    execute = migrations._execute_operation
+
+    def fail_after_ddl(connection: sqlite3.Connection, operation: dict) -> None:
+        execute(connection, operation)
+        raise sqlite3.OperationalError("injected migration failure")
+
+    monkeypatch.setattr(migrations, "_execute_operation", fail_after_ddl)
+    with pytest.raises(StorageMigrationError, match="live storage migration failed"):
+        apply_live_storage_migration(
+            database,
+            manifest=manifest,
+            identity=identity,
+            receipt_root=receipts,
+            preflight=preflight,
+        )
+
+    backups = tuple((receipts / "backups").glob("*.sqlite3"))
+    assert len(backups) == 1
+    assert hashlib.sha256(backups[0].read_bytes()).hexdigest() == preflight.source_database_sha256
+    connection = sqlite3.connect(database)
+    try:
+        assert connection.execute("PRAGMA quick_check").fetchone() == ("ok",)
+        assert connection.execute("SELECT COUNT(*) FROM memory_meta").fetchone()[0] == before_count
+        assert connection.execute(
+            "SELECT value FROM runtime_meta WHERE key='storage_schema_version'"
+        ).fetchone() == ("1",)
+        assert connection.execute(
+            "SELECT value FROM runtime_meta WHERE key='product_schema_sha256'"
+        ).fetchone() == (before_digest,)
+        exists = connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' "
+            "AND name='knowledge_mutation_requests'"
+        ).fetchone()
+        assert (exists is not None) is legacy_knowledge
+        if legacy_knowledge:
+            assert connection.execute(
+                "SELECT COUNT(*) FROM knowledge_mutation_requests"
+            ).fetchone() == (1,)
+            assert connection.execute(
+                "SELECT 1 FROM sqlite_schema WHERE type='trigger' "
+                "AND name='knowledge_requests_identity_immutable'"
+            ).fetchone() == (1,)
+    finally:
+        connection.close()
+
+
+def test_product_migration_recovers_after_commit_before_live_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ecorex.runtime import storage_migrations as migrations
+
+    database = tmp_path / "runtime.sqlite3"
+    _predecessor_database(database, legacy_knowledge=True)
+    manifest = product_storage_migration_manifest()
+    identity = _identity()
+    receipts = tmp_path / "receipts"
+    preflight = dry_run_storage_migration(
+        database,
+        manifest=manifest,
+        identity=identity,
+        receipt_root=receipts,
+        phase="live_preflight",
+    )
+    write_receipt = migrations._write_receipt
+
+    def fail_live_receipt(path: Path, receipt: StorageMigrationReceipt) -> None:
+        if receipt.phase == "live":
+            raise OSError("injected live receipt failure")
+        write_receipt(path, receipt)
+
+    monkeypatch.setattr(migrations, "_write_receipt", fail_live_receipt)
+    with pytest.raises(StorageMigrationError, match="live storage migration failed"):
+        apply_live_storage_migration(
+            database,
+            manifest=manifest,
+            identity=identity,
+            receipt_root=receipts,
+            preflight=preflight,
+        )
+    monkeypatch.setattr(migrations, "_write_receipt", write_receipt)
+
+    retry = dry_run_storage_migration(
+        database,
+        manifest=manifest,
+        identity=identity,
+        receipt_root=receipts,
+        phase="live_preflight",
+    )
+    live = apply_live_storage_migration(
+        database,
+        manifest=manifest,
+        identity=identity,
+        receipt_root=receipts,
+        preflight=retry,
+    )
+
+    assert live.source_schema_version == live.target_schema_version == 2
+    assert len(tuple((receipts / "backups").glob("*.sqlite3"))) == 2
+    SQLiteDatabase(database)
+
+
 def _upgrade_plan() -> StorageMigrationManifest:
     target = sqlite3.connect(":memory:")
     try:
@@ -151,20 +464,20 @@ def _upgrade_plan() -> StorageMigrationManifest:
 
 
 def _future_product_plan() -> StorageMigrationManifest:
-    """Advance only the logical version while preserving the full v1 schema."""
+    """Advance only the logical version while preserving the current schema."""
 
     return StorageMigrationManifest.from_bytes(
         _canonical(
             {
                 "schema_version": 2,
                 "document_type": "ecorex.storage-migration-plan",
-                "target_schema_version": 2,
+                "target_schema_version": 3,
                 "target_schema_sha256": current_storage_schema_sha256(),
                 "steps": [
                     {
-                        "step_id": "runtime-v1-to-v2",
-                        "from_schema_version": 1,
-                        "to_schema_version": 2,
+                        "step_id": "runtime-v2-to-v3",
+                        "from_schema_version": 2,
+                        "to_schema_version": 3,
                         "operations": [
                             {
                                 "op": "create_index",
@@ -444,7 +757,7 @@ def test_first_install_receipt_materializes_the_complete_product_schema(
 ) -> None:
     database = tmp_path / "new-product.sqlite3"
     receipts = tmp_path / "receipts"
-    manifest = StorageMigrationManifest.current(SCHEMA_VERSION)
+    manifest = product_storage_migration_manifest()
     identity = _identity()
 
     preflight = dry_run_storage_migration(
@@ -1021,8 +1334,9 @@ def test_release_builder_injects_current_plan_and_rejects_invalid_override(
     with zipfile.ZipFile(built.artifact_paths["core-windows-x64"]) as archive:
         embedded = archive.read(STORAGE_MIGRATION_FILE_NAME)
     embedded_manifest = StorageMigrationManifest.from_bytes(embedded)
-    assert embedded_manifest == StorageMigrationManifest.current(SCHEMA_VERSION)
+    assert embedded_manifest == product_storage_migration_manifest()
     assert embedded_manifest.schema_version == 2
+    assert len(embedded_manifest.steps) == 1
     assert embedded_manifest.target_schema_sha256 == current_storage_schema_sha256()
 
     (core / STORAGE_MIGRATION_FILE_NAME).write_bytes(
@@ -1062,8 +1376,8 @@ def test_installed_runtime_admits_a_future_signed_schema_without_candidate_code(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Release construction runs in the future candidate build, where the
-    # compiled database schema is v2. Admission below deliberately runs in
-    # this installed v1 process and must not require candidate target == v1.
+    # compiled database schema is v3. Admission below deliberately runs in
+    # this installed v2 process and must not require candidate target == v2.
     from ecorex.runtime import database as runtime_database
     from ecorex.runtime import storage_migrations as storage_migrations_module
 
@@ -1099,7 +1413,7 @@ def test_installed_runtime_admits_a_future_signed_schema_without_candidate_code(
         "</head><body></body></html>",
         encoding="utf-8",
     )
-    monkeypatch.setattr(runtime_database, "SCHEMA_VERSION", 2)
+    monkeypatch.setattr(runtime_database, "SCHEMA_VERSION", 3)
     monkeypatch.setattr(
         storage_migrations_module,
         "current_storage_schema_sha256",
@@ -1153,8 +1467,8 @@ def test_installed_runtime_admits_a_future_signed_schema_without_candidate_code(
     assert len(receipt_files) == 1
     receipt = StorageMigrationReceipt.from_bytes(receipt_files[0].read_bytes())
     assert receipt.phase == "admission_dry_run"
-    assert receipt.source_schema_version == 1
-    assert receipt.target_schema_version == 2
+    assert receipt.source_schema_version == SCHEMA_VERSION
+    assert receipt.target_schema_version == 3
     assert receipt.target_schema_sha256 == future_plan.target_schema_sha256
     assert receipt.plan_sha256 == future_plan.sha256
 
