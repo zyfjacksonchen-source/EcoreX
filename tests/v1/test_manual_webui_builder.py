@@ -47,6 +47,10 @@ def test_manual_webui_builder_preserves_predecessor_release_trust(
     builder = _builder()
     public = bytes(range(32))
     key_id = f"release-{hashlib.sha256(public).hexdigest()[:20]}"
+    publication_public = bytes(reversed(range(32)))
+    publication_key_id = (
+        f"publication-{hashlib.sha256(publication_public).hexdigest()[:20]}"
+    )
     trust = tmp_path / "predecessor.json"
     trust.write_text(
         json.dumps(
@@ -59,14 +63,20 @@ def test_manual_webui_builder_preserves_predecessor_release_trust(
                 "release_public_keys": {
                     key_id: base64.b64encode(public).decode("ascii")
                 },
+                "publication_public_keys": {
+                    publication_key_id: base64.b64encode(publication_public).decode(
+                        "ascii"
+                    )
+                },
             }
         ),
         encoding="utf-8",
     )
 
-    keys, identity = builder["_load_predecessor_trust"](trust)
+    keys, publication_keys, identity = builder["_load_predecessor_trust"](trust)
 
     assert tuple(keys) == (key_id,)
+    assert tuple(publication_keys) == (publication_key_id,)
     assert identity == {
         "version": "2.0.0",
         "release_id": "release-stable-" + "a" * 24,
@@ -85,7 +95,7 @@ def test_manual_webui_builder_preserves_predecessor_release_trust(
 
 
 def test_checked_in_predecessor_trust_covers_both_v2_release_identities() -> None:
-    keys, identity = _builder()["_load_predecessor_trust"](
+    keys, publication_keys, identity = _builder()["_load_predecessor_trust"](
         ROOT / "release" / "v1" / "desktop-predecessor-trust.json"
     )
 
@@ -99,6 +109,31 @@ def test_checked_in_predecessor_trust_covers_both_v2_release_identities() -> Non
         "ecorex-webui-release-0ef113eca992433d9d43": "+v+fPP/7gWk/VB1k2V8hRmIfkQ/j+IobGgfC+PaWR7A=",
         "ecorex-webui-release-cfb9b141bd87235444ca": "bXoHp+C9D1I6amv2yfM8BN+qpzztXHJCvi9VOyXJ/fA=",
     }
+    assert publication_keys == {
+        "ecorex-server-publication-8b4f04d606210eaac76b": "/uPIX0DABqalInd9Qv/81OWYtRnPd56l+ZuFZ7WNBHY=",
+    }
+
+
+def test_manual_webui_builder_adds_predecessor_publication_trust() -> None:
+    builder = _builder()
+
+    assert builder["_merge_publication_keys"](
+        {"current": "current-key"}, {"production": "production-key"}
+    ) == {"current": "current-key", "production": "production-key"}
+    with pytest.raises(
+        builder["ManualWebUIBuildError"],
+        match="manual_webui_predecessor_publication_trust_conflict",
+    ):
+        builder["_merge_publication_keys"](
+            {"production": "wrong-key"}, {"production": "production-key"}
+        )
+    with pytest.raises(
+        builder["ManualWebUIBuildError"],
+        match="manual_webui_publication_trust_too_large",
+    ):
+        builder["_merge_publication_keys"](
+            {str(index): "key" for index in range(8)}, {"ninth": "key"}
+        )
 
 
 def test_manual_webui_runtime_config_is_canonical_and_rebound(

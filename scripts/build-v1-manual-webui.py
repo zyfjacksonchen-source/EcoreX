@@ -121,7 +121,9 @@ def _canonical_json(value: object) -> bytes:
     ).encode("utf-8")
 
 
-def _load_predecessor_trust(path: Path) -> tuple[dict[str, str], dict[str, str]]:
+def _load_predecessor_trust(
+    path: Path,
+) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
     try:
         absolute = path.absolute()
         resolved = absolute.resolve(strict=True)
@@ -136,6 +138,7 @@ def _load_predecessor_trust(path: Path) -> tuple[dict[str, str], dict[str, str]]
         "build_digest",
         "signing_key_id",
         "release_public_keys",
+        "publication_public_keys",
     }
     if (
         resolved != absolute
@@ -163,31 +166,50 @@ def _load_predecessor_trust(path: Path) -> tuple[dict[str, str], dict[str, str]]
         or not isinstance(value["signing_key_id"], str)
         or not isinstance(value["release_public_keys"], dict)
         or not 1 <= len(value["release_public_keys"]) <= 8
+        or not isinstance(value["publication_public_keys"], dict)
+        or not 1 <= len(value["publication_public_keys"]) <= 8
     ):
         _fail("manual_webui_predecessor_trust_invalid")
-    keys: dict[str, str] = {}
-    for key_id, encoded in value["release_public_keys"].items():
-        try:
-            raw = base64.b64decode(encoded, validate=True)
-        except (TypeError, ValueError):
-            _fail("manual_webui_predecessor_trust_invalid")
-        if (
-            not isinstance(key_id, str)
-            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", key_id)
-            or len(raw) != 32
-            or base64.b64encode(raw).decode("ascii") != encoded
-            or not key_id.endswith(hashlib.sha256(raw).hexdigest()[:20])
-        ):
-            _fail("manual_webui_predecessor_trust_invalid")
-        keys[key_id] = encoded
-    if value["signing_key_id"] not in keys:
+    keyrings: dict[str, dict[str, str]] = {}
+    for field in ("release_public_keys", "publication_public_keys"):
+        keys: dict[str, str] = {}
+        for key_id, encoded in value[field].items():
+            try:
+                raw = base64.b64decode(encoded, validate=True)
+            except (TypeError, ValueError):
+                _fail("manual_webui_predecessor_trust_invalid")
+            if (
+                not isinstance(key_id, str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", key_id)
+                or len(raw) != 32
+                or base64.b64encode(raw).decode("ascii") != encoded
+                or not key_id.endswith(hashlib.sha256(raw).hexdigest()[:20])
+            ):
+                _fail("manual_webui_predecessor_trust_invalid")
+            keys[key_id] = encoded
+        keyrings[field] = keys
+    if value["signing_key_id"] not in keyrings["release_public_keys"]:
         _fail("manual_webui_predecessor_trust_invalid")
-    return keys, {
+    return keyrings["release_public_keys"], keyrings["publication_public_keys"], {
         "version": value["version"],
         "release_id": value["release_id"],
         "build_digest": value["build_digest"],
         "signing_key_id": value["signing_key_id"],
     }
+
+
+def _merge_publication_keys(
+    current: dict[str, str], predecessor: dict[str, str]
+) -> dict[str, str]:
+    merged = dict(current)
+    for key_id, encoded in predecessor.items():
+        existing = merged.get(key_id)
+        if existing is not None and existing != encoded:
+            _fail("manual_webui_predecessor_publication_trust_conflict")
+        merged[key_id] = encoded
+    if len(merged) > 8:
+        _fail("manual_webui_publication_trust_too_large")
+    return merged
 
 
 def _run(
@@ -1160,8 +1182,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             if existing_keys and candidate != existing_keys:
                 _fail("manual_webui_base_trust_mismatch")
             existing_keys = candidate
-        predecessor_keys, predecessor = _load_predecessor_trust(
-            args.predecessor_trust
+        predecessor_keys, predecessor_publication_keys, predecessor = (
+            _load_predecessor_trust(args.predecessor_trust)
         )
         release_keys = dict(existing_keys)
         for predecessor_key_id, encoded in predecessor_keys.items():
@@ -1172,6 +1194,9 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         release_keys[key_id] = base64.b64encode(public).decode("ascii")
         if len(release_keys) > 8:
             _fail("manual_webui_release_trust_too_large")
+        publication_keys = _merge_publication_keys(
+            publication_keys, predecessor_publication_keys
+        )
         stages = _prepare_stages(
             source,
             base_artifacts,
