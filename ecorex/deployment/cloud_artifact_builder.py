@@ -39,6 +39,7 @@ MANIFEST_NAME = "cloud-release-manifest.json"
 PAYLOAD_NAME = "cloud-release-manifest.signing-payload"
 RECEIPT_NAME = "cloud-build-receipt.json"
 SIGNATURE_RESPONSE_NAME = "cloud-manifest-signature-response.json"
+UNSIGNED_WAIVER_NAME = "cloud-unsigned-release-waiver.json"
 MAX_SIGNING_PAYLOAD_BYTES = 16 * 1024 * 1024
 PYPI_SIMPLE_INDEX_URL = "https://pypi.org/simple"
 DOMESTIC_PYPI_SIMPLE_INDEX_URL = "https://mirrors.aliyun.com/pypi/simple"
@@ -251,6 +252,68 @@ def attach_detached_cloud_signature(
         raise CloudArtifactPipelineError(str(exc)) from None
     _verify_manifest_modes(artifact, manifest)
     return result
+
+
+def finalize_operator_waived_unsigned_artifact(
+    artifact_root: Path,
+    handoff_root: Path,
+    *,
+    operator_instruction_sha256: str,
+) -> dict[str, Any]:
+    """Finalize one exact unsigned tree without representing it as signed."""
+
+    artifact = _existing_directory(artifact_root, "cloud_artifact_root_invalid")
+    handoff = _existing_directory(handoff_root, "cloud_handoff_root_invalid")
+    descriptor = _strict_object(handoff / DESCRIPTOR_NAME)
+    receipt = _strict_object(handoff / RECEIPT_NAME)
+    manifest = _strict_object(handoff / MANIFEST_NAME)
+    payload = _read_regular(handoff / PAYLOAD_NAME, MAX_SIGNING_PAYLOAD_BYTES)
+    _validate_handoff(descriptor, receipt, manifest, payload)
+    if _SHA.fullmatch(operator_instruction_sha256) is None:
+        raise CloudArtifactPipelineError("cloud_unsigned_waiver_invalid")
+    try:
+        actual = unsigned_cloud_manifest(
+            artifact,
+            release_id=str(manifest.get("release_id", "")),
+            source_commit=str(manifest.get("source_commit", "")),
+            dependency_lock_manifest_sha256=str(
+                manifest.get("dependency_lock_manifest_sha256", "")
+            ),
+        )
+    except CloudArtifactBuildError as exc:
+        raise CloudArtifactPipelineError(str(exc)) from None
+    if actual != manifest:
+        raise CloudArtifactPipelineError("cloud_artifact_manifest_changed")
+    manifest_bytes = cloud_manifest_file_bytes(manifest)
+    waiver = {
+        "schema_version": 1,
+        "document_type": "ecorex.cloud-unsigned-release-waiver",
+        "status": "operator-waived-unsigned",
+        "represented_as_signed": False,
+        "scope": "single-release",
+        "operator_instruction_sha256": operator_instruction_sha256,
+        "release_id": manifest["release_id"],
+        "version": manifest["version"],
+        "source_commit": manifest["source_commit"],
+        "dependency_lock_manifest_sha256": manifest[
+            "dependency_lock_manifest_sha256"
+        ],
+        "manifest_sha256": _digest_bytes(manifest_bytes),
+    }
+    waiver_bytes = _json_bytes(waiver)
+    _write_new(artifact / MANIFEST_NAME, manifest_bytes, mode=0o644)
+    try:
+        _write_new(artifact / UNSIGNED_WAIVER_NAME, waiver_bytes, mode=0o644)
+    except BaseException:
+        (artifact / MANIFEST_NAME).unlink(missing_ok=True)
+        raise
+    return {
+        "schema_version": 1,
+        "release_id": manifest["release_id"],
+        "mode": "operator-waived-unsigned",
+        "manifest_sha256": waiver["manifest_sha256"],
+        "waiver_sha256": _digest_bytes(waiver_bytes),
+    }
 
 
 def create_detached_signature_response(

@@ -464,6 +464,61 @@ def test_raw_canonical_signature_cannot_cross_cloud_signing_domain(
         deployment._validate_artifact(spec)
 
 
+def _operator_waived_artifact(
+    tmp_path: Path,
+) -> tuple[deployment.CloudDeploymentSpec, Path, Path]:
+    spec, root = _signed_artifact(tmp_path)
+    (root / "cloud-release-manifest.sig.json").unlink()
+    waiver = {
+        "schema_version": 1,
+        "document_type": "ecorex.cloud-unsigned-release-waiver",
+        "status": "operator-waived-unsigned",
+        "represented_as_signed": False,
+        "scope": "single-release",
+        "operator_instruction_sha256": "8" * 64,
+        "release_id": spec.release_id,
+        "version": deployment.PRODUCT_VERSION,
+        "source_commit": spec.source_commit,
+        "dependency_lock_manifest_sha256": spec.dependency_lock_manifest_sha256,
+        "manifest_sha256": spec.artifact_manifest_sha256,
+    }
+    path = root / deployment.UNSIGNED_WAIVER_NAME
+    path.write_text(json.dumps(waiver, sort_keys=True), encoding="utf-8")
+    return spec, root, path
+
+
+def test_unsigned_artifact_requires_exact_release_scoped_operator_waiver(
+    tmp_path: Path,
+) -> None:
+    spec, root, waiver = _operator_waived_artifact(tmp_path)
+    with pytest.raises(deployment.CloudDeployError, match="unsigned_waiver_required"):
+        deployment._validate_artifact(spec)
+
+    accepted = deployment.dataclasses.replace(
+        spec, unsigned_release_waivers={spec.release_id: _sha(waiver)}
+    )
+    assert deployment._validate_artifact(accepted)["source_commit"] == "a" * 40
+    (root / "venv/bin/ecorex-image").write_text("tampered", encoding="utf-8")
+    with pytest.raises(deployment.CloudDeployError, match="file_digest_mismatch"):
+        deployment._validate_artifact(accepted)
+
+
+def test_unsigned_waiver_never_coexists_with_signature(tmp_path: Path) -> None:
+    spec, root, waiver = _operator_waived_artifact(tmp_path)
+    (root / "cloud-release-manifest.sig.json").write_text("{}", encoding="utf-8")
+    spec = deployment.dataclasses.replace(
+        spec, unsigned_release_waivers={spec.release_id: _sha(waiver)}
+    )
+    with pytest.raises(deployment.CloudDeployError, match="authentication_ambiguous"):
+        deployment._validate_artifact(spec)
+
+    signed, _ = _signed_artifact(tmp_path / "signed")
+    signed = deployment.dataclasses.replace(
+        signed, unsigned_release_waivers={signed.release_id: "4" * 64}
+    )
+    assert deployment._artifact_authentication(signed)["mode"] == "signed"
+
+
 def test_unlisted_artifact_file_is_rejected(tmp_path: Path) -> None:
     spec, root = _signed_artifact(tmp_path)
     (root / "venv/lib/python3.11/site-packages").mkdir(parents=True)

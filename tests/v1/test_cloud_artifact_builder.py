@@ -30,6 +30,7 @@ from ecorex.deployment.cloud_artifact_builder import (
     CloudArtifactPipelineError,
     attach_detached_cloud_signature,
     create_detached_signature_response,
+    finalize_operator_waived_unsigned_artifact,
     _cloud_pip_index_url,
 )
 from ecorex.release import Ed25519MemorySigner
@@ -298,6 +299,42 @@ def test_detached_signature_refuses_tree_change_after_linux_receipt(
 
     with pytest.raises(CloudArtifactPipelineError, match="manifest_changed"):
         attach_detached_cloud_signature(root, handoff, response_path, keyring)
+
+
+def test_explicit_unsigned_waiver_is_exact_and_never_claims_signed(
+    tmp_path: Path,
+) -> None:
+    root = _tree(tmp_path / "cloud")
+    handoff = tmp_path / "handoff"
+    _handoff(root, handoff)
+
+    result = finalize_operator_waived_unsigned_artifact(
+        root,
+        handoff,
+        operator_instruction_sha256="8d7d0a1b9333287ad9c1fd415543c717c32e7d7390bb3f8390e54b2af2ff8e65",
+    )
+
+    waiver = json.loads((root / "cloud-unsigned-release-waiver.json").read_text())
+    assert result["mode"] == "operator-waived-unsigned"
+    assert waiver["represented_as_signed"] is False
+    assert not (root / "cloud-release-manifest.sig.json").exists()
+    assert waiver["manifest_sha256"] == hashlib.sha256(
+        (root / "cloud-release-manifest.json").read_bytes()
+    ).hexdigest()
+
+
+def test_unsigned_waiver_refuses_tree_change_after_build_receipt(tmp_path: Path) -> None:
+    root = _tree(tmp_path / "cloud")
+    handoff = tmp_path / "handoff"
+    _handoff(root, handoff)
+    (root / REQUIRED[-1]).write_text("changed\n", encoding="utf-8")
+
+    with pytest.raises(CloudArtifactPipelineError, match="manifest_changed"):
+        finalize_operator_waived_unsigned_artifact(
+            root,
+            handoff,
+            operator_instruction_sha256="8d7d0a1b9333287ad9c1fd415543c717c32e7d7390bb3f8390e54b2af2ff8e65",
+        )
 
 
 def test_windows_bridge_refuses_raw_canonical_json_without_cloud_domain(
