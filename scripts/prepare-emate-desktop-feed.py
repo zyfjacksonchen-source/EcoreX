@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import errno
 import hashlib
 import json
 import os
@@ -16,9 +15,10 @@ import stat
 import sys
 import tempfile
 from typing import Any, Iterable, Mapping
+from urllib.parse import quote
 import zipfile
 
-from ecorex.release import validate_public_bootstrap_index
+from ecorex.release import required_publication_sources, validate_public_bootstrap_index
 from ecorex.update import (
     Ed25519SignatureVerifier,
     ReleaseManifest,
@@ -517,14 +517,118 @@ def _validate_nginx(path: Path) -> str:
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
-def _link(source: Path, destination: Path) -> None:
+def _snapshot_file(
+    source: Path, destination: Path, maximum: int = _MAX_FILE_BYTES
+) -> None:
+    before = source.lstat()
+    if (
+        source.is_symlink()
+        or not stat.S_ISREG(before.st_mode)
+        or not 1 <= before.st_size <= maximum
+    ):
+        raise FeedError(f"artifact is not a regular file: {source}")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.link(source, destination)
-    except OSError as error:
-        if error.errno != errno.EXDEV:
-            raise
-        shutil.copy2(source, destination)
+    with source.open("rb") as reader, destination.open("xb") as writer:
+        opened = os.fstat(reader.fileno())
+        if (opened.st_dev, opened.st_ino, opened.st_size) != (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+        ):
+            raise FeedError(f"file changed while opening: {source.name}")
+        shutil.copyfileobj(reader, writer, length=1024 * 1024)
+        writer.flush()
+        os.fsync(writer.fileno())
+        after = os.fstat(reader.fileno())
+    if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+    ):
+        raise FeedError(f"file changed while copying: {source.name}")
+
+
+def _snapshot_tree(source: Path, destination: Path) -> tuple[Path, ...]:
+    paths = _files(source)
+    for path in paths:
+        _snapshot_file(path, destination / path.relative_to(source))
+    return _files(destination)
+
+
+def _publish_snapshot(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(source, destination)
+
+
+def _bind_public_index(
+    value: Mapping[str, Any], manifest: ReleaseManifest, manifest_sha256: str
+) -> None:
+    def sources(file_name: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "source_id": source.source_id,
+                "kind": source.kind.value,
+                "priority": source.priority,
+                "url": f"{source.base_url}/{quote(file_name, safe='')}",
+            }
+            for source in required_publication_sources(manifest)
+        ]
+
+    release = value.get("release")
+    if not isinstance(release, Mapping) or (
+        release.get("version"),
+        release.get("release_id"),
+        release.get("channel"),
+        release.get("created_at"),
+        release.get("build_digest"),
+    ) != (
+        manifest.version,
+        manifest.release_id,
+        manifest.channel.value,
+        manifest.created_at,
+        manifest.build_digest,
+    ):
+        raise FeedError("public Bootstrap index targets a different release")
+    public_manifest = release.get("manifest")
+    if not isinstance(public_manifest, Mapping) or any(
+        public_manifest.get(field) != expected
+        for field, expected in (
+            ("file_name", "release-manifest.json"),
+            ("sha256", manifest_sha256),
+            ("signature", manifest.signature.to_dict()),
+            ("sources", sources("release-manifest.json")),
+        )
+    ):
+        raise FeedError("public Bootstrap index differs from signed Runtime")
+    artifacts = release.get("bootstrap_artifacts")
+    expected_artifacts = [
+        manifest.artifact(artifact_id)
+        for artifact_id in (
+            "bootstrap-windows-x64",
+            "bootstrap-macos-arm64",
+            "bootstrap-macos-x64",
+        )
+    ]
+    if not isinstance(artifacts, list) or len(artifacts) != len(expected_artifacts):
+        raise FeedError("public Bootstrap index differs from signed Runtime")
+    fields = (
+        "artifact_id",
+        "platform",
+        "architecture",
+        "file_name",
+        "size_bytes",
+        "sha256",
+        "signature",
+    )
+    for public, expected in zip(artifacts, expected_artifacts, strict=True):
+        expected_value = expected.to_dict()
+        if (
+            not isinstance(public, Mapping)
+            or any(public.get(field) != expected_value[field] for field in fields)
+            or public.get("sources") != sources(expected.file_name)
+        ):
+            raise FeedError("public Bootstrap index differs from signed Runtime")
 
 
 def _record(
@@ -544,75 +648,95 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         args.expected_source_sha
     ):
         raise FeedError("expected release identity is invalid")
-    roots = {
+    source_roots = {
         "runtime": args.runtime_root.resolve(strict=True),
         "windows-x64": args.windows_root.resolve(strict=True),
         "macos-arm64": args.macos_arm64_root.resolve(strict=True),
         "macos-x64": args.macos_x64_root.resolve(strict=True),
     }
-    inventories = {name: _files(root) for name, root in roots.items()}
-    release_dir, manifest, runtime_receipt, release_keys, publication_keys = (
-        _verify_runtime(
-            inventories["runtime"],
-            version=args.expected_version,
-            source_sha=args.expected_source_sha,
-        )
-    )
-    version = args.expected_version
-    expected = {
-        "windows-x64": {f"e-Mate-Setup-{version}-x64.exe"},
-        "macos-arm64": {f"e-Mate-{version}-arm64.dmg", f"e-Mate-{version}-arm64.zip"},
-        "macos-x64": {f"e-Mate-{version}-x64.dmg", f"e-Mate-{version}-x64.zip"},
-    }
-    desktop: dict[str, dict[str, Path]] = {}
-    metadata: dict[str, dict[str, Any]] = {}
-    for target, names in expected.items():
-        paths = inventories[target]
-        files = {name: _one(paths, name) for name in names}
-        for name in names:
-            files[f"{name}.blockmap"] = _one(paths, f"{name}.blockmap")
-        desktop[target] = files
-        checksum = _one(paths, f"{target}.sha256")
-        metadata_name = (
-            "latest.yml"
-            if target == "windows-x64"
-            else f"latest-mac-{target.removeprefix('macos-')}.yml"
-        )
-        metadata_path = _one(paths, metadata_name)
-        checksum_files = {**files, metadata_name: metadata_path}
-        _validate_checksums(checksum, checksum_files, set(checksum_files))
-        metadata[target] = _validate_metadata(
-            metadata_path,
-            files,
-            expected_version=version,
-            expected_names=names,
-        )
-    nginx_sha256 = _validate_nginx(args.nginx_config.resolve(strict=True))
-    public_index: Path | None = None
-    if args.public_bootstrap_index is not None:
-        public_index = args.public_bootstrap_index.resolve(strict=True)
-        value = _json(public_index, 256 * 1024)
-        validate_public_bootstrap_index(
-            value,
-            verifier=Ed25519SignatureVerifier(release_keys),
-            freshness_verifier=Ed25519SignatureVerifier(publication_keys),
-        )
-        release = value.get("release")
-        if not isinstance(release, Mapping) or (
-            release.get("version"),
-            release.get("release_id"),
-            release.get("build_digest"),
-        ) != (version, manifest.release_id, manifest.build_digest):
-            raise FeedError("public Bootstrap index targets a different release")
     output = args.output.absolute()
     if os.path.lexists(output):
         raise FeedError("feed output already exists")
     output.parent.mkdir(parents=True, exist_ok=True)
+    output = output.parent.resolve(strict=True) / output.name
+    if any(output.is_relative_to(root) for root in source_roots.values()):
+        raise FeedError("feed output overlaps an artifact root")
     staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
     try:
+        input_root = staging / ".inputs"
+        roots = {
+            name: input_root / name
+            for name in ("runtime", "windows-x64", "macos-arm64", "macos-x64")
+        }
+        inventories = {
+            name: _snapshot_tree(source_roots[name], roots[name]) for name in roots
+        }
+        nginx_config = input_root / "nginx.conf"
+        _snapshot_file(args.nginx_config.resolve(strict=True), nginx_config, 256 * 1024)
+        public_index: Path | None = None
+        if args.public_bootstrap_index is not None:
+            public_index = input_root / "public-bootstrap-index.json"
+            _snapshot_file(
+                args.public_bootstrap_index.resolve(strict=True),
+                public_index,
+                256 * 1024,
+            )
+
+        release_dir, manifest, runtime_receipt, release_keys, publication_keys = (
+            _verify_runtime(
+                inventories["runtime"],
+                version=args.expected_version,
+                source_sha=args.expected_source_sha,
+            )
+        )
+        version = args.expected_version
+        expected = {
+            "windows-x64": {f"e-Mate-Setup-{version}-x64.exe"},
+            "macos-arm64": {
+                f"e-Mate-{version}-arm64.dmg",
+                f"e-Mate-{version}-arm64.zip",
+            },
+            "macos-x64": {
+                f"e-Mate-{version}-x64.dmg",
+                f"e-Mate-{version}-x64.zip",
+            },
+        }
+        desktop: dict[str, dict[str, Path]] = {}
+        metadata: dict[str, dict[str, Any]] = {}
+        for target, names in expected.items():
+            paths = inventories[target]
+            files = {name: _one(paths, name) for name in names}
+            for name in names:
+                files[f"{name}.blockmap"] = _one(paths, f"{name}.blockmap")
+            desktop[target] = files
+            checksum = _one(paths, f"{target}.sha256")
+            metadata_name = (
+                "latest.yml"
+                if target == "windows-x64"
+                else f"latest-mac-{target.removeprefix('macos-')}.yml"
+            )
+            metadata_path = _one(paths, metadata_name)
+            checksum_files = {**files, metadata_name: metadata_path}
+            _validate_checksums(checksum, checksum_files, set(checksum_files))
+            metadata[target] = _validate_metadata(
+                metadata_path,
+                files,
+                expected_version=version,
+                expected_names=names,
+            )
+        nginx_sha256 = _validate_nginx(nginx_config)
+        if public_index is not None:
+            value = _json(public_index, 256 * 1024)
+            validate_public_bootstrap_index(
+                value,
+                verifier=Ed25519SignatureVerifier(release_keys),
+                freshness_verifier=Ed25519SignatureVerifier(publication_keys),
+            )
+            _bind_public_index(value, manifest, str(runtime_receipt["manifest_sha256"]))
+
         records: list[dict[str, Any]] = []
         windows_metadata = _one(inventories["windows-x64"], "latest.yml")
-        _link(windows_metadata, staging / "latest.yml")
+        _publish_snapshot(windows_metadata, staging / "latest.yml")
         records.append(
             _record(
                 staging / "latest.yml",
@@ -639,7 +763,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         for target, files in desktop.items():
             for name, source in sorted(files.items()):
                 destination = staging / name
-                _link(source, destination)
+                _publish_snapshot(source, destination)
                 records.append(
                     _record(
                         destination,
@@ -651,7 +775,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         runtime_target = staging / "runtime" / manifest.release_id
         for source in sorted(path for path in release_dir.iterdir() if path.is_file()):
             destination = runtime_target / source.name
-            _link(source, destination)
+            _publish_snapshot(source, destination)
             records.append(
                 _record(
                     destination,
@@ -662,7 +786,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             )
         if public_index is not None:
             destination = staging / "public-bootstrap-index.json"
-            _link(public_index, destination)
+            _publish_snapshot(public_index, destination)
             records.append(
                 _record(
                     destination,
@@ -671,6 +795,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
                     root=staging,
                 )
             )
+        shutil.rmtree(input_root)
         records.sort(key=lambda item: item["path"])
         build_id = hashlib.sha256(
             json.dumps(records, sort_keys=True, separators=(",", ":")).encode("utf-8")

@@ -34,6 +34,7 @@ test("desktop identity and unsigned release targets are explicit", async () => {
   assert.equal(pkg.build.win.forceCodeSigning, false);
   assert.deepEqual(pkg.build.mac.target, ["dmg", "zip"]);
   assert.deepEqual(pkg.build.win.target[0].arch, ["x64"]);
+  assert.ok(pkg.build.files.includes("src/v1/assets/emate-logo.png"));
 });
 
 test("desktop loads the existing loopback Runtime and never packages a second renderer", async () => {
@@ -47,6 +48,9 @@ test("desktop loads the existing loopback Runtime and never packages a second re
   assert.match(main, /loadURL\(startupPage\(\)\)/);
   assert.match(main, /startBackendWithRetry/);
   assert.match(main, /buttons: \["重试", "退出"\]/);
+  assert.match(main, /src", "v1", "assets", "emate-logo\.png"/);
+  assert.match(main, /<img class="logo" src="\$\{logo\}"/);
+  assert.doesNotMatch(main, />ϟ</);
   assert.doesNotMatch(main, /loadFile\(/);
   assert.match(backend, /-m", "ecorex\.server\.cli", "serve"/);
   assert.match(backend, /emate-backend/);

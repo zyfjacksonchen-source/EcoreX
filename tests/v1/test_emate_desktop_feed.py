@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 from pathlib import Path
+import runpy
 import subprocess
 import sys
 from urllib.parse import quote
@@ -19,6 +20,8 @@ from ecorex.release import (
     ReleaseBuilder,
     ReleaseBuildSpec,
     build_public_bootstrap_index,
+    public_bootstrap_authority_signing_bytes,
+    public_bootstrap_freshness_signing_bytes,
 )
 from ecorex.update import (
     Ed25519SignatureVerifier,
@@ -262,6 +265,35 @@ def _public_index(
     )
 
 
+def _resign_pointer(pointer, release_signer, publication_signer) -> None:
+    authority_payload = public_bootstrap_authority_signing_bytes(
+        sequence=pointer["authority"]["sequence"],
+        revision=pointer["authority"]["revision"],
+        target=pointer["authority"]["target"],
+    )
+    pointer["authority"]["signature"] = {
+        "algorithm": "ed25519",
+        "key_id": release_signer.key_id,
+        "value": base64.b64encode(release_signer.sign(authority_payload)).decode(
+            "ascii"
+        ),
+    }
+    authority_sha256 = hashlib.sha256(authority_payload).hexdigest()
+    pointer["freshness"]["authority_sha256"] = authority_sha256
+    freshness_payload = public_bootstrap_freshness_signing_bytes(
+        authority_sha256=authority_sha256,
+        issued_at=pointer["freshness"]["issued_at"],
+        expires_at=pointer["freshness"]["expires_at"],
+    )
+    pointer["freshness"]["signature"] = {
+        "algorithm": "ed25519",
+        "key_id": publication_signer.key_id,
+        "value": base64.b64encode(publication_signer.sign(freshness_payload)).decode(
+            "ascii"
+        ),
+    }
+
+
 def _command(
     tmp_path: Path,
     output: str,
@@ -437,6 +469,95 @@ def test_feed_gate_rejects_consistently_replaced_extracted_trust(
 
     assert completed.returncode == 1
     assert "differs from signed Runtime" in completed.stderr
+
+
+def test_feed_gate_binds_pointer_to_the_exact_signed_runtime(tmp_path: Path) -> None:
+    built, release_signer, publication_signer = _inputs(tmp_path)
+    pointer_path = tmp_path / "public-bootstrap-index.json"
+
+    pointer = _public_index(built, release_signer, publication_signer)
+    pointer["release"]["manifest"]["sha256"] = "f" * 64
+    pointer["authority"]["target"]["manifest_sha256"] = "f" * 64
+    _resign_pointer(pointer, release_signer, publication_signer)
+    pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+    mismatched_manifest = subprocess.run(
+        _command(tmp_path, "manifest-mismatch", public_index=pointer_path),
+        capture_output=True,
+        text=True,
+    )
+    assert mismatched_manifest.returncode == 1
+    assert "differs from signed Runtime" in mismatched_manifest.stderr
+
+    pointer = _public_index(built, release_signer, publication_signer)
+    pointer["release"]["bootstrap_artifacts"][0]["sha256"] = "e" * 64
+    pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+    mismatched_bootstrap = subprocess.run(
+        _command(tmp_path, "bootstrap-mismatch", public_index=pointer_path),
+        capture_output=True,
+        text=True,
+    )
+    assert mismatched_bootstrap.returncode == 1
+    assert "differs from signed Runtime" in mismatched_bootstrap.stderr
+
+    pointer = _public_index(built, release_signer, publication_signer)
+    pointer["release"]["manifest"]["sources"][0]["url"] = (
+        "https://attacker.example/release-manifest.json"
+    )
+    for artifact in pointer["release"]["bootstrap_artifacts"]:
+        artifact["sources"][0]["url"] = (
+            f"https://attacker.example/{artifact['file_name']}"
+        )
+    pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+    mismatched_sources = subprocess.run(
+        _command(tmp_path, "source-mismatch", public_index=pointer_path),
+        capture_output=True,
+        text=True,
+    )
+    assert mismatched_sources.returncode == 1
+    assert "differs from signed Runtime" in mismatched_sources.stderr
+
+
+def test_feed_gate_publishes_only_the_private_verified_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    built, release_signer, publication_signer = _inputs(tmp_path)
+    pointer = (tmp_path / "public-bootstrap-index.json").resolve()
+    trusted_pointer = json.dumps(
+        _public_index(built, release_signer, publication_signer)
+    ).encode()
+    pointer.write_bytes(trusted_pointer)
+    installer = tmp_path / "windows-x64" / f"e-Mate-Setup-{VERSION}-x64.exe"
+    trusted_installer = installer.read_bytes()
+
+    module = runpy.run_path(str(SCRIPT))
+    prepare = module["prepare"]
+    args = module["_parser"]().parse_args(
+        _command(tmp_path, "feed", public_index=pointer)[2:]
+    )
+    original_publish = prepare.__globals__["_publish_snapshot"]
+    raced: set[str] = set()
+
+    def racing_publish(source, destination):
+        if destination.name == pointer.name and "pointer" not in raced:
+            raced.add("pointer")
+            replacement = pointer.with_name("rogue-pointer.json")
+            replacement.write_bytes(b'{"status":"attacker-controlled"}\n')
+            replacement.replace(pointer)
+        if destination.name == installer.name and "installer" not in raced:
+            raced.add("installer")
+            replacement = installer.with_name("rogue-installer.exe")
+            replacement.write_bytes(b"attacker-controlled")
+            replacement.replace(installer)
+        return original_publish(source, destination)
+
+    monkeypatch.setitem(prepare.__globals__, "_publish_snapshot", racing_publish)
+
+    receipt = prepare(args)
+
+    assert raced == {"pointer", "installer"}
+    assert receipt["status"] == "activation-ready"
+    assert (tmp_path / "feed" / pointer.name).read_bytes() == trusted_pointer
+    assert (tmp_path / "feed" / installer.name).read_bytes() == trusted_installer
 
 
 def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:

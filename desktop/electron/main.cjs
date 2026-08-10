@@ -25,6 +25,11 @@ function eMateIcon() {
   return icon.isEmpty() ? undefined : icon;
 }
 
+function eMateLogoDataUrl() {
+  const logoPath = path.join(app.getAppPath(), "src", "v1", "assets", "emate-logo.png");
+  return `data:image/png;base64,${fs.readFileSync(logoPath).toString("base64")}`;
+}
+
 function focusWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -33,18 +38,19 @@ function focusWindow() {
 }
 
 function startupPage() {
+  const logo = eMateLogoDataUrl();
   const document = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">
 <title>e-Mate</title><style>
 :root{color-scheme:light dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f7f9;color:#171717}
-main{text-align:center;padding:32px}.mark{width:52px;height:52px;margin:0 auto 20px;border-radius:18px;background:#171717;color:#ff8a00;display:grid;place-items:center;font-size:28px;box-shadow:0 12px 28px #1112}
-h1{margin:0 0 10px;font-size:25px;letter-spacing:-.02em}p{margin:0;color:#6b6b6b;font-size:14px}
+main{text-align:center;padding:32px}.logo{width:126px;height:40px;margin:0 auto 20px;display:block;object-fit:contain}.visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+p{margin:0;color:#6b6b6b;font-size:14px}
 .spinner{width:18px;height:18px;margin:22px auto 0;border:2px solid #ff8a0033;border-top-color:#ff8a00;border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.spinner{animation:none;border-top-color:#ff8a00}}
-@media(prefers-color-scheme:dark){body{background:#171719;color:#f5f5f5}p{color:#a9a9ad}.mark{background:#29292d}}
-</style></head><body><main role="status" aria-live="polite"><div class="mark" aria-hidden="true">ϟ</div><h1>e-Mate</h1><p>正在验证并启动企业工作伙伴…</p><div class="spinner" aria-hidden="true"></div></main></body></html>`;
+@media(prefers-color-scheme:dark){body{background:#171719;color:#f5f5f5}p{color:#a9a9ad}.logo{filter:invert(1) hue-rotate(180deg)}}
+</style></head><body><main role="status" aria-live="polite"><img class="logo" src="${logo}" alt="" aria-hidden="true"><h1 class="visually-hidden">e-Mate</h1><p>正在验证并启动企业工作伙伴…</p><div class="spinner" aria-hidden="true"></div></main></body></html>`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(document)}`;
 }
 

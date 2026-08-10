@@ -72,6 +72,7 @@
       "electron/**/*",
       "dist/**/*",
       "src/v1/assets/emate-mark.png",
+      "src/v1/assets/emate-logo.png",
       "package.json"
     ],
     "extraResources": [

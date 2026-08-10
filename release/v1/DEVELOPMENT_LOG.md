@@ -2333,3 +2333,23 @@ TypeScript / generated contracts / Ruff / workflow YAML / diff check：passed
 Production Web build：passed，33 chunks，initial JS gzip 145.02 KiB
 生产 CP schema v7 + Gateway 同提交部署、连续真实模型会话、三平台候选与公开 feed：pending
 ```
+
+## 2026-08-10 补充 — Feed 校验快照与启动品牌收口
+
+- Feed gate 不再校验输入后用硬链接重新取路径。四组 handoff、Nginx 配置与公开 Bootstrap
+  pointer 先复制到同文件系统私有 staging，随后只验证该快照，并用 `os.replace` 将同一已验证
+  inode 发布到候选树；源路径在校验后被原子替换也不能改变 feed。
+- `activation-ready` 现在把 pointer 的 release identity、manifest SHA-256/签名/来源，以及三个
+  Bootstrap 的平台、架构、文件名、大小、SHA-256、签名和来源 URL 逐字段绑定到已验证的签名
+  Runtime。可信 signer 对错误 manifest 重签、未重签的 Bootstrap 描述符或下载来源篡改均拒绝。
+- Electron Runtime 启动页删除旧黑色闪电，直接内嵌主界面左上角同一
+  `emate-logo.png`；安装包显式包含该现有资产，暗色模式和 CSP 保持有界。
+
+定向验证：
+
+```text
+Feed 双签名身份/来源绑定与 pointer+installer TOCTOU：8 passed
+Electron shell / 启动品牌：9 passed；brand gate passed
+Ruff / Node syntax / git diff check：passed
+新 exact 2.0.1 三平台 CI、签名制品与 Computer Use：pending rebuild
+```
