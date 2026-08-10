@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from urllib.parse import quote
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -17,8 +18,14 @@ from ecorex.release import (
     Ed25519MemorySigner,
     ReleaseBuilder,
     ReleaseBuildSpec,
+    build_public_bootstrap_index,
 )
-from ecorex.update import ReleaseChannel, ReleaseSource, SourceKind
+from ecorex.update import (
+    Ed25519SignatureVerifier,
+    ReleaseChannel,
+    ReleaseSource,
+    SourceKind,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -79,15 +86,40 @@ def _desktop(root: Path, target: str, names: tuple[str, ...]) -> None:
     )
 
 
-def _runtime(root: Path) -> None:
+def _runtime(root: Path, *, publication_drift_target: str | None = None):
     private = Ed25519PrivateKey.generate()
     public = private.public_key().public_bytes(
         serialization.Encoding.Raw,
         serialization.PublicFormat.Raw,
     )
-    source = root.parent / "runtime-source"
-    source.mkdir()
-    (source / "emate-bootstrap.exe").write_bytes(b"bootstrap")
+    publication = Ed25519PrivateKey.generate()
+    publication_public = publication.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    encoded = base64.b64encode(public).decode("ascii")
+    publication_encoded = base64.b64encode(publication_public).decode("ascii")
+    targets = (("windows", "x64"), ("macos", "arm64"), ("macos", "x64"))
+    sources: dict[tuple[str, str], Path] = {}
+    configs: dict[str, bytes] = {}
+    for platform, architecture in targets:
+        target = f"{platform}-{architecture}"
+        source = root.parent / f"runtime-source-{target}"
+        source.mkdir()
+        (source / "emate-bootstrap.exe").write_bytes(b"bootstrap")
+        publication_keys = {"publication-test": publication_encoded}
+        if target == publication_drift_target:
+            publication_keys = {
+                "publication-drift": base64.b64encode(b"x" * 32).decode("ascii")
+            }
+        configs[target] = json.dumps(
+            {
+                "release_public_keys": {"release-test": encoded},
+                "publication_public_keys": publication_keys,
+            }
+        ).encode("utf-8")
+        (source / "bootstrap-config.json").write_bytes(configs[target])
+        sources[(platform, architecture)] = source
     built = ReleaseBuilder(Ed25519MemorySigner("release-test", private)).build(
         ReleaseBuildSpec(
             channel=ReleaseChannel.STABLE,
@@ -109,14 +141,15 @@ def _runtime(root: Path) -> None:
                     "cdn", SourceKind.ECOREX_CDN, 2, "https://cdn.example/e-mate"
                 ),
             ),
-            artifacts=(
+            artifacts=tuple(
                 ArtifactBuildInput(
-                    source,
+                    sources[(platform, architecture)],
                     ArtifactKind.BOOTSTRAP,
-                    "windows",
-                    "x64",
+                    platform,
+                    architecture,
                     executable_paths=("emate-bootstrap.exe",),
-                ),
+                )
+                for platform, architecture in targets
             ),
         ),
         root / "release",
@@ -142,18 +175,100 @@ def _runtime(root: Path) -> None:
         ),
         encoding="utf-8",
     )
-    encoded = base64.b64encode(public).decode("ascii")
     for target in ("windows-x64", "macos-arm64", "macos-x64"):
         destination = root / "bootstraps" / target
         destination.mkdir(parents=True)
-        (destination / "bootstrap-config.json").write_text(
-            json.dumps({"release_public_keys": {"release-test": encoded}}),
-            encoding="utf-8",
-        )
+        (destination / "bootstrap-config.json").write_bytes(configs[target])
+    return (
+        built,
+        Ed25519MemorySigner("release-test", private),
+        Ed25519MemorySigner("publication-test", publication),
+    )
 
 
-def _command(tmp_path: Path, output: str, nginx: Path = NGINX) -> list[str]:
-    return [
+def _inputs(tmp_path: Path, *, publication_drift_target: str | None = None):
+    runtime = _runtime(
+        tmp_path / "runtime", publication_drift_target=publication_drift_target
+    )
+    _desktop(
+        tmp_path / "windows-x64",
+        "windows-x64",
+        (f"e-Mate-Setup-{VERSION}-x64.exe",),
+    )
+    _desktop(
+        tmp_path / "macos-arm64",
+        "macos-arm64",
+        (f"e-Mate-{VERSION}-arm64.dmg", f"e-Mate-{VERSION}-arm64.zip"),
+    )
+    _desktop(
+        tmp_path / "macos-x64",
+        "macos-x64",
+        (f"e-Mate-{VERSION}-x64.dmg", f"e-Mate-{VERSION}-x64.zip"),
+    )
+    return runtime
+
+
+def _public_index(
+    built, release_signer, publication_signer, *, authority=None, freshness=None
+):
+    authority = authority or release_signer
+    freshness = freshness or publication_signer
+    files = sorted(built.output_dir.iterdir(), key=lambda path: path.name)
+    receipt = {
+        "schema_version": 1,
+        "release_id": built.manifest.release_id,
+        "version": built.manifest.version,
+        "manifest_sha256": hashlib.sha256(built.manifest_path.read_bytes()).hexdigest(),
+        "github_release_id": 42,
+        "github_draft": False,
+        "source_receipts": {
+            source.source_id: [
+                {
+                    "name": path.name,
+                    "size_bytes": path.stat().st_size,
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "url": f"{source.base_url}/{quote(path.name, safe='')}",
+                }
+                for path in files
+            ]
+            for source in built.manifest.sources
+        },
+    }
+    receipt_sha256 = hashlib.sha256(
+        json.dumps(
+            receipt,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    release_keys = {
+        release_signer.key_id: release_signer.public_key_bytes,
+        authority.key_id: authority.public_key_bytes,
+    }
+    return build_public_bootstrap_index(
+        manifest=built.manifest,
+        manifest_bytes=built.manifest_path.read_bytes(),
+        manifest_sha256=receipt["manifest_sha256"],
+        publication_receipt=receipt,
+        publication_receipt_sha256=receipt_sha256,
+        verifier=Ed25519SignatureVerifier(release_keys),
+        freshness_verifier=Ed25519SignatureVerifier(
+            {freshness.key_id: freshness.public_key_bytes}
+        ),
+        signer=authority,
+        freshness_signer=freshness,
+    )
+
+
+def _command(
+    tmp_path: Path,
+    output: str,
+    nginx: Path = NGINX,
+    public_index: Path | None = None,
+) -> list[str]:
+    command = [
         sys.executable,
         str(SCRIPT),
         "--runtime-root",
@@ -173,25 +288,13 @@ def _command(tmp_path: Path, output: str, nginx: Path = NGINX) -> list[str]:
         "--expected-source-sha",
         COMMIT,
     ]
+    if public_index is not None:
+        command.extend(("--public-bootstrap-index", str(public_index)))
+    return command
 
 
 def test_feed_gate_merges_mac_metadata_and_rejects_tampering(tmp_path: Path) -> None:
-    _runtime(tmp_path / "runtime")
-    _desktop(
-        tmp_path / "windows-x64",
-        "windows-x64",
-        (f"e-Mate-Setup-{VERSION}-x64.exe",),
-    )
-    _desktop(
-        tmp_path / "macos-arm64",
-        "macos-arm64",
-        (f"e-Mate-{VERSION}-arm64.dmg", f"e-Mate-{VERSION}-arm64.zip"),
-    )
-    _desktop(
-        tmp_path / "macos-x64",
-        "macos-x64",
-        (f"e-Mate-{VERSION}-x64.dmg", f"e-Mate-{VERSION}-x64.zip"),
-    )
+    _inputs(tmp_path)
 
     completed = subprocess.run(
         _command(tmp_path, "feed"), capture_output=True, text=True
@@ -205,9 +308,7 @@ def test_feed_gate_merges_mac_metadata_and_rejects_tampering(tmp_path: Path) -> 
     merged = (tmp_path / "feed" / "latest-mac.yml").read_text()
     assert merged.count("  - url: e-Mate-") == 4
     assert "arm64.zip" in merged and "x64.zip" in merged
-    download_index = json.loads(
-        (tmp_path / "feed" / "download-index.json").read_text()
-    )
+    download_index = json.loads((tmp_path / "feed" / "download-index.json").read_text())
     assert download_index["version"] == VERSION
     assert [item["target"] for item in download_index["downloads"]] == [
         "windows-x64",
@@ -236,6 +337,108 @@ def test_feed_gate_merges_mac_metadata_and_rejects_tampering(tmp_path: Path) -> 
     assert "checksum receipt digest mismatch" in rejected.stderr
 
 
+def test_feed_gate_accepts_pointer_signed_by_both_runtime_trust_roles(
+    tmp_path: Path,
+) -> None:
+    built, release_signer, publication_signer = _inputs(tmp_path)
+    pointer = tmp_path / "public-bootstrap-index.json"
+    pointer.write_text(
+        json.dumps(_public_index(built, release_signer, publication_signer)),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        _command(tmp_path, "feed", public_index=pointer),
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    receipt = json.loads((tmp_path / "feed" / "feed-stage-receipt.json").read_text())
+    assert receipt["status"] == "activation-ready"
+    assert (tmp_path / "feed" / "public-bootstrap-index.json").read_bytes() == (
+        pointer.read_bytes()
+    )
+
+
+def test_feed_gate_rejects_unknown_pointer_authority_and_freshness(
+    tmp_path: Path,
+) -> None:
+    built, release_signer, publication_signer = _inputs(tmp_path)
+    for role in ("authority", "freshness"):
+        rogue = Ed25519MemorySigner(f"rogue-{role}", Ed25519PrivateKey.generate())
+        pointer = tmp_path / f"unknown-{role}.json"
+        pointer.write_text(
+            json.dumps(
+                _public_index(
+                    built,
+                    release_signer,
+                    publication_signer,
+                    **{role: rogue},
+                )
+            ),
+            encoding="utf-8",
+        )
+
+        completed = subprocess.run(
+            _command(tmp_path, f"feed-{role}", public_index=pointer),
+            capture_output=True,
+            text=True,
+        )
+
+        assert completed.returncode == 1
+        assert f"public {role} signature is invalid" in completed.stderr
+
+
+def test_feed_gate_rejects_cross_target_publication_keyring_drift(
+    tmp_path: Path,
+) -> None:
+    _inputs(tmp_path, publication_drift_target="macos-x64")
+
+    completed = subprocess.run(
+        _command(tmp_path, "feed"), capture_output=True, text=True
+    )
+
+    assert completed.returncode == 1
+    assert "Bootstrap publication trust differs by target" in completed.stderr
+
+
+def test_feed_gate_rejects_consistently_replaced_extracted_trust(
+    tmp_path: Path,
+) -> None:
+    built, release_signer, publication_signer = _inputs(tmp_path)
+    rogue = Ed25519MemorySigner("publication-rogue", Ed25519PrivateKey.generate())
+    encoded = base64.b64encode(rogue.public_key_bytes).decode("ascii")
+    for target in ("windows-x64", "macos-arm64", "macos-x64"):
+        config_path = (
+            tmp_path / "runtime" / "bootstraps" / target / "bootstrap-config.json"
+        )
+        config = json.loads(config_path.read_text())
+        config["publication_public_keys"] = {rogue.key_id: encoded}
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+    pointer = tmp_path / "rogue-freshness.json"
+    pointer.write_text(
+        json.dumps(
+            _public_index(
+                built,
+                release_signer,
+                publication_signer,
+                freshness=rogue,
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        _command(tmp_path, "feed", public_index=pointer),
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "differs from signed Runtime" in completed.stderr
+
+
 def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
     workflow = (
         ROOT / ".github" / "workflows" / "emate-2.0-desktop-release.yml"
@@ -254,8 +457,8 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
         "tests/v1/test_emate_feed_deploy.py",
         "test_product_composes_message_channels_with_the_agent_runtime",
         "npm run typecheck",
-        "tools/ga-mock-server.test.mjs",
+        "npm run test:v1",
         "npx playwright install chromium",
-        "scheduled tasks and external connections",
+        "e2e/ga-webui.spec.ts",
     ):
         assert required_gate in workflow

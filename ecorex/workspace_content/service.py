@@ -760,7 +760,7 @@ class WorkspaceContentService:
     def _write_new(self, destination: Path, content: bytes) -> None:
         relative = PurePosixPath(destination.relative_to(self.root).as_posix())
         parent = PurePosixPath(*relative.parts[:-1])
-        temporary_name = f".emate-knowledge-{uuid.uuid4().hex}.tmp"
+        temporary_name = f"emate-knowledge-{uuid.uuid4().hex}.tmp"
         try:
             with self._directory_lease(parent) as (directory_fd, directory):
                 flags = (

@@ -74,8 +74,10 @@ jobs:
           python scripts/install-v1-python-profile.py --profile dev
           python -m pytest -q -p no:cacheprovider \
             tests/v1/test_public_download_site.py \
+            tests/v1/test_emate_desktop_feed.py \
             tests/v1/test_emate_feed_deploy.py \
             tests/v1/test_control_plane_release_replica_service.py \
+            tests/v1/test_manual_webui_builder.py \
             tests/v1/test_callback_channel_boundary.py \
             tests/v1/test_workspace_content.py \
             tests/v1/test_cowagent_data_migration.py \

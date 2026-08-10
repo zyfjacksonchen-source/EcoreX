@@ -16,6 +16,7 @@ import stat
 import sys
 import tempfile
 from typing import Any, Iterable, Mapping
+import zipfile
 
 from ecorex.release import validate_public_bootstrap_index
 from ecorex.update import (
@@ -31,6 +32,7 @@ _SHA512 = re.compile(r"^[A-Za-z0-9+/]{86}==$")
 _SEMVER = re.compile(r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,179}$")
+_SAFE_KEY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _RELEASE_DATE = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$"
 )
@@ -264,9 +266,78 @@ def _validate_checksums(
         raise FeedError(f"checksum receipt digest mismatch: {path.name}")
 
 
+def _bootstrap_keyring(
+    configs: Iterable[Mapping[str, Any]], field: str, role: str
+) -> dict[str, bytes]:
+    keyrings: list[dict[str, bytes]] = []
+    for config in configs:
+        value = config.get(field)
+        if not isinstance(value, dict) or not 1 <= len(value) <= 8:
+            raise FeedError(f"Bootstrap {role} trust is invalid")
+        decoded: dict[str, bytes] = {}
+        for key_id, encoded in value.items():
+            if (
+                not isinstance(key_id, str)
+                or _SAFE_KEY_ID.fullmatch(key_id) is None
+                or not isinstance(encoded, str)
+            ):
+                raise FeedError(f"Bootstrap {role} trust is invalid")
+            try:
+                raw = base64.b64decode(encoded, validate=True)
+            except ValueError:
+                raise FeedError(f"Bootstrap {role} trust is invalid") from None
+            if len(raw) != 32 or base64.b64encode(raw).decode("ascii") != encoded:
+                raise FeedError(f"Bootstrap {role} trust is invalid")
+            decoded[key_id] = raw
+        keyrings.append(decoded)
+    if any(keyring != keyrings[0] for keyring in keyrings[1:]):
+        raise FeedError(f"Bootstrap {role} trust differs by target")
+    return keyrings[0]
+
+
+def _signed_bootstrap_config(path: Path) -> tuple[dict[str, Any], bytes]:
+    try:
+        metadata = path.lstat()
+        if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+            raise FeedError("signed Bootstrap archive is invalid")
+        with zipfile.ZipFile(path) as archive:
+            matches = [
+                member
+                for member in archive.infolist()
+                if member.filename == "bootstrap-config.json"
+            ]
+            if (
+                len(matches) != 1
+                or matches[0].is_dir()
+                or matches[0].flag_bits & 1
+                or not 1 <= matches[0].file_size <= 64 * 1024
+            ):
+                raise FeedError("signed Bootstrap trust configuration is invalid")
+            payload = archive.read(matches[0])
+        value = json.loads(payload.decode("utf-8"))
+    except (
+        OSError,
+        RuntimeError,
+        NotImplementedError,
+        UnicodeError,
+        json.JSONDecodeError,
+        zipfile.BadZipFile,
+    ):
+        raise FeedError("signed Bootstrap trust configuration is invalid") from None
+    if len(payload) != matches[0].file_size or not isinstance(value, dict):
+        raise FeedError("signed Bootstrap trust configuration is invalid")
+    return value, payload
+
+
 def _verify_runtime(
     paths: tuple[Path, ...], *, version: str, source_sha: str
-) -> tuple[Path, ReleaseManifest, dict[str, Any]]:
+) -> tuple[
+    Path,
+    ReleaseManifest,
+    dict[str, Any],
+    dict[str, bytes],
+    dict[str, bytes],
+]:
     receipt = _json(_one(paths, "manual-webui-build-receipt.json"))
     manifests = [
         path
@@ -288,22 +359,41 @@ def _verify_runtime(
         or manifest.version != version
     ):
         raise FeedError("Runtime receipt identity is invalid")
-    configs = [_json(path) for path in paths if path.name == "bootstrap-config.json"]
-    if not configs:
+    config_paths = [path for path in paths if path.name == "bootstrap-config.json"]
+    if len(config_paths) != 3 or {path.parent.name for path in config_paths} != {
+        "windows-x64",
+        "macos-arm64",
+        "macos-x64",
+    }:
         raise FeedError("Bootstrap trust configuration is missing")
-    release_keys = configs[0].get("release_public_keys")
-    if not isinstance(release_keys, dict) or any(
-        item.get("release_public_keys") != release_keys for item in configs
-    ):
-        raise FeedError("Bootstrap release trust differs by target")
-    try:
-        decoded = {
-            key: base64.b64decode(value, validate=True)
-            for key, value in release_keys.items()
-        }
-    except (TypeError, ValueError):
-        raise FeedError("Bootstrap release trust is invalid") from None
-    key = decoded.get(manifest.signature.key_id)
+    extracted = {path.parent.name: path for path in config_paths}
+    configs: list[dict[str, Any]] = []
+    for target in ("windows-x64", "macos-arm64", "macos-x64"):
+        artifact = next(
+            (
+                item
+                for item in manifest.artifacts
+                if item.artifact_id == f"bootstrap-{target}"
+            ),
+            None,
+        )
+        if artifact is None:
+            raise FeedError("signed Bootstrap trust configuration is missing")
+        config, signed_payload = _signed_bootstrap_config(
+            release_dir / artifact.file_name
+        )
+        try:
+            extracted_payload = extracted[target].read_bytes()
+        except OSError:
+            raise FeedError("Bootstrap trust configuration is unreadable") from None
+        if extracted_payload != signed_payload:
+            raise FeedError("Bootstrap trust configuration differs from signed Runtime")
+        configs.append(config)
+    release_keys = _bootstrap_keyring(configs, "release_public_keys", "release")
+    publication_keys = _bootstrap_keyring(
+        configs, "publication_public_keys", "publication"
+    )
+    key = release_keys.get(manifest.signature.key_id)
     signing = receipt.get("signing")
     if (
         not isinstance(key, bytes)
@@ -314,7 +404,7 @@ def _verify_runtime(
         or signing.get("inner_integrity") != "ed25519"
     ):
         raise FeedError("Runtime signing identity is invalid")
-    verifier = Ed25519SignatureVerifier(decoded)
+    verifier = Ed25519SignatureVerifier(release_keys)
     verify_manifest_signature(manifest, verifier)
     for artifact in manifest.artifacts:
         verify_artifact_file(
@@ -329,7 +419,7 @@ def _verify_runtime(
         or metadata.get("sbom_sha256") != _sha256(release_dir / "sbom.cdx.json")
     ):
         raise FeedError("Runtime release metadata is invalid")
-    return release_dir, manifest, receipt
+    return release_dir, manifest, receipt, release_keys, publication_keys
 
 
 def _merge_mac(arm64: Mapping[str, Any], x64: Mapping[str, Any]) -> bytes:
@@ -461,10 +551,12 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "macos-x64": args.macos_x64_root.resolve(strict=True),
     }
     inventories = {name: _files(root) for name, root in roots.items()}
-    release_dir, manifest, runtime_receipt = _verify_runtime(
-        inventories["runtime"],
-        version=args.expected_version,
-        source_sha=args.expected_source_sha,
+    release_dir, manifest, runtime_receipt, release_keys, publication_keys = (
+        _verify_runtime(
+            inventories["runtime"],
+            version=args.expected_version,
+            source_sha=args.expected_source_sha,
+        )
     )
     version = args.expected_version
     expected = {
@@ -500,7 +592,11 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     if args.public_bootstrap_index is not None:
         public_index = args.public_bootstrap_index.resolve(strict=True)
         value = _json(public_index, 256 * 1024)
-        validate_public_bootstrap_index(value)
+        validate_public_bootstrap_index(
+            value,
+            verifier=Ed25519SignatureVerifier(release_keys),
+            freshness_verifier=Ed25519SignatureVerifier(publication_keys),
+        )
         release = value.get("release")
         if not isinstance(release, Mapping) or (
             release.get("version"),

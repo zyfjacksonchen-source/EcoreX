@@ -2,6 +2,7 @@
   "build_digest": "36d240b2ceae5d4b55f33dc8e5e30b7f3688a442106f2c723281992410a316f8",
   "release_id": "release-stable-36d240b2ceae5d4b55f33dc8",
   "release_public_keys": {
+    "ecorex-webui-release-0ef113eca992433d9d43": "+v+fPP/7gWk/VB1k2V8hRmIfkQ/j+IobGgfC+PaWR7A=",
     "ecorex-webui-release-cfb9b141bd87235444ca": "bXoHp+C9D1I6amv2yfM8BN+qpzztXHJCvi9VOyXJ/fA="
   },
   "schema": "emate.desktop-predecessor-trust.v1",

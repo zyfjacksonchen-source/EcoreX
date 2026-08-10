@@ -43,7 +43,11 @@ def test_unpackaged_callback_channels_and_weixin_qr_stay_fail_closed() -> None:
         item = catalog[channel_id]
         assert item["auth_kind"] == auth_kind
         assert item["adapter_available"] is False
-        assert item["unavailable_reason"] == "adapter_not_packaged"
+        assert item["unavailable_reason"] == (
+            "passive_runtime_unavailable"
+            if channel_id == "wechatmp"
+            else "adapter_not_packaged"
+        )
         assert item["instance"] is None
         assert not any(item["actions"].values())
 
@@ -81,7 +85,7 @@ def test_managed_callback_catalog_keeps_passive_mp_explicitly_unavailable() -> N
     catalog = {item["channel_id"]: item for item in service.catalog()["items"]}
 
     assert catalog["wechatmp"]["adapter_available"] is False
-    assert catalog["wechatmp"]["unavailable_reason"] == "adapter_not_packaged"
+    assert catalog["wechatmp"]["unavailable_reason"] == "passive_runtime_unavailable"
     assert not any(catalog["wechatmp"]["actions"].values())
     for channel_id in adapters:
         assert catalog[channel_id]["adapter_available"] is True

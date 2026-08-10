@@ -84,6 +84,23 @@ def test_manual_webui_builder_preserves_predecessor_release_trust(
         builder["_load_predecessor_trust"](trust)
 
 
+def test_checked_in_predecessor_trust_covers_both_v2_release_identities() -> None:
+    keys, identity = _builder()["_load_predecessor_trust"](
+        ROOT / "release" / "v1" / "desktop-predecessor-trust.json"
+    )
+
+    assert identity == {
+        "version": "2.0.0",
+        "release_id": "release-stable-36d240b2ceae5d4b55f33dc8",
+        "build_digest": "36d240b2ceae5d4b55f33dc8e5e30b7f3688a442106f2c723281992410a316f8",
+        "signing_key_id": "ecorex-webui-release-cfb9b141bd87235444ca",
+    }
+    assert keys == {
+        "ecorex-webui-release-0ef113eca992433d9d43": "+v+fPP/7gWk/VB1k2V8hRmIfkQ/j+IobGgfC+PaWR7A=",
+        "ecorex-webui-release-cfb9b141bd87235444ca": "bXoHp+C9D1I6amv2yfM8BN+qpzztXHJCvi9VOyXJ/fA=",
+    }
+
+
 def test_manual_webui_runtime_config_is_canonical_and_rebound(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
