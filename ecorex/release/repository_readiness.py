@@ -128,20 +128,13 @@ def default_release_repository_contract() -> ReleaseRepositoryContract:
         default_branch="main",
         workflows=frozenset(
             {
+                ".github/workflows/ecorex-v1-pr.yml",
                 ".github/workflows/ecorex-v1-ci.yml",
                 ".github/workflows/ecorex-v1-platform-stage.yml",
                 ".github/workflows/ecorex-v1-candidate.yml",
             }
         ),
-        status_checks=frozenset(
-            {
-                "v1 quality and deterministic build",
-                "Windows x64 compatibility",
-                "macOS arm64 compatibility",
-                "macOS x64 compatibility",
-                "Cross-runner byte stability",
-            }
-        ),
+        status_checks=frozenset({"v1 PR development gate"}),
         environments=(
             EnvironmentContract("ecorex-release-stage", _STAGE_VARIABLES),
             EnvironmentContract(
