@@ -146,9 +146,10 @@ const download = (target, platform, architecture, fileName) => ({
   sha256: "a".repeat(64),
 });
 const raw = {
-  schema_version: 1,
+  schema_version: 2,
   product: "e-Mate",
   version,
+  distribution_mode: "unsigned-manual",
   released_at: "2026-08-09T00:00:00Z",
   downloads: [
     download("windows-x64", "windows", "x64", `e-Mate-Setup-${version}-x64.exe`),
@@ -157,6 +158,11 @@ const raw = {
   ],
 };
 assert.equal(contract.normalizeDownloadIndex(raw).version, version);
+assert.equal(contract.normalizeDownloadIndex(raw).distribution_mode, "unsigned-manual");
+assert.throws(() => contract.normalizeDownloadIndex({ ...raw, distribution_mode: "unknown" }));
+const signed = { ...raw, schema_version: 1 };
+delete signed.distribution_mode;
+assert.equal(contract.normalizeDownloadIndex(signed).distribution_mode, "signed-automatic");
 assert.throws(() => contract.normalizeDownloadIndex({ ...raw, version: `v${version}` }));
 assert.throws(() => contract.normalizeDownloadIndex({ ...raw, extra: true }));
 assert.throws(() => contract.normalizeDownloadIndex({ ...raw, downloads: [raw.downloads[0], raw.downloads[0], raw.downloads[2]] }));
