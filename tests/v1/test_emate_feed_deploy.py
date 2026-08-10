@@ -46,6 +46,9 @@ def _feed(
     if previous:
         (root / OLD_TARGET).mkdir()
         (root / OLD_TARGET / "download-index.json").write_bytes(b'{"version":"1.9.9"}\n')
+        (root / OLD_TARGET / "public-bootstrap-index.json").write_bytes(
+            b'{"schema":"old-public-bootstrap"}\n'
+        )
         os.symlink(OLD_TARGET, root / "current")
 
     files = {
@@ -224,18 +227,32 @@ def test_unsigned_manual_activation_reads_back_only_download_index(tmp_path: Pat
     ).hexdigest()
 
 
+@pytest.mark.parametrize("unsigned_manual", [False, True])
 def test_success_receipt_failure_rolls_back_and_records_compensation(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, unsigned_manual: bool
 ) -> None:
-    root, candidate, _stage = _feed(tmp_path, unsigned_manual=True)
+    root, candidate, _stage = _feed(tmp_path, unsigned_manual=unsigned_manual)
     output = root / "activation-receipts" / "compensated.json"
     module = runpy.run_path(str(SCRIPT))
     activate = module["activate"]
+    readback_name = (
+        "download-index.json"
+        if unsigned_manual
+        else "public-bootstrap-index.json"
+    )
     args = module["_parser"]().parse_args([
         *_command(root, candidate, output)[2:],
         "--readback-command", "/bin/cat",
-        "--readback-argument", str(root / "current/download-index.json"),
+        "--readback-argument", str(root / "current" / readback_name),
     ])
+    original_readback = activate.__globals__["_readback"]
+    readbacks: list[bytes] = []
+
+    def record_readback(readback_args, expected):
+        readbacks.append(expected)
+        return original_readback(readback_args, expected)
+
+    monkeypatch.setitem(activate.__globals__, "_readback", record_readback)
     original = activate.__globals__["_write_receipt"]
     calls = 0
 
@@ -256,6 +273,10 @@ def test_success_receipt_failure_rolls_back_and_records_compensation(
     assert receipt["operation"] == "rollback"
     assert receipt["previous_target"] == _stage["candidate_target"]
     assert receipt["new_target"] == OLD_TARGET
+    assert readbacks == [
+        (candidate / readback_name).read_bytes(),
+        (root / OLD_TARGET / readback_name).read_bytes(),
+    ]
 
 
 def test_post_switch_installer_drift_rolls_back_and_records_compensation(
@@ -353,9 +374,16 @@ def test_failed_readback_atomically_restores_previous(
     )
 
     assert result.returncode == 1
-    assert "readback_failed_rolled_back" in result.stderr
+    expected = (
+        "readback_failed_rollback_failed"
+        if previous
+        else "readback_failed_rolled_back"
+    )
+    assert expected in result.stderr
     if previous:
         assert os.readlink(root / "current") == OLD_TARGET
+        assert not output.exists()
+        return
     else:
         assert not os.path.lexists(root / "current")
     receipt = json.loads(output.read_text(encoding="utf-8"))

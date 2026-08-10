@@ -674,15 +674,24 @@ def _stable_readback_file(path: Path) -> bytes:
     return payload
 
 
-def _verify_rollback(root: Path, previous: str | None, previous_bytes: bytes | None) -> None:
+def _verify_rollback(
+    args: argparse.Namespace,
+    root: Path,
+    previous: str | None,
+    previous_bytes: bytes | None,
+    readback_name: str,
+) -> None:
     device = root.lstat().st_dev
     if _current_target(root, device) != previous:
         raise FeedDeployError("rollback_readback_target_mismatch")
-    if previous is not None and (
-        previous_bytes is None
-        or _stable_readback_file(root / "current/download-index.json") != previous_bytes
-    ):
-        raise FeedDeployError("rollback_readback_mismatch")
+    if previous is not None:
+        if (
+            previous_bytes is None
+            or _stable_readback_file(root / "current" / readback_name)
+            != previous_bytes
+        ):
+            raise FeedDeployError("rollback_readback_mismatch")
+        _readback(args, previous_bytes)
 
 
 def _completed_at() -> str:
@@ -699,8 +708,13 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
             output = _receipt_path(root, args.activation_receipt)
             device = root.lstat().st_dev
             previous = _current_target(root, device)
+            readback_name = (
+                "download-index.json"
+                if stage["schema_version"] == 2
+                else "public-bootstrap-index.json"
+            )
             previous_bytes = (
-                _stable_readback_file(root / "current/download-index.json")
+                _stable_readback_file(root / "current" / readback_name)
                 if previous is not None
                 else None
             )
@@ -729,7 +743,9 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
                     phase = "readback"
                 try:
                     _rollback(root, candidate_target, previous)
-                    _verify_rollback(root, previous, previous_bytes)
+                    _verify_rollback(
+                        args, root, previous, previous_bytes, readback_name
+                    )
                 except FeedDeployError:
                     raise FeedDeployError(f"{phase}_failed_rollback_failed") from None
                 rollback_receipt = {
