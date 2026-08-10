@@ -64,7 +64,12 @@ from ecorex.artifacts.wire import (  # noqa: E402
     RetouchJobResponse,
     RetouchWorkspaceResponse,
 )
-from ecorex.memory.api import MemoryMutationResponse, MemorySnapshotResponse  # noqa: E402
+from ecorex.memory.api import (  # noqa: E402
+    MemoryContentDocumentResponse,
+    MemoryContentPageResponse,
+    MemoryMutationResponse,
+    MemorySnapshotResponse,
+)
 from ecorex.migration.api import MigrationQuarantineResponse  # noqa: E402
 from ecorex.observability.system_api import (  # noqa: E402
     SystemHealthPublicResponse,
@@ -75,6 +80,12 @@ from ecorex.output.api import (  # noqa: E402
     OutputLocationCatalogResponse,
     OutputMaterializationResponse,
     OutputPreferenceResponse,
+)
+from ecorex.workspace_content.api import (  # noqa: E402
+    KnowledgeDocumentResponse,
+    KnowledgeGraphResponse,
+    KnowledgeImportResponse,
+    KnowledgeTreeResponse,
 )
 
 
@@ -110,6 +121,12 @@ SETTINGS_CONTRACT_NAMES = frozenset(
     {
         "MemoryMutationResponse",
         "MemorySnapshotResponse",
+        "MemoryContentDocumentResponse",
+        "MemoryContentPageResponse",
+        "KnowledgeDocumentResponse",
+        "KnowledgeGraphResponse",
+        "KnowledgeImportResponse",
+        "KnowledgeTreeResponse",
         "MigrationQuarantineResponse",
         "OutputLocationCatalogResponse",
         "OutputMaterializationResponse",
@@ -134,6 +151,12 @@ NESTED_WIRE_CONTRACT_NAMES = frozenset(
         "ArtifactProjection",
         "MemoryMutationResponse",
         "MemorySnapshotResponse",
+        "MemoryContentDocumentResponse",
+        "MemoryContentPageResponse",
+        "KnowledgeDocumentResponse",
+        "KnowledgeGraphResponse",
+        "KnowledgeImportResponse",
+        "KnowledgeTreeResponse",
         "MigrationQuarantineResponse",
         "OutputLocationCatalogResponse",
         "SystemHealthPublicResponse",
@@ -165,6 +188,12 @@ def _contract_schemas() -> dict[str, dict[str, Any]]:
         "SkillHubListResponse": SkillHubListResponse.model_json_schema(),
         "MemoryMutationResponse": MemoryMutationResponse.model_json_schema(),
         "MemorySnapshotResponse": MemorySnapshotResponse.model_json_schema(),
+        "MemoryContentDocumentResponse": MemoryContentDocumentResponse.model_json_schema(),
+        "MemoryContentPageResponse": MemoryContentPageResponse.model_json_schema(),
+        "KnowledgeDocumentResponse": KnowledgeDocumentResponse.model_json_schema(),
+        "KnowledgeGraphResponse": KnowledgeGraphResponse.model_json_schema(),
+        "KnowledgeImportResponse": KnowledgeImportResponse.model_json_schema(),
+        "KnowledgeTreeResponse": KnowledgeTreeResponse.model_json_schema(),
         "MigrationQuarantineResponse": MigrationQuarantineResponse.model_json_schema(),
         "OutputLocationCatalogResponse": OutputLocationCatalogResponse.model_json_schema(),
         "OutputMaterializationResponse": OutputMaterializationResponse.model_json_schema(),
@@ -341,6 +370,12 @@ def build_outputs() -> tuple[bytes, bytes, bytes, bytes, bytes, str]:
             "JobProjection": "ecorex.protocol.JobProjection",
             "MemoryMutationResponse": "ecorex.memory.api.MemoryMutationResponse",
             "MemorySnapshotResponse": "ecorex.memory.api.MemorySnapshotResponse",
+            "MemoryContentDocumentResponse": "ecorex.memory.api.MemoryContentDocumentResponse",
+            "MemoryContentPageResponse": "ecorex.memory.api.MemoryContentPageResponse",
+            "KnowledgeDocumentResponse": "ecorex.workspace_content.api.KnowledgeDocumentResponse",
+            "KnowledgeGraphResponse": "ecorex.workspace_content.api.KnowledgeGraphResponse",
+            "KnowledgeImportResponse": "ecorex.workspace_content.api.KnowledgeImportResponse",
+            "KnowledgeTreeResponse": "ecorex.workspace_content.api.KnowledgeTreeResponse",
             "MigrationQuarantineResponse": "ecorex.migration.api.MigrationQuarantineResponse",
             "OutputLocationCatalogResponse": "ecorex.output.api.OutputLocationCatalogResponse",
             "OutputMaterializationResponse": "ecorex.output.api.OutputMaterializationResponse",
@@ -383,6 +418,22 @@ def build_outputs() -> tuple[bytes, bytes, bytes, bytes, bytes, str]:
             schemas["MemoryMutationResponse"],
             "MemoryResetProjectionResponse",
             "status",
+        ),
+        "memoryContentKinds": _property_enum(
+            schemas["MemoryContentPageResponse"],
+            "MemoryContentItemResponse",
+            "kind",
+        ),
+        "memoryContentOrigins": _property_enum(
+            schemas["MemoryContentPageResponse"],
+            "MemoryContentItemResponse",
+            "origin",
+        ),
+        "memoryContentViews": _root_property_enum(
+            schemas["MemoryContentPageResponse"], "view"
+        ),
+        "knowledgeNodeKinds": _property_enum(
+            schemas["KnowledgeTreeResponse"], "KnowledgeNodeResponse", "kind"
         ),
         "migrationCredentialKinds": _property_enum(
             schemas["MigrationQuarantineResponse"],
@@ -558,6 +609,14 @@ def build_outputs() -> tuple[bytes, bytes, bytes, bytes, bytes, str]:
         f"{rendered_settings_manifest} as const;\n"
         "export type GeneratedMemoryResetStatus = "
         "typeof GENERATED_SETTINGS_RUNTIME_CONTRACT.values.memoryResetStatuses[number];\n"
+        "export type GeneratedMemoryContentKind = "
+        "typeof GENERATED_SETTINGS_RUNTIME_CONTRACT.values.memoryContentKinds[number];\n"
+        "export type GeneratedMemoryContentOrigin = "
+        "typeof GENERATED_SETTINGS_RUNTIME_CONTRACT.values.memoryContentOrigins[number];\n"
+        "export type GeneratedMemoryContentView = "
+        "typeof GENERATED_SETTINGS_RUNTIME_CONTRACT.values.memoryContentViews[number];\n"
+        "export type GeneratedKnowledgeNodeKind = "
+        "typeof GENERATED_SETTINGS_RUNTIME_CONTRACT.values.knowledgeNodeKinds[number];\n"
         "export type GeneratedMigrationCredentialKind = "
         "typeof GENERATED_SETTINGS_RUNTIME_CONTRACT.values.migrationCredentialKinds[number];\n"
         "export type GeneratedMigrationCredentialOrigin = "

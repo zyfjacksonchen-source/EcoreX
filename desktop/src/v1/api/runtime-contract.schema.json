@@ -4262,6 +4262,55 @@
           },
           "title": "TokenUsageWindow",
           "type": "object"
+        },
+        "UsageDataQualityProjection": {
+          "additionalProperties": false,
+          "description": "Whether a local observability recovery left an auditable usage gap.",
+          "properties": {
+            "audit_continuity": {
+              "default": "complete",
+              "enum": [
+                "complete",
+                "recovered_with_gap",
+                "uncertain"
+              ],
+              "title": "Audit Continuity",
+              "type": "string"
+            },
+            "last_recovery_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Recovery At"
+            },
+            "recovery_count": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Recovery Count",
+              "type": "integer"
+            },
+            "removed_audit_rows": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Removed Audit Rows",
+              "type": "integer"
+            },
+            "removed_trace_rows": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Removed Trace Rows",
+              "type": "integer"
+            }
+          },
+          "title": "UsageDataQualityProjection",
+          "type": "object"
         }
       },
       "additionalProperties": false,
@@ -4279,6 +4328,9 @@
         },
         "context": {
           "$ref": "#/$defs/ContextUsageProjection"
+        },
+        "data_quality": {
+          "$ref": "#/$defs/UsageDataQualityProjection"
         },
         "scope": {
           "default": "local_device",
@@ -6661,6 +6713,535 @@
         "updated_at"
       ],
       "title": "JobProjection",
+      "type": "object"
+    },
+    "KnowledgeDocumentResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "maxLength": 10485760,
+          "title": "Content",
+          "type": "string"
+        },
+        "links": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "title": "Links",
+          "type": "array"
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "size_bytes": {
+          "maximum": 10485760,
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "name",
+        "content",
+        "size_bytes",
+        "updated_at",
+        "links"
+      ],
+      "title": "KnowledgeDocumentResponse",
+      "type": "object"
+    },
+    "KnowledgeGraphResponse": {
+      "$defs": {
+        "KnowledgeGraphEdgeResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Source",
+              "type": "string"
+            },
+            "target": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Target",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "target"
+          ],
+          "title": "KnowledgeGraphEdgeResponse",
+          "type": "object"
+        },
+        "KnowledgeGraphNodeResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "path": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "label"
+          ],
+          "title": "KnowledgeGraphNodeResponse",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/KnowledgeGraphEdgeResponse"
+          },
+          "maxItems": 20000,
+          "title": "Edges",
+          "type": "array"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/KnowledgeGraphNodeResponse"
+          },
+          "maxItems": 5000,
+          "title": "Nodes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "nodes",
+        "edges"
+      ],
+      "title": "KnowledgeGraphResponse",
+      "type": "object"
+    },
+    "KnowledgeImportResponse": {
+      "$defs": {
+        "KnowledgeImportItemResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Name"
+            },
+            "original_name": {
+              "maxLength": 512,
+              "title": "Original Name",
+              "type": "string"
+            },
+            "path": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Path"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason"
+            },
+            "status": {
+              "enum": [
+                "imported",
+                "renamed",
+                "rejected"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "original_name",
+            "status"
+          ],
+          "title": "KnowledgeImportItemResponse",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "imported_count": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Imported Count",
+          "type": "integer"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/KnowledgeImportItemResponse"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Items",
+          "type": "array"
+        },
+        "rejected_count": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Rejected Count",
+          "type": "integer"
+        },
+        "total_bytes": {
+          "maximum": 209715200,
+          "minimum": 0,
+          "title": "Total Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "imported_count",
+        "rejected_count",
+        "total_bytes",
+        "items"
+      ],
+      "title": "KnowledgeImportResponse",
+      "type": "object"
+    },
+    "KnowledgeTreeResponse": {
+      "$defs": {
+        "KnowledgeNodeResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "children": {
+              "items": {
+                "$ref": "#/$defs/KnowledgeNodeResponse"
+              },
+              "maxItems": 10000,
+              "title": "Children",
+              "type": "array"
+            },
+            "kind": {
+              "enum": [
+                "category",
+                "document"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "path": {
+              "maxLength": 1024,
+              "title": "Path",
+              "type": "string"
+            },
+            "size_bytes": {
+              "maximum": 10485760,
+              "minimum": 0,
+              "title": "Size Bytes",
+              "type": "integer"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "name",
+            "kind",
+            "size_bytes",
+            "updated_at",
+            "children"
+          ],
+          "title": "KnowledgeNodeResponse",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/KnowledgeNodeResponse"
+          },
+          "maxItems": 10000,
+          "title": "Items",
+          "type": "array"
+        },
+        "query": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Query"
+        },
+        "root": {
+          "const": "knowledge",
+          "title": "Root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "items"
+      ],
+      "title": "KnowledgeTreeResponse",
+      "type": "object"
+    },
+    "MemoryContentDocumentResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "maxLength": 10485760,
+          "title": "Content",
+          "type": "string"
+        },
+        "item_id": {
+          "maxLength": 8192,
+          "minLength": 1,
+          "title": "Item Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "file",
+            "evolution"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 8192,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "factory",
+            "learned",
+            "imported"
+          ],
+          "title": "Origin",
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 8192,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "size_bytes": {
+          "maximum": 10485760,
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "source": {
+          "maxLength": 8192,
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "updated_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Updated At"
+        }
+      },
+      "required": [
+        "item_id",
+        "name",
+        "path",
+        "kind",
+        "origin",
+        "source",
+        "size_bytes",
+        "updated_at",
+        "content"
+      ],
+      "title": "MemoryContentDocumentResponse",
+      "type": "object"
+    },
+    "MemoryContentPageResponse": {
+      "$defs": {
+        "MemoryContentItemResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "item_id": {
+              "maxLength": 8192,
+              "minLength": 1,
+              "title": "Item Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "file",
+                "evolution"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 8192,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "origin": {
+              "enum": [
+                "factory",
+                "learned",
+                "imported"
+              ],
+              "title": "Origin",
+              "type": "string"
+            },
+            "path": {
+              "maxLength": 8192,
+              "minLength": 1,
+              "title": "Path",
+              "type": "string"
+            },
+            "size_bytes": {
+              "maximum": 10485760,
+              "minimum": 0,
+              "title": "Size Bytes",
+              "type": "integer"
+            },
+            "source": {
+              "maxLength": 8192,
+              "minLength": 1,
+              "title": "Source",
+              "type": "string"
+            },
+            "updated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Updated At"
+            }
+          },
+          "required": [
+            "item_id",
+            "name",
+            "path",
+            "kind",
+            "origin",
+            "source",
+            "size_bytes",
+            "updated_at"
+          ],
+          "title": "MemoryContentItemResponse",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/MemoryContentItemResponse"
+          },
+          "maxItems": 10,
+          "title": "Items",
+          "type": "array"
+        },
+        "page": {
+          "minimum": 1,
+          "title": "Page",
+          "type": "integer"
+        },
+        "page_size": {
+          "const": 10,
+          "title": "Page Size",
+          "type": "integer"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        },
+        "view": {
+          "enum": [
+            "files",
+            "evolution"
+          ],
+          "title": "View",
+          "type": "string"
+        }
+      },
+      "required": [
+        "view",
+        "page",
+        "page_size",
+        "total",
+        "items"
+      ],
+      "title": "MemoryContentPageResponse",
       "type": "object"
     },
     "MemoryMutationResponse": {
@@ -11913,6 +12494,12 @@
     "InteractionRequest": "ecorex.protocol.InteractionRequest",
     "ItemProjection": "ecorex.protocol.ItemProjection",
     "JobProjection": "ecorex.protocol.JobProjection",
+    "KnowledgeDocumentResponse": "ecorex.workspace_content.api.KnowledgeDocumentResponse",
+    "KnowledgeGraphResponse": "ecorex.workspace_content.api.KnowledgeGraphResponse",
+    "KnowledgeImportResponse": "ecorex.workspace_content.api.KnowledgeImportResponse",
+    "KnowledgeTreeResponse": "ecorex.workspace_content.api.KnowledgeTreeResponse",
+    "MemoryContentDocumentResponse": "ecorex.memory.api.MemoryContentDocumentResponse",
+    "MemoryContentPageResponse": "ecorex.memory.api.MemoryContentPageResponse",
     "MemoryMutationResponse": "ecorex.memory.api.MemoryMutationResponse",
     "MemorySnapshotResponse": "ecorex.memory.api.MemorySnapshotResponse",
     "MigrationQuarantineResponse": "ecorex.migration.api.MigrationQuarantineResponse",

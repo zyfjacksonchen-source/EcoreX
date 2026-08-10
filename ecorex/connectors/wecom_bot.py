@@ -44,6 +44,7 @@ _SEND_MESSAGE = "aibot_send_msg"
 _MAX_FRAME_BYTES = 1024 * 1024
 _MAX_TEXT_BYTES = 20_000
 _ID_RE = re.compile(r"^[^\x00-\x1f\x7f]{1,512}$")
+_ERROR_RE = re.compile(r"^wecom_bot_[a-z0-9_]{1,124}$")
 
 
 class _Socket(Protocol):
@@ -160,34 +161,75 @@ class _WeComStore:
             for row in rows
         )
 
-    def finish(self, turn_id: str, state: str) -> None:
+    def finish(
+        self, turn_id: str, state: str, error_code: str | None = None
+    ) -> None:
         if state not in {"completed", "failed", "uncertain"}:
             raise ValueError("WeCom event terminal state is invalid")
+        if (state == "completed") != (error_code is None) or (
+            error_code is not None and _ERROR_RE.fullmatch(error_code) is None
+        ):
+            raise ValueError("WeCom event terminal error is invalid")
         with closing(self._connection()) as connection, connection:
             connection.execute(
                 """
                 UPDATE wecom_bot_events
-                SET state = ?, conversation_id = '', message_id = '', text = '',
+                SET state = ?, error_code = ?, conversation_id = '', message_id = '', text = '',
                     channel_id = NULL, thread_id = NULL, turn_id = NULL,
                     client_message_id = NULL, conversation_sha256 = NULL
                 WHERE scope = ? AND turn_id = ? AND state = 'outbound'
                 """,
-                (state, self.scope, turn_id),
+                (state, error_code, self.scope, turn_id),
+            )
+
+    def terminal_error(self) -> tuple[str, bool] | None:
+        with closing(self._connection()) as connection:
+            event = connection.execute(
+                "SELECT state,error_code FROM wecom_bot_events WHERE scope = ? "
+                "AND state = 'uncertain' LIMIT 1",
+                (self.scope,),
+            ).fetchone()
+            if event is None:
+                delivery = connection.execute(
+                    "SELECT state FROM wecom_bot_deliveries WHERE scope = ? "
+                    "AND state IN ('sending','uncertain') LIMIT 1",
+                    (self.scope,),
+                ).fetchone()
+            else:
+                delivery = None
+        if event is not None:
+            uncertain = str(event[0]) == "uncertain"
+            code = str(event[1] or "")
+        elif delivery is not None:
+            uncertain = True
+            code = ""
+        else:
+            return None
+        return (
+            code if _ERROR_RE.fullmatch(code) else (
+                "wecom_bot_delivery_uncertain"
+                if uncertain
+                else "wecom_bot_delivery_rejected"
+            ),
+            uncertain,
+        )
+
+    def resolve_uncertain(self) -> None:
+        with closing(self._connection()) as connection, connection:
+            connection.execute(
+                "UPDATE wecom_bot_events SET state='failed' "
+                "WHERE scope=? AND state='uncertain'",
+                (self.scope,),
+            )
+            connection.execute(
+                "UPDATE wecom_bot_deliveries SET state='failed' "
+                "WHERE scope=? AND state IN ('sending','uncertain')",
+                (self.scope,),
             )
 
     def has_uncertain(self) -> bool:
-        with closing(self._connection()) as connection:
-            event = connection.execute(
-                "SELECT 1 FROM wecom_bot_events "
-                "WHERE scope = ? AND state = 'uncertain' LIMIT 1",
-                (self.scope,),
-            ).fetchone()
-            delivery = connection.execute(
-                "SELECT 1 FROM wecom_bot_deliveries "
-                "WHERE scope = ? AND state IN ('sending','uncertain') LIMIT 1",
-                (self.scope,),
-            ).fetchone()
-        return event is not None or delivery is not None
+        terminal = self.terminal_error()
+        return terminal is not None and terminal[1]
 
     def claim_delivery(self, key: str) -> str:
         now = int(time.time())
@@ -217,7 +259,7 @@ class _WeComStore:
         return "send"
 
     def mark_delivery(self, key: str, state: str) -> None:
-        if state not in {"sent", "uncertain"}:
+        if state not in {"sent", "failed", "uncertain"}:
             raise ValueError("WeCom delivery state is invalid")
         with closing(self._connection()) as connection, connection:
             connection.execute(
@@ -240,6 +282,7 @@ class _WeComStore:
                 raise RuntimeError("WeCom state path is invalid")
             connection = sqlite3.connect(self.path, timeout=5)
             connection.execute("PRAGMA busy_timeout = 5000")
+            connection.execute("PRAGMA secure_delete = ON")
             if not self._initialized:
                 connection.executescript(
                     """
@@ -257,19 +300,50 @@ class _WeComStore:
                         turn_id TEXT,
                         client_message_id TEXT,
                         conversation_sha256 TEXT,
+                        error_code TEXT,
                         PRIMARY KEY(scope, event_key)
                     );
                     CREATE TABLE IF NOT EXISTS wecom_bot_deliveries(
                         scope TEXT NOT NULL,
                         delivery_key TEXT NOT NULL,
                         state TEXT NOT NULL CHECK(
-                            state IN ('sending','sent','uncertain')
+                            state IN ('sending','sent','failed','uncertain')
                         ),
                         updated_at INTEGER NOT NULL,
                         PRIMARY KEY(scope, delivery_key)
                     );
                     """
                 )
+                columns = {
+                    str(row[1])
+                    for row in connection.execute("PRAGMA table_info(wecom_bot_events)")
+                }
+                if "error_code" not in columns:
+                    connection.execute(
+                        "ALTER TABLE wecom_bot_events ADD COLUMN error_code TEXT"
+                    )
+                delivery_sql = str(
+                    connection.execute(
+                        "SELECT sql FROM sqlite_master WHERE type='table' "
+                        "AND name='wecom_bot_deliveries'"
+                    ).fetchone()[0]
+                )
+                if "'failed'" not in delivery_sql:
+                    connection.executescript(
+                        """
+                        ALTER TABLE wecom_bot_deliveries RENAME TO wecom_bot_deliveries_v1;
+                        CREATE TABLE wecom_bot_deliveries(
+                            scope TEXT NOT NULL, delivery_key TEXT NOT NULL,
+                            state TEXT NOT NULL CHECK(
+                                state IN ('sending','sent','failed','uncertain')
+                            ), updated_at INTEGER NOT NULL,
+                            PRIMARY KEY(scope, delivery_key)
+                        );
+                        INSERT INTO wecom_bot_deliveries
+                        SELECT * FROM wecom_bot_deliveries_v1;
+                        DROP TABLE wecom_bot_deliveries_v1;
+                        """
+                    )
                 connection.commit()
                 os.chmod(self.path, 0o600)
                 self._initialized = True
@@ -346,20 +420,21 @@ class WeComBotLongConnectionAdapter:
                 if self._thread is not None and self._thread.is_alive():
                     return ConnectorHealthResult(self._health, self._last_error)
             socket = self._open_authenticated_socket(credentials)
+            store = self._required_store()
+            store.has_uncertain()
+            terminal = store.terminal_error()
             with self._lock:
                 self._socket = socket
                 self._credentials = credentials
                 self._stop_event = threading.Event()
                 self._health = (
-                    ConnectorHealth.DEGRADED
-                    if self._store.has_uncertain()
-                    else ConnectorHealth.CONNECTED
+                    ConnectorHealth.CONNECTED
+                    if terminal is None
+                    else ConnectorHealth.DEGRADED
+                    if terminal[1]
+                    else ConnectorHealth.ERROR
                 )
-                self._last_error = (
-                    "wecom_bot_delivery_uncertain"
-                    if self._health is ConnectorHealth.DEGRADED
-                    else None
-                )
+                self._last_error = terminal[0] if terminal else None
                 self._thread = threading.Thread(
                     target=self._run,
                     args=(socket, credentials),
@@ -385,6 +460,9 @@ class WeComBotLongConnectionAdapter:
                 self._health if self._last_error else ConnectorHealth.DISABLED,
                 self._last_error,
             )
+
+    def resolve_uncertain(self) -> None:
+        self._required_store().resolve_uncertain()
 
     def stop(self, timeout_seconds: float) -> bool:
         with self._lock:
@@ -425,6 +503,8 @@ class WeComBotLongConnectionAdapter:
             state = store.claim_delivery(key)
             if state == "sent":
                 continue
+            if state == "failed":
+                raise _WeComFailure("wecom_bot_delivery_rejected", permanent=True)
             if state == "uncertain":
                 raise _WeComFailure(
                     "wecom_bot_delivery_uncertain", uncertain=True
@@ -453,6 +533,8 @@ class WeComBotLongConnectionAdapter:
             except _WeComFailure as error:
                 if error.uncertain:
                     store.mark_delivery(key, "uncertain")
+                elif error.permanent:
+                    store.mark_delivery(key, "failed")
                 else:
                     store.release_delivery(key)
                 raise
@@ -675,16 +757,24 @@ class WeComBotLongConnectionAdapter:
                     conversation_id=conversation_id,
                     transport=self,
                 )
-            except ChannelTurnTerminalFailure:
-                store.finish(receipt.turn_id, "failed")
+            except ChannelTurnTerminalFailure as error:
+                store.finish(
+                    receipt.turn_id,
+                    "failed",
+                    error.code.replace("channel_", "wecom_bot_", 1),
+                )
                 continue
             except _WeComFailure as error:
                 if error.uncertain:
-                    store.finish(receipt.turn_id, "uncertain")
+                    store.finish(receipt.turn_id, "uncertain", error.code)
                     self._set_health(
                         ConnectorHealth.DEGRADED,
                         "wecom_bot_delivery_uncertain",
                     )
+                    continue
+                if error.permanent:
+                    store.finish(receipt.turn_id, "failed", error.code)
+                    self._set_health(ConnectorHealth.ERROR, error.code)
                     continue
                 raise
             if delivered:
@@ -702,12 +792,15 @@ class WeComBotLongConnectionAdapter:
 
     def _set_ready_health(self) -> None:
         store = self._store
-        if store is not None and store.has_uncertain():
-            self._set_health(
-                ConnectorHealth.DEGRADED, "wecom_bot_delivery_uncertain"
-            )
-        else:
+        terminal = store.terminal_error() if store is not None else None
+        if terminal is None:
             self._set_health(ConnectorHealth.CONNECTED, None)
+            return
+        error, uncertain = terminal
+        self._set_health(
+            ConnectorHealth.DEGRADED if uncertain else ConnectorHealth.ERROR,
+            error,
+        )
 
     def _set_health(self, health: ConnectorHealth, error: str | None) -> None:
         with self._lock:

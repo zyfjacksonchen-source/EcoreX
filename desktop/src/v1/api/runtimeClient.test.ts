@@ -240,6 +240,13 @@ const conversationUsage: ConversationUsageProjection = {
       { date: "2026-07-13", completed: 1, partial: 1, terminal: 2 },
     ],
   },
+  data_quality: {
+    audit_continuity: "complete",
+    recovery_count: 0,
+    removed_audit_rows: 0,
+    removed_trace_rows: 0,
+    last_recovery_at: null,
+  },
   calculated_at: "2026-07-13T01:00:01Z",
 };
 
@@ -2693,6 +2700,119 @@ test("memory transport preserves the authoritative reset identity and derived co
       confirmed: true,
       client_request_id: "reset-memory-stable",
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("knowledge and memory-content transports preserve the real Product contracts", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Request[] = [];
+  const updatedAt = bootstrap.server_time;
+  const node = {
+    path: "项目/方案.md",
+    name: "方案.md",
+    kind: "document" as const,
+    size_bytes: 8,
+    updated_at: updatedAt,
+    children: [],
+  };
+  const document = {
+    path: node.path,
+    name: node.name,
+    content: "# 方案",
+    size_bytes: node.size_bytes,
+    updated_at: updatedAt,
+    links: [],
+  };
+  const memoryItem = {
+    item_id: "record_1",
+    name: "偏好.md",
+    path: "memory/偏好.md",
+    kind: "evolution" as const,
+    origin: "learned" as const,
+    source: "conversation",
+    size_bytes: 12,
+    updated_at: updatedAt,
+  };
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/knowledge/tree")) {
+      return Response.json({ root: "knowledge", query: null, items: [node] });
+    }
+    if (url.pathname.endsWith("/knowledge/document")) return Response.json(document);
+    if (url.pathname.endsWith("/knowledge/graph")) {
+      return Response.json({ nodes: [{ path: node.path, label: "方案" }], edges: [] });
+    }
+    if (url.pathname.endsWith("/knowledge/categories")) {
+      return Response.json({ ...node, path: "项目", name: "项目", kind: "category" });
+    }
+    if (url.pathname.endsWith("/knowledge/documents")) return Response.json(document);
+    if (url.pathname.endsWith("/knowledge/imports")) {
+      return Response.json({
+        imported_count: 1,
+        rejected_count: 0,
+        total_bytes: 8,
+        items: [{ original_name: "方案.md", name: "方案.md", path: "项目/方案.md", status: "imported", reason: null }],
+      });
+    }
+    if (url.pathname.endsWith("/memory/files")) {
+      return Response.json({ view: "evolution", page: 1, page_size: 10, total: 1, items: [memoryItem] });
+    }
+    return Response.json({ ...memoryItem, content: "偏好：专业严谨" });
+  };
+  try {
+    const client = new RuntimeClient({
+      apiBase: "http://127.0.0.1:8765/api/v1",
+      bearerToken: "b".repeat(43),
+      csrfToken: "csrf-workspace-content",
+    });
+    assert.equal((await client.knowledgeTree()).items[0]?.path, node.path);
+    assert.equal((await client.knowledgeDocument(node.path)).content, "# 方案");
+    assert.equal((await client.knowledgeGraph()).nodes[0]?.path, node.path);
+    assert.equal((await client.createKnowledgeCategory("项目", "knowledge-category-0001")).kind, "category");
+    assert.equal((await client.createKnowledgeDocument(node.path, "# 方案", "knowledge-document-0001")).path, node.path);
+    assert.equal(
+      (await client.importKnowledgeDocuments([new File(["# 方案"], "方案.md", { type: "text/markdown" })], "项目", "knowledge-import-0001")).imported_count,
+      1,
+    );
+    assert.equal((await client.memoryContent("evolution", 1)).items[0]?.item_id, "record_1");
+    assert.equal((await client.memoryContentDocument("evolution", "record_1")).content, "偏好：专业严谨");
+    for (const request of requests.filter((item) => item.method === "POST")) {
+      assert.equal(request.headers.get("x-ecorex-csrf"), "csrf-workspace-content");
+    }
+    assert.equal(requests[5]?.headers.get("content-type")?.startsWith("multipart/form-data; boundary="), true);
+    const upload = await requests[5]?.clone().formData();
+    assert.equal(upload?.get("category_path"), "项目");
+    assert.equal(upload?.get("client_request_id"), "knowledge-import-0001");
+    assert.equal((upload?.get("files") as File).name, "方案.md");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("knowledge and memory-content transports reject undeclared fields", async () => {
+  const originalFetch = globalThis.fetch;
+  const payloads = [
+    { root: "knowledge", query: null, items: [], absolute_path: "/secret" },
+    { view: "files", page: 1, page_size: 10, total: 1, items: [{
+      item_id: "one",
+      name: "one.md",
+      path: "memory/one.md",
+      kind: "evolution",
+      origin: "learned",
+      source: "test",
+      size_bytes: 1,
+      updated_at: bootstrap.server_time,
+    }] },
+  ];
+  globalThis.fetch = async () => Response.json(payloads.shift());
+  try {
+    const client = new RuntimeClient({ bearerToken: "b".repeat(43) });
+    await assert.rejects(client.knowledgeTree(), RuntimeContractError);
+    await assert.rejects(client.memoryContent("files"), RuntimeContractError);
   } finally {
     globalThis.fetch = originalFetch;
   }

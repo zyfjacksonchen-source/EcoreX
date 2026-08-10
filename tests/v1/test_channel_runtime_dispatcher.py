@@ -210,8 +210,11 @@ def test_channel_dispatcher_never_sends_old_text_for_unsuccessful_turns(
 
 
 class _TerminalDispatcher:
+    def __init__(self, status: TurnStatus = TurnStatus.FAILED) -> None:
+        self.status = status
+
     def deliver(self, *_args, **_kwargs) -> bool:
-        raise ChannelTurnTerminalFailure(TurnStatus.FAILED)
+        raise ChannelTurnTerminalFailure(self.status)
 
 
 @pytest.mark.parametrize(
@@ -287,7 +290,13 @@ def test_channel_adapters_terminalize_failed_turns_without_raw_replay(
         adapter._drain_pending()
         assert store.pending() == ()
         with sqlite3.connect(database_path) as connection:
-            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+            assert connection.execute(
+                f"SELECT state, error_code, conversation_id FROM {table}"
+            ).fetchone() == (
+                "failed",
+                f"{channel_id if channel_id != 'feishu' else 'feishu_bot'}_turn_failed",
+                "",
+            )
         return
 
     if channel_id == "slack":

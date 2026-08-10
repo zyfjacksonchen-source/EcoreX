@@ -24,6 +24,8 @@ from typing import Any
 
 import httpx
 
+from ecorex.json_boundary import JSONComplexityError, validate_json_complexity
+
 from .cas import ImageContentAddressedStore, validate_image_payload
 from .managed_provider import (
     ManagedImageProviderConfigurationError,
@@ -352,9 +354,10 @@ class OpenAICompatibleImageProvider:
         inputs = set(request.input_sha256)
         try:
             structured = json.loads(request.instruction)
+            validate_json_complexity(structured)
         except json.JSONDecodeError:
             structured = None
-        except RecursionError:
+        except (JSONComplexityError, RecursionError):
             raise ProviderRejected("image retouch instruction is invalid") from None
         if not isinstance(structured, Mapping):
             return request.instruction, request.input_sha256, None
@@ -851,6 +854,7 @@ class OpenAICompatibleImageProvider:
 
         try:
             value = json.loads(payload.decode("utf-8"), object_pairs_hook=unique)
+            validate_json_complexity(value)
         except (UnicodeDecodeError, ValueError, RecursionError):
             raise ProviderRejected("image provider response is invalid") from None
         if not isinstance(value, dict):
@@ -863,7 +867,13 @@ class OpenAICompatibleImageProvider:
             return False
         try:
             value = json.loads(payload.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+            validate_json_complexity(value)
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            JSONComplexityError,
+            RecursionError,
+        ):
             return False
         error = value.get("error") if isinstance(value, Mapping) else None
         if not isinstance(error, Mapping):

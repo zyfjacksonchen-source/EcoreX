@@ -5,10 +5,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .errors import MemoryConflict, MemoryResetNotFound, MemoryUndoExpired
+from .errors import (
+    MemoryConflict,
+    MemoryContentNotFound,
+    MemoryContentUnavailable,
+    MemoryResetNotFound,
+    MemoryUndoExpired,
+)
 from .service import MemoryService
 
 
@@ -80,12 +86,75 @@ class MemoryMutationResponse(_StrictResponseModel):
         return self
 
 
+class MemoryContentItemResponse(_StrictResponseModel):
+    item_id: str = Field(min_length=1, max_length=8192)
+    name: str = Field(min_length=1, max_length=8192)
+    path: str = Field(min_length=1, max_length=8192)
+    kind: Literal["file", "evolution"]
+    origin: Literal["factory", "learned", "imported"]
+    source: str = Field(min_length=1, max_length=8192)
+    size_bytes: int = Field(ge=0, le=10 * 1024 * 1024)
+    updated_at: datetime | None = Field(strict=False)
+
+
+class MemoryContentPageResponse(_StrictResponseModel):
+    view: Literal["files", "evolution"]
+    page: int = Field(ge=1)
+    page_size: Literal[10]
+    total: int = Field(ge=0)
+    items: list[MemoryContentItemResponse] = Field(max_length=10)
+
+
+class MemoryContentDocumentResponse(MemoryContentItemResponse):
+    content: str = Field(max_length=10 * 1024 * 1024)
+
+
 def create_memory_router(service: MemoryService) -> APIRouter:
     router = APIRouter(prefix="/api/v1/memory", tags=["memory"])
 
     @router.get("", response_model=MemorySnapshotResponse)
     def snapshot() -> MemorySnapshotResponse:
         return MemorySnapshotResponse.model_validate(service.snapshot().to_dict())
+
+    @router.get("/files", response_model=MemoryContentPageResponse)
+    def content_files(
+        view: Literal["files", "evolution"] = "files",
+        page: int = Query(default=1, ge=1, le=1_000_000),
+    ) -> MemoryContentPageResponse:
+        try:
+            return MemoryContentPageResponse.model_validate(
+                service.content_page(view=view, page=page).to_dict()
+            )
+        except ValueError:
+            raise HTTPException(
+                422,
+                detail={"code": "memory_page_invalid", "message": "记忆分页参数无效。"},
+            ) from None
+
+    @router.get("/file", response_model=MemoryContentDocumentResponse)
+    def content_file(
+        item_id: str,
+        view: Literal["files", "evolution"] = "files",
+    ) -> MemoryContentDocumentResponse:
+        try:
+            return MemoryContentDocumentResponse.model_validate(
+                service.content_document(view=view, item_id=item_id).to_dict()
+            )
+        except MemoryContentNotFound as error:
+            raise HTTPException(
+                404,
+                detail={"code": error.code, "message": "没有找到这项记忆内容。"},
+            ) from None
+        except MemoryContentUnavailable as error:
+            raise HTTPException(
+                409,
+                detail={"code": error.code, "message": "这项记忆内容暂时不可读取。"},
+            ) from None
+        except ValueError:
+            raise HTTPException(
+                422,
+                detail={"code": "memory_content_invalid", "message": "记忆内容参数无效。"},
+            ) from None
 
     @router.post("/reset", response_model=MemoryMutationResponse)
     def reset(request: MemoryResetRequest) -> MemoryMutationResponse:
@@ -159,6 +228,8 @@ def create_memory_router(service: MemoryService) -> APIRouter:
 
 
 __all__ = [
+    "MemoryContentDocumentResponse",
+    "MemoryContentPageResponse",
     "MemoryMutationResponse",
     "MemoryResetProjectionResponse",
     "MemorySnapshotResponse",

@@ -111,7 +111,7 @@ export function HomeDashboard({
         <div className="ex-home-metrics">
           <article><small>完成任务数</small><strong>{completed}</strong><span>{partial ? `另有 ${partial} 项部分完成` : "今日完成"}</span></article>
           <article><small>等待任务</small><strong>{waiting}</strong><span>{waiting ? "等待小芯处理" : "当前无等待"}</span></article>
-          <article><small>Token 消耗量</small><strong>{(usage?.today.total_tokens ?? 0).toLocaleString("zh-CN")}</strong><span>{usage?.complete_across_devices ? "账号统一可核对用量" : "本机可核对用量"}</span></article>
+          <article><small>Token 消耗量</small><strong>{(usage?.today.total_tokens ?? 0).toLocaleString("zh-CN")}</strong><span>{usage?.data_quality.audit_continuity !== "complete" ? "审计连续性待核对" : usage?.complete_across_devices ? "账号统一可核对用量" : "本机可核对用量"}</span></article>
           <article><small>任务成功率</small><strong>{taskActivity.successRate}</strong><span>{terminal ? "按已结束任务计算" : "暂无已结束任务"}</span></article>
         </div>
         <div className="ex-home-report">

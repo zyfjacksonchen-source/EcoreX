@@ -1,6 +1,6 @@
 ---
 name: office-presentations
-description: Create, edit, summarize, and verify PowerPoint/PPTX presentation decks. Use for .ppt, .pptx, slide outlines, speaker decks, visual story flow, and Google Slides-targeted local deck workflows.
+description: Create simple PPTX decks and inspect visible text and slide counts from existing e-Mate PPTX artifacts. Use for a new title-and-bullets deck or read-only review and summarization of a current same-thread presentation Artifact.
 mentionable: true
 mention-category: document
 user-invocable: true
@@ -8,58 +8,32 @@ compatibility-id: office-presentations
 adopts-official-skill: Presentations
 ecorex-native-facade: true
 quality-gates:
-  - story-flow
-  - artifact-tool-authoring
-  - layout-bounds
-  - font-size-check
-  - chart-integrity
-  - render-preview
-  - overlap-check
-  - visual-inspection
+  - structural-open
+  - artifact-integrity
 metadata: {"default_enabled":true,"requires":{"modules":["pptx"]}}
 ---
 
 # Office Presentations
 
-This is the e-Mate-native compatibility facade for the official Codex
-`Presentations` workflow. Keep the public e-Mate skill ID
-`office-presentations` stable, but use the official `Presentations` skill as
-the authoritative workflow when it is available in `<available_skills>`.
+The packaged e-Mate native facade supports two operations in the first release:
 
-If both skills are visible, read this skill first for e-Mate compatibility
-rules, then read `Presentations` for implementation details, asset-tool usage,
-layout library guidance, and QA commands. If the official skill is not visible,
-follow the equivalent contract below and use the safest available local tools.
+- `create`: create a simple PPTX from bounded slide titles and bullets.
+- `inspect`: extract bounded visible shape text and the slide count from an existing e-Mate PPTX Artifact so the model can review or summarize it.
 
-Use this skill when the user asks e-Mate to work with presentation decks: create slides, edit a `.ppt`/`.pptx`, summarize a deck, convert notes into slides, polish layout, or prepare a local PowerPoint deliverable.
+## Native calls
 
-## Default Workflow
+Create with:
 
-1. Identify the deck job: read/summarize, edit existing deck, create from outline, convert a document/table into slides, or prepare a polished deliverable.
-2. Establish the story flow before authoring slides. Each slide should have one clear purpose and the deck must have a coherent slide-to-slide narrative.
-3. For existing decks, preserve the template, brand, typography, footers, page markers, and layout conventions unless the user asks to restyle.
-4. For new decks, use the official `Presentations` composition route when available: `@oai/artifact-tool` JavaScript ES modules, Codex Grid layouts when there is no stronger template, and project-safe scratch/output paths.
-5. Keep slide text concise. Shorten content before shrinking fonts. Do not allow intended one-line titles or banners to wrap.
-6. Use real visual assets when visuals are needed. Do not fake final slide visuals with decorative placeholders or Python-drawn images.
-7. Verify the deck visually before delivery: render previews/contact sheets, inspect for overlap/clipping/wrapping/chart issues, and iterate until clean.
+`{"operation":"create","file_name":"deck.pptx","title":"...","slides":[{"title":"...","bullets":["..."]}]}`
 
-## Quality Contract
+Inspect with the exact current Artifact identities:
 
-- No unintended overlap, clipped text, broken charts, or empty placeholder slides.
-- Slide titles should be readable and should not wrap unexpectedly.
-- When no template controls typography, use at least 50pt deck title, 35pt slide titles, 24pt subheads/callouts, and 16pt body text.
-- Run the e-Mate presentation QA evidence builder after authoring or editing. Treat `story-flow`, `layout-bounds`, `font-size-check`, `chart-integrity`, `render-preview`, `overlap-check`, and `visual-inspection` failures as blockers.
-- Treat programmatic overlap warnings as blockers until visually inspected and resolved.
-- Use real images or chart outputs when visuals are needed; do not rely on decorative placeholders.
-- For data-heavy decks, keep source tables or notes available in the workspace.
-- For Google Slides-targeted output, create and verify a local `.pptx` first, then import through the appropriate cloud-document route when available.
-- Final response should link to the final `.pptx` deliverable, not scratch files, unless requested.
+`{"operation":"inspect","artifact_id":"art_...","revision_id":"rev_..."}`
 
-## e-Mate Adaptation
+Inspection accepts only a ready PPTX Artifact owned by the current account and created in the current thread. It reads immutable Artifact bytes, never caller-provided filesystem paths. Extracted text is not proof of layout, overlap, clipping, charts, images, or speaker-note fidelity.
 
-- This is a user-invocable office skill and should appear under the document category in `@skill`.
-- For a new PPTX, call `skill_run` with this exact discovery ID and parameters shaped as `{"operation":"create","file_name":"deck.pptx","title":"...","slides":[{"title":"...","bullets":["..."]}]}`. The Runtime-owned Office Pack creates and structurally validates the file, then publishes the resulting Artifact; do not fall back to `pip` or an untracked shell output.
-- Preserve compatibility with existing prompts, shortcuts, and automations that mention `office-presentations`.
-- Prefer official Codex workspace dependencies for authoring and render/QA when the host exposes them; do not silently use unrelated global packages for final deck creation.
-- The `office-pdf` capability pack remains a fallback for legacy parsing/preview, but high-quality new deck creation should follow the official `Presentations` artifact-tool workflow.
-- If required authoring or rendering dependencies are unavailable, report the missing verification layer clearly instead of implying the deck passed visual QA.
+## First-release boundary
+
+The native facade does not edit or restyle an existing deck, preserve its template, generate charts or visual assets, import Google Slides, render slides, detect overlap, or perform visual QA. Do not claim those actions succeeded. When one is requested, state that the packaged native operation is unavailable instead of presenting a newly created deck as an edit of the original.
+
+Created files receive structural-open validation only. Report that visual layout was not verified.

@@ -37,6 +37,7 @@ from .models import ConnectorHealth, ConnectorHealthResult
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_.-]{24,256}$")
 _SNOWFLAKE_RE = re.compile(r"^[0-9]{1,20}$")
 _SESSION_RE = re.compile(r"^[A-Za-z0-9._:-]{1,256}$")
+_ERROR_RE = re.compile(r"^discord_[a-z0-9_]{1,124}$")
 _MAX_RESPONSE_BYTES = 1024 * 1024
 _MAX_DISCORD_TEXT = 2_000
 _MAX_INBOUND_TEXT = 1_000_000
@@ -199,29 +200,70 @@ class _DiscordStore:
             for row in rows
         )
 
-    def finish(self, turn_id: str, state: str) -> None:
+    def finish(
+        self, turn_id: str, state: str, error_code: str | None = None
+    ) -> None:
         if state not in {"completed", "failed", "uncertain"}:
             raise ValueError("Discord event terminal state is invalid")
+        if (state == "completed") != (error_code is None) or (
+            error_code is not None and _ERROR_RE.fullmatch(error_code) is None
+        ):
+            raise ValueError("Discord event terminal error is invalid")
         with closing(self._connection()) as connection, connection:
             connection.execute(
                 """
                 UPDATE discord_events
-                SET state = ?, conversation_id = '', message_id = '', text = '',
+                SET state = ?, error_code = ?, conversation_id = '', message_id = '', text = '',
                     channel_id = NULL, thread_id = NULL, turn_id = NULL,
                     client_message_id = NULL, conversation_sha256 = NULL
                 WHERE scope = ? AND turn_id = ? AND state = 'outbound'
                 """,
-                (state, self.scope, turn_id),
+                (state, error_code, self.scope, turn_id),
+            )
+
+    def terminal_error(self) -> tuple[str, bool] | None:
+        with closing(self._connection()) as connection:
+            row = connection.execute(
+                "SELECT state,error_code FROM discord_events WHERE scope = ? "
+                "AND state = 'uncertain' LIMIT 1",
+                (self.scope,),
+            ).fetchone()
+            delivery = connection.execute(
+                "SELECT state FROM discord_deliveries WHERE scope=? "
+                "AND state IN ('sending','uncertain') LIMIT 1",
+                (self.scope,),
+            ).fetchone()
+        if row is None:
+            return (
+                ("discord_delivery_uncertain", True)
+                if delivery is not None
+                else None
+            )
+        uncertain = str(row[0]) == "uncertain"
+        code = str(row[1] or "")
+        return (
+            code if _ERROR_RE.fullmatch(code) else (
+                "discord_delivery_uncertain" if uncertain else "discord_delivery_rejected"
+            ),
+            uncertain,
+        )
+
+    def resolve_uncertain(self) -> None:
+        with closing(self._connection()) as connection, connection:
+            connection.execute(
+                "UPDATE discord_events SET state='failed' "
+                "WHERE scope=? AND state='uncertain'",
+                (self.scope,),
+            )
+            connection.execute(
+                "UPDATE discord_deliveries SET state='failed' "
+                "WHERE scope=? AND state IN ('sending','uncertain')",
+                (self.scope,),
             )
 
     def has_uncertain(self) -> bool:
-        with closing(self._connection()) as connection:
-            row = connection.execute(
-                "SELECT 1 FROM discord_events "
-                "WHERE scope = ? AND state = 'uncertain' LIMIT 1",
-                (self.scope,),
-            ).fetchone()
-        return row is not None
+        terminal = self.terminal_error()
+        return terminal is not None and terminal[1]
 
     def claim_delivery(self, key: str) -> str:
         now = int(time.time())
@@ -250,7 +292,7 @@ class _DiscordStore:
         return "send"
 
     def mark_delivery(self, key: str, state: str) -> None:
-        if state not in {"sent", "uncertain"}:
+        if state not in {"sent", "failed", "uncertain"}:
             raise ValueError("Discord delivery state is invalid")
         with closing(self._connection()) as connection, connection:
             connection.execute(
@@ -314,6 +356,7 @@ class _DiscordStore:
                 raise RuntimeError("Discord state path is invalid")
             connection = sqlite3.connect(self.path, timeout=5)
             connection.execute("PRAGMA busy_timeout = 5000")
+            connection.execute("PRAGMA secure_delete = ON")
             if not self._initialized:
                 connection.executescript(
                     """
@@ -331,12 +374,13 @@ class _DiscordStore:
                         turn_id TEXT,
                         client_message_id TEXT,
                         conversation_sha256 TEXT,
+                        error_code TEXT,
                         PRIMARY KEY(scope, event_key)
                     );
                     CREATE TABLE IF NOT EXISTS discord_deliveries(
                         scope TEXT NOT NULL,
                         delivery_key TEXT NOT NULL,
-                        state TEXT NOT NULL CHECK(state IN ('sending','sent','uncertain')),
+                        state TEXT NOT NULL CHECK(state IN ('sending','sent','failed','uncertain')),
                         updated_at INTEGER NOT NULL,
                         PRIMARY KEY(scope, delivery_key)
                     );
@@ -348,6 +392,36 @@ class _DiscordStore:
                     );
                     """
                 )
+                columns = {
+                    str(row[1])
+                    for row in connection.execute("PRAGMA table_info(discord_events)")
+                }
+                if "error_code" not in columns:
+                    connection.execute(
+                        "ALTER TABLE discord_events ADD COLUMN error_code TEXT"
+                    )
+                delivery_sql = str(
+                    connection.execute(
+                        "SELECT sql FROM sqlite_master WHERE type='table' "
+                        "AND name='discord_deliveries'"
+                    ).fetchone()[0]
+                )
+                if "'failed'" not in delivery_sql:
+                    connection.executescript(
+                        """
+                        ALTER TABLE discord_deliveries RENAME TO discord_deliveries_v1;
+                        CREATE TABLE discord_deliveries(
+                            scope TEXT NOT NULL, delivery_key TEXT NOT NULL,
+                            state TEXT NOT NULL CHECK(
+                                state IN ('sending','sent','failed','uncertain')
+                            ), updated_at INTEGER NOT NULL,
+                            PRIMARY KEY(scope, delivery_key)
+                        );
+                        INSERT INTO discord_deliveries
+                        SELECT * FROM discord_deliveries_v1;
+                        DROP TABLE discord_deliveries_v1;
+                        """
+                    )
                 connection.commit()
                 os.chmod(self.path, 0o600)
                 self._initialized = True
@@ -438,6 +512,9 @@ class DiscordGatewayAdapter:
                     token,
                     session,
                 )
+                store = self._required_store()
+                store.has_uncertain()
+                terminal = store.terminal_error()
                 with self._lock:
                     self._client = client
                     self._socket = socket
@@ -447,15 +524,13 @@ class DiscordGatewayAdapter:
                     self._session = session
                     self._stop_event = threading.Event()
                     self._health = (
-                        ConnectorHealth.DEGRADED
-                        if self._required_store().has_uncertain()
-                        else ConnectorHealth.CONNECTED
+                        ConnectorHealth.CONNECTED
+                        if terminal is None
+                        else ConnectorHealth.DEGRADED
+                        if terminal[1]
+                        else ConnectorHealth.ERROR
                     )
-                    self._last_error = (
-                        "discord_delivery_uncertain"
-                        if self._health is ConnectorHealth.DEGRADED
-                        else None
-                    )
+                    self._last_error = terminal[0] if terminal else None
                     self._thread = threading.Thread(
                         target=self._run,
                         args=(
@@ -490,6 +565,9 @@ class DiscordGatewayAdapter:
                 self._health if self._last_error else ConnectorHealth.DISABLED,
                 self._last_error,
             )
+
+    def resolve_uncertain(self) -> None:
+        self._required_store().resolve_uncertain()
 
     def stop(self, timeout_seconds: float) -> bool:
         with self._lock:
@@ -540,6 +618,8 @@ class DiscordGatewayAdapter:
             state = store.claim_delivery(key)
             if state == "sent":
                 continue
+            if state == "failed":
+                raise _DiscordFailure("discord_delivery_rejected", permanent=True)
             if state == "uncertain":
                 raise _DiscordFailure("discord_delivery_uncertain", uncertain=True)
             nonce = hashlib.sha256(key.encode()).hexdigest()[:25]
@@ -567,6 +647,8 @@ class DiscordGatewayAdapter:
             except _DiscordFailure as error:
                 if error.uncertain:
                     store.mark_delivery(key, "uncertain")
+                elif error.permanent:
+                    store.mark_delivery(key, "failed")
                 else:
                     store.release_delivery(key)
                 raise
@@ -821,15 +903,23 @@ class DiscordGatewayAdapter:
                     conversation_id=conversation_id,
                     transport=self,
                 )
-            except ChannelTurnTerminalFailure:
-                store.finish(receipt.turn_id, "failed")
+            except ChannelTurnTerminalFailure as error:
+                store.finish(
+                    receipt.turn_id,
+                    "failed",
+                    error.code.replace("channel_", "discord_", 1),
+                )
                 continue
             except _DiscordFailure as error:
                 if error.uncertain:
-                    store.finish(receipt.turn_id, "uncertain")
+                    store.finish(receipt.turn_id, "uncertain", error.code)
                     self._set_health(
                         ConnectorHealth.DEGRADED, "discord_delivery_uncertain"
                     )
+                    continue
+                if error.permanent:
+                    store.finish(receipt.turn_id, "failed", error.code)
+                    self._set_health(ConnectorHealth.ERROR, error.code)
                     continue
                 raise
             if delivered:
@@ -1060,12 +1150,15 @@ class DiscordGatewayAdapter:
             return self._session
 
     def _set_ready_health(self) -> None:
-        if self._required_store().has_uncertain():
-            self._set_health(
-                ConnectorHealth.DEGRADED, "discord_delivery_uncertain"
-            )
-        else:
+        terminal = self._required_store().terminal_error()
+        if terminal is None:
             self._set_health(ConnectorHealth.CONNECTED, None)
+            return
+        error, uncertain = terminal
+        self._set_health(
+            ConnectorHealth.DEGRADED if uncertain else ConnectorHealth.ERROR,
+            error,
+        )
 
     def _set_health(self, health: ConnectorHealth, error: str | None) -> None:
         with self._lock:

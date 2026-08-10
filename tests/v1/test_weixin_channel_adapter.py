@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from datetime import UTC, datetime, timedelta
 import stat
@@ -332,6 +333,11 @@ class _ReplacingDeviceAdapter:
         self.token = "old-token"
         self.running_token: str | None = None
         self.stop_succeeds = True
+        self.fail_start_token: str | None = None
+        self.fail_consume = False
+        self.crash_start_token: str | None = None
+        self.fail_commit_token: str | None = None
+        self.staged_token: str | None = None
         self.calls: list[str] = []
 
     def begin_authorization(self) -> ChannelDeviceAuthorization:
@@ -347,12 +353,50 @@ class _ReplacingDeviceAdapter:
         return self._result("pending")
 
     def consume_authorization(self, _flow_id: str) -> None:
+        self.calls.append("consume")
+        if self.fail_consume:
+            raise RuntimeError("consume failed")
         return None
 
     def start(self, config: Mapping[str, Any]):
-        self.calls.append(f"start:{config['weixin_token']}")
-        self.running_token = str(config["weixin_token"])
+        token = str(config["weixin_token"])
+        self.calls.append(f"start:{token}")
+        if token == self.crash_start_token:
+            raise KeyboardInterrupt
+        if token == self.fail_start_token:
+            return ConnectorHealthResult(
+                ConnectorHealth.ERROR, "weixin_start_rejected"
+            )
+        self.running_token = token
         return ConnectorHealthResult(ConnectorHealth.CONNECTED)
+
+    def prepare_replace(self, config: Mapping[str, Any]):
+        token = str(config["weixin_token"])
+        self.calls.append(f"prepare:{token}")
+        if token == self.crash_start_token:
+            raise KeyboardInterrupt
+        if token == self.fail_start_token:
+            return ConnectorHealthResult(
+                ConnectorHealth.ERROR, "weixin_start_rejected"
+            )
+        self.staged_token = token
+        return ConnectorHealthResult(ConnectorHealth.CONNECTED)
+
+    def commit_replace(self, _timeout: float):
+        token = self.staged_token
+        assert token is not None
+        if token == self.fail_commit_token:
+            return ConnectorHealthResult(
+                ConnectorHealth.ERROR, "weixin_commit_rejected"
+            )
+        self.calls.append(f"switch:{self.running_token}->{token}")
+        self.running_token = token
+        self.staged_token = None
+        return ConnectorHealthResult(ConnectorHealth.CONNECTED)
+
+    def abort_replace(self) -> None:
+        self.calls.append("abort")
+        self.staged_token = None
 
     def test(self, _config):
         raise AssertionError
@@ -383,7 +427,7 @@ class _ReplacingDeviceAdapter:
         )
 
 
-def test_weixin_reauthorization_stops_old_client_before_vault_replacement() -> None:
+def test_weixin_reauthorization_commits_credentials_before_session_switch() -> None:
     adapter = _ReplacingDeviceAdapter()
     service = ChannelSelfService(
         owner=ChannelCredentialOwner("account-a", "organization-a"),
@@ -396,11 +440,205 @@ def test_weixin_reauthorization_stops_old_client_before_vault_replacement() -> N
 
     adapter.token = "new-token"
     service.poll_authorization("weixin", flow["flow_id"], request_id="confirm-new")
-    assert adapter.calls[-2:] == ["stop", "start:new-token"]
+    assert adapter.calls[-3:] == [
+        "prepare:new-token",
+        "consume",
+        "switch:old-token->new-token",
+    ]
     assert adapter.running_token == "new-token"
 
     adapter.token = "must-not-replace"
-    adapter.stop_succeeds = False
-    with pytest.raises(ChannelSelfServiceError, match="channel_stop_timeout"):
+    adapter.fail_start_token = "must-not-replace"
+    with pytest.raises(ChannelSelfServiceError, match="weixin_start_rejected"):
         service.poll_authorization("weixin", flow["flow_id"], request_id="confirm-blocked")
+    assert adapter.running_token == "new-token"
     assert service._read("weixin").secrets["weixin_token"] == "new-token"
+
+
+def test_weixin_reauthorization_restores_old_record_when_start_or_consume_fails() -> None:
+    vault = InMemoryCredentialVault()
+    adapter = _ReplacingDeviceAdapter()
+    service = ChannelSelfService(
+        owner=ChannelCredentialOwner("account-a", "organization-a"),
+        vault=vault,
+        adapters={"weixin": adapter},  # type: ignore[dict-item]
+    )
+    flow = service.begin_authorization("weixin", request_id="begin")
+    service.poll_authorization("weixin", flow["flow_id"], request_id="old")
+
+    adapter.token = "start-fails"
+    adapter.fail_start_token = "start-fails"
+    with pytest.raises(ChannelSelfServiceError, match="weixin_start_rejected"):
+        service.poll_authorization("weixin", flow["flow_id"], request_id="start-fails")
+    assert adapter.running_token == "old-token"
+    assert service._read("weixin").secrets["weixin_token"] == "old-token"
+
+    adapter.fail_start_token = None
+    adapter.token = "consume-fails"
+    adapter.fail_consume = True
+    with pytest.raises(ChannelSelfServiceError, match="channel_adapter_failed"):
+        service.poll_authorization(
+            "weixin", flow["flow_id"], request_id="consume-fails"
+        )
+    assert adapter.running_token == "old-token"
+    assert service._read("weixin").secrets["weixin_token"] == "old-token"
+
+
+def test_weixin_reauthorization_crash_marker_recovers_old_record_on_restart() -> None:
+    vault = InMemoryCredentialVault()
+    owner = ChannelCredentialOwner("account-a", "organization-a")
+    adapter = _ReplacingDeviceAdapter()
+    service = ChannelSelfService(
+        owner=owner,
+        vault=vault,
+        adapters={"weixin": adapter},  # type: ignore[dict-item]
+    )
+    flow = service.begin_authorization("weixin", request_id="begin")
+    service.poll_authorization("weixin", flow["flow_id"], request_id="old")
+
+    adapter.token = "crash-token"
+    adapter.crash_start_token = "crash-token"
+    with pytest.raises(KeyboardInterrupt):
+        service.poll_authorization("weixin", flow["flow_id"], request_id="crash")
+    assert service._read("weixin").secrets["weixin_token"] == "old-token"
+    assert vault.get(service._transition_reference("weixin"))["state"] == "preparing"
+
+    restored_adapter = _ReplacingDeviceAdapter()
+    restored = ChannelSelfService(
+        owner=owner,
+        vault=vault,
+        adapters={"weixin": restored_adapter},  # type: ignore[dict-item]
+    )
+    asyncio.run(restored.start())
+    assert restored_adapter.running_token == "old-token"
+    with pytest.raises(KeyError):
+        vault.get(restored._transition_reference("weixin"))
+
+
+class _RollbackFailVault(InMemoryCredentialVault):
+    blocked_generation: str | None = None
+
+    def put(self, reference: str, material: Mapping[str, str]) -> None:
+        if (
+            self.blocked_generation is not None
+            and material.get("generation_reference") == self.blocked_generation
+        ):
+            raise RuntimeError("rollback write failed")
+        super().put(reference, material)
+
+
+def test_weixin_pointer_rollback_failure_stops_transport_fail_closed() -> None:
+    vault = _RollbackFailVault()
+    adapter = _ReplacingDeviceAdapter()
+    service = ChannelSelfService(
+        owner=ChannelCredentialOwner("account-a", "organization-a"),
+        vault=vault,
+        adapters={"weixin": adapter},  # type: ignore[dict-item]
+    )
+    flow = service.begin_authorization("weixin", request_id="begin")
+    service.poll_authorization("weixin", flow["flow_id"], request_id="old")
+    pointer = vault.get(service._reference("weixin"))
+    assert set(pointer) == {"schema_version", "channel_id", "generation_reference"}
+    old_generation = pointer["generation_reference"]
+    assert vault.get(old_generation)["secrets_json"] == '{"weixin_token":"old-token"}'
+
+    vault.blocked_generation = old_generation
+    adapter.token = "new-token"
+    adapter.fail_commit_token = "new-token"
+    with pytest.raises(ChannelSelfServiceError, match="channel_device_rollback_failed"):
+        service.poll_authorization("weixin", flow["flow_id"], request_id="new")
+    assert adapter.running_token is None
+    assert vault.get(service._transition_reference("weixin"))["state"] == "preparing"
+
+
+def test_weixin_concurrent_confirmed_polls_leave_one_readable_generation() -> None:
+    vault = InMemoryCredentialVault()
+    adapter = _ReplacingDeviceAdapter()
+    service = ChannelSelfService(
+        owner=ChannelCredentialOwner("account-a", "organization-a"),
+        vault=vault,
+        adapters={"weixin": adapter},  # type: ignore[dict-item]
+    )
+    flow = service.begin_authorization("weixin", request_id="begin")
+    barrier = threading.Barrier(3)
+    failures: list[BaseException] = []
+
+    def poll(request_id: str) -> None:
+        barrier.wait()
+        try:
+            service.poll_authorization("weixin", flow["flow_id"], request_id=request_id)
+        except BaseException as error:
+            failures.append(error)
+
+    threads = [threading.Thread(target=poll, args=(f"poll-{index}",)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(2)
+
+    assert failures == []
+    assert service._read("weixin").secrets["weixin_token"] == "old-token"
+    pointer = vault.get(service._reference("weixin"))
+    assert vault.get(pointer["generation_reference"])["channel_id"] == "weixin"
+    with pytest.raises(KeyError):
+        vault.get(service._transition_reference("weixin"))
+
+
+def test_weixin_adapter_prepares_new_client_before_atomic_session_swap(
+    tmp_path: Path,
+) -> None:
+    clients = []
+
+    class Client:
+        def __init__(self, token: str) -> None:
+            self.token = token
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    def factory(_base_url: str, token: str):
+        client = Client(token)
+        clients.append(client)
+        return client
+
+    adapter = WeixinILinkAdapter(tmp_path / "weixin.db", client_factory=factory)
+    adapter.bind_runtime(
+        ChannelCredentialOwner("account-a", "organization-a"),
+        _Dispatcher(),  # type: ignore[arg-type]
+    )
+    adapter._run = lambda _client, stop, _initial=None: stop.wait(2)  # type: ignore[method-assign]
+    cursors: list[str] = []
+
+    def updates(client, cursor):
+        cursors.append(cursor)
+        if client.token == "bad-token":
+            raise RuntimeError("prepare failed")
+        return {"msgs": []}
+
+    adapter._updates = updates  # type: ignore[method-assign]
+
+    old_config = dict(_CONFIG)
+    old_config["weixin_token"] = "old-token"
+    assert adapter.start(old_config).health is ConnectorHealth.CONNECTED
+    old_client = adapter._client
+
+    new_config = dict(_CONFIG)
+    new_config["weixin_token"] = "new-token"
+    assert adapter.prepare_replace(new_config).health is ConnectorHealth.CONNECTED
+    assert cursors[-1] == ""
+    assert adapter._client is old_client
+    assert old_client is not None and old_client.closed is False
+    assert adapter.commit_replace(1).health is ConnectorHealth.CONNECTED
+    assert old_client is not None and old_client.closed is True
+    new_client = adapter._client
+    assert new_client is not None and new_client.token == "new-token"
+
+    bad_config = dict(_CONFIG)
+    bad_config["weixin_token"] = "bad-token"
+    assert adapter.prepare_replace(bad_config).health is ConnectorHealth.ERROR
+    assert adapter._client is new_client
+    assert new_client.closed is False
+    assert clients[-1].closed is True
+    assert adapter.stop(1) is True

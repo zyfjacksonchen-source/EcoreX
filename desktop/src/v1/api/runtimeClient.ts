@@ -27,6 +27,14 @@ import type {
   LiveReplayResponse,
   LoginSessionResponse,
   LogoutSessionResponse,
+  KnowledgeDocument,
+  KnowledgeGraph,
+  KnowledgeImportResponse,
+  KnowledgeNode,
+  KnowledgeTree,
+  MemoryContentDocument,
+  MemoryContentPage,
+  MemoryContentView,
   PasswordSessionChangeResponse,
   MemoryMutationResponse,
   MemorySnapshot,
@@ -608,6 +616,99 @@ export class RuntimeClient {
       { signal },
       false,
       0, // memory snapshot
+    );
+  }
+
+  knowledgeTree(query = "", signal?: AbortSignal): Promise<KnowledgeTree> {
+    const suffix = query
+      ? `?query=${encodeURIComponent(query)}`
+      : "";
+    return this.json(
+      `/api/v1/knowledge/tree${suffix}`,
+      { signal },
+      false,
+      9,
+    );
+  }
+
+  knowledgeDocument(path: string, signal?: AbortSignal): Promise<KnowledgeDocument> {
+    return this.json(
+      `/api/v1/knowledge/document?path=${encodeURIComponent(path)}`,
+      { signal },
+      false,
+      10,
+    );
+  }
+
+  knowledgeGraph(signal?: AbortSignal): Promise<KnowledgeGraph> {
+    return this.json("/api/v1/knowledge/graph", { signal }, false, 11);
+  }
+
+  createKnowledgeCategory(
+    path: string,
+    clientRequestId: string,
+  ): Promise<KnowledgeNode> {
+    return this.json(
+      "/api/v1/knowledge/categories",
+      { method: "POST", body: JSON.stringify({ path, client_request_id: clientRequestId }) },
+      true,
+      15,
+    );
+  }
+
+  createKnowledgeDocument(
+    path: string,
+    content: string,
+    clientRequestId: string,
+  ): Promise<KnowledgeDocument> {
+    return this.json(
+      "/api/v1/knowledge/documents",
+      { method: "POST", body: JSON.stringify({ path, content, client_request_id: clientRequestId }) },
+      true,
+      10,
+    );
+  }
+
+  importKnowledgeDocuments(
+    files: readonly File[],
+    categoryPath: string,
+    clientRequestId: string,
+  ): Promise<KnowledgeImportResponse> {
+    const body = new FormData();
+    body.set("category_path", categoryPath);
+    body.set("client_request_id", clientRequestId);
+    for (const file of files) body.append("files", file, file.name);
+    return this.json(
+      "/api/v1/knowledge/imports",
+      { method: "POST", body },
+      true,
+      12,
+    );
+  }
+
+  memoryContent(
+    view: MemoryContentView,
+    page = 1,
+    signal?: AbortSignal,
+  ): Promise<MemoryContentPage> {
+    return this.json(
+      `/api/v1/memory/files?view=${encodeURIComponent(view)}&page=${page}`,
+      { signal },
+      false,
+      13,
+    );
+  }
+
+  memoryContentDocument(
+    view: MemoryContentView,
+    itemId: string,
+    signal?: AbortSignal,
+  ): Promise<MemoryContentDocument> {
+    return this.json(
+      `/api/v1/memory/file?view=${encodeURIComponent(view)}&item_id=${encodeURIComponent(itemId)}`,
+      { signal },
+      false,
+      14,
     );
   }
 

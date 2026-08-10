@@ -2298,3 +2298,38 @@ Ruff / py_compile / git diff check：passed
 真实数据克隆 77 条派生记录备份、业务表计数不变、本机密钥双启动：passed
 Computer Use 与新签名三平台候选：pending
 ```
+
+## 2026-08-10 补充 — 首版知识/记忆、办公读取、通道与跨线发布门禁收口
+
+- 设置中的知识与记忆保持两个独立页面。知识内容以受控 workspace 文件树为事实源，提供真实
+  树、正文搜索、阅读、关系、创建和有界导入；写操作由 Runtime SQLite 保存幂等身份，并以
+  `dir_fd`/`O_NOFOLLOW`/文件身份租约阻止目录替换逃逸。记忆继续只投影现有 DB + CAS 的 active
+  状态，绝对旧路径不返回 Renderer。Markdown 不执行 HTML、不加载图片，只允许用户点击 HTTPS
+  外链和后端确认存在的知识内链。当前没有检索 ToolSpec，因此 UI 不宣称知识会自动进入回答。
+- 11 个实际消息适配器统一了终态、重启和不确定投递恢复；失败任务事实不再永久污染连接健康。
+  微信重授权使用 prepare → 凭据 generation pointer 持久化 → commit 的两阶段切换，失败保留旧
+  连接，回滚失败即停用。被动公众号 `wechatmp` 继续明确为
+  `passive_runtime_unavailable`，不计为已接通。
+- Office DOCX/XLSX/PPTX/PDF 只提供已形成真实闭环的 create + 当前账号/线程/revision read。
+  解析在隔离子进程中执行；Unix/macOS 有明确 RLIMIT_AS 增量，Windows 在 suspended spawn 后先
+  进入 Process/Job memory limit 再恢复。worker 使用已加载 Core 的绝对脚本入口，不依赖子解释器
+  site-packages 安装 ecorex。Skills 已删除 edit/redline/render/OCR/chart 等未实现承诺。
+- User MCP 凭据改为 generation-specific Vault 引用与 SQLite 原子指针，endpoint 与 token 不会在
+  事务失败时错配；OAuth refresh、清除和并发更新使用 revision fence，响应 JSON 复用统一深度/
+  节点上限。连续图片上下文只引用同账号/线程已完成 Artifact 身份，不把用户文件名注入可信提示。
+- Desktop Release workflow 现运行本批 Python 聚焦集、完整 `test:v1`、完整 GA，并在 Windows
+  runner 实跑进程隔离测试；三平台仍由 accepted Renderer tree 精确哈希阻止未验收 UI 打包。
+  生产模型连续会话源码门禁同时锁定：Provider 用量结算只推进业务 revision，不推进
+  `auth_epoch`；只有用户/凭据/租户策略变化才使旧 token 失效。
+
+统一验证：
+
+```text
+跨线 Python：263 passed, 3 Windows-only skipped（Windows 条件项进入 CI）
+Control Plane/Nginx release replica 与公开分享路由：19 passed
+Desktop test:v1：240 passed
+完整 GA：56 passed（10 组明暗/窄屏 axe 零违规）
+TypeScript / generated contracts / Ruff / workflow YAML / diff check：passed
+Production Web build：passed，33 chunks，initial JS gzip 145.02 KiB
+生产 CP schema v7 + Gateway 同提交部署、连续真实模型会话、三平台候选与公开 feed：pending
+```

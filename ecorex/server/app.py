@@ -748,6 +748,7 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         capability_sandbox_profile_availability=(
             capability_runtime.sandbox_profile_availability
         ),
+        workspace_root=settings.workspace_roots[0],
         output_roots=(settings.output_roots or None),
         output_default_location=settings.output_default_location,
         model_worker_concurrency=settings.model_worker_concurrency,

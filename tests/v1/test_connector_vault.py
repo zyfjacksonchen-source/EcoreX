@@ -131,3 +131,27 @@ def test_local_desktop_vault_survives_restart_without_keychain_or_plaintext(
     assert b"TOP-SECRET" not in (tmp_path / ".credential-vault").read_bytes()
     assert (tmp_path / ".credential-vault.key").stat().st_mode & 0o077 == 0
     assert (tmp_path / ".credential-vault").stat().st_mode & 0o077 == 0
+
+
+def test_local_desktop_vault_fsyncs_each_directory_entry_mutation(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = []
+    original = vault_module._fsync_parent
+
+    def tracked(path):
+        calls.append(path)
+        original(path)
+
+    monkeypatch.setattr(vault_module, "_fsync_parent", tracked)
+    vault = LocalEncryptedCredentialVault(tmp_path)
+    vault.put("ecorex/session/test", {"access_token": "first"})
+    vault.put("ecorex/session/test", {"access_token": "replacement"})
+    vault.delete("ecorex/session/test")
+
+    assert calls == [
+        tmp_path / ".credential-vault.key",
+        tmp_path / ".credential-vault",
+        tmp_path / ".credential-vault",
+        tmp_path / ".credential-vault",
+    ]

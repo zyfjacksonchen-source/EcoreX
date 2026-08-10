@@ -6,6 +6,7 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
+from ecorex.artifacts import ArtifactFamily, ArtifactScope
 from ecorex.capabilities import (
     CapabilitySnapshotRepository,
     Exposure,
@@ -303,7 +304,21 @@ def test_image_followup_requires_durable_success_in_the_same_thread(tmp_path) ->
         arguments={"instruction": "海报"},
         idempotency_key="image-context-call",
     )
-    executions.complete("image-context-call", {"artifact_id": "artifact-image-1"})
+    image = app.state.artifact_service.create_artifact(
+        b"\x89PNG\r\n\x1a\nimage-context",
+        requested_name="poster.png",
+        mime_type="image/png",
+        declaration=app.state.artifact_service.issue_trusted_deliverable_declaration(
+            "imagegen", family=ArtifactFamily.IMAGE
+        ),
+        scope=ArtifactScope(
+            account_id="local-user",
+            thread_id=thread.thread_id,
+            turn_id=created.turn.turn_id,
+            created_by_tool_id="imagegen",
+        ),
+    )
+    executions.complete("image-context-call", {"artifact_id": image.artifact_id})
 
     inherited = composition.prepare_turn(
         CreateTurnRequest(input="再来一张", client_message_id="has-image-context"),
@@ -316,6 +331,16 @@ def test_image_followup_requires_durable_success_in_the_same_thread(tmp_path) ->
     assert imagegen is not None and imagegen.eligible
     assert imagegen.exposure is Exposure.DIRECT
     assert "runtime_context_required" in imagegen.reason_codes
+
+    other_thread = kernel.create_thread(CreateThreadRequest(title="other image context"))
+    isolated = composition.prepare_turn(
+        CreateTurnRequest(input="修改上一张", client_message_id="other-image-context"),
+        thread_id=other_thread.thread_id,
+    )
+    isolated_plan = composition.capability_service.get_plan(
+        isolated.snapshot_context.capability_snapshot_id
+    )
+    assert isolated_plan.decision("imagegen").exposure is Exposure.DEFERRED
 
     negated = composition.prepare_turn(
         CreateTurnRequest(

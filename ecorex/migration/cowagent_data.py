@@ -12,12 +12,14 @@ from datetime import UTC, datetime
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import stat
 import sys
 import tempfile
 from typing import Any, Iterable, Mapping
+
+from ecorex.workspace_content.paths import MAX_DOCUMENT_BYTES, normalize_knowledge_path
 
 from .errors import MigrationError, SourceLayoutError
 from .path_security import (
@@ -31,6 +33,9 @@ from .path_security import (
 
 
 RECEIPT_RELATIVE_PATH = Path("migration/legacy-desktop-import-v1.json")
+KNOWLEDGE_LAYOUT_RECEIPT_RELATIVE_PATH = Path(
+    "migration/legacy-knowledge-layout-v1.json"
+)
 _RECEIPT_DOMAIN = b"e-Mate legacy desktop data import receipt v1\0"
 _INVENTORY_DOMAIN = b"e-Mate legacy desktop data inventory v1\0"
 _MAX_RECEIPT_BYTES = 8 * 1024 * 1024
@@ -202,6 +207,7 @@ def migrate_cowagent_data(
     """Copy the allowlisted predecessor data once and return its audit result."""
 
     target = _prepare_target_root(Path(target_root))
+    migrate_legacy_knowledge_layout(target)
     receipt_path = target / RECEIPT_RELATIVE_PATH
     if os.path.lexists(receipt_path):
         receipt = _load_and_validate_receipt(receipt_path, target, verify_files=False)
@@ -333,6 +339,46 @@ def _prepare_target_root(path: Path) -> Path:
         raise CowAgentDataMigrationError("e-Mate data root is unsafe") from error
 
 
+def _portable_knowledge_path(relative: str) -> PurePosixPath | None:
+    try:
+        normalized = normalize_knowledge_path(relative)
+    except ValueError:
+        return None
+    return normalized if normalized.as_posix() == relative else None
+
+
+def _knowledge_candidate(
+    path: Path,
+    *,
+    relative: str,
+    metadata: os.stat_result,
+    root: Path,
+) -> tuple[PurePosixPath, str, int] | str:
+    normalized = _portable_knowledge_path(relative)
+    if normalized is None:
+        return "non_portable_knowledge_path"
+    if normalized.suffix.casefold() not in {".md", ".txt"}:
+        return "unsupported_knowledge_file"
+    if metadata.st_size > MAX_DOCUMENT_BYTES:
+        return "knowledge_file_too_large"
+    try:
+        payload = stable_read_bytes(
+            path,
+            label=f"legacy knowledge file {relative}",
+            maximum=MAX_DOCUMENT_BYTES,
+            root=root,
+        )
+    except SourceLayoutError as error:
+        raise CowAgentDataMigrationError("legacy knowledge file is unsafe") from error
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return "knowledge_file_not_utf8"
+    if "\x00" in text:
+        return "knowledge_file_contains_nul"
+    return normalized, hashlib.sha256(payload).hexdigest(), len(payload)
+
+
 def _inventory_root(
     root: LegacyDataRoot,
     *,
@@ -373,6 +419,12 @@ def _inventory_root(
                     "channels"
                 }:
                     skip(relative + "/", "outside_allowlist")
+                elif (
+                    parts[0].casefold() == "knowledge"
+                    and len(parts) > 1
+                    and _portable_knowledge_path("/".join(parts[1:])) is None
+                ):
+                    skip(relative + "/", "non_portable_knowledge_path")
                 else:
                     visit(child, parts)
                 continue
@@ -398,6 +450,30 @@ def _inventory_root(
             elif top not in _COPY_TREES:
                 skip(relative, "outside_allowlist")
                 continue
+            elif top == "knowledge":
+                knowledge_relative = "/".join(parts[1:])
+                knowledge = _knowledge_candidate(
+                    child,
+                    relative=knowledge_relative,
+                    metadata=metadata,
+                    root=root.path,
+                )
+                if isinstance(knowledge, str):
+                    skip(relative, knowledge)
+                    continue
+                normalized, digest, size = knowledge
+                candidates.append(
+                    _Candidate(
+                        source_label=root.label,
+                        source=child,
+                        source_relative_path=relative,
+                        target_relative_path=f"workspace/knowledge/{normalized.as_posix()}",
+                        size_bytes=size,
+                        source_sha256=digest,
+                        transform="copy",
+                    )
+                )
+                continue
             try:
                 digest, identity = stable_sha256_file(
                     child,
@@ -421,6 +497,132 @@ def _inventory_root(
             )
 
     visit(root.path, ())
+
+
+def migrate_legacy_knowledge_layout(target_root: str | os.PathLike[str]) -> Path | None:
+    """Copy the retired ``knowledge`` tree into ``workspace/knowledge`` once."""
+
+    target = _prepare_target_root(Path(target_root))
+    receipt_path = target / KNOWLEDGE_LAYOUT_RECEIPT_RELATIVE_PATH
+    if os.path.lexists(receipt_path):
+        _load_and_validate_receipt(receipt_path, target, verify_files=False)
+        return receipt_path
+    source_path = target / "knowledge"
+    if not os.path.lexists(source_path):
+        return None
+    try:
+        source = secure_directory(
+            source_path,
+            label="legacy knowledge layout",
+            root=target,
+        )
+    except SourceLayoutError as error:
+        raise CowAgentDataMigrationError("legacy knowledge layout is unsafe") from error
+
+    candidates: list[_Candidate] = []
+    skipped: list[dict[str, str]] = []
+
+    def visit(directory: Path, parts: tuple[str, ...]) -> None:
+        try:
+            children = sorted(
+                directory.iterdir(), key=lambda item: (item.name.casefold(), item.name)
+            )
+        except OSError as error:
+            raise CowAgentDataMigrationError(
+                "legacy knowledge directory is unreadable"
+            ) from error
+        for child in children:
+            relative_parts = (*parts, child.name)
+            relative = "/".join(relative_parts)
+            if len(candidates) + len(skipped) >= _MAX_FILES:
+                raise CowAgentDataMigrationError(
+                    "legacy knowledge inventory exceeds its file limit"
+                )
+            try:
+                metadata = child.lstat()
+            except OSError as error:
+                raise CowAgentDataMigrationError(
+                    "legacy knowledge entry is unreadable"
+                ) from error
+            if stat.S_ISLNK(metadata.st_mode) or bool(
+                int(getattr(metadata, "st_file_attributes", 0)) & _REPARSE_POINT
+            ):
+                skipped.append(
+                    {"source": "legacy-layout", "path": relative, "reason": "unsafe_link_or_reparse"}
+                )
+                continue
+            if stat.S_ISDIR(metadata.st_mode):
+                if _portable_knowledge_path(relative) is None:
+                    skipped.append(
+                        {
+                            "source": "legacy-layout",
+                            "path": relative + "/",
+                            "reason": "non_portable_knowledge_path",
+                        }
+                    )
+                    continue
+                visit(child, relative_parts)
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                skipped.append(
+                    {"source": "legacy-layout", "path": relative, "reason": "special_file"}
+                )
+                continue
+            knowledge = _knowledge_candidate(
+                child,
+                relative=relative,
+                metadata=metadata,
+                root=source,
+            )
+            if isinstance(knowledge, str):
+                skipped.append(
+                    {"source": "legacy-layout", "path": relative, "reason": knowledge}
+                )
+                continue
+            normalized, digest, size = knowledge
+            candidates.append(
+                _Candidate(
+                    source_label="legacy-layout",
+                    source=child,
+                    source_relative_path=relative,
+                    target_relative_path=f"workspace/knowledge/{normalized.as_posix()}",
+                    size_bytes=size,
+                    source_sha256=digest,
+                    transform="copy",
+                )
+            )
+
+    visit(source, ())
+    candidates.sort(key=lambda item: (item.target_relative_path.casefold(), item.target_relative_path))
+    files: list[dict[str, Any]] = []
+    claimed_targets: set[str] = set()
+    for candidate in candidates:
+        target_key = candidate.target_relative_path.casefold()
+        if target_key in claimed_targets:
+            skipped.append(
+                {
+                    "source": candidate.source_label,
+                    "path": candidate.source_relative_path,
+                    "reason": "portable_name_collision",
+                }
+            )
+            continue
+        claimed_targets.add(target_key)
+        files.append(_copy_candidate(candidate, target))
+    skipped.sort(key=lambda item: (item["path"].casefold(), item["path"]))
+    receipt: dict[str, Any] = {
+        "schema_version": 1,
+        "status": "completed",
+        "completed_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "source_inventory_sha256": _inventory_digest(candidates, skipped),
+        "sources": ["legacy-layout"],
+        "files": files,
+        "skipped": skipped,
+    }
+    receipt["authority_sha256"] = _receipt_digest(receipt)
+    _publish_receipt(receipt_path, receipt)
+    _load_and_validate_receipt(receipt_path, target, verify_files=True)
+    return receipt_path
 
 
 def _secret_path_reason(parts: tuple[str, ...]) -> str | None:
@@ -743,10 +945,12 @@ def _result(
 
 __all__ = [
     "CowAgentDataMigrationError",
+    "KNOWLEDGE_LAYOUT_RECEIPT_RELATIVE_PATH",
     "LegacyDataMigrationResult",
     "LegacyDataRoot",
     "RECEIPT_RELATIVE_PATH",
     "default_cowagent_data_roots",
     "default_emate_data_root",
     "migrate_cowagent_data",
+    "migrate_legacy_knowledge_layout",
 ]

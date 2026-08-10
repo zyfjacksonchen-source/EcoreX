@@ -22,6 +22,7 @@ from .models import (
     ConnectorDescriptor,
     ConversationUsageProjection,
     ContextUsageProjection,
+    UsageDataQualityProjection,
     ConnectorInteractionState,
     ExtensionActionProjection,
     ExtensionCatalogSnapshot,

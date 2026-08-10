@@ -26,6 +26,21 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 _REFERENCE_RE = re.compile(r"^ecorex/[A-Za-z0-9._/-]{1,1000}$")
 
 
+def _fsync_parent(path: Path) -> None:
+    """Make a completed directory entry mutation durable on POSIX."""
+
+    if os.name == "nt":
+        return
+    descriptor = os.open(
+        path.parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 class CredentialVault(Protocol):
     def put(self, reference: str, material: Mapping[str, str]) -> None:
         ...
@@ -220,6 +235,7 @@ class EphemeralEncryptedCredentialVault:
                 self._write(values)
             else:
                 self._path.unlink(missing_ok=True)
+                _fsync_parent(self._path)
 
     def _read(self) -> dict[str, dict[str, str]]:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -312,6 +328,7 @@ class EphemeralEncryptedCredentialVault:
                 os.close(descriptor)
             os.replace(temporary, self._path)
             temporary = None
+            _fsync_parent(self._path)
         except Exception:
             raise RuntimeError("acceptance credential vault write failed") from None
         finally:
@@ -361,6 +378,7 @@ class LocalEncryptedCredentialVault(EphemeralEncryptedCredentialVault):
                 os.fsync(descriptor)
             finally:
                 os.close(descriptor)
+            _fsync_parent(path)
             return candidate
         try:
             metadata = os.fstat(descriptor)

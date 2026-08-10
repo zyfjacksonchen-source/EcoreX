@@ -14,20 +14,23 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import stat
-import subprocess
 import tempfile
 import threading
-from dataclasses import dataclass
 from typing import Any, Mapping
 import zipfile
 
 from ecorex.capabilities import VerifiedCapabilityPack
+from ecorex.integration.dependency_pack_worker import (
+    OFFICE_READ_JOB_MEMORY_LIMIT_BYTES,
+    OFFICE_READ_PROCESS_MEMORY_LIMIT_BYTES,
+)
 from ecorex.integration.pack_python import PackPythonIdentity
 
 _MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024
 _MAX_FILES = 50_000
 _MAX_REQUEST_BYTES = 12 * 1024 * 1024
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+_WORKER_PATH = Path(__file__).with_name("dependency_pack_worker.py").resolve(strict=True)
 
 
 class DependencyPackProcessError(RuntimeError):
@@ -79,6 +82,13 @@ class VerifiedDependencyPackProcessAdapter:
         *,
         timeout_seconds: float,
     ) -> Mapping[str, Any]:
+        # Import lazily: ecorex.release's public facade also imports server
+        # composition, which depends on this adapter during module loading.
+        from ecorex.release.process_boundary import (
+            BoundedProcessError,
+            run_bounded_process,
+        )
+
         if not isinstance(operation, str) or not operation or len(operation) > 64:
             raise DependencyPackProcessError("dependency_pack_operation_invalid")
         if not 0.5 <= float(timeout_seconds) <= 30:
@@ -109,24 +119,42 @@ class VerifiedDependencyPackProcessAdapter:
             # that startup bounded without turning a healthy first call into
             # a false timeout on slower Windows disks or antivirus scans.
             process_timeout = min(30.0, max(15.0, float(timeout_seconds) + 8.0))
+            office_read = self.pack.manifest.pack_id == "office" and operation == "read"
+            command = (
+                str(self.python_executable),
+                "-I",
+                "-B",
+                str(_WORKER_PATH),
+                str(self._root),
+            )
+            if office_read:
+                command += (
+                    "--office-read-memory-limit",
+                    str(OFFICE_READ_PROCESS_MEMORY_LIMIT_BYTES),
+                )
             try:
-                result = _run_bounded_process(
-                    (
-                        str(self.python_executable),
-                        "-I",
-                        "-B",
-                        "-m",
-                        "ecorex.integration.dependency_pack_worker",
-                        str(self._root),
-                    ),
+                result = run_bounded_process(
+                    command,
                     payload=request,
                     cwd=self._root,
                     environment=_runtime_environment(),
                     timeout_seconds=process_timeout,
                     max_stdout_bytes=_MAX_RESPONSE_BYTES,
                     max_stderr_bytes=64 * 1024,
+                    **(
+                        {
+                            "windows_process_memory_limit_bytes": (
+                                OFFICE_READ_PROCESS_MEMORY_LIMIT_BYTES
+                            ),
+                            "windows_job_memory_limit_bytes": (
+                                OFFICE_READ_JOB_MEMORY_LIMIT_BYTES
+                            ),
+                        }
+                        if os.name == "nt" and office_read
+                        else {}
+                    ),
                 )
-            except (OSError, TimeoutError, ValueError):
+            except (BoundedProcessError, OSError, ValueError):
                 raise DependencyPackProcessError(
                     "dependency_pack_process_failed"
                 ) from None
@@ -364,6 +392,26 @@ class PackOfficeServiceAdapter:
             timeout_seconds=min(30.0, max(1.0, float(timeout_seconds))),
         )
 
+    def read(
+        self,
+        family: str,
+        content: bytes,
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> Mapping[str, Any]:
+        if family not in {"document", "spreadsheet", "presentation", "pdf"}:
+            raise ValueError("Office family is unsupported")
+        if not isinstance(content, bytes) or not 1 <= len(content) <= 5 * 1024 * 1024:
+            raise ValueError("Office content is invalid")
+        return self.process.invoke(
+            "read",
+            {
+                "family": family,
+                "content_base64": base64.b64encode(content).decode("ascii"),
+            },
+            timeout_seconds=min(30.0, max(1.0, float(timeout_seconds))),
+        )
+
     async def aclose(self) -> None:
         await self.process.aclose()
 
@@ -386,80 +434,6 @@ def _runtime_environment() -> Mapping[str, str]:
         }
     )
     return result
-
-
-@dataclass(frozen=True, slots=True)
-class _ProcessResult:
-    returncode: int
-    stdout: bytes
-    stderr: bytes
-
-
-def _run_bounded_process(
-    command: tuple[str, ...],
-    *,
-    payload: bytes,
-    cwd: Path,
-    environment: Mapping[str, str],
-    timeout_seconds: float,
-    max_stdout_bytes: int,
-    max_stderr_bytes: int,
-) -> _ProcessResult:
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-    process = subprocess.Popen(
-        command,
-        cwd=cwd,
-        env=dict(environment),
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        creationflags=creationflags,
-        start_new_session=(os.name != "nt"),
-    )
-    assert (
-        process.stdin is not None
-        and process.stdout is not None
-        and process.stderr is not None
-    )
-    buffers = {"stdout": bytearray(), "stderr": bytearray()}
-    overflow = threading.Event()
-
-    def read(stream: Any, name: str, maximum: int) -> None:
-        while chunk := stream.read(64 * 1024):
-            target = buffers[name]
-            if len(target) + len(chunk) > maximum:
-                overflow.set()
-                return
-            target.extend(chunk)
-
-    readers = (
-        threading.Thread(
-            target=read, args=(process.stdout, "stdout", max_stdout_bytes), daemon=True
-        ),
-        threading.Thread(
-            target=read, args=(process.stderr, "stderr", max_stderr_bytes), daemon=True
-        ),
-    )
-    for reader in readers:
-        reader.start()
-    try:
-        process.stdin.write(payload)
-        process.stdin.close()
-        process.wait(timeout=timeout_seconds)
-    except (subprocess.TimeoutExpired, BrokenPipeError):
-        process.kill()
-        process.wait(timeout=5)
-        raise TimeoutError from None
-    finally:
-        for reader in readers:
-            reader.join(timeout=5)
-    if overflow.is_set() or any(reader.is_alive() for reader in readers):
-        if process.poll() is None:
-            process.kill()
-        raise ValueError("bounded process output exceeded limit")
-    return _ProcessResult(
-        process.returncode, bytes(buffers["stdout"]), bytes(buffers["stderr"])
-    )
 
 
 __all__ = [

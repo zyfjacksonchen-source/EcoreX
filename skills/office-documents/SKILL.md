@@ -1,6 +1,6 @@
 ---
 name: office-documents
-description: Read, create, edit, summarize, redline, and verify Word/DOCX office documents. Use for .doc, .docx, Word, and Google Docs-targeted local document workflows.
+description: Create structurally valid DOCX files and inspect text and structure from existing e-Mate DOCX artifacts. Use for new Word-style reports or read-only review and summarization of a current same-thread DOCX artifact.
 mentionable: true
 mention-category: document
 user-invocable: true
@@ -8,57 +8,32 @@ compatibility-id: office-documents
 adopts-official-skill: documents
 ecorex-native-facade: true
 quality-gates:
-  - design-preset
-  - structure-check
-  - render-docx
-  - table-geometry
-  - visual-inspection
-  - redline-preserve
+  - structural-open
+  - artifact-integrity
 metadata: {"default_enabled":true,"requires":{"modules":["docx"]}}
 ---
 
 # Office Documents
 
-This is the e-Mate-native compatibility facade for the official Codex
-`documents` workflow. Keep the public e-Mate skill ID `office-documents`
-stable, but use the official `documents` skill as the authoritative workflow
-when it is available in `<available_skills>`.
+The packaged e-Mate native facade supports two operations in the first release:
 
-If both skills are visible, read this skill first for e-Mate compatibility
-rules, then read `documents` for design presets, deterministic OOXML helpers,
-render-to-PNG visual QA, Google Docs-targeted sanitization, comments, redlines,
-and table geometry details. If the official skill is not visible, follow the
-equivalent contract below and use the safest available local tools.
+- `create`: create a new, simple DOCX from a title and sections.
+- `inspect`: extract text plus paragraph/table counts from an existing e-Mate DOCX Artifact so the model can review or summarize it.
 
-Use this skill when the user asks e-Mate to work with Word-style office documents: read, summarize, rewrite, create, edit, redline, comment on, or package a `.doc`/`.docx` deliverable.
+## Native calls
 
-## Default Workflow
+Create with:
 
-1. Identify the user's goal: read-only analysis, targeted edit, new document, redline/comment, or export-ready deliverable.
-2. Use local file tools for user-provided files. For web links, fetch the source first, save citations or source notes, then create/edit the document.
-3. For existing documents, preserve the original structure and apply the smallest correct edit unless the user asks for a rewrite.
-4. For new documents, choose an office-appropriate archetype such as memo, report, SOP, proposal, checklist, brief, or form before drafting.
-5. For new documents or major rewrites, choose and apply one design preset with explicit typography, margins, spacing, list, table, header, footer, and color tokens.
-6. Generate final files under the workspace output area or a user-requested path.
-7. Verify before delivery. Render DOCX pages to PNG when possible, inspect every page, fix layout defects, and re-render until clean. If rendering is unavailable, run structural OOXML checks and disclose that visual QA was skipped.
+`{"operation":"create","file_name":"report.docx","title":"...","sections":[{"heading":"...","paragraphs":["..."]}]}`
 
-## Quality Contract
+Inspect with the exact current Artifact identities:
 
-- Do not treat raw extracted text as layout proof. Tables, lists, headers, footers, and page breaks must be checked.
-- Use real document structure: headings, numbered lists, tables, comments, and metadata instead of visual text hacks.
-- Tables must have explicit widths, table grids, cell widths, padding, and readable spacing. Avoid cramped all-grid layouts for prose-heavy material.
-- Lists must use real Word numbering definitions rather than fake bullet text or manual numbering.
-- For edits, preserve the original and make minimal local changes unless the user explicitly requests a rewrite.
-- For redlines/comments, keep feedback anchored near the changed text rather than dumping all notes at the end.
-- For Google Docs-targeted output, create and verify a local `.docx`, run the official title sanitizer when available, then import through the appropriate cloud-document route.
-- If visual rendering is unavailable, clearly report that only structural verification passed; render-docx evidence must come from trusted runtime render output, not caller-provided metadata.
-- Final response should link to the final `.docx` deliverable, not scratch files, unless the user asks for intermediates.
+`{"operation":"inspect","artifact_id":"art_...","revision_id":"rev_..."}`
 
-## e-Mate Adaptation
+Inspection accepts only a ready DOCX Artifact owned by the current account and created in the current thread. It reads immutable Artifact bytes, never caller-provided filesystem paths. The returned text is suitable for content review and summarization, but it is not evidence of page layout.
 
-- This is a user-invocable office skill and should appear under the document category in `@skill`.
-- For a new DOCX, call `skill_run` with this exact discovery ID and parameters shaped as `{"operation":"create","file_name":"report.docx","title":"...","sections":[{"heading":"...","paragraphs":["..."]}]}`. The Runtime-owned Office Pack creates and structurally validates the file, then publishes the resulting Artifact; do not fall back to `pip` or an untracked shell output.
-- Preserve compatibility with existing prompts, shortcuts, and automations that mention `office-documents`.
-- Prefer official Codex workspace dependencies and helper scripts for DOCX creation, deterministic OOXML edits, render, comment, redline, title sanitization, and accessibility/redaction checks when the host exposes them.
-- The `office-pdf` capability pack remains a fallback for legacy parsing/preview and small local edits, but high-quality document creation should follow the official `documents` render-and-verify workflow.
-- If required authoring or rendering dependencies are unavailable, report the missing verification layer clearly instead of implying visual QA passed.
+## First-release boundary
+
+The native facade does not edit an existing DOCX, preserve formatting during rewrite, add comments or redlines, import Google Docs, render pages, or perform visual QA. Do not claim those actions succeeded. When one is requested, state that the packaged native operation is unavailable instead of presenting a newly created file as an edit of the original.
+
+Created files receive structural-open validation only. Report that visual layout was not verified.

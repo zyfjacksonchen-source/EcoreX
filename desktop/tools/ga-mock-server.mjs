@@ -899,6 +899,11 @@ function scenarioState(name) {
     memoryRevision: 1,
     memoryResettableCount: 2,
     memoryReset: null,
+    knowledgeDocuments: new Map([
+      ["README.md", { content: "# e-Mate 知识库\n\n[项目说明](项目/说明.md)", updated_at: NOW }],
+      ["项目/说明.md", { content: "# 项目说明\n\n真实知识目录。", updated_at: NOW }],
+    ]),
+    knowledgeCategories: new Set(["项目"]),
     outputLocation: "documents",
     outputRevision: 1,
     outputRequests: new Map(),
@@ -1459,6 +1464,51 @@ function memorySnapshot(state) {
   };
 }
 
+function knowledgeDocument(state, path) {
+  const stored = state.knowledgeDocuments.get(path);
+  if (!stored) return null;
+  const links = [...stored.content.matchAll(/\[[^\]]*\]\(([^)]+)\)/gu)]
+    .map((match) => match[1])
+    .filter((target) => state.knowledgeDocuments.has(target));
+  return {
+    path,
+    name: path.split("/").at(-1),
+    content: stored.content,
+    size_bytes: Buffer.byteLength(stored.content),
+    updated_at: stored.updated_at,
+    links,
+  };
+}
+
+function knowledgeTree(state, query) {
+  const root = [];
+  const categories = new Map();
+  const ensureCategory = (path) => {
+    if (categories.has(path)) return categories.get(path);
+    const parts = path.split("/");
+    const parentPath = parts.slice(0, -1).join("/");
+    const node = { path, name: parts.at(-1), kind: "category", size_bytes: 0, updated_at: NOW, children: [] };
+    categories.set(path, node);
+    (parentPath ? ensureCategory(parentPath).children : root).push(node);
+    return node;
+  };
+  for (const category of [...state.knowledgeCategories].sort()) ensureCategory(category);
+  for (const path of [...state.knowledgeDocuments.keys()].sort()) {
+    const document = knowledgeDocument(state, path);
+    if (query && !path.toLowerCase().includes(query.toLowerCase()) && !document.content.toLowerCase().includes(query.toLowerCase())) continue;
+    const parentPath = path.split("/").slice(0, -1).join("/");
+    (parentPath ? ensureCategory(parentPath).children : root).push({
+      path,
+      name: document.name,
+      kind: "document",
+      size_bytes: document.size_bytes,
+      updated_at: document.updated_at,
+      children: [],
+    });
+  }
+  return { root: "knowledge", query: query || null, items: root };
+}
+
 function systemHealth(state, technical = false) {
   const sampledAt = new Date().toISOString();
   const sample = {
@@ -1811,6 +1861,13 @@ function conversationUsage(state, threadId) {
     scope: "account",
     source: "managed_gateway",
     complete_across_devices: true,
+    data_quality: {
+      audit_continuity: "complete",
+      recovery_count: 0,
+      removed_audit_rows: 0,
+      removed_trace_rows: 0,
+      last_recovery_at: null,
+    },
     today: { input_tokens: 4_280, output_tokens: 960, total_tokens: 5_240 },
     week: { input_tokens: 18_840, output_tokens: 3_760, total_tokens: 22_600 },
     context: {
@@ -1913,6 +1970,75 @@ async function handleApi(holder, req, res, url) {
   }
   if (path === "/api/v1/memory" && req.method === "GET") {
     return json(res, 200, memorySnapshot(state));
+  }
+  if (path === "/api/v1/knowledge/tree" && req.method === "GET") {
+    return json(res, 200, knowledgeTree(state, url.searchParams.get("query") || ""));
+  }
+  if (path === "/api/v1/knowledge/document" && req.method === "GET") {
+    const document = knowledgeDocument(state, url.searchParams.get("path") || "");
+    return document ? json(res, 200, document) : apiError(res, 404, "knowledge_not_found", "Knowledge document was not found");
+  }
+  if (path === "/api/v1/knowledge/graph" && req.method === "GET") {
+    const documents = [...state.knowledgeDocuments.keys()].map((itemPath) => knowledgeDocument(state, itemPath));
+    return json(res, 200, {
+      nodes: documents.map((item) => ({ path: item.path, label: item.name.replace(/\.(?:md|txt)$/u, "") })),
+      edges: documents.flatMap((item) => item.links.map((target) => ({ source: item.path, target }))),
+    });
+  }
+  if (path === "/api/v1/knowledge/categories" && req.method === "POST") {
+    const request = await body(req);
+    state.knowledgeCategories.add(request.path);
+    return json(res, 200, { path: request.path, name: request.path.split("/").at(-1), kind: "category", size_bytes: 0, updated_at: new Date().toISOString(), children: [] });
+  }
+  if (path === "/api/v1/knowledge/documents" && req.method === "POST") {
+    const request = await body(req);
+    const updated_at = new Date().toISOString();
+    state.knowledgeDocuments.set(request.path, { content: request.content, updated_at });
+    const parent = request.path.split("/").slice(0, -1).join("/");
+    if (parent) state.knowledgeCategories.add(parent);
+    return json(res, 200, knowledgeDocument(state, request.path));
+  }
+  if (path === "/api/v1/knowledge/imports" && req.method === "POST") {
+    const importedPath = "导入.md";
+    state.knowledgeDocuments.set(importedPath, { content: "# 已导入", updated_at: new Date().toISOString() });
+    const document = knowledgeDocument(state, importedPath);
+    return json(res, 200, {
+      imported_count: 1,
+      rejected_count: 0,
+      total_bytes: document.size_bytes,
+      items: [{ original_name: importedPath, name: importedPath, path: importedPath, status: "imported", reason: null }],
+    });
+  }
+  if (path === "/api/v1/memory/files" && req.method === "GET") {
+    const view = url.searchParams.get("view") || "files";
+    const items = view === "files" ? [{
+      item_id: "memory/factory.md",
+      name: "factory.md",
+      path: "memory/factory.md",
+      kind: "file",
+      origin: "factory",
+      source: "factory",
+      size_bytes: 20,
+      updated_at: NOW,
+    }] : state.memoryResettableCount ? [{
+      item_id: "memory-record-ga",
+      name: "偏好.md",
+      path: "memory/偏好.md",
+      kind: "evolution",
+      origin: "learned",
+      source: "conversation",
+      size_bytes: 24,
+      updated_at: NOW,
+    }] : [];
+    return json(res, 200, { view, page: Number(url.searchParams.get("page") || 1), page_size: 10, total: items.length, items });
+  }
+  if (path === "/api/v1/memory/file" && req.method === "GET") {
+    const view = url.searchParams.get("view") || "files";
+    return json(res, 200, view === "files" ? {
+      item_id: "memory/factory.md", name: "factory.md", path: "memory/factory.md", kind: "file", origin: "factory", source: "factory", size_bytes: 20, updated_at: NOW, content: "# e-Mate 内置记忆",
+    } : {
+      item_id: "memory-record-ga", name: "偏好.md", path: "memory/偏好.md", kind: "evolution", origin: "learned", source: "conversation", size_bytes: 24, updated_at: NOW, content: "偏好：专业严谨，称呼同学。",
+    });
   }
   if (path === "/api/v1/output/locations" && req.method === "GET") {
     return json(res, 200, {

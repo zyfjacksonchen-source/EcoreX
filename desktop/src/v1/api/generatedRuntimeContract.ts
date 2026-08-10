@@ -158,7 +158,7 @@ export const GENERATED_RUNTIME_CONTRACT = {
       "failed"
     ]
   },
-  "schemaSha256": "2f9311b90ed0141f123c43a12bc2fb549d10a5a33a2d7b1d0a724cc3360fa340",
+  "schemaSha256": "f979c63c2fd7b77b84dbf905b7f89f46f81bd2e177abe14ec42e0f8cad820cc7",
   "schemaVersion": 1,
   "versions": {
     "api": "v1",
@@ -247,6 +247,7 @@ export const GENERATED_RUNTIME_CONTRACT = {
         "week",
         "context",
         "task_activity",
+        "data_quality",
         "calculated_at"
       ]
     },

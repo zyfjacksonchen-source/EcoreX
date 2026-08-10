@@ -133,7 +133,9 @@ export function Composer({
   const quotaUnit = quota?.unit === "managed_requests" ? "次" : (quota?.unit || "");
   const usageScopeLabel = usage?.complete_across_devices
     ? "账号累计"
-    : "仅此设备";
+    : usage?.data_quality.audit_continuity === "complete"
+      ? "仅此设备"
+      : "审计连续性待核对";
   const usageOpen = usageHoverOpen || usagePinned;
   const sendLabel = submitting ? "发送中" : sendFailed ? "重试发送" : "发送";
   const selectedChatModel = chatModels.find((model) => model.model_id === chatModel);
@@ -564,6 +566,9 @@ export function Composer({
                   <span><b>上下文</b>{contextLabel}</span>
                   <span><b>额度</b>{remainingLabel}{remainingLabel === "—" ? "" : quotaUnit}</span>
                   <span><b>范围</b>{usageScopeLabel}</span>
+                  {usage?.data_quality.audit_continuity !== "complete" ? (
+                    <span><b>数据</b>曾执行审计恢复，历史用量需核对</span>
+                  ) : null}
                   <Tooltip.Arrow className="ex-tooltip-arrow" />
                 </Tooltip.Content>
               </Tooltip.Portal>

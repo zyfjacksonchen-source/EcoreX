@@ -87,12 +87,15 @@ def test_catalog_is_typed_secret_free_and_fail_closed_without_pack() -> None:
     catalog = service.catalog()
     telegram = next(item for item in catalog["items"] if item["channel_id"] == "telegram")
     feishu = next(item for item in catalog["items"] if item["channel_id"] == "feishu")
+    wechatmp = next(item for item in catalog["items"] if item["channel_id"] == "wechatmp")
 
     assert catalog["contract_version"] == "channel-self-service-v1"
     assert telegram["auth_kind"] == "api_token"
     assert telegram["adapter_available"] is False
     assert telegram["unavailable_reason"] == "adapter_not_packaged"
     assert telegram["actions"]["test"] is False
+    assert wechatmp["adapter_available"] is False
+    assert wechatmp["unavailable_reason"] == "passive_runtime_unavailable"
     assert telegram["fields"] == [
         {
             "key": "telegram_token",

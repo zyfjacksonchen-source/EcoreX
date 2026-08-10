@@ -18,6 +18,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
 
 from ecorex.connectors.vault import CredentialVault
+from ecorex.json_boundary import JSONComplexityError, validate_json_complexity
 
 
 _SAFE_ID = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
@@ -90,6 +91,7 @@ class _PendingAuthorization:
     client_id: str
     client_secret: str | None
     scope: str
+    credential_generation: int
 
 
 class _MCPOAuthTokenProvider:
@@ -143,6 +145,8 @@ class MCPOAuthService:
         self._owns_client = client is None
         self._pending: dict[str, _PendingAuthorization] = {}
         self._lock = asyncio.Lock()
+        self._credential_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._credential_generations: dict[tuple[str, str], int] = {}
 
     def provider(self, tenant_id: str, service_id: str) -> _MCPOAuthTokenProvider:
         self._registration(service_id)
@@ -189,64 +193,72 @@ class MCPOAuthService:
     async def begin(self, service_id: str, tenant_id: str) -> Mapping[str, Any]:
         registration = self._registration(service_id)
         tenant_id = _safe_tenant(tenant_id)
-        stored = await self._load_record(registration, tenant_id)
-        metadata = await self._metadata(registration, stored)
-        client_id = registration.client_id or stored.get("client_id")
-        client_secret = stored.get("client_secret")
-        scope = registration.scope or stored.get("scope") or metadata.get("scope", "")
-        if not client_id:
-            registration_endpoint = metadata.get("registration_endpoint")
-            if not registration_endpoint:
-                raise MCPOAuthError("mcp_oauth_client_registration_required")
-            registered = await self._request_json(
-                "POST",
-                registration_endpoint,
-                registration.authorization_hosts,
-                json_body={
-                    "client_name": "e-Mate",
-                    "redirect_uris": [self.redirect_uri],
-                    "grant_types": ["authorization_code", "refresh_token"],
-                    "response_types": ["code"],
-                    "token_endpoint_auth_method": "none",
+        credential_key = (service_id, tenant_id)
+        async with self._credential_lock(credential_key):
+            stored = await self._load_record(registration, tenant_id)
+            metadata = await self._metadata(registration, stored)
+            client_id = registration.client_id or stored.get("client_id")
+            client_secret = stored.get("client_secret")
+            scope = (
+                registration.scope or stored.get("scope") or metadata.get("scope", "")
+            )
+            if not client_id:
+                registration_endpoint = metadata.get("registration_endpoint")
+                if not registration_endpoint:
+                    raise MCPOAuthError("mcp_oauth_client_registration_required")
+                registered = await self._request_json(
+                    "POST",
+                    registration_endpoint,
+                    registration.authorization_hosts,
+                    json_body={
+                        "client_name": "e-Mate",
+                        "redirect_uris": [self.redirect_uri],
+                        "grant_types": ["authorization_code", "refresh_token"],
+                        "response_types": ["code"],
+                        "token_endpoint_auth_method": "none",
+                    },
+                    expected_statuses={200, 201},
+                )
+                client_id = _bounded_secret(registered.get("client_id"), "client_id")
+                client_secret = _optional_secret(
+                    registered.get("client_secret"), "client_secret"
+                )
+            verifier = _b64url(secrets.token_bytes(48))
+            challenge = _b64url(hashlib.sha256(verifier.encode("ascii")).digest())
+            state = secrets.token_urlsafe(32)
+            await self._save_record(
+                registration,
+                tenant_id,
+                {
+                    **stored,
+                    **metadata,
+                    "client_id": client_id,
+                    **({"client_secret": client_secret} if client_secret else {}),
+                    **({"scope": scope} if scope else {}),
                 },
-                expected_statuses={200, 201},
             )
-            client_id = _bounded_secret(registered.get("client_id"), "client_id")
-            client_secret = _optional_secret(
-                registered.get("client_secret"), "client_secret"
+            generation = self._advance_credential_generation(credential_key)
+            pending = _PendingAuthorization(
+                service_id=service_id,
+                tenant_id=tenant_id,
+                verifier=verifier,
+                created_at=time.time(),
+                metadata=metadata,
+                client_id=client_id,
+                client_secret=client_secret,
+                scope=scope,
+                credential_generation=generation,
             )
-        verifier = _b64url(secrets.token_bytes(48))
-        challenge = _b64url(hashlib.sha256(verifier.encode("ascii")).digest())
-        state = secrets.token_urlsafe(32)
-        pending = _PendingAuthorization(
-            service_id=service_id,
-            tenant_id=tenant_id,
-            verifier=verifier,
-            created_at=time.time(),
-            metadata=metadata,
-            client_id=client_id,
-            client_secret=client_secret,
-            scope=scope,
-        )
-        async with self._lock:
-            self._prune_pending()
-            self._pending = {
-                key: item
-                for key, item in self._pending.items()
-                if not (item.service_id == service_id and item.tenant_id == tenant_id)
-            }
-            self._pending[state] = pending
-        await self._save_record(
-            registration,
-            tenant_id,
-            {
-                **stored,
-                **metadata,
-                "client_id": client_id,
-                **({"client_secret": client_secret} if client_secret else {}),
-                **({"scope": scope} if scope else {}),
-            },
-        )
+            async with self._lock:
+                self._prune_pending()
+                self._pending = {
+                    key: item
+                    for key, item in self._pending.items()
+                    if not (
+                        item.service_id == service_id and item.tenant_id == tenant_id
+                    )
+                }
+                self._pending[state] = pending
         parameters = {
             "response_type": "code",
             "client_id": client_id,
@@ -287,101 +299,143 @@ class MCPOAuthService:
         if not code or len(code) > 8192:
             raise MCPOAuthError("mcp_oauth_code_invalid")
         registration = self._registration(pending.service_id)
-        fields = {
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": self.redirect_uri,
-            "client_id": pending.client_id,
-            "code_verifier": pending.verifier,
-            "resource": registration.resource_url,
-        }
-        if pending.client_secret:
-            fields["client_secret"] = pending.client_secret
-        token = await self._request_json(
-            "POST",
-            pending.metadata["token_endpoint"],
-            registration.authorization_hosts,
-            data=fields,
-            expected_statuses={200},
-        )
-        record = await self._load_record(registration, pending.tenant_id)
-        await self._save_record(
-            registration,
-            pending.tenant_id,
-            _token_record(record, token, pending.scope),
-        )
+        credential_key = (pending.service_id, pending.tenant_id)
+        async with self._credential_lock(credential_key):
+            if (
+                self._credential_generation(credential_key)
+                != pending.credential_generation
+            ):
+                raise MCPOAuthError("mcp_oauth_state_invalid")
+            fields = {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": self.redirect_uri,
+                "client_id": pending.client_id,
+                "code_verifier": pending.verifier,
+                "resource": registration.resource_url,
+            }
+            if pending.client_secret:
+                fields["client_secret"] = pending.client_secret
+            token = await self._request_json(
+                "POST",
+                pending.metadata["token_endpoint"],
+                registration.authorization_hosts,
+                data=fields,
+                expected_statuses={200},
+            )
+            record = await self._load_record(registration, pending.tenant_id)
+            await self._save_record(
+                registration,
+                pending.tenant_id,
+                _token_record(record, token, pending.scope),
+            )
+            self._advance_credential_generation(credential_key)
         return await self.status(pending.service_id, pending.tenant_id)
 
     async def access_token(self, service_id: str, tenant_id: str) -> str | None:
         registration = self._registration(service_id)
         tenant_id = _safe_tenant(tenant_id)
+        credential_key = (service_id, tenant_id)
+        observed_generation = self._credential_generation(credential_key)
         record = await self._load_record(registration, tenant_id)
         if not record.get("access_token"):
             return None
         expires_at = int(record.get("expires_at", "0") or 0)
         if expires_at and expires_at <= int(time.time()) + 60:
-            return await self.refresh(service_id, tenant_id)
+            return await self._refresh(
+                registration,
+                tenant_id,
+                credential_key,
+                observed_generation,
+            )
         return record["access_token"]
 
     async def refresh(self, service_id: str, tenant_id: str) -> str | None:
         registration = self._registration(service_id)
         tenant_id = _safe_tenant(tenant_id)
-        record = await self._load_record(registration, tenant_id)
-        if not record.get("refresh_token") or not record.get("token_endpoint"):
-            return None
-        fields = {
-            "grant_type": "refresh_token",
-            "refresh_token": record["refresh_token"],
-            "client_id": record.get("client_id", ""),
-            "resource": registration.resource_url,
-        }
-        if record.get("client_secret"):
-            fields["client_secret"] = record["client_secret"]
-        try:
-            token = await self._request_json(
-                "POST",
-                record["token_endpoint"],
-                registration.authorization_hosts,
-                data=fields,
-                expected_statuses={200},
-            )
-            updated = _token_record(record, token, record.get("scope", ""))
+        credential_key = (service_id, tenant_id)
+        return await self._refresh(
+            registration,
+            tenant_id,
+            credential_key,
+            self._credential_generation(credential_key),
+        )
+
+    async def _refresh(
+        self,
+        registration: MCPOAuthRegistration,
+        tenant_id: str,
+        credential_key: tuple[str, str],
+        observed_generation: int,
+    ) -> str | None:
+        async with self._credential_lock(credential_key):
+            record = await self._load_record(registration, tenant_id)
+            if self._credential_generation(credential_key) != observed_generation:
+                return record.get("access_token")
+            if not record.get("refresh_token") or not record.get("token_endpoint"):
+                return None
+            fields = {
+                "grant_type": "refresh_token",
+                "refresh_token": record["refresh_token"],
+                "client_id": record.get("client_id", ""),
+                "resource": registration.resource_url,
+            }
+            if record.get("client_secret"):
+                fields["client_secret"] = record["client_secret"]
+            try:
+                token = await self._request_json(
+                    "POST",
+                    record["token_endpoint"],
+                    registration.authorization_hosts,
+                    data=fields,
+                    expected_statuses={200},
+                )
+                updated = _token_record(record, token, record.get("scope", ""))
+            except MCPOAuthError:
+                await self._save_record(
+                    registration,
+                    tenant_id,
+                    {
+                        key: value
+                        for key, value in record.items()
+                        if key != "access_token"
+                    },
+                )
+                self._advance_credential_generation(credential_key)
+                return None
             await self._save_record(registration, tenant_id, updated)
+            self._advance_credential_generation(credential_key)
             return updated["access_token"]
-        except MCPOAuthError:
-            await self._save_record(
-                registration,
-                tenant_id,
-                {key: value for key, value in record.items() if key != "access_token"},
-            )
-            return None
 
     async def clear(self, service_id: str, tenant_id: str) -> None:
         registration = self._registration(service_id)
         tenant_id = _safe_tenant(tenant_id)
-        record = await self._load_record(registration, tenant_id)
-        token = record.get("refresh_token") or record.get("access_token")
-        if token and record.get("revocation_endpoint"):
-            fields = {"token": token, "client_id": record.get("client_id", "")}
-            if record.get("client_secret"):
-                fields["client_secret"] = record["client_secret"]
+        credential_key = (service_id, tenant_id)
+        async with self._credential_lock(credential_key):
+            record = await self._load_record(registration, tenant_id)
+            token = record.get("refresh_token") or record.get("access_token")
+            if token and record.get("revocation_endpoint"):
+                fields = {"token": token, "client_id": record.get("client_id", "")}
+                if record.get("client_secret"):
+                    fields["client_secret"] = record["client_secret"]
+                try:
+                    await self._request_json(
+                        "POST",
+                        record["revocation_endpoint"],
+                        registration.authorization_hosts,
+                        data=fields,
+                        expected_statuses={200, 204},
+                        allow_empty=True,
+                    )
+                except MCPOAuthError:
+                    pass
             try:
-                await self._request_json(
-                    "POST",
-                    record["revocation_endpoint"],
-                    registration.authorization_hosts,
-                    data=fields,
-                    expected_statuses={200, 204},
-                    allow_empty=True,
+                await asyncio.to_thread(
+                    self.vault.delete, self._reference(registration, tenant_id)
                 )
-            except MCPOAuthError:
-                pass
-        try:
-            await asyncio.to_thread(
-                self.vault.delete, self._reference(registration, tenant_id)
-            )
-        except RuntimeError:
-            raise MCPOAuthError("mcp_oauth_vault_unavailable") from None
+            except RuntimeError:
+                raise MCPOAuthError("mcp_oauth_vault_unavailable") from None
+            self._advance_credential_generation(credential_key)
         async with self._lock:
             self._pending = {
                 key: item
@@ -512,10 +566,14 @@ class MCPOAuthService:
             raise MCPOAuthError("mcp_oauth_response_invalid")
         try:
             payload = response.json()
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        except (json.JSONDecodeError, RecursionError, UnicodeDecodeError):
             raise MCPOAuthError("mcp_oauth_response_invalid") from None
         if not isinstance(payload, dict):
             raise MCPOAuthError("mcp_oauth_response_invalid")
+        try:
+            validate_json_complexity(payload)
+        except JSONComplexityError:
+            raise MCPOAuthError("mcp_oauth_response_invalid") from None
         return payload
 
     async def _load_record(
@@ -554,10 +612,33 @@ class MCPOAuthService:
 
     @staticmethod
     def _reference(registration: MCPOAuthRegistration, tenant_id: str) -> str:
+        registration_generation = json.dumps(
+            {
+                "authorization_hosts": sorted(registration.authorization_hosts),
+                "client_id": registration.client_id,
+                "expected_host": registration.expected_host,
+                "resource_url": registration.resource_url,
+                "scope": registration.scope,
+                "service_id": registration.service_id,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         digest = hashlib.sha256(
-            f"{tenant_id}\0{registration.service_id}".encode("utf-8")
+            f"{tenant_id}\0{registration_generation}".encode("utf-8")
         ).hexdigest()
         return f"ecorex/mcp-oauth/{digest}"
+
+    def _credential_lock(self, key: tuple[str, str]) -> asyncio.Lock:
+        return self._credential_locks.setdefault(key, asyncio.Lock())
+
+    def _credential_generation(self, key: tuple[str, str]) -> int:
+        return self._credential_generations.get(key, 0)
+
+    def _advance_credential_generation(self, key: tuple[str, str]) -> int:
+        generation = self._credential_generation(key) + 1
+        self._credential_generations[key] = generation
+        return generation
 
     def _registration(self, service_id: str) -> MCPOAuthRegistration:
         registration = self.registrations.get(service_id)

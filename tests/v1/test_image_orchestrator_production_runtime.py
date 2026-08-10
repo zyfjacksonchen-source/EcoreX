@@ -60,6 +60,12 @@ from ecorex.image_orchestrator.worker import (
 PNG = b"\x89PNG\r\n\x1a\n" + b"managed-provider-result"
 
 
+def test_managed_image_response_rejects_excessive_json_depth() -> None:
+    payload = b'{"data":' + b"[" * 64 + b"0" + b"]" * 64 + b"}"
+    with pytest.raises(ProviderRejected, match="response"):
+        ManagedHTTPSImageProvider._decode_object(payload)
+
+
 def _keyring() -> str:
     private = Ed25519PrivateKey.generate()
     public = private.public_key().public_bytes(

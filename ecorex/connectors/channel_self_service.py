@@ -15,6 +15,7 @@ from enum import StrEnum
 import hashlib
 import json
 import re
+import secrets
 import threading
 from typing import Any, Protocol
 
@@ -130,6 +131,17 @@ class ChannelDeviceLifecycleAdapter(ChannelLifecycleAdapter, Protocol):
     def consume_authorization(self, flow_id: str) -> None:
         ...
 
+    def prepare_replace(self, config: Mapping[str, Any]) -> ConnectorHealthResult:
+        """Validate a confirmed session without exposing inbound messages."""
+        ...
+
+    def commit_replace(self, timeout_seconds: float) -> ConnectorHealthResult:
+        """Select the staged session after its credential generation is durable."""
+        ...
+
+    def abort_replace(self) -> None:
+        ...
+
 
 class ChannelDeviceAuthorizationError(RuntimeError):
     def __init__(self, code: str, http_status: int = 502) -> None:
@@ -191,6 +203,7 @@ class ChannelSelfService:
         self.stop_timeout_seconds = float(stop_timeout_seconds)
         self._states: dict[str, tuple[ChannelState, ConnectorHealth, str | None]] = {}
         self._lock = threading.RLock()
+        self._device_lock = threading.Lock()
 
     def catalog(self) -> dict[str, Any]:
         items: list[dict[str, Any]] = []
@@ -204,7 +217,10 @@ class ChannelSelfService:
                 if oauth
                 else channel_id in self.adapters
             )
-            if not adapter_available:
+            if channel_id == "wechatmp":
+                adapter_available = False
+                unavailable_reason = "passive_runtime_unavailable"
+            elif not adapter_available:
                 unavailable_reason = "adapter_not_packaged"
             else:
                 unavailable_reason = None
@@ -261,6 +277,17 @@ class ChannelSelfService:
         """Restore only previously enabled channels with packaged adapters."""
 
         for channel_id in self.adapters:
+            if self._auth_kind(channel_id) is ConnectorAuthKind.DEVICE_CODE:
+                try:
+                    self._recover_device_transition(channel_id)
+                except ChannelSelfServiceError as error:
+                    with self._lock:
+                        self._states[channel_id] = (
+                            ChannelState.ERROR,
+                            ConnectorHealth.ERROR,
+                            error.code,
+                        )
+                    continue
             stored = self._read(channel_id)
             if (
                 stored is None
@@ -426,6 +453,20 @@ class ChannelSelfService:
     def retry(self, channel_id: str, *, request_id: str | None) -> dict[str, Any]:
         channel_id, stored, adapter = self._ready(channel_id, request_id)
         self._stop(channel_id, action="retry", request_id=request_id)
+        resolve_uncertain = getattr(adapter, "resolve_uncertain", None)
+        if callable(resolve_uncertain):
+            try:
+                resolve_uncertain()
+            except Exception:
+                self._audit(
+                    channel_id,
+                    "retry",
+                    "failed",
+                    request_id,
+                    (),
+                    "channel_recovery_failed",
+                )
+                raise ChannelSelfServiceError("channel_recovery_failed", 503) from None
         stored = self._set_enabled(channel_id, stored, True)
         with self._lock:
             self._states[channel_id] = (
@@ -499,36 +540,105 @@ class ChannelSelfService:
         )
         instance = None
         if result.status == "confirmed":
-            replacing = self._read(channel_id)
-            if (
-                replacing is not None
-                and (result.config is not None or result.secrets is not None)
-            ):
-                self._stop(
-                    channel_id,
-                    action="auth_replace",
-                    request_id=request_id,
-                )
-            stored = (
-                self._confirmed_device_record(channel_id, result)
-                if result.config is not None or result.secrets is not None
-                else self._required_stored(channel_id)
-            )
-            if result.config is not None or result.secrets is not None:
-                adapter.consume_authorization(flow_id)
-                started = self._call_adapter(
-                    channel_id,
-                    "auth_start",
-                    request_id,
-                    lambda: adapter.start(self._material(stored)),
-                )
-                with self._lock:
-                    self._states[channel_id] = (
-                        _state_for_health(started.health),
-                        started.health,
-                        _error_code(started.error_code),
+            with self._device_lock:
+                replacing = self._read(channel_id)
+                if result.config is None and result.secrets is None:
+                    stored = self._required_stored(channel_id)
+                else:
+                    stored = self._confirmed_device_record(channel_id, result)
+                    old_reference = self._active_generation_reference(channel_id)
+                    if replacing is not None and old_reference is None:
+                        old_reference = self._new_generation_reference(channel_id)
+                    new_reference = self._new_generation_reference(channel_id)
+                    self._begin_device_transition(
+                        channel_id,
+                        flow_id,
+                        old_reference,
+                        new_reference,
                     )
-            instance = self._projection(channel_id, stored)
+                    pointer_committed = False
+                    try:
+                        if replacing is not None and self._active_generation_reference(
+                            channel_id
+                        ) is None:
+                            assert old_reference is not None
+                            self._vault_put_raw(
+                                old_reference, self._encode(channel_id, replacing)
+                            )
+                            self._set_generation_pointer(channel_id, old_reference)
+                        prepared = self._call_adapter(
+                            channel_id,
+                            "auth_prepare",
+                            request_id,
+                            lambda: adapter.prepare_replace(self._material(stored)),
+                        )
+                        if prepared.health is not ConnectorHealth.CONNECTED:
+                            raise ChannelSelfServiceError(
+                                _error_code(prepared.error_code)
+                                or "channel_device_prepare_failed",
+                                502,
+                            )
+                        self._consume_device_authorization(
+                            channel_id,
+                            flow_id,
+                            request_id,
+                            adapter,
+                        )
+                        self._vault_put_raw(
+                            new_reference, self._encode(channel_id, stored)
+                        )
+                        self._set_generation_pointer(channel_id, new_reference)
+                        pointer_committed = True
+                        started = self._call_adapter(
+                            channel_id,
+                            "auth_commit",
+                            request_id,
+                            lambda: adapter.commit_replace(
+                                self.stop_timeout_seconds
+                            ),
+                        )
+                        if started.health is not ConnectorHealth.CONNECTED:
+                            raise ChannelSelfServiceError(
+                                _error_code(started.error_code)
+                                or "channel_device_start_failed",
+                                502,
+                            )
+                    except Exception:
+                        try:
+                            adapter.abort_replace()
+                        except Exception:
+                            pass
+                        if pointer_committed:
+                            try:
+                                if old_reference is None:
+                                    self._vault_delete_raw(self._reference(channel_id))
+                                else:
+                                    self._set_generation_pointer(
+                                        channel_id, old_reference
+                                    )
+                            except Exception:
+                                try:
+                                    adapter.stop(self.stop_timeout_seconds)
+                                except Exception:
+                                    pass
+                                raise ChannelSelfServiceError(
+                                    "channel_device_rollback_failed", 503
+                                ) from None
+                        if self._delete_generation(new_reference):
+                            self._clear_device_transition(channel_id)
+                        raise
+                    with self._lock:
+                        self._states[channel_id] = (
+                            _state_for_health(started.health),
+                            started.health,
+                            _error_code(started.error_code),
+                        )
+                    cleaned = old_reference is None or self._delete_generation(
+                        old_reference
+                    )
+                    if cleaned:
+                        self._clear_device_transition(channel_id)
+                instance = self._projection(channel_id, stored)
         self._audit(channel_id, "auth_poll", "succeeded", request_id, (), None)
         projection = self._device_projection(channel_id, result)
         if instance is not None:
@@ -580,6 +690,9 @@ class ChannelSelfService:
                 "cancel_authorization",
                 "refresh_authorization",
                 "consume_authorization",
+                "prepare_replace",
+                "commit_replace",
+                "abort_replace",
             )
         ):
             raise ChannelSelfServiceError("channel_adapter_unavailable", 503)
@@ -628,8 +741,110 @@ class ChannelSelfService:
             secrets={key: _secret_value(value) for key, value in result.secrets.items()},
             updated_at=datetime.now(UTC),
         )
-        self._vault_put(channel_id, stored)
         return stored
+
+    def _consume_device_authorization(
+        self,
+        channel_id: str,
+        flow_id: str,
+        request_id: str | None,
+        adapter: ChannelDeviceLifecycleAdapter,
+    ) -> None:
+        try:
+            adapter.consume_authorization(flow_id)
+        except ChannelDeviceAuthorizationError as error:
+            self._audit(
+                channel_id,
+                "auth_consume",
+                "failed",
+                request_id,
+                (),
+                error.code,
+            )
+            raise ChannelSelfServiceError(error.code, error.http_status) from None
+        except Exception:
+            self._audit(
+                channel_id,
+                "auth_consume",
+                "failed",
+                request_id,
+                (),
+                "channel_adapter_failed",
+            )
+            raise ChannelSelfServiceError("channel_adapter_failed", 502) from None
+
+    def _begin_device_transition(
+        self,
+        channel_id: str,
+        flow_id: str,
+        old_reference: str | None,
+        new_reference: str,
+    ) -> None:
+        try:
+            self.vault.put(
+                self._transition_reference(channel_id),
+                {
+                    "schema_version": "1",
+                    "channel_id": channel_id,
+                    "state": "preparing",
+                    "flow_sha256": hashlib.sha256(flow_id.encode()).hexdigest(),
+                    "old_generation_reference": old_reference or "",
+                    "new_generation_reference": new_reference,
+                    "updated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        except Exception:
+            raise ChannelSelfServiceError("channel_vault_unavailable", 503) from None
+
+    def _clear_device_transition(self, channel_id: str) -> None:
+        try:
+            self.vault.delete(self._transition_reference(channel_id))
+        except Exception:
+            # The channel record remains the authority; a later startup retries cleanup.
+            pass
+
+    def _recover_device_transition(self, channel_id: str) -> None:
+        try:
+            transition = self.vault.get(self._transition_reference(channel_id))
+        except KeyError:
+            return
+        except Exception:
+            raise ChannelSelfServiceError("channel_vault_unavailable", 503) from None
+        expected = {
+            "schema_version",
+            "channel_id",
+            "state",
+            "flow_sha256",
+            "old_generation_reference",
+            "new_generation_reference",
+            "updated_at",
+        }
+        try:
+            if (
+                set(transition) != expected
+                or transition["schema_version"] != "1"
+                or transition["channel_id"] != channel_id
+                or transition["state"] != "preparing"
+            ):
+                raise ValueError
+            old_reference = transition["old_generation_reference"] or None
+            new_reference = transition["new_generation_reference"]
+            if old_reference is not None:
+                self._validate_generation_reference(channel_id, old_reference)
+            self._validate_generation_reference(channel_id, new_reference)
+        except Exception:
+            raise ChannelSelfServiceError(
+                "channel_device_transition_invalid", 503
+            ) from None
+        active = self._active_generation_reference(channel_id)
+        if active == new_reference:
+            cleaned = old_reference is None or self._delete_generation(old_reference)
+        else:
+            cleaned = self._delete_generation(new_reference)
+            if active is None and old_reference is not None:
+                cleaned = self._delete_generation(old_reference) and cleaned
+        if cleaned:
+            self._clear_device_transition(channel_id)
 
     def _device_projection(
         self, channel_id: str, result: ChannelDeviceAuthorization
@@ -765,6 +980,32 @@ class ChannelSelfService:
             return None
         except RuntimeError:
             raise ChannelSelfServiceError("channel_vault_unavailable", 503) from None
+        if set(payload) == {"schema_version", "channel_id", "generation_reference"}:
+            try:
+                if payload["schema_version"] != "2" or payload["channel_id"] != channel_id:
+                    raise ValueError
+                generation_reference = payload["generation_reference"]
+                self._validate_generation_reference(channel_id, generation_reference)
+                payload = self.vault.get(generation_reference)
+            except KeyError:
+                raise ChannelSelfServiceError(
+                    "channel_vault_record_invalid", 503
+                ) from None
+            except ChannelSelfServiceError:
+                raise
+            except RuntimeError:
+                raise ChannelSelfServiceError(
+                    "channel_vault_unavailable", 503
+                ) from None
+            except Exception:
+                raise ChannelSelfServiceError(
+                    "channel_vault_record_invalid", 503
+                ) from None
+        return self._decode(channel_id, payload)
+
+    def _decode(
+        self, channel_id: str, payload: Mapping[str, str]
+    ) -> _StoredChannel:
         try:
             if set(payload) != {
                 "schema_version",
@@ -824,22 +1065,90 @@ class ChannelSelfService:
         }
 
     def _vault_put(self, channel_id: str, stored: _StoredChannel) -> None:
-        try:
-            self.vault.put(
-                self._reference(channel_id), self._encode(channel_id, stored)
-            )
-        except (ChannelSelfServiceError, KeyboardInterrupt, SystemExit):
-            raise
-        except Exception:
-            raise ChannelSelfServiceError("channel_vault_unavailable", 503) from None
+        reference = self._active_generation_reference(channel_id)
+        self._vault_put_raw(
+            reference or self._reference(channel_id), self._encode(channel_id, stored)
+        )
 
     def _vault_delete(self, channel_id: str) -> None:
+        generation_reference = self._active_generation_reference(channel_id)
         try:
             self.vault.delete(self._reference(channel_id))
+            if generation_reference is not None:
+                self.vault.delete(generation_reference)
+            self.vault.delete(self._transition_reference(channel_id))
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception:
             raise ChannelSelfServiceError("channel_vault_unavailable", 503) from None
+
+    def _vault_put_raw(self, reference: str, payload: Mapping[str, str]) -> None:
+        try:
+            self.vault.put(reference, payload)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:
+            raise ChannelSelfServiceError("channel_vault_unavailable", 503) from None
+
+    def _vault_delete_raw(self, reference: str) -> None:
+        try:
+            self.vault.delete(reference)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:
+            raise ChannelSelfServiceError("channel_vault_unavailable", 503) from None
+
+    def _active_generation_reference(self, channel_id: str) -> str | None:
+        try:
+            payload = self.vault.get(self._reference(channel_id))
+        except KeyError:
+            return None
+        except Exception:
+            raise ChannelSelfServiceError("channel_vault_unavailable", 503) from None
+        if set(payload) != {"schema_version", "channel_id", "generation_reference"}:
+            return None
+        try:
+            if payload["schema_version"] != "2" or payload["channel_id"] != channel_id:
+                raise ValueError
+            reference = payload["generation_reference"]
+            self._validate_generation_reference(channel_id, reference)
+            return reference
+        except Exception:
+            raise ChannelSelfServiceError("channel_vault_record_invalid", 503) from None
+
+    def _set_generation_pointer(self, channel_id: str, reference: str) -> None:
+        self._validate_generation_reference(channel_id, reference)
+        self._vault_put_raw(
+            self._reference(channel_id),
+            {
+                "schema_version": "2",
+                "channel_id": channel_id,
+                "generation_reference": reference,
+            },
+        )
+
+    def _new_generation_reference(self, channel_id: str) -> str:
+        return f"{self._generation_prefix(channel_id)}{secrets.token_hex(16)}"
+
+    def _generation_prefix(self, channel_id: str) -> str:
+        return f"ecorex/channel-generations/{self._instance_id(channel_id)}/"
+
+    def _validate_generation_reference(self, channel_id: str, reference: Any) -> None:
+        prefix = self._generation_prefix(channel_id)
+        if (
+            not isinstance(reference, str)
+            or not reference.startswith(prefix)
+            or re.fullmatch(r"[0-9a-f]{32}", reference[len(prefix) :]) is None
+        ):
+            raise ValueError("channel generation reference is invalid")
+
+    def _delete_generation(self, reference: str) -> bool:
+        try:
+            self.vault.delete(reference)
+            return True
+        except Exception:
+            # The transition marker makes orphan cleanup recoverable on restart.
+            return False
 
     def _projection(
         self, channel_id: str, stored: _StoredChannel
@@ -981,6 +1290,9 @@ class ChannelSelfService:
         ).hexdigest()[:32]
         account = hashlib.sha256(self.owner.account_id.encode("utf-8")).hexdigest()[:32]
         return f"ecorex/channel-instances/{organization}/{account}/{channel_id}"
+
+    def _transition_reference(self, channel_id: str) -> str:
+        return f"ecorex/channel-transitions/{self._instance_id(channel_id)}"
 
     def _instance_id(self, channel_id: str) -> str:
         source = "\x00".join(

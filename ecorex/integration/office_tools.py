@@ -10,8 +10,16 @@ import math
 from pathlib import PurePath
 from typing import Any, Callable, Mapping
 
-from ecorex.artifacts import ArtifactFamily, ArtifactScope, ArtifactService
+from ecorex.artifacts import (
+    ArtifactError,
+    ArtifactFamily,
+    ArtifactNotFound,
+    ArtifactScope,
+    ArtifactService,
+    ArtifactStatus,
+)
 from ecorex.capabilities import ToolInvocationContext
+from ecorex.json_boundary import JSONComplexityError, validate_json_complexity
 from ecorex.protocol import ItemKind, ItemStatus
 
 
@@ -21,6 +29,9 @@ _SKILL_FAMILIES = {
     "office-presentations": (ArtifactFamily.PRESENTATION, ".pptx"),
     "office-pdf": (ArtifactFamily.PDF, ".pdf"),
 }
+_MAX_PARAMETERS_BYTES = 64 * 1024
+_MAX_INSPECTION_TEXT_BYTES = 192 * 1024
+_MAX_INSPECTION_RESULT_BYTES = 240 * 1024
 
 
 class OfficeSkillError(RuntimeError):
@@ -32,7 +43,7 @@ class OfficeSkillError(RuntimeError):
 
 
 class RuntimeOfficeSkillBackend:
-    """Create one bounded Office deliverable through the signed Office Pack."""
+    """Create or inspect one bounded Office artifact through the signed Pack."""
 
     def __init__(
         self,
@@ -42,8 +53,8 @@ class RuntimeOfficeSkillBackend:
         kernel: Any,
         account_id: str,
     ) -> None:
-        if not callable(getattr(service, "create", None)):
-            raise ValueError("Office Pack service does not implement create")
+        if not all(callable(getattr(service, method, None)) for method in ("create", "read")):
+            raise ValueError("Office Pack service does not implement create and read")
         self.service = service
         self.artifacts = artifacts
         self.kernel = kernel
@@ -70,6 +81,14 @@ class RuntimeOfficeSkillBackend:
         if scope is None or not context.idempotency_key:
             raise OfficeSkillError("office_skill_execution_scope_missing")
         family, extension = _SKILL_FAMILIES[str(skill.name)]
+        _validate_json_request(parameters)
+        if parameters.get("operation") in {"inspect", "read"}:
+            return await self._read(
+                family,
+                parameters,
+                context,
+                state_fence=state_fence,
+            )
         payload, requested_name = _validated_request(
             family, extension, parameters
         )
@@ -195,6 +214,69 @@ class RuntimeOfficeSkillBackend:
             return existing
         return _public_result(created)
 
+    async def _read(
+        self,
+        family: ArtifactFamily,
+        parameters: Mapping[str, Any],
+        context: ToolInvocationContext,
+        *,
+        state_fence: Callable[[], None],
+    ) -> Mapping[str, Any]:
+        scope = context.execution_scope
+        assert scope is not None
+        artifact_id, revision_id = _validated_read_request(parameters)
+        try:
+            artifact = self.artifacts.get_user_artifact(
+                artifact_id,
+                account_id=self.account_id,
+            )
+        except ArtifactNotFound:
+            raise OfficeSkillError("office_artifact_not_found") from None
+        if artifact.revision_id != revision_id:
+            raise OfficeSkillError("office_artifact_revision_changed")
+        if artifact.family is not family or artifact.status is not ArtifactStatus.READY:
+            raise OfficeSkillError("office_artifact_not_readable")
+        try:
+            artifact_scope = self.artifacts.get_artifact_scope(artifact_id)
+        except ArtifactError:
+            raise OfficeSkillError("office_artifact_not_found") from None
+        if (
+            artifact_scope.account_id != self.account_id
+            or artifact_scope.thread_id != scope.thread_id
+        ):
+            raise OfficeSkillError("office_artifact_not_found")
+        if not 1 <= artifact.size_bytes <= 5 * 1024 * 1024:
+            raise OfficeSkillError("office_artifact_too_large")
+
+        state_fence()
+        try:
+            content = self.artifacts.read_user_content(
+                artifact_id,
+                revision_id,
+                account_id=self.account_id,
+            )
+        except ArtifactError:
+            raise OfficeSkillError("office_artifact_read_failed") from None
+        if len(content) != artifact.size_bytes:
+            raise OfficeSkillError("office_artifact_read_failed")
+        pack_result = await asyncio.to_thread(
+            self.service.read,
+            family.value,
+            content,
+            timeout_seconds=30.0,
+        )
+        state_fence()
+        try:
+            current = self.artifacts.get_user_artifact(
+                artifact_id,
+                account_id=self.account_id,
+            )
+        except ArtifactNotFound:
+            raise OfficeSkillError("office_artifact_not_found") from None
+        if current.revision_id != revision_id:
+            raise OfficeSkillError("office_artifact_revision_changed")
+        return _validated_read_result(artifact, family, pack_result)
+
     def _existing(
         self, item_id: str, request_sha256: str
     ) -> Mapping[str, Any] | None:
@@ -236,18 +318,6 @@ def _validated_request(
     }[family]
     if set(parameters) - allowed:
         raise OfficeSkillError("office_create_parameters_invalid")
-    try:
-        encoded = json.dumps(
-            dict(parameters),
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode("utf-8")
-    except (TypeError, ValueError, RecursionError):
-        raise OfficeSkillError("office_create_parameters_invalid") from None
-    if len(encoded) > 256 * 1024:
-        raise OfficeSkillError("office_create_parameters_too_large")
     title = _bounded_text(parameters.get("title") or "e-Mate 办公产物", 512)
     file_name = str(parameters.get("file_name") or f"{title}{extension}").strip()
     if (
@@ -320,6 +390,50 @@ def _validated_request(
     return payload, file_name
 
 
+def _validate_json_request(parameters: Mapping[str, Any]) -> None:
+    if not isinstance(parameters, Mapping):
+        raise OfficeSkillError("office_parameters_invalid")
+    try:
+        value = dict(parameters)
+        validate_json_complexity(value, max_depth=8, max_nodes=20_000)
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (
+        JSONComplexityError,
+        TypeError,
+        ValueError,
+        UnicodeEncodeError,
+        RecursionError,
+    ):
+        raise OfficeSkillError("office_parameters_invalid") from None
+    if len(encoded) > _MAX_PARAMETERS_BYTES:
+        raise OfficeSkillError("office_parameters_too_large")
+
+
+def _validated_read_request(parameters: Mapping[str, Any]) -> tuple[str, str]:
+    if set(parameters) != {"operation", "artifact_id", "revision_id"}:
+        raise OfficeSkillError("office_read_parameters_invalid")
+    if parameters.get("operation") not in {"inspect", "read"}:
+        raise OfficeSkillError("office_read_parameters_invalid")
+    return (
+        _bounded_identifier(parameters.get("artifact_id")),
+        _bounded_identifier(parameters.get("revision_id")),
+    )
+
+
+def _bounded_identifier(value: Any) -> str:
+    if not isinstance(value, str) or value != value.strip():
+        raise OfficeSkillError("office_read_parameters_invalid")
+    if not 1 <= len(value.encode("utf-8")) <= 128:
+        raise OfficeSkillError("office_read_parameters_invalid")
+    return value
+
+
 def _bounded_list(value: Any, maximum: int, *, empty: bool = False) -> list[Any]:
     if not isinstance(value, list) or len(value) > maximum or (not empty and not value):
         raise OfficeSkillError("office_collection_invalid")
@@ -370,6 +484,65 @@ def _validated_pack_result(
     if not valid_signature or mime_type != expected_mime_type:
         raise OfficeSkillError("office_pack_result_invalid")
     return content, expected_mime_type, dict(result["validation"])
+
+
+def _validated_read_result(
+    artifact: Any,
+    family: ArtifactFamily,
+    result: Any,
+) -> Mapping[str, Any]:
+    if not isinstance(result, Mapping):
+        raise OfficeSkillError("office_pack_result_invalid")
+    detached = dict(result)
+    try:
+        validate_json_complexity(detached, max_depth=8, max_nodes=20_000)
+        encoded = json.dumps(
+            detached,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (
+        JSONComplexityError,
+        TypeError,
+        ValueError,
+        UnicodeEncodeError,
+        RecursionError,
+    ):
+        raise OfficeSkillError("office_pack_result_invalid") from None
+    text = result.get("text")
+    structure = result.get("structure")
+    warnings = result.get("warnings")
+    if (
+        result.get("family") != family.value
+        or not isinstance(text, str)
+        or len(text.encode("utf-8")) > _MAX_INSPECTION_TEXT_BYTES
+        or not isinstance(structure, Mapping)
+        or not isinstance(warnings, list)
+        or len(warnings) > 64
+        or any(
+            not isinstance(value, str) or len(value.encode("utf-8")) > 512
+            for value in warnings
+        )
+        or not isinstance(result.get("truncated"), bool)
+        or len(encoded) > _MAX_INSPECTION_RESULT_BYTES
+    ):
+        raise OfficeSkillError("office_pack_result_invalid")
+    return {
+        "status": "completed",
+        "operation": "inspect",
+        "artifact_id": artifact.artifact_id,
+        "revision_id": artifact.revision_id,
+        "family": artifact.family.value,
+        "display_name": artifact.display_name,
+        "mime_type": artifact.mime_type,
+        "text": text,
+        "structure": dict(structure),
+        "warnings": list(warnings),
+        "truncated": result["truncated"],
+        "summary": "已提取办公文件文本与结构；未执行视觉布局验收。",
+    }
 
 
 def _public_result(artifact: Any) -> Mapping[str, Any]:

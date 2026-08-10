@@ -12,6 +12,10 @@ import type {
   GeneratedRenditionKind,
 } from "./generatedRuntimeContract.ts";
 import type {
+  GeneratedKnowledgeNodeKind,
+  GeneratedMemoryContentKind,
+  GeneratedMemoryContentOrigin,
+  GeneratedMemoryContentView,
   GeneratedMemoryResetStatus,
   GeneratedMigrationCredentialKind,
   GeneratedMigrationCredentialOrigin,
@@ -184,6 +188,13 @@ export interface ConversationUsageProjection {
   week: TokenUsageWindow;
   context: ContextUsageProjection;
   task_activity: TaskActivityProjection;
+  data_quality: {
+    audit_continuity: "complete" | "recovered_with_gap" | "uncertain";
+    recovery_count: number;
+    removed_audit_rows: number;
+    removed_trace_rows: number;
+    last_recovery_at: string | null;
+  };
   calculated_at: string;
 }
 
@@ -844,6 +855,73 @@ export interface MemorySnapshot {
 export interface MemoryMutationResponse {
   memory: MemorySnapshot;
   reset: MemoryResetProjection;
+}
+
+export type MemoryContentView = GeneratedMemoryContentView;
+
+export interface MemoryContentItem {
+  item_id: string;
+  name: string;
+  path: string;
+  kind: GeneratedMemoryContentKind;
+  origin: GeneratedMemoryContentOrigin;
+  source: string;
+  size_bytes: number;
+  updated_at: string | null;
+}
+
+export interface MemoryContentPage {
+  view: MemoryContentView;
+  page: number;
+  page_size: 10;
+  total: number;
+  items: MemoryContentItem[];
+}
+
+export interface MemoryContentDocument extends MemoryContentItem {
+  content: string;
+}
+
+export interface KnowledgeNode {
+  path: string;
+  name: string;
+  kind: GeneratedKnowledgeNodeKind;
+  size_bytes: number;
+  updated_at: string;
+  children: KnowledgeNode[];
+}
+
+export interface KnowledgeTree {
+  root: "knowledge";
+  query: string | null;
+  items: KnowledgeNode[];
+}
+
+export interface KnowledgeDocument {
+  path: string;
+  name: string;
+  content: string;
+  size_bytes: number;
+  updated_at: string;
+  links: string[];
+}
+
+export interface KnowledgeGraph {
+  nodes: Array<{ path: string; label: string }>;
+  edges: Array<{ source: string; target: string }>;
+}
+
+export interface KnowledgeImportResponse {
+  imported_count: number;
+  rejected_count: number;
+  total_bytes: number;
+  items: Array<{
+    original_name: string;
+    name: string | null;
+    path: string | null;
+    status: "imported" | "renamed" | "rejected";
+    reason: string | null;
+  }>;
 }
 
 export type MigrationCredentialKind = GeneratedMigrationCredentialKind;

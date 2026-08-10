@@ -228,6 +228,13 @@ test("GA harness exposes managed bootstrap, strict CSRF, state reset, and unique
 
   const usage = await fetch(`${harness.url}/api/v1/threads/thread-ga/usage`).then((response) => response.json());
   assert.deepEqual(usage.today, { input_tokens: 4280, output_tokens: 960, total_tokens: 5240 });
+  assert.deepEqual(usage.data_quality, {
+    audit_continuity: "complete",
+    recovery_count: 0,
+    removed_audit_rows: 0,
+    removed_trace_rows: 0,
+    last_recovery_at: null,
+  });
   assert.deepEqual(usage.context, {
     used_tokens: 42180,
     window_tokens: 272000,

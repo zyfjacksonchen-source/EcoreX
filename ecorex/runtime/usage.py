@@ -11,6 +11,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import json
+import os
+from pathlib import Path
+import stat
 from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -23,12 +26,16 @@ from ecorex.protocol import (
     TERMINAL_TURN_STATUSES,
     TokenUsageWindow,
     TurnStatus,
+    UsageDataQualityProjection,
 )
 
 from .database import SQLiteDatabase
 
 
 _MAX_REPORTED_TOKENS = 10**12
+_MAX_RECOVERY_RECEIPTS = 64
+_MAX_RECOVERY_RECEIPT_BYTES = 64 * 1024
+_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
 
 def _utc_now() -> datetime:
@@ -144,6 +151,150 @@ class UsageProjectionService:
         self.timezone_name = timezone_name
         self._zone = zone
         self._clock = clock
+
+    def _data_quality(self) -> UsageDataQualityProjection:
+        root = self.database.path.parent / "observability-quarantine"
+        try:
+            metadata = root.lstat()
+        except FileNotFoundError:
+            return UsageDataQualityProjection()
+        except OSError:
+            return UsageDataQualityProjection(audit_continuity="uncertain")
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or not stat.S_ISDIR(metadata.st_mode)
+            or bool(getattr(metadata, "st_file_attributes", 0) & _REPARSE_POINT)
+        ):
+            return UsageDataQualityProjection(audit_continuity="uncertain")
+        try:
+            entries = sorted(os.scandir(root), key=lambda item: item.name)
+        except OSError:
+            return UsageDataQualityProjection(audit_continuity="uncertain")
+        if len(entries) > _MAX_RECOVERY_RECEIPTS:
+            return UsageDataQualityProjection(
+                audit_continuity="uncertain",
+                recovery_count=len(entries),
+            )
+
+        recovery_count = 0
+        removed_audit_rows = 0
+        removed_trace_rows = 0
+        last_recovery_at: datetime | None = None
+        uncertain = False
+        for entry in entries:
+            try:
+                directory = entry.stat(follow_symlinks=False)
+                if (
+                    entry.is_symlink()
+                    or not stat.S_ISDIR(directory.st_mode)
+                    or bool(
+                        getattr(directory, "st_file_attributes", 0)
+                        & _REPARSE_POINT
+                    )
+                ):
+                    uncertain = True
+                    continue
+                path = Path(entry.path) / "recovery-receipt.json"
+                metadata = path.lstat()
+                if (
+                    stat.S_ISLNK(metadata.st_mode)
+                    or not stat.S_ISREG(metadata.st_mode)
+                    or bool(
+                        getattr(metadata, "st_file_attributes", 0)
+                        & _REPARSE_POINT
+                    )
+                    or metadata.st_size > _MAX_RECOVERY_RECEIPT_BYTES
+                ):
+                    uncertain = True
+                    continue
+                flags = (
+                    os.O_RDONLY
+                    | getattr(os, "O_BINARY", 0)
+                    | getattr(os, "O_NOFOLLOW", 0)
+                )
+                descriptor = os.open(path, flags)
+                with os.fdopen(descriptor, "rb") as stream:
+                    opened = os.fstat(stream.fileno())
+                    payload = stream.read(_MAX_RECOVERY_RECEIPT_BYTES + 1)
+                    opened_after = os.fstat(stream.fileno())
+                current = path.lstat()
+                identity = (
+                    metadata.st_dev,
+                    metadata.st_ino,
+                    metadata.st_size,
+                    metadata.st_mtime_ns,
+                )
+                if (
+                    len(payload) > _MAX_RECOVERY_RECEIPT_BYTES
+                    or identity
+                    != (
+                        opened.st_dev,
+                        opened.st_ino,
+                        opened.st_size,
+                        opened.st_mtime_ns,
+                    )
+                    or identity
+                    != (
+                        opened_after.st_dev,
+                        opened_after.st_ino,
+                        opened_after.st_size,
+                        opened_after.st_mtime_ns,
+                    )
+                    or identity
+                    != (
+                        current.st_dev,
+                        current.st_ino,
+                        current.st_size,
+                        current.st_mtime_ns,
+                    )
+                ):
+                    uncertain = True
+                    continue
+                value = json.loads(payload.decode("utf-8"))
+            except (OSError, UnicodeError, ValueError, RecursionError):
+                uncertain = True
+                continue
+            if not isinstance(value, Mapping) or value.get("reason") != "audit_key_mismatch":
+                uncertain = True
+                continue
+            state = value.get("state")
+            if state not in {"pending", "completed"}:
+                uncertain = True
+                continue
+            recovery_count += 1
+            uncertain = uncertain or state != "completed"
+            removed = value.get("removed_rows")
+            if not isinstance(removed, Mapping):
+                uncertain = True
+                continue
+            for name, raw_count in removed.items():
+                count = _nonnegative_int(raw_count)
+                if count is None:
+                    uncertain = True
+                    continue
+                if str(name).startswith("observability_audit_"):
+                    removed_audit_rows += count
+                elif str(name).startswith("observability_trace_"):
+                    removed_trace_rows += count
+            recovered_at = _parse_time(value.get("created_at"))
+            if recovered_at is None:
+                uncertain = True
+            elif last_recovery_at is None or recovered_at > last_recovery_at:
+                last_recovery_at = recovered_at
+        continuity = (
+            "uncertain"
+            if uncertain
+            else "recovered_with_gap"
+            if recovery_count
+            else "complete"
+        )
+        return UsageDataQualityProjection(
+            audit_continuity=continuity,
+            recovery_count=recovery_count,
+            removed_audit_rows=removed_audit_rows,
+            removed_trace_rows=removed_trace_rows,
+            last_recovery_at=last_recovery_at,
+        )
 
     @staticmethod
     def _frozen_model_projection(
@@ -425,6 +576,7 @@ class UsageProjectionService:
                     for day, counts in activity.items()
                 ],
             ),
+            data_quality=self._data_quality(),
             calculated_at=now,
         )
 

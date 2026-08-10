@@ -1622,6 +1622,20 @@ class TaskActivityProjection(FrozenProtocolModel):
     days: list[TaskActivityDay] = Field(default_factory=list, max_length=7)
 
 
+class UsageDataQualityProjection(FrozenProtocolModel):
+    """Whether a local observability recovery left an auditable usage gap."""
+
+    audit_continuity: Literal["complete", "recovered_with_gap", "uncertain"] = (
+        "complete"
+    )
+    recovery_count: int = Field(default=0, ge=0, strict=True)
+    removed_audit_rows: int = Field(default=0, ge=0, strict=True)
+    removed_trace_rows: int = Field(default=0, ge=0, strict=True)
+    last_recovery_at: datetime | None = None
+
+    _last_recovery_at_utc = field_validator("last_recovery_at")(_ensure_utc)
+
+
 class ConversationUsageProjection(FrozenProtocolModel):
     """Read-only usage projection for the active conversation composer."""
 
@@ -1634,6 +1648,9 @@ class ConversationUsageProjection(FrozenProtocolModel):
     week: TokenUsageWindow = Field(default_factory=TokenUsageWindow)
     context: ContextUsageProjection = Field(default_factory=ContextUsageProjection)
     task_activity: TaskActivityProjection = Field(default_factory=TaskActivityProjection)
+    data_quality: UsageDataQualityProjection = Field(
+        default_factory=UsageDataQualityProjection
+    )
     calculated_at: datetime = Field(default_factory=utc_now)
 
     _calculated_at_utc = field_validator("calculated_at")(_ensure_utc)

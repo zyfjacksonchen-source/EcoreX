@@ -48,7 +48,7 @@ export function validateConversationUsageProjection(value: unknown): Conversatio
   record(value, "root");
   fields(value, [
     "thread_id", "timezone", "scope", "source", "complete_across_devices",
-    "today", "week", "context", "task_activity", "calculated_at",
+    "today", "week", "context", "task_activity", "data_quality", "calculated_at",
   ], "root");
   text(value.thread_id, "thread_id");
   text(value.timezone, "timezone");
@@ -92,5 +92,17 @@ export function validateConversationUsageProjection(value: unknown): Conversatio
     text(context[name], `context.${name}`, true);
   }
   text(value.calculated_at, "calculated_at");
+  record(value.data_quality, "data_quality");
+  fields(value.data_quality, [
+    "audit_continuity", "recovery_count", "removed_audit_rows",
+    "removed_trace_rows", "last_recovery_at",
+  ], "data_quality");
+  if (!( ["complete", "recovered_with_gap", "uncertain"] as unknown[]).includes(value.data_quality.audit_continuity)) {
+    reject("data_quality.audit_continuity", "complete, recovered_with_gap, or uncertain");
+  }
+  for (const name of ["recovery_count", "removed_audit_rows", "removed_trace_rows"] as const) {
+    integer(value.data_quality[name], `data_quality.${name}`);
+  }
+  text(value.data_quality.last_recovery_at, "data_quality.last_recovery_at", true);
   return value as unknown as ConversationUsageProjection;
 }

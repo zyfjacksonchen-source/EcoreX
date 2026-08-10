@@ -658,6 +658,11 @@ def test_production_nginx_and_systemd_keep_replica_boundary_narrow() -> None:
     assert "location /ecorex-agent/releases/" in routes
     assert 'location ~ "^/ecorex-agent/releases/(?<release_namespace>v' in routes
     assert "proxy_request_buffering off" in routes
+    public_share_route = routes.split("location ^~ /s/ {", 1)[1].split(
+        "\n}\n", 1
+    )[0]
+    assert "limit_except GET HEAD { deny all; }" in public_share_route
+    assert "proxy_pass $ecorex_control_plane;" in public_share_route
     legacy_gateway_route = routes.split(
         "location = /ecorex-agent/api/v1/responses {", 1
     )[1].split("}\n", 1)[0]

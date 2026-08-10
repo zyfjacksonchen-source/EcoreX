@@ -1051,15 +1051,6 @@ export function AppV1() {
               setSchedulesOpen(false);
               setSkillsOpen(true);
             }}
-            onManageKnowledge={() => {
-              setComposerPrefill({
-                key: crypto.randomUUID(),
-                text: "请读取我的真实知识目录，列出当前知识内容和可执行的整理操作；任何修改前先让我确认。",
-              });
-              setSkillsOpen(false);
-              setSchedulesOpen(false);
-              closeSettings();
-            }}
             profileAvatar={profileAvatar}
             onProfileAvatarChange={updateProfileAvatar}
             memory={runtime.memory}

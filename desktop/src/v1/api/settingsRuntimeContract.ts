@@ -1,4 +1,12 @@
 import type {
+  KnowledgeDocument,
+  KnowledgeGraph,
+  KnowledgeImportResponse,
+  KnowledgeNode,
+  KnowledgeTree,
+  MemoryContentDocument,
+  MemoryContentItem,
+  MemoryContentPage,
   MemoryMutationResponse,
   MemoryResetProjection,
   MemorySnapshot,
@@ -12,6 +20,12 @@ import type {
 import { GENERATED_SETTINGS_RUNTIME_CONTRACT } from "./generatedSettingsRuntimeContract.ts";
 
 type SettingsContract =
+  | "KnowledgeDocumentResponse"
+  | "KnowledgeGraphResponse"
+  | "KnowledgeImportResponse"
+  | "KnowledgeTreeResponse"
+  | "MemoryContentDocumentResponse"
+  | "MemoryContentPageResponse"
   | "MemoryMutationResponse"
   | "MemorySnapshotResponse"
   | "MigrationQuarantineResponse"
@@ -179,6 +193,228 @@ function assertMemoryReset(
   if (value.status !== "active" && value.can_undo) {
     reject(contract, `${path}.can_undo`, "false after an active reset ends");
   }
+}
+
+function assertKnowledgeDocument(
+  value: unknown,
+  contract: "KnowledgeDocumentResponse" | "KnowledgeImportResponse",
+  rootFields: readonly string[],
+  path: string,
+): asserts value is KnowledgeDocument {
+  assertRecord(value, contract, path);
+  assertFields(value, rootFields, contract, path);
+  assertString(value.path, contract, `${path}.path`);
+  assertString(value.name, contract, `${path}.name`);
+  if (typeof value.content !== "string" || value.content.length > 10 * 1024 * 1024) {
+    reject(contract, `${path}.content`, "bounded UTF-8 knowledge text");
+  }
+  assertInteger(value.size_bytes, contract, `${path}.size_bytes`);
+  if ((value.size_bytes as number) > 10 * 1024 * 1024) {
+    reject(contract, `${path}.size_bytes`, "at most 10 MiB");
+  }
+  timestampValue(value.updated_at, contract, `${path}.updated_at`);
+  if (!Array.isArray(value.links) || value.links.length > 10_000) {
+    reject(contract, `${path}.links`, "a bounded link list");
+  }
+  const links = new Set<string>();
+  value.links.forEach((link, index) => {
+    assertString(link, contract, `${path}.links[${index}]`);
+    if (links.has(link)) reject(contract, `${path}.links[${index}]`, "a unique link");
+    links.add(link);
+  });
+}
+
+function assertKnowledgeNode(
+  value: unknown,
+  contract: "KnowledgeTreeResponse",
+  path: string,
+  depth = 0,
+): asserts value is KnowledgeNode {
+  if (depth > 32) reject(contract, path, "a knowledge tree no deeper than 32 levels");
+  assertRecord(value, contract, path);
+  assertFields(value, fields.KnowledgeTreeResponse.KnowledgeNodeResponse, contract, path);
+  if (typeof value.path !== "string") reject(contract, `${path}.path`, "a relative path");
+  assertString(value.name, contract, `${path}.name`);
+  assertOneOf(value.kind, values.knowledgeNodeKinds, contract, `${path}.kind`);
+  assertInteger(value.size_bytes, contract, `${path}.size_bytes`);
+  timestampValue(value.updated_at, contract, `${path}.updated_at`);
+  if (!Array.isArray(value.children) || value.children.length > 10_000) {
+    reject(contract, `${path}.children`, "a bounded child list");
+  }
+  if (value.kind === "document" && value.children.length !== 0) {
+    reject(contract, `${path}.children`, "no children for a document");
+  }
+  value.children.forEach((child, index) => (
+    assertKnowledgeNode(child, contract, `${path}.children[${index}]`, depth + 1)
+  ));
+}
+
+export function validateKnowledgeTree(value: unknown): KnowledgeTree {
+  const contract = "KnowledgeTreeResponse";
+  assertRecord(value, contract, "root");
+  assertFields(value, fields.KnowledgeTreeResponse.KnowledgeTreeResponse, contract, "root");
+  if (value.root !== "knowledge") reject(contract, "root", "the knowledge authority");
+  if (value.query !== null && (typeof value.query !== "string" || value.query.length > 256)) {
+    reject(contract, "query", "a bounded search query");
+  }
+  if (!Array.isArray(value.items) || value.items.length > 10_000) {
+    reject(contract, "items", "a bounded knowledge tree");
+  }
+  value.items.forEach((item, index) => assertKnowledgeNode(item, contract, `items[${index}]`));
+  return value as unknown as KnowledgeTree;
+}
+
+export function validateKnowledgeNode(value: unknown): KnowledgeNode {
+  assertKnowledgeNode(value, "KnowledgeTreeResponse", "root");
+  return value;
+}
+
+export function validateKnowledgeDocument(value: unknown): KnowledgeDocument {
+  assertKnowledgeDocument(
+    value,
+    "KnowledgeDocumentResponse",
+    fields.KnowledgeDocumentResponse.KnowledgeDocumentResponse,
+    "root",
+  );
+  return value;
+}
+
+export function validateKnowledgeGraph(value: unknown): KnowledgeGraph {
+  const contract = "KnowledgeGraphResponse";
+  assertRecord(value, contract, "root");
+  assertFields(value, fields.KnowledgeGraphResponse.KnowledgeGraphResponse, contract, "root");
+  if (!Array.isArray(value.nodes) || value.nodes.length > 5_000) {
+    reject(contract, "nodes", "a bounded graph node list");
+  }
+  const nodes = new Set<string>();
+  value.nodes.forEach((node, index) => {
+    const path = `nodes[${index}]`;
+    assertRecord(node, contract, path);
+    assertFields(node, fields.KnowledgeGraphResponse.KnowledgeGraphNodeResponse, contract, path);
+    assertString(node.path, contract, `${path}.path`);
+    assertString(node.label, contract, `${path}.label`);
+    if (nodes.has(node.path)) reject(contract, `${path}.path`, "a unique graph node");
+    nodes.add(node.path);
+  });
+  if (!Array.isArray(value.edges) || value.edges.length > 20_000) {
+    reject(contract, "edges", "a bounded graph edge list");
+  }
+  value.edges.forEach((edge, index) => {
+    const path = `edges[${index}]`;
+    assertRecord(edge, contract, path);
+    assertFields(edge, fields.KnowledgeGraphResponse.KnowledgeGraphEdgeResponse, contract, path);
+    assertString(edge.source, contract, `${path}.source`);
+    assertString(edge.target, contract, `${path}.target`);
+    if (!nodes.has(edge.source) || !nodes.has(edge.target)) {
+      reject(contract, path, "an edge between declared graph nodes");
+    }
+  });
+  return value as unknown as KnowledgeGraph;
+}
+
+export function validateKnowledgeImport(value: unknown): KnowledgeImportResponse {
+  const contract = "KnowledgeImportResponse";
+  assertRecord(value, contract, "root");
+  assertFields(value, fields.KnowledgeImportResponse.KnowledgeImportResponse, contract, "root");
+  assertInteger(value.imported_count, contract, "imported_count");
+  assertInteger(value.rejected_count, contract, "rejected_count");
+  assertInteger(value.total_bytes, contract, "total_bytes");
+  if (
+    (value.imported_count as number) > 100
+    || (value.rejected_count as number) > 100
+    || (value.total_bytes as number) > 200 * 1024 * 1024
+  ) {
+    reject(contract, "root", "the bounded import contract");
+  }
+  if (
+    !Array.isArray(value.items)
+    || value.items.length !== (value.imported_count as number) + (value.rejected_count as number)
+  ) {
+    reject(contract, "items", "one result per submitted document");
+  }
+  let imported = 0;
+  let rejected = 0;
+  value.items.forEach((item, index) => {
+    const path = `items[${index}]`;
+    assertRecord(item, contract, path);
+    assertFields(item, fields.KnowledgeImportResponse.KnowledgeImportItemResponse, contract, path);
+    assertString(item.original_name, contract, `${path}.original_name`);
+    assertOneOf(item.status, ["imported", "renamed", "rejected"] as const, contract, `${path}.status`);
+    if (item.status === "rejected") {
+      if (item.name !== null || item.path !== null) reject(contract, path, "no target for a rejected file");
+      assertString(item.reason, contract, `${path}.reason`);
+      rejected += 1;
+    } else {
+      assertString(item.name, contract, `${path}.name`);
+      assertString(item.path, contract, `${path}.path`);
+      if (item.reason !== null) reject(contract, `${path}.reason`, "null for an imported file");
+      imported += 1;
+    }
+  });
+  if (imported !== value.imported_count || rejected !== value.rejected_count) {
+    reject(contract, "items", "counts matching per-file statuses");
+  }
+  return value as unknown as KnowledgeImportResponse;
+}
+
+function assertMemoryContentItem(
+  value: unknown,
+  contract: "MemoryContentPageResponse" | "MemoryContentDocumentResponse",
+  rootFields: readonly string[],
+  path: string,
+): asserts value is MemoryContentItem {
+  assertRecord(value, contract, path);
+  assertFields(value, rootFields, contract, path);
+  for (const field of ["item_id", "name", "path", "source"] as const) {
+    assertString(value[field], contract, `${path}.${field}`);
+  }
+  assertOneOf(value.kind, values.memoryContentKinds, contract, `${path}.kind`);
+  assertOneOf(value.origin, values.memoryContentOrigins, contract, `${path}.origin`);
+  assertInteger(value.size_bytes, contract, `${path}.size_bytes`);
+  if ((value.size_bytes as number) > 10 * 1024 * 1024) {
+    reject(contract, `${path}.size_bytes`, "at most 10 MiB");
+  }
+  if (value.updated_at !== null) timestampValue(value.updated_at, contract, `${path}.updated_at`);
+}
+
+export function validateMemoryContentPage(value: unknown): MemoryContentPage {
+  const contract = "MemoryContentPageResponse";
+  assertRecord(value, contract, "root");
+  assertFields(value, fields.MemoryContentPageResponse.MemoryContentPageResponse, contract, "root");
+  assertOneOf(value.view, values.memoryContentViews, contract, "view");
+  assertInteger(value.page, contract, "page", 1);
+  if (value.page_size !== 10) reject(contract, "page_size", "the fixed page size 10");
+  assertInteger(value.total, contract, "total");
+  if (!Array.isArray(value.items) || value.items.length > 10) {
+    reject(contract, "items", "at most 10 memory items");
+  }
+  value.items.forEach((item, index) => {
+    assertMemoryContentItem(
+      item,
+      contract,
+      fields.MemoryContentPageResponse.MemoryContentItemResponse,
+      `items[${index}]`,
+    );
+    if ((value.view === "files") !== (item.kind === "file")) {
+      reject(contract, `items[${index}].kind`, "the selected memory view");
+    }
+  });
+  return value as unknown as MemoryContentPage;
+}
+
+export function validateMemoryContentDocument(value: unknown): MemoryContentDocument {
+  const contract = "MemoryContentDocumentResponse";
+  assertMemoryContentItem(
+    value,
+    contract,
+    fields.MemoryContentDocumentResponse.MemoryContentDocumentResponse,
+    "root",
+  );
+  const content = (value as MemoryContentItem & { content?: unknown }).content;
+  if (typeof content !== "string" || content.length > 10 * 1024 * 1024) {
+    reject(contract, "content", "bounded memory text");
+  }
+  return value as MemoryContentDocument;
 }
 
 function assertMemorySnapshot(
@@ -447,7 +683,7 @@ export function validateSystemMetricHistory(value: unknown): SystemMetricHistory
  * output preference, materialization, public health, technical health,
  * metric history.
  */
-export type SettingsBoundaryKind = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+export type SettingsBoundaryKind = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
 
 export function validateSettingsBoundary(
   kind: SettingsBoundaryKind,
@@ -464,5 +700,12 @@ export function validateSettingsBoundary(
     case 6: return validateSystemHealthSample(value);
     case 7: return validateSystemHealthSample(value, { technical: true });
     case 8: return validateSystemMetricHistory(value);
+    case 9: return validateKnowledgeTree(value);
+    case 10: return validateKnowledgeDocument(value);
+    case 11: return validateKnowledgeGraph(value);
+    case 12: return validateKnowledgeImport(value);
+    case 13: return validateMemoryContentPage(value);
+    case 14: return validateMemoryContentDocument(value);
+    case 15: return validateKnowledgeNode(value);
   }
 }

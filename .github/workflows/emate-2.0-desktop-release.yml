@@ -75,7 +75,26 @@ jobs:
           python -m pytest -q -p no:cacheprovider \
             tests/v1/test_public_download_site.py \
             tests/v1/test_emate_feed_deploy.py \
+            tests/v1/test_control_plane_release_replica_service.py \
             tests/v1/test_callback_channel_boundary.py \
+            tests/v1/test_workspace_content.py \
+            tests/v1/test_cowagent_data_migration.py \
+            tests/v1/test_channel_self_service.py \
+            tests/v1/test_channel_runtime_dispatcher.py \
+            tests/v1/test_channel_terminal_convergence.py \
+            tests/v1/test_connector_vault.py \
+            tests/v1/test_wechat_callback_gateway.py \
+            tests/v1/test_weixin_channel_adapter.py \
+            tests/v1/test_dependency_pack_process.py \
+            tests/v1/test_office_skill_runtime.py \
+            tests/v1/test_release_process_boundary.py \
+            tests/v1/test_user_mcp_self_service.py \
+            tests/v1/test_mcp_oauth.py \
+            tests/v1/test_agent_turn_worker.py \
+            tests/v1/test_runtime_composition.py \
+            tests/v1/test_usage_projection.py \
+            tests/v1/test_device_identity_management.py \
+            tests/v1/test_image_orchestrator_production_runtime.py \
             tests/v1/test_server_product_app.py::test_product_composes_message_channels_with_the_agent_runtime \
             tests/v1/test_server_product_app.py::test_product_settings_inject_cloud_authoritative_session
           python scripts/check-v1-public-download-site.py
@@ -84,14 +103,11 @@ jobs:
         working-directory: desktop
         run: |
           npm run typecheck
-          node --test \
-            tools/ga-mock-server.test.mjs \
-            tools/product-language-contract.test.mjs
+          npm run test:v1
           npx playwright install chromium
           npx playwright test \
             --config=playwright.config.ts \
-            e2e/ga-webui.spec.ts \
-            --grep "scheduled tasks and external connections"
+            e2e/ga-webui.spec.ts
 
       - name: Fetch pinned predecessor Runtime closure
         run: |
@@ -210,7 +226,7 @@ jobs:
 
       - name: Verify accepted UI and release identity
         run: |
-          test "$(git rev-parse HEAD:desktop/src/v1)" = "7232b294da66c7930bbfc8c086df40cc8602a2b4"
+          test "$(git rev-parse HEAD:desktop/src/v1)" = "934487d82f182be9c1a29b1c454643d57f11038e"
           python - <<'PY'
           import json
           from pathlib import Path
@@ -223,6 +239,14 @@ jobs:
         run: |
           python scripts/install-v1-python-profile.py --profile runtime
           npm ci --prefix desktop
+
+      - name: Gate Windows process isolation
+        if: ${{ matrix.id == 'windows-x64' }}
+        run: |
+          python scripts/install-v1-python-profile.py --profile dev
+          python -m pytest -q -p no:cacheprovider \
+            tests/v1/test_dependency_pack_process.py \
+            tests/v1/test_release_process_boundary.py
 
       - name: Build unsigned desktop package
         env:

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from dataclasses import replace
+import json
 
 from fastapi.testclient import TestClient
+import pytest
 
 from ecorex.gateway import GatewayAccountUsageProjection, GatewayTokenUsageWindow
 from ecorex.capabilities import ManagedModelCatalog, builtin_model_catalog
@@ -379,3 +381,70 @@ def test_usage_endpoint_prefers_account_projection_and_falls_back_locally(
     assert fallback.json()["source"] == "local_event_store"
     assert fallback.json()["complete_across_devices"] is False
     assert fallback.json()["today"]["total_tokens"] == 5
+
+
+def test_usage_projection_discloses_observability_recovery_gap(tmp_path) -> None:
+    database = tmp_path / "runtime-gap.db"
+    app = create_app(settings=RuntimeSettings(database_path=database))
+    receipt = (
+        tmp_path
+        / "observability-quarantine"
+        / "audit-key-mismatch-fixture"
+        / "recovery-receipt.json"
+    )
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "reason": "audit_key_mismatch",
+                "created_at": "2026-08-10T01:02:03Z",
+                "state": "completed",
+                "live_cleanup_committed": True,
+                "removed_rows": {
+                    "observability_audit_outbox": 5,
+                    "observability_audit_daily": 2,
+                    "observability_trace_outbox": 3,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    quality = app.state.usage_projection_service.project("account").data_quality
+
+    assert quality.audit_continuity == "recovered_with_gap"
+    assert quality.recovery_count == 1
+    assert quality.removed_audit_rows == 7
+    assert quality.removed_trace_rows == 3
+    assert quality.last_recovery_at == datetime(2026, 8, 10, 1, 2, 3, tzinfo=UTC)
+
+
+def test_usage_projection_never_follows_recovery_directory_links(tmp_path) -> None:
+    database = tmp_path / "runtime-gap-link.db"
+    app = create_app(settings=RuntimeSettings(database_path=database))
+    root = tmp_path / "observability-quarantine"
+    outside = tmp_path / "outside-recovery"
+    outside.mkdir()
+    (outside / "recovery-receipt.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "reason": "audit_key_mismatch",
+                "created_at": "2026-08-10T01:02:03Z",
+                "state": "completed",
+                "removed_rows": {"observability_audit_outbox": 99},
+            }
+        ),
+        encoding="utf-8",
+    )
+    root.mkdir()
+    try:
+        (root / "linked-recovery").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+
+    quality = app.state.usage_projection_service.project("account").data_quality
+
+    assert quality.audit_continuity == "uncertain"
+    assert quality.removed_audit_rows == 0

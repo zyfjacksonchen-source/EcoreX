@@ -264,13 +264,17 @@ class _QQStore:
             row = connection.execute(
                 """
                 SELECT state, error_code FROM qq_events
-                WHERE scope = ? AND state IN ('uncertain','failed')
-                ORDER BY CASE state WHEN 'uncertain' THEN 0 ELSE 1 END LIMIT 1
+                WHERE scope = ? AND state = 'uncertain' LIMIT 1
                 """,
                 (self.scope,),
             ).fetchone()
+            delivery = connection.execute(
+                "SELECT state FROM qq_deliveries WHERE scope=? "
+                "AND state IN ('sending','uncertain') LIMIT 1",
+                (self.scope,),
+            ).fetchone()
         if row is None:
-            return None
+            return "qq_delivery_uncertain" if delivery is not None else None
         error_code = row[1]
         if isinstance(error_code, str) and _ERROR_RE.fullmatch(error_code):
             return error_code
@@ -279,6 +283,19 @@ class _QQStore:
             if str(row[0]) == "uncertain"
             else "qq_delivery_rejected"
         )
+
+    def resolve_uncertain(self) -> None:
+        with closing(self._connection()) as connection, connection:
+            connection.execute(
+                "UPDATE qq_events SET state='failed' "
+                "WHERE scope=? AND state='uncertain'",
+                (self.scope,),
+            )
+            connection.execute(
+                "UPDATE qq_deliveries SET state='failed' "
+                "WHERE scope=? AND state IN ('sending','uncertain')",
+                (self.scope,),
+            )
 
     def claim_delivery(self, key: str) -> str:
         now = int(time.time())
@@ -328,6 +345,7 @@ class _QQStore:
                 raise RuntimeError("QQ state path is invalid")
             connection = sqlite3.connect(self.path, timeout=5)
             connection.execute("PRAGMA busy_timeout = 5000")
+            connection.execute("PRAGMA secure_delete = ON")
             if not self._initialized:
                 connection.executescript(
                     """
@@ -491,6 +509,9 @@ class QQBotGatewayAdapter:
                 self._health if self._last_error else ConnectorHealth.DISABLED,
                 self._last_error,
             )
+
+    def resolve_uncertain(self) -> None:
+        self._required_store().resolve_uncertain()
 
     def stop(self, timeout_seconds: float) -> bool:
         with self._lock:

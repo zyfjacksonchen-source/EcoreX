@@ -93,6 +93,10 @@ from ecorex.integration import (
     RuntimeRetouchBridge,
 )
 from ecorex.memory import MemoryService, create_memory_router
+from ecorex.workspace_content import (
+    WorkspaceContentService,
+    create_workspace_content_router,
+)
 from ecorex.input_attachments import (
     InputAttachmentConflict,
     InputAttachmentError,
@@ -301,6 +305,7 @@ class RuntimeSettings:
     connected_connectors: frozenset[str] = frozenset()
     online: bool = True
     artifact_root: str | Path | None = None
+    workspace_root: str | Path | None = None
     output_roots: Mapping[str, str | Path] | None = field(default=None, repr=False)
     output_default_location: str = "workspace"
     artifact_action_launcher: ArtifactLauncher | None = field(default=None, repr=False)
@@ -1997,10 +2002,19 @@ def create_app(
     app.state.managed_session_startup_error = startup_session_error
     memory_service = MemoryService(
         kernel.database,
+        blob_loader=artifact_service.blobs.read_bytes,
         initialize=startup_convergence_allowed,
     )
     app.state.memory_service = memory_service
     app.include_router(create_memory_router(memory_service))
+    workspace_content_service = WorkspaceContentService(
+        settings.workspace_root
+        or (Path(settings.database_path).expanduser().resolve().parent / "workspace"),
+        database=kernel.database,
+        create_root=startup_convergence_allowed,
+    )
+    app.state.workspace_content_service = workspace_content_service
+    app.include_router(create_workspace_content_router(workspace_content_service))
     migration_quarantine_service = MigrationQuarantineService(
         Path(settings.database_path).expanduser().resolve().parent
     )
@@ -2187,6 +2201,7 @@ def create_app(
                     connector_composition.repository.resolve_uncertain_invocation
                 ),
                 input_attachments=input_attachment_service,
+                image_context_resolver=composition.recent_thread_images,
                 image_execution_concurrency=settings.image_execution_concurrency,
                 image_execution_queue_capacity=(
                     settings.image_execution_queue_capacity
@@ -4185,7 +4200,9 @@ def create_app(
             update={
                 "scope": "account",
                 "source": "managed_gateway",
-                "complete_across_devices": True,
+                "complete_across_devices": (
+                    local_projection.data_quality.audit_continuity == "complete"
+                ),
                 "today": TokenUsageWindow(**account_projection.today.model_dump()),
                 "week": TokenUsageWindow(**account_projection.week.model_dump()),
                 "calculated_at": account_projection.calculated_at,

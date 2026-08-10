@@ -323,6 +323,10 @@ class AgentTurnWorker:
         input_attachments: InputAttachmentService | None = None,
         visual_evidence_resolver: Callable[..., tuple[GatewayImageInput, ...]]
         | None = None,
+        image_context_resolver: Callable[
+            [str], tuple[Mapping[str, Any], ...]
+        ]
+        | None = None,
         stream_checkpoint_interval_seconds: float = 0.2,
         image_execution_concurrency: int = 2,
         image_execution_queue_capacity: int = 8,
@@ -385,6 +389,7 @@ class AgentTurnWorker:
         self.connector_uncertain_resolver = connector_uncertain_resolver
         self.input_attachments = input_attachments
         self.visual_evidence_resolver = visual_evidence_resolver
+        self.image_context_resolver = image_context_resolver
         self.stream_checkpoint_interval_seconds = stream_checkpoint_interval_seconds
         self.tool_executions = ToolExecutionRepository(kernel.database)
         self.image_executions = ImageExecutionPool(
@@ -2574,6 +2579,41 @@ class AgentTurnWorker:
             character_count += len(text)
 
         selected.reverse()
+        if self.image_context_resolver is not None:
+            images = self.image_context_resolver(thread_id)
+            if images:
+                lines = [
+                    "e-Mate Runtime 已验证本任务中可继续编辑的图片产物。"
+                    "调用 imagegen 修改图片时，只能从下列 artifact_id 中选择："
+                ]
+                for image in images:
+                    line = (
+                        "- 第{set_ordinal}组第{image_ordinal}张："
+                        "artifact_id={artifact_id} revision_id={revision_id}"
+                    ).format(**image)
+                    if len("\n".join((*lines, line))) > self._MAX_THREAD_CONTEXT_CHARACTERS:
+                        truncated = True
+                        break
+                    lines.append(line)
+                text = "\n".join(lines)
+                while (
+                    selected
+                    and character_count + len(text)
+                    > self._MAX_THREAD_CONTEXT_CHARACTERS
+                ):
+                    removed = selected.pop(0)
+                    character_count -= len(removed.content)
+                    truncated = True
+                if character_count + len(text) <= self._MAX_THREAD_CONTEXT_CHARACTERS:
+                    selected.append(
+                        GatewayAssistantMessageInput(
+                            message_id=f"{thread_id}:verified-image-context",
+                            content=text,
+                        )
+                    )
+                    character_count += len(text)
+                else:
+                    truncated = True
         return _ConversationContext(
             items=tuple(selected),
             source_item_count=source_item_count,

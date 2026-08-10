@@ -298,7 +298,7 @@ export function Sidebar({
             />
           ) : null}
         </button>
-        <DropdownMenu.Root>
+        <DropdownMenu.Root modal={false}>
           <DropdownMenu.Trigger asChild>
             <IconButton
               className="ex-task-more"
@@ -314,7 +314,10 @@ export function Sidebar({
               <DropdownMenu.Item className="ex-menu-item" onSelect={() => void copyThreadId(thread.thread_id)}>
                 <Copy aria-hidden="true" />复制任务 ID
               </DropdownMenu.Item>
-              <DropdownMenu.Item className="ex-menu-item" onSelect={() => setRenameTarget(thread)}>
+              <DropdownMenu.Item
+                className="ex-menu-item"
+                onSelect={() => window.requestAnimationFrame(() => setRenameTarget(thread))}
+              >
                 <Pencil aria-hidden="true" />重命名
               </DropdownMenu.Item>
               <DropdownMenu.Item
@@ -567,7 +570,7 @@ export function Sidebar({
                         <Archive aria-hidden="true" />
                         <span>{label}</span>
                       </button>
-                      <DropdownMenu.Root>
+                      <DropdownMenu.Root modal={false}>
                         <DropdownMenu.Trigger asChild>
                           <IconButton
                             className="ex-task-more"
@@ -585,7 +588,10 @@ export function Sidebar({
                             <DropdownMenu.Item className="ex-menu-item" onSelect={() => void onRestoreThread(thread.thread_id)}>
                               <ArchiveRestore aria-hidden="true" />恢复任务
                             </DropdownMenu.Item>
-                            <DropdownMenu.Item className="ex-menu-item is-danger" onSelect={() => setDeleteTarget(thread)}>
+                            <DropdownMenu.Item
+                              className="ex-menu-item is-danger"
+                              onSelect={() => window.requestAnimationFrame(() => setDeleteTarget(thread))}
+                            >
                               <Trash2 aria-hidden="true" />删除任务
                             </DropdownMenu.Item>
                           </DropdownMenu.Content>
@@ -610,7 +616,7 @@ export function Sidebar({
             <Settings2 aria-hidden="true" />
             <span>设置</span>
           </button>
-          <DropdownMenu.Root>
+          <DropdownMenu.Root modal={false}>
             <DropdownMenu.Trigger asChild>
               <button
                 className="ex-sidebar-action ex-account-trigger"
@@ -642,7 +648,7 @@ export function Sidebar({
                     onSelect={() => {
                       setLogoutComplete(null);
                       onClearSessionError();
-                      setLogoutConfirmOpen(true);
+                      window.requestAnimationFrame(() => setLogoutConfirmOpen(true));
                     }}
                   >
                     {sessionBusy

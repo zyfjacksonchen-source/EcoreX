@@ -874,8 +874,20 @@ class RuntimeComposition:
     def _thread_has_successful_image_context(self, thread_id: str | None) -> bool:
         """Trust only a durable image Artifact result from this Thread."""
 
-        if not isinstance(thread_id, str) or not thread_id:
-            return False
+        return bool(self.recent_thread_images(thread_id))
+
+    def recent_thread_images(
+        self,
+        thread_id: str | None,
+    ) -> tuple[dict[str, str | int], ...]:
+        """Return bounded, current image Artifacts grouped by generating call."""
+
+        if (
+            not isinstance(thread_id, str)
+            or not thread_id
+            or self.artifact_service is None
+        ):
+            return ()
         with self.snapshot_repository.database.reader() as connection:
             rows = connection.execute(
                 "SELECT execution.result_json FROM tool_executions AS execution "
@@ -883,14 +895,69 @@ class RuntimeComposition:
                 "WHERE turn.thread_id = ? AND turn.status IN ('completed', 'partial') "
                 "AND execution.tool_id = 'imagegen' "
                 "AND execution.status = 'completed' "
-                "ORDER BY execution.updated_at DESC LIMIT 8",
+                "ORDER BY execution.updated_at DESC, execution.tool_call_id DESC LIMIT 4",
                 (thread_id,),
             ).fetchall()
-        for row in rows:
-            result = json.loads(str(row["result_json"] or "null"))
-            if isinstance(result, dict) and isinstance(result.get("artifact_id"), str):
-                return bool(result["artifact_id"])
-        return False
+        images: list[dict[str, str | int]] = []
+        seen: set[str] = set()
+        for set_ordinal, row in enumerate(rows, start=1):
+            try:
+                result = json.loads(str(row["result_json"] or "null"))
+            except (json.JSONDecodeError, RecursionError, TypeError):
+                continue
+            artifact_ids: list[str] = []
+            if isinstance(result, dict):
+                artifact_id = result.get("artifact_id")
+                if isinstance(artifact_id, str) and artifact_id:
+                    artifact_ids.append(artifact_id)
+                elif result.get("result_type") == "image_gallery":
+                    items = result.get("items")
+                    if isinstance(items, list):
+                        for item in items[:8]:
+                            if (
+                                not isinstance(item, dict)
+                                or item.get("status") != "completed"
+                            ):
+                                continue
+                            child = item.get("result")
+                            child_id = (
+                                child.get("artifact_id")
+                                if isinstance(child, dict)
+                                else None
+                            )
+                            if isinstance(child_id, str) and child_id:
+                                artifact_ids.append(child_id)
+            for image_ordinal, artifact_id in enumerate(artifact_ids, start=1):
+                if artifact_id in seen:
+                    continue
+                try:
+                    projection = self.artifact_service.get_user_artifact(
+                        artifact_id,
+                        account_id=self.permission_account_id,
+                    )
+                    scope = self.artifact_service.get_artifact_scope(artifact_id)
+                except (KeyError, ValueError):
+                    continue
+                if (
+                    projection.family.value != "image"
+                    or projection.status.value != "ready"
+                    or scope.thread_id != thread_id
+                    or scope.account_id != self.permission_account_id
+                    or scope.created_by_tool_id != "imagegen"
+                ):
+                    continue
+                seen.add(artifact_id)
+                images.append(
+                    {
+                        "set_ordinal": set_ordinal,
+                        "image_ordinal": image_ordinal,
+                        "artifact_id": artifact_id,
+                        "revision_id": projection.revision_id,
+                    }
+                )
+                if len(images) == 10:
+                    return tuple(images)
+        return tuple(images)
 
     def record_permission(
         self, permission: PermissionSnapshot

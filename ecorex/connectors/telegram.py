@@ -29,6 +29,7 @@ from .models import ConnectorHealth, ConnectorHealthResult
 
 
 _TOKEN_RE = re.compile(r"^[0-9]{5,20}:[A-Za-z0-9_-]{20,128}$")
+_ERROR_RE = re.compile(r"^telegram_[a-z0-9_]{1,124}$")
 _MAX_RESPONSE_BYTES = 1024 * 1024
 _MAX_TELEGRAM_TEXT = 4096
 
@@ -102,7 +103,8 @@ class _TelegramStore:
                 """
                 SELECT channel_id, thread_id, turn_id, client_message_id,
                        conversation_sha256, conversation_id
-                FROM telegram_pending WHERE scope = ? ORDER BY rowid
+                FROM telegram_pending WHERE scope = ? AND state = 'pending'
+                ORDER BY rowid
                 """,
                 (self.scope,),
             ).fetchall()
@@ -120,11 +122,64 @@ class _TelegramStore:
             for row in rows
         )
 
-    def complete_pending(self, turn_id: str) -> None:
+    def finish_pending(
+        self, turn_id: str, state: str, error_code: str | None = None
+    ) -> None:
+        if state not in {"completed", "failed", "uncertain"}:
+            raise ValueError("telegram pending terminal state is invalid")
+        if (state == "completed") != (error_code is None) or (
+            error_code is not None and _ERROR_RE.fullmatch(error_code) is None
+        ):
+            raise ValueError("telegram pending terminal error is invalid")
         with closing(self._connection()) as connection, connection:
             connection.execute(
-                "DELETE FROM telegram_pending WHERE scope = ? AND turn_id = ?",
-                (self.scope, turn_id),
+                "UPDATE telegram_pending SET state = ?, error_code = ?, "
+                "channel_id = '', thread_id = '', client_message_id = '', "
+                "conversation_sha256 = '', conversation_id = '' "
+                "WHERE scope = ? AND turn_id = ? AND state = 'pending'",
+                (state, error_code, self.scope, turn_id),
+            )
+
+    def terminal_error(self) -> tuple[str, bool] | None:
+        with closing(self._connection()) as connection:
+            row = connection.execute(
+                "SELECT state,error_code FROM telegram_pending WHERE scope = ? "
+                "AND state = 'uncertain' LIMIT 1",
+                (self.scope,),
+            ).fetchone()
+            delivery = connection.execute(
+                "SELECT state FROM telegram_deliveries WHERE scope=? "
+                "AND state IN ('sending','uncertain') LIMIT 1",
+                (self.scope,),
+            ).fetchone()
+        if row is None:
+            return (
+                ("telegram_delivery_uncertain", True)
+                if delivery is not None
+                else None
+            )
+        uncertain = str(row[0]) == "uncertain"
+        code = str(row[1] or "")
+        return (
+            code if _ERROR_RE.fullmatch(code) else (
+                "telegram_delivery_uncertain"
+                if uncertain
+                else "telegram_delivery_rejected"
+            ),
+            uncertain,
+        )
+
+    def resolve_uncertain(self) -> None:
+        with closing(self._connection()) as connection, connection:
+            connection.execute(
+                "UPDATE telegram_pending SET state='failed' "
+                "WHERE scope=? AND state='uncertain'",
+                (self.scope,),
+            )
+            connection.execute(
+                "UPDATE telegram_deliveries SET state='failed' "
+                "WHERE scope=? AND state IN ('sending','uncertain')",
+                (self.scope,),
             )
 
     def claim_delivery(self, key: str) -> str:
@@ -152,7 +207,7 @@ class _TelegramStore:
         return "send"
 
     def mark_delivery(self, key: str, state: str) -> None:
-        if state not in {"sent", "uncertain"}:
+        if state not in {"sent", "failed", "uncertain"}:
             raise ValueError("telegram delivery state is invalid")
         with closing(self._connection()) as connection, connection:
             connection.execute(
@@ -175,6 +230,7 @@ class _TelegramStore:
                 raise RuntimeError("telegram state path is invalid")
             connection = sqlite3.connect(self.path, timeout=5)
             connection.execute("PRAGMA busy_timeout = 5000")
+            connection.execute("PRAGMA secure_delete = ON")
             if not self._initialized:
                 connection.executescript(
                     """
@@ -190,17 +246,57 @@ class _TelegramStore:
                         client_message_id TEXT NOT NULL,
                         conversation_sha256 TEXT NOT NULL,
                         conversation_id TEXT NOT NULL,
+                        state TEXT NOT NULL DEFAULT 'pending' CHECK(
+                            state IN ('pending','completed','failed','uncertain')
+                        ),
+                        error_code TEXT,
                         PRIMARY KEY(scope, turn_id)
                     );
                     CREATE TABLE IF NOT EXISTS telegram_deliveries(
                         scope TEXT NOT NULL,
                         delivery_key TEXT NOT NULL,
-                        state TEXT NOT NULL CHECK(state IN ('sending','sent','uncertain')),
+                        state TEXT NOT NULL CHECK(state IN ('sending','sent','failed','uncertain')),
                         updated_at INTEGER NOT NULL,
                         PRIMARY KEY(scope, delivery_key)
                     );
                     """
                 )
+                columns = {
+                    str(row[1])
+                    for row in connection.execute("PRAGMA table_info(telegram_pending)")
+                }
+                if "state" not in columns:
+                    connection.execute(
+                        "ALTER TABLE telegram_pending ADD COLUMN state TEXT NOT NULL "
+                        "DEFAULT 'pending' CHECK(state IN "
+                        "('pending','completed','failed','uncertain'))"
+                    )
+                if "error_code" not in columns:
+                    connection.execute(
+                        "ALTER TABLE telegram_pending ADD COLUMN error_code TEXT"
+                    )
+                delivery_sql = str(
+                    connection.execute(
+                        "SELECT sql FROM sqlite_master WHERE type='table' "
+                        "AND name='telegram_deliveries'"
+                    ).fetchone()[0]
+                )
+                if "'failed'" not in delivery_sql:
+                    connection.executescript(
+                        """
+                        ALTER TABLE telegram_deliveries RENAME TO telegram_deliveries_v1;
+                        CREATE TABLE telegram_deliveries(
+                            scope TEXT NOT NULL, delivery_key TEXT NOT NULL,
+                            state TEXT NOT NULL CHECK(
+                                state IN ('sending','sent','failed','uncertain')
+                            ), updated_at INTEGER NOT NULL,
+                            PRIMARY KEY(scope, delivery_key)
+                        );
+                        INSERT INTO telegram_deliveries
+                        SELECT * FROM telegram_deliveries_v1;
+                        DROP TABLE telegram_deliveries_v1;
+                        """
+                    )
                 connection.commit()
                 os.chmod(self.path, 0o600)
                 self._initialized = True
@@ -290,10 +386,17 @@ class TelegramBotAdapter:
                 except Exception:
                     _close(client)
                     raise
+                terminal = self._store.terminal_error()
                 self._client = client
                 self._stop_event = threading.Event()
-                self._health = ConnectorHealth.CONNECTED
-                self._last_error = None
+                self._health = (
+                    ConnectorHealth.CONNECTED
+                    if terminal is None
+                    else ConnectorHealth.DEGRADED
+                    if terminal[1]
+                    else ConnectorHealth.ERROR
+                )
+                self._last_error = terminal[0] if terminal else None
                 self._thread = threading.Thread(
                     target=self._run,
                     args=(client,),
@@ -301,7 +404,7 @@ class TelegramBotAdapter:
                     daemon=True,
                 )
                 self._thread.start()
-            return ConnectorHealthResult(ConnectorHealth.CONNECTED)
+            return ConnectorHealthResult(self._health, self._last_error)
         except _TelegramFailure as error:
             return ConnectorHealthResult(ConnectorHealth.ERROR, error.code)
         except Exception:
@@ -317,6 +420,9 @@ class TelegramBotAdapter:
                 self._health if self._last_error else ConnectorHealth.DISABLED,
                 self._last_error,
             )
+
+    def resolve_uncertain(self) -> None:
+        self._required_store().resolve_uncertain()
 
     def stop(self, timeout_seconds: float) -> bool:
         with self._lock:
@@ -358,6 +464,8 @@ class TelegramBotAdapter:
             state = store.claim_delivery(key)
             if state == "sent":
                 continue
+            if state == "failed":
+                raise _TelegramFailure("telegram_delivery_rejected", permanent=True)
             if state == "uncertain":
                 raise _TelegramFailure("telegram_delivery_uncertain", uncertain=True)
             try:
@@ -377,6 +485,8 @@ class TelegramBotAdapter:
             except _TelegramFailure as error:
                 if error.uncertain:
                     store.mark_delivery(key, "uncertain")
+                elif error.permanent:
+                    store.mark_delivery(key, "failed")
                 else:
                     store.release_delivery(key)
                 raise
@@ -392,7 +502,7 @@ class TelegramBotAdapter:
                     for update in self._updates(client, offset):
                         self._accept_update(update)
                     self._drain_pending()
-                    self._set_health(ConnectorHealth.CONNECTED, None)
+                    self._set_ready_health()
                     backoff = 1.0
                 except _TelegramFailure as error:
                     self._set_health(
@@ -461,11 +571,36 @@ class TelegramBotAdapter:
                     conversation_id=conversation_id,
                     transport=self,
                 )
-            except ChannelTurnTerminalFailure:
-                store.complete_pending(receipt.turn_id)
+            except ChannelTurnTerminalFailure as error:
+                store.finish_pending(
+                    receipt.turn_id,
+                    "failed",
+                    error.code.replace("channel_", "telegram_", 1),
+                )
                 continue
+            except _TelegramFailure as error:
+                if error.uncertain:
+                    store.finish_pending(receipt.turn_id, "uncertain", error.code)
+                    self._set_health(ConnectorHealth.DEGRADED, error.code)
+                    continue
+                if error.permanent:
+                    store.finish_pending(receipt.turn_id, "failed", error.code)
+                    self._set_health(ConnectorHealth.ERROR, error.code)
+                    continue
+                raise
             if delivered:
-                store.complete_pending(receipt.turn_id)
+                store.finish_pending(receipt.turn_id, "completed")
+
+    def _set_ready_health(self) -> None:
+        terminal = self._required_store().terminal_error()
+        if terminal is None:
+            self._set_health(ConnectorHealth.CONNECTED, None)
+            return
+        error, uncertain = terminal
+        self._set_health(
+            ConnectorHealth.DEGRADED if uncertain else ConnectorHealth.ERROR,
+            error,
+        )
 
     def _updates(self, client: _HTTPClient, offset: int) -> tuple[Mapping[str, Any], ...]:
         payload = self._request(
@@ -534,13 +669,20 @@ class TelegramBotAdapter:
             )
         if response.status_code in {401, 403}:
             raise _TelegramFailure("telegram_auth_rejected", permanent=True)
+        if response.status_code == 429:
+            raise _TelegramFailure("telegram_rate_limited")
         if response.status_code >= 500:
             raise _TelegramFailure(
                 "telegram_delivery_uncertain" if delivery else "telegram_transport_unavailable",
                 uncertain=delivery,
             )
         if response.status_code != 200:
-            raise _TelegramFailure("telegram_provider_rejected")
+            raise _TelegramFailure(
+                "telegram_delivery_rejected"
+                if delivery
+                else "telegram_provider_rejected",
+                permanent=delivery,
+            )
         try:
             payload = response.json()
         except ValueError:
@@ -548,11 +690,23 @@ class TelegramBotAdapter:
                 "telegram_delivery_uncertain" if delivery else "telegram_provider_response_invalid",
                 uncertain=delivery,
             ) from None
-        if not isinstance(payload, dict) or payload.get("ok") is not True:
+        if not isinstance(payload, dict):
+            raise _TelegramFailure(
+                "telegram_delivery_uncertain"
+                if delivery
+                else "telegram_provider_response_invalid",
+                uncertain=delivery,
+            )
+        if payload.get("ok") is not True:
             error_code = payload.get("error_code") if isinstance(payload, dict) else None
             if error_code in {401, 403}:
                 raise _TelegramFailure("telegram_auth_rejected", permanent=True)
-            raise _TelegramFailure("telegram_provider_rejected")
+            raise _TelegramFailure(
+                "telegram_delivery_rejected"
+                if delivery
+                else "telegram_provider_rejected",
+                permanent=delivery,
+            )
         return payload
 
     def _set_health(self, health: ConnectorHealth, error: str | None) -> None:

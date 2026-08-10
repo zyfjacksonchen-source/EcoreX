@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import hashlib
+import hmac
 import json
 from pathlib import Path
 import re
@@ -20,7 +21,13 @@ from collections.abc import Callable
 from ecorex.runtime.database import SQLiteDatabase, json_dumps
 from ecorex.runtime.ids import new_id
 
-from .errors import MemoryConflict, MemoryResetNotFound, MemoryUndoExpired
+from .errors import (
+    MemoryConflict,
+    MemoryContentNotFound,
+    MemoryContentUnavailable,
+    MemoryResetNotFound,
+    MemoryUndoExpired,
+)
 
 
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{7,255}$")
@@ -94,6 +101,57 @@ class MemorySnapshot:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class MemoryContentItem:
+    item_id: str
+    name: str
+    path: str
+    kind: str
+    origin: str
+    source: str
+    size_bytes: int
+    updated_at: datetime | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "item_id": self.item_id,
+            "name": self.name,
+            "path": self.path,
+            "kind": self.kind,
+            "origin": self.origin,
+            "source": self.source,
+            "size_bytes": self.size_bytes,
+            "updated_at": _time(self.updated_at) if self.updated_at else None,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryContentPage:
+    view: str
+    page: int
+    page_size: int
+    total: int
+    items: tuple[MemoryContentItem, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "view": self.view,
+            "page": self.page,
+            "page_size": self.page_size,
+            "total": self.total,
+            "items": [item.to_dict() for item in self.items],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryContentDocument:
+    item: MemoryContentItem
+    content: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {**self.item.to_dict(), "content": self.content}
+
+
 class MemoryService:
     def __init__(
         self,
@@ -102,6 +160,7 @@ class MemoryService:
         undo_window: timedelta = timedelta(hours=24),
         clock=_now,
         fault_hook: Callable[[str, str], None] | None = None,
+        blob_loader: Callable[[str], bytes] | None = None,
         initialize: bool = True,
     ) -> None:
         if not timedelta(minutes=1) <= undo_window <= timedelta(days=30):
@@ -110,6 +169,7 @@ class MemoryService:
         self.undo_window = undo_window
         self.clock = clock
         self.fault_hook = fault_hook or (lambda _phase, _reset_id: None)
+        self.blob_loader = blob_loader
         if initialize:
             self.initialize()
 
@@ -219,6 +279,171 @@ class MemoryService:
                 tombstoned_files=int(files["tombstoned"] or 0),
                 latest_reset=self._batch(latest, now=now) if latest else None,
             )
+
+    @staticmethod
+    def _content_time(value: Any) -> datetime | None:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            number = float(value)
+            if number <= 0:
+                return None
+            if number > 10_000_000_000:
+                number /= 1000
+            try:
+                return datetime.fromtimestamp(number, UTC)
+            except (OSError, OverflowError, ValueError):
+                return None
+        try:
+            return _parse_time(str(value))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _content_text(content: bytes) -> str:
+        if len(content) > 10 * 1024 * 1024:
+            raise MemoryContentUnavailable("memory content exceeds its read boundary")
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise MemoryContentUnavailable("memory content is not UTF-8") from error
+        if "\x00" in text:
+            raise MemoryContentUnavailable("memory content contains NUL bytes")
+        return text
+
+    @staticmethod
+    def _content_label(path: str, *, prefix: str) -> tuple[str, str]:
+        parts = [
+            part
+            for part in str(path or "").replace("\\", "/").split("/")
+            if part not in {"", ".", ".."}
+        ]
+        raw_name = parts[-1] if parts else "记忆.md"
+        name = "".join(
+            character for character in raw_name if character >= " " and character != "\x7f"
+        )[:255] or "记忆.md"
+        return name, f"{prefix}/{name}"
+
+    @staticmethod
+    def _file_item(row: sqlite3.Row) -> MemoryContentItem:
+        authority_path = str(row["path"])
+        name, path = MemoryService._content_label(authority_path, prefix="memory")
+        return MemoryContentItem(
+            item_id="memfile_" + hashlib.sha256(authority_path.encode("utf-8")).hexdigest(),
+            name=name,
+            path=path,
+            kind="file",
+            origin=str(row["memory_origin"]),
+            source=str(row["memory_origin"]),
+            size_bytes=int(row["size_bytes"]),
+            updated_at=MemoryService._content_time(row["updated_at"] or row["mtime"]),
+        )
+
+    @staticmethod
+    def _record_item(row: sqlite3.Row) -> MemoryContentItem:
+        name, path = MemoryService._content_label(str(row["path"]), prefix="evolution")
+        text = str(row["text"])
+        return MemoryContentItem(
+            item_id=str(row["record_id"]),
+            name=name,
+            path=path,
+            kind="evolution",
+            origin=str(row["memory_origin"]),
+            source=str(row["memory_origin"]),
+            size_bytes=len(text.encode("utf-8")),
+            updated_at=MemoryService._content_time(row["updated_at"] or row["created_at"]),
+        )
+
+    def content_page(self, *, view: str, page: int, page_size: int = 10) -> MemoryContentPage:
+        if view not in {"files", "evolution"}:
+            raise ValueError("memory view is invalid")
+        if isinstance(page, bool) or not isinstance(page, int) or not 1 <= page <= 1_000_000:
+            raise ValueError("memory page is invalid")
+        if page_size != 10:
+            raise ValueError("memory page size is fixed at 10")
+        offset = (page - 1) * page_size
+        with self.database.reader() as connection:
+            if view == "files":
+                total = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM memory_files WHERE memory_state='active'"
+                    ).fetchone()[0]
+                )
+                rows = connection.execute(
+                    "SELECT * FROM memory_files WHERE memory_state='active' "
+                    "ORDER BY COALESCE(updated_at,mtime) DESC,path LIMIT ? OFFSET ?",
+                    (page_size, offset),
+                ).fetchall()
+                items = tuple(self._file_item(row) for row in rows)
+            else:
+                total = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM memory_canonical_records WHERE memory_state='active'"
+                    ).fetchone()[0]
+                )
+                rows = connection.execute(
+                    "SELECT * FROM memory_canonical_records WHERE memory_state='active' "
+                    "ORDER BY COALESCE(updated_at,created_at) DESC,record_id LIMIT ? OFFSET ?",
+                    (page_size, offset),
+                ).fetchall()
+                items = tuple(self._record_item(row) for row in rows)
+        return MemoryContentPage(
+            view=view,
+            page=page,
+            page_size=page_size,
+            total=total,
+            items=items,
+        )
+
+    def content_document(self, *, view: str, item_id: str) -> MemoryContentDocument:
+        identity = str(item_id or "").strip()
+        if view not in {"files", "evolution"} or not identity or len(identity) > 8192:
+            raise ValueError("memory content identity is invalid")
+        with self.database.reader() as connection:
+            if view == "files":
+                row = next(
+                    (
+                        candidate
+                        for candidate in connection.execute(
+                            "SELECT * FROM memory_files WHERE memory_state='active' ORDER BY path"
+                        ).fetchall()
+                        if hmac.compare_digest(self._file_item(candidate).item_id, identity)
+                    ),
+                    None,
+                )
+                if row is None:
+                    raise MemoryContentNotFound("memory file does not exist")
+                if (
+                    row["availability"] != "stored"
+                    or not row["blob_sha256"]
+                    or self.blob_loader is None
+                ):
+                    raise MemoryContentUnavailable("memory file content is unavailable")
+                try:
+                    digest = str(row["blob_sha256"])
+                    payload = self.blob_loader(digest)
+                    if (
+                        len(payload) != int(row["size_bytes"])
+                        or hashlib.sha256(payload).hexdigest() != digest
+                    ):
+                        raise MemoryContentUnavailable("memory file content failed verification")
+                    content = self._content_text(payload)
+                except MemoryContentUnavailable:
+                    raise
+                except Exception as error:
+                    raise MemoryContentUnavailable("memory file content is unavailable") from error
+                item = self._file_item(row)
+            else:
+                row = connection.execute(
+                    "SELECT * FROM memory_canonical_records "
+                    "WHERE record_id=? AND memory_state='active'",
+                    (identity,),
+                ).fetchone()
+                if row is None:
+                    raise MemoryContentNotFound("memory evolution record does not exist")
+                content = self._content_text(str(row["text"]).encode("utf-8"))
+                item = self._record_item(row)
+        return MemoryContentDocument(item=item, content=content)
 
     def reset_learned(
         self,
@@ -391,4 +616,11 @@ class MemoryService:
             return len(rows)
 
 
-__all__ = ["MemoryResetProjection", "MemoryService", "MemorySnapshot"]
+__all__ = [
+    "MemoryContentDocument",
+    "MemoryContentItem",
+    "MemoryContentPage",
+    "MemoryResetProjection",
+    "MemoryService",
+    "MemorySnapshot",
+]

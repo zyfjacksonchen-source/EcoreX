@@ -64,6 +64,15 @@ test("settings exposes truthful background and verified phases", () => {
   );
 });
 
+test("failed discovery never masquerades as the latest available version", () => {
+  for (const target_version of [null, "1.0.5", "1.0.8"]) {
+    assert.match(
+      runtimeUpdateStatusText({ ...current, state: "failed", target_version }),
+      /更新检查失败/u,
+    );
+  }
+});
+
 test("install progress is visible only while a pending update is active", () => {
   assert.equal(
     isRuntimeUpdateInstalling({ ...current, state: "available", target_version: "1.0.8" }),

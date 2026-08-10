@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import json
 import sqlite3
+import threading
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -56,6 +59,26 @@ def _service(tmp_path, *, organization_id="org-a", vault=None, client=None, relo
     )
 
 
+class _FaultVault(InMemoryCredentialVault):
+    def __init__(self) -> None:
+        super().__init__()
+        self.references: set[str] = set()
+        self.put_references: list[str] = []
+        self.fail_delete: set[str] = set()
+
+    def put(self, reference, material) -> None:
+        super().put(reference, material)
+        self.references.add(reference)
+        self.put_references.append(reference)
+
+    def delete(self, reference) -> None:
+        if reference in self.fail_delete:
+            self.fail_delete.remove(reference)
+            raise RuntimeError("injected vault delete failure")
+        super().delete(reference)
+        self.references.discard(reference)
+
+
 def test_crud_is_tenant_scoped_and_never_projects_or_persists_secret(tmp_path) -> None:
     vault = InMemoryCredentialVault()
     service = _service(tmp_path, vault=vault)
@@ -82,6 +105,123 @@ def test_crud_is_tenant_scoped_and_never_projects_or_persists_secret(tmp_path) -
     assert service.list() == ()
     with pytest.raises(KeyError):
         vault.get(updated.credential_ref or "")
+
+
+def test_credential_swap_rolls_back_new_generation_when_database_commit_fails(
+    tmp_path, monkeypatch
+) -> None:
+    vault = _FaultVault()
+    service = _service(tmp_path, vault=vault)
+    created = service.create(_request(credential="old-token"))
+    original_connect = service._connect
+    connections = 0
+    failed_ref: list[str] = []
+
+    @contextmanager
+    def fail_after_write():
+        nonlocal connections
+        connections += 1
+        with original_connect() as connection:
+            yield connection
+            if connections == 2:
+                failed_ref.append(vault.put_references[-1])
+                vault.fail_delete.add(failed_ref[0])
+                raise sqlite3.OperationalError("injected commit failure")
+
+    monkeypatch.setattr(service, "_connect", fail_after_write)
+    with pytest.raises(sqlite3.OperationalError, match="injected commit failure"):
+        service._save(
+            created,
+            created.server_id,
+            _request(credential="new-token", expected_revision=created.revision),
+        )
+
+    assert vault.references == {created.credential_ref, failed_ref[0]}
+    assert vault.get(created.credential_ref or "")["bearer_token"] == "old-token"
+    _service(tmp_path, vault=vault)
+    assert vault.references == {created.credential_ref}
+
+
+def test_committed_swap_and_delete_cleanup_converge_after_restart(tmp_path) -> None:
+    vault = _FaultVault()
+    service = _service(tmp_path, vault=vault)
+    created = service.create(_request(credential="old-token"))
+    old_ref = created.credential_ref or ""
+    vault.fail_delete.add(old_ref)
+
+    updated = service.update(
+        created.server_id,
+        _request(credential="new-token", expected_revision=created.revision),
+    )
+    assert updated.credential_ref != old_ref
+    assert old_ref in vault.references
+    assert vault.get(updated.credential_ref or "")["bearer_token"] == "new-token"
+
+    _service(tmp_path, vault=vault)
+    assert old_ref not in vault.references
+
+    vault.fail_delete.add(updated.credential_ref or "")
+    asyncio.run(service.remove(updated.server_id))
+    assert service.list() == ()
+    assert updated.credential_ref in vault.references
+
+    _service(tmp_path, vault=vault)
+    assert vault.references == set()
+    assert sqlite3.connect(tmp_path / "user-mcp.db").execute(
+        "SELECT COUNT(*) FROM user_mcp_vault_cleanup"
+    ).fetchone() == (0,)
+
+
+def test_expected_revision_fences_concurrent_credential_swaps(tmp_path) -> None:
+    barrier = threading.Barrier(2)
+
+    class BarrierVault(_FaultVault):
+        def put(self, reference, material) -> None:
+            super().put(reference, material)
+            if material.get("bearer_token") != "initial-token":
+                barrier.wait(timeout=5)
+
+    vault = BarrierVault()
+    first = _service(tmp_path, vault=vault)
+    created = first.create(_request(credential="initial-token"))
+    second = _service(tmp_path, vault=vault)
+
+    def update(service: UserMCPService, token: str):
+        try:
+            return service.update(
+                created.server_id,
+                _request(credential=token, expected_revision=created.revision),
+            )
+        except Exception as error:
+            return error
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(
+            executor.map(
+                lambda pair: update(*pair),
+                ((first, "token-one"), (second, "token-two")),
+            )
+        )
+
+    winner = next(item for item in results if not isinstance(item, Exception))
+    loser = next(item for item in results if isinstance(item, Exception))
+    assert "mcp_server_revision_conflict" in str(loser)
+    assert first.get(created.server_id).revision == created.revision + 1
+    assert vault.get(winner.credential_ref or "")["bearer_token"] in {
+        "token-one",
+        "token-two",
+    }
+    assert vault.references == {winner.credential_ref}
+
+    with pytest.raises(Exception, match="mcp_bearer_credential_required"):
+        first.update(
+            created.server_id,
+            _request(
+                endpoint="https://other.example.com/v1",
+                credential=None,
+                expected_revision=winner.revision,
+            ),
+        )
 
 
 def test_public_https_boundary_rejects_local_cleartext_and_url_ambiguity(tmp_path) -> None:

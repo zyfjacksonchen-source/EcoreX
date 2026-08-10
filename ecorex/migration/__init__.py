@@ -49,12 +49,14 @@ from .legacy_identity_export import (
 )
 from .cowagent_data import (
     CowAgentDataMigrationError,
+    KNOWLEDGE_LAYOUT_RECEIPT_RELATIVE_PATH,
     LegacyDataMigrationResult,
     LegacyDataRoot,
     RECEIPT_RELATIVE_PATH as COWAGENT_DATA_RECEIPT_RELATIVE_PATH,
     default_cowagent_data_roots,
     default_emate_data_root,
     migrate_cowagent_data,
+    migrate_legacy_knowledge_layout,
 )
 
 LegacyDesktopDataMigrationError = CowAgentDataMigrationError
@@ -85,6 +87,7 @@ __all__ = [
     "BACKUP_MANIFEST_NAME",
     "COWAGENT_DATA_RECEIPT_RELATIVE_PATH",
     "CowAgentDataMigrationError",
+    "KNOWLEDGE_LAYOUT_RECEIPT_RELATIVE_PATH",
     "DuplicateLegacyIdError",
     "DEFAULT_SOURCE_VERSION",
     "INVENTORY_NAME",
@@ -133,6 +136,7 @@ __all__ = [
     "load_quarantine_key",
     "migrate_legacy_to_v1",
     "migrate_cowagent_data",
+    "migrate_legacy_knowledge_layout",
     "migrate_legacy_desktop_data",
     "migrate_v030_to_v1",
     "MigrationQuarantineService",

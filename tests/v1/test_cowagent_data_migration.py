@@ -6,13 +6,17 @@ from pathlib import Path
 
 import pytest
 
+import ecorex.migration.cowagent_data as migration_module
+
 from ecorex.migration.cowagent_data import (
     CowAgentDataMigrationError,
+    KNOWLEDGE_LAYOUT_RECEIPT_RELATIVE_PATH,
     LegacyDataRoot,
     RECEIPT_RELATIVE_PATH,
     default_cowagent_data_roots,
     default_emate_data_root,
     migrate_cowagent_data,
+    migrate_legacy_knowledge_layout,
 )
 
 
@@ -92,7 +96,7 @@ def test_first_import_is_secret_free_audited_and_idempotent(tmp_path: Path) -> N
     assert (
         target / "memory/long-term/index.db"
     ).read_bytes() == b"conversation-history"
-    assert (target / "knowledge/notes.md").read_text(encoding="utf-8") == "knowledge"
+    assert (target / "workspace/knowledge/notes.md").read_text(encoding="utf-8") == "knowledge"
     settings = json.loads(
         (target / "channels/imported-legacy-config-settings.json").read_text(
             encoding="utf-8"
@@ -154,6 +158,7 @@ def test_links_are_not_followed_and_existing_data_is_not_overwritten(
 
     assert result.skipped_entries == 2
     assert (target / "knowledge/current.md").read_text(encoding="utf-8") == "e-Mate"
+    assert (target / "workspace/knowledge/current.md").read_text(encoding="utf-8") == "e-Mate"
     assert not (target / "attachments/escape.txt").exists()
     receipt = json.loads((target / RECEIPT_RELATIVE_PATH).read_text(encoding="utf-8"))
     assert receipt["files"][0]["status"] == "target_conflict"
@@ -164,6 +169,73 @@ def test_links_are_not_followed_and_existing_data_is_not_overwritten(
             "source": "legacy-workspace",
         }
     ]
+
+
+def test_existing_legacy_knowledge_layout_moves_once_without_overwrite(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / ".emate"
+    _write(target / "knowledge/project/notes.md", "legacy")
+    _write(target / "workspace/knowledge/current.md", "current")
+    _write(target / "knowledge/current.md", "must not overwrite")
+
+    receipt_path = migrate_legacy_knowledge_layout(target)
+
+    assert receipt_path == target / KNOWLEDGE_LAYOUT_RECEIPT_RELATIVE_PATH
+    assert (target / "workspace/knowledge/project/notes.md").read_text() == "legacy"
+    assert (target / "workspace/knowledge/current.md").read_text() == "current"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert {item["status"] for item in receipt["files"]} == {"copied", "target_conflict"}
+
+    _write(target / "knowledge/late.md", "late")
+    assert migrate_legacy_knowledge_layout(target) == receipt_path
+    assert not (target / "workspace/knowledge/late.md").exists()
+
+
+def test_all_legacy_knowledge_imports_filter_unmanageable_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(migration_module, "MAX_DOCUMENT_BYTES", 4)
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    _write(source / "knowledge/good.md", "good")
+    _write(source / "knowledge/script.py", "x")
+    _write(source / "knowledge/binary.md", b"\xff")
+    _write(source / "knowledge/contains-nul.txt", b"a\0")
+    _write(source / "knowledge/CON.md", "x")
+    _write(source / "knowledge/large.md", "12345")
+
+    migrate_cowagent_data(
+        target, source_roots=(LegacyDataRoot("legacy-workspace", source),)
+    )
+    assert (target / "workspace/knowledge/good.md").read_text() == "good"
+    receipt = json.loads((target / RECEIPT_RELATIVE_PATH).read_text(encoding="utf-8"))
+    assert {item["reason"] for item in receipt["skipped"]} >= {
+        "unsupported_knowledge_file",
+        "knowledge_file_not_utf8",
+        "knowledge_file_contains_nul",
+        "non_portable_knowledge_path",
+        "knowledge_file_too_large",
+    }
+
+    layout = tmp_path / "layout"
+    _write(layout / "knowledge/good.txt", "good")
+    _write(layout / "knowledge/script.py", "x")
+    _write(layout / "knowledge/binary.md", b"\xff")
+    _write(layout / "knowledge/contains-nul.md", b"a\0")
+    _write(layout / "knowledge/CON.md", "x")
+    _write(layout / "knowledge/large.md", "12345")
+    layout_receipt_path = migrate_legacy_knowledge_layout(layout)
+    assert layout_receipt_path is not None
+    assert (layout / "workspace/knowledge/good.txt").read_text() == "good"
+    layout_receipt = json.loads(layout_receipt_path.read_text(encoding="utf-8"))
+    assert {item["reason"] for item in layout_receipt["skipped"]} >= {
+        "unsupported_knowledge_file",
+        "knowledge_file_not_utf8",
+        "knowledge_file_contains_nul",
+        "non_portable_knowledge_path",
+        "knowledge_file_too_large",
+    }
 
 
 def test_replay_preserves_live_data_modified_after_import(tmp_path: Path) -> None:

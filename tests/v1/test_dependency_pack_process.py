@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+from io import BytesIO
 import json
 from pathlib import Path
 import stat
+import subprocess
 import sys
 from typing import Mapping
+import venv
 import zipfile
+import zlib
 
 import pytest
 
@@ -22,6 +26,7 @@ from ecorex.integration.dependency_pack_process import (
     PackOfficeServiceAdapter,
     VerifiedDependencyPackProcessAdapter,
 )
+from ecorex.integration.dependency_pack_worker import _verify_ooxml_archive
 from ecorex.integration.pack_python import PackPythonIdentity
 from ecorex.update import SignatureEnvelope
 
@@ -114,6 +119,76 @@ def _identity() -> PackPythonIdentity:
     )
 
 
+def _compressed_multi_stream_pdf() -> bytes:
+    objects: list[bytes] = [b"", b""]
+    page_ids: list[int] = []
+    compressed = zlib.compress(b" " * (2 * 1024 * 1024), level=9)
+    for _ in range(8):
+        page_id = len(objects) + 1
+        stream_id = page_id + 1
+        page_ids.append(page_id)
+        objects.extend(
+            (
+                (
+                    f"<< /Type /Page /Parent 2 0 R /Resources <<>> "
+                    f"/MediaBox [0 0 100 100] /Contents {stream_id} 0 R >>"
+                ).encode(),
+                (
+                    f"<< /Length {len(compressed)} /Filter /FlateDecode >>\nstream\n"
+                ).encode()
+                + compressed
+                + b"\nendstream",
+            )
+        )
+    objects[0] = b"<< /Type /Catalog /Pages 2 0 R >>"
+    objects[1] = (
+        f"<< /Type /Pages /Count {len(page_ids)} /Kids ["
+        + " ".join(f"{value} 0 R" for value in page_ids)
+        + "] >>"
+    ).encode()
+    output = bytearray(b"%PDF-1.7\n")
+    offsets = [0]
+    for object_id, value in enumerate(objects, start=1):
+        offsets.append(len(output))
+        output.extend(f"{object_id} 0 obj\n".encode())
+        output.extend(value)
+        output.extend(b"\nendobj\n")
+    xref = len(output)
+    output.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    output.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        output.extend(f"{offset:010d} 00000 n \n".encode())
+    output.extend(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref}\n%%EOF\n"
+        ).encode()
+    )
+    return bytes(output)
+
+
+def _large_ooxml_document() -> bytes:
+    output = BytesIO()
+    document = (
+        b'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        b"<w:body>"
+        + b"<w:p><w:r><w:t>x</w:t></w:r></w:p>" * 800_000
+        + b"</w:body></w:document>"
+    )
+    with zipfile.ZipFile(
+        output,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=9,
+    ) as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>',
+        )
+        archive.writestr("word/document.xml", document)
+    return output.getvalue()
+
+
 def test_ocr_executes_only_from_verified_installed_pack_snapshot(
     tmp_path: Path,
 ) -> None:
@@ -177,6 +252,46 @@ def test_office_native_dependency_service_is_executable_without_sys_path_polluti
         process.close()
 
 
+def test_dependency_worker_does_not_require_core_installed_in_pack_python(
+    tmp_path: Path,
+) -> None:
+    environment = tmp_path / "isolated-python"
+    venv.EnvBuilder(with_pip=False, symlinks=sys.platform != "win32").create(
+        environment
+    )
+    interpreter = environment / (
+        "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
+    )
+    probe = subprocess.run(
+        (
+            str(interpreter),
+            "-I",
+            "-c",
+            "import importlib.util; print(importlib.util.find_spec('ecorex'))",
+        ),
+        cwd=tmp_path,
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert probe.stdout.strip() == "None"
+
+    files = {"ecorex-dependency-pack.json": b"{}"}
+    for module in ("docx", "openpyxl", "pptx", "pypdf", "reportlab"):
+        files[f"runtime/python/{module}/__init__.py"] = b"PACK_RUNTIME = True\n"
+    process = VerifiedDependencyPackProcessAdapter(
+        _verified_dependency_pack(tmp_path, "office", files),
+        python_executable=interpreter,
+        python_identity=_identity(),
+    )
+    try:
+        assert process.invoke("probe", {}, timeout_seconds=8.0)["provider"] == (
+            "python-office-formats-v1"
+        )
+    finally:
+        process.close()
+
+
 def test_office_service_adapter_uses_the_existing_verified_process_contract() -> None:
     class Process:
         call = None
@@ -198,6 +313,72 @@ def test_office_service_adapter_uses_the_existing_verified_process_contract() ->
         {"family": "document", "title": "Release notes", "sections": []},
         12.0,
     )
+
+    result = PackOfficeServiceAdapter(process).read(
+        "document",
+        b"bounded-docx",
+        timeout_seconds=10.0,
+    )
+
+    assert result == {"provider": "office"}
+    assert process.call == (
+        "read",
+        {
+            "family": "document",
+            "content_base64": "Ym91bmRlZC1kb2N4",
+        },
+        10.0,
+    )
+
+
+def test_office_reader_rejects_path_confused_ooxml_archives() -> None:
+    payload = BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("../document.xml", "<document/>")
+
+    with pytest.raises(ValueError, match="OOXML archive member is invalid"):
+        _verify_ooxml_archive(payload.getvalue())
+
+
+def test_office_reader_memory_limit_rejects_parser_exhaustion_and_parent_survives(
+    tmp_path: Path,
+) -> None:
+    bomb = (
+        b"class Bomb:\n"
+        b" def __init__(self,*args,**kwargs):\n"
+        b"  self.payload=bytearray(600*1024*1024)\n"
+    )
+    files = {
+        "ecorex-dependency-pack.json": b"{}",
+        "runtime/python/docx/__init__.py": bomb + b"Document=Bomb\n",
+        "runtime/python/pypdf/__init__.py": bomb + b"PdfReader=Bomb\n",
+        "runtime/python/openpyxl/__init__.py": b"PACK_RUNTIME=True\n",
+        "runtime/python/pptx/__init__.py": b"PACK_RUNTIME=True\n",
+        "runtime/python/reportlab/__init__.py": b"PACK_RUNTIME=True\n",
+    }
+    process = VerifiedDependencyPackProcessAdapter(
+        _verified_dependency_pack(tmp_path, "office", files),
+        python_executable=Path(sys.executable),
+        python_identity=_identity(),
+    )
+    service = PackOfficeServiceAdapter(process)
+    try:
+        for family, content in (
+            ("pdf", _compressed_multi_stream_pdf()),
+            ("document", _large_ooxml_document()),
+        ):
+            assert len(content) < 5 * 1024 * 1024
+            with pytest.raises(
+                DependencyPackProcessError,
+                match="dependency_pack_process_rejected",
+            ):
+                service.read(family, content, timeout_seconds=8.0)
+            assert process.invoke("probe", {}, timeout_seconds=8.0)["provider"] == (
+                "python-office-formats-v1"
+            )
+            assert bytearray(1024 * 1024) == bytes(1024 * 1024)
+    finally:
+        process.close()
 
 
 def test_dependency_pack_snapshot_mutation_fails_closed(tmp_path: Path) -> None:

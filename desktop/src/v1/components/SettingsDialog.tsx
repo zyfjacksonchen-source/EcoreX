@@ -1,4 +1,4 @@
-import { Activity, AlertCircle, Blocks, BookOpenText, Brain, Camera, FolderOutput, KeyRound, RefreshCw, RotateCcw, Shield, UserRound, X } from "lucide-react";
+import { Activity, AlertCircle, Blocks, Camera, FolderOutput, KeyRound, RefreshCw, Shield, UserRound, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
@@ -27,6 +27,7 @@ import {
   isVerifiedRuntimeUpdateReady,
   runtimeUpdateStatusText,
 } from "../state/updatePresentation.ts";
+import { KnowledgeSettings, MemorySettings } from "./WorkspaceContentSettings.tsx";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -39,7 +40,6 @@ interface SettingsDialogProps {
   extensions: ExtensionCatalogSnapshot | null;
   extensionLoadState: ExtensionLoadState;
   onManageExtensions: () => void;
-  onManageKnowledge: () => void;
   profileAvatar: string | null;
   onProfileAvatarChange: (value: string | null) => void;
   memory: MemorySnapshot | null;
@@ -86,7 +86,6 @@ export function SettingsDialog({
   extensions,
   extensionLoadState,
   onManageExtensions,
-  onManageKnowledge,
   profileAvatar,
   onProfileAvatarChange,
   memory,
@@ -122,7 +121,6 @@ export function SettingsDialog({
   const authenticated = bootstrap?.login.authenticated === true;
   const fullAccess = bootstrap?.permissions.profile === "full_access";
   const [confirmElevation, setConfirmElevation] = useState(false);
-  const [confirmMemoryReset, setConfirmMemoryReset] = useState(false);
   const [confirmQuarantineDelete, setConfirmQuarantineDelete] = useState(false);
   const [migrationQuarantine, setMigrationQuarantine] = useState<MigrationQuarantineProjection | null>(null);
   const [migrationQuarantineLoadState, setMigrationQuarantineLoadState] = useState<"loading" | "ready" | "error">("loading");
@@ -196,7 +194,6 @@ export function SettingsDialog({
 
   useEffect(() => {
     if (!open) {
-      setConfirmMemoryReset(false);
       setConfirmQuarantineDelete(false);
       setTechnicalHealth(null);
       setTechnicalHealthLoading(false);
@@ -309,7 +306,7 @@ export function SettingsDialog({
             </button>
           ))}
         </nav>
-        <div className="ex-settings-page-content">
+        <div className={`ex-settings-page-content${activePage === "knowledge" || activePage === "memory" ? " is-content" : ""}`}>
 
           <section className="ex-settings-section" id="settings-profile" hidden={activePage !== "profile"}>
             <h2>个人资料</h2>
@@ -541,103 +538,20 @@ export function SettingsDialog({
             </p>
           </section>
 
-          <section className="ex-settings-section" id="settings-knowledge" hidden={activePage !== "knowledge"}>
-            <h2>知识</h2>
-            <div className="ex-settings-row">
-              <span className="ex-settings-icon"><BookOpenText aria-hidden="true" /></span>
-              <div><strong>知识库</strong><p>由 Runtime 的知识能力读取、整理和更新，不在设置页保存副本。</p></div>
-              <button className="ex-button ex-permission-change" type="button" onClick={onManageKnowledge}>在会话中管理</button>
-            </div>
-            <p className="ex-settings-note">点击后会进入当前会话，由小芯先读取真实知识目录，再按你的确认执行修改。</p>
-          </section>
+          <KnowledgeSettings active={activePage === "knowledge"} client={client} />
 
-          <section className="ex-settings-section" id="settings-memory" hidden={activePage !== "memory"}>
-            <h2>记忆</h2>
-            <div className="ex-settings-row">
-              <span className="ex-settings-icon"><Brain aria-hidden="true" /></span>
-              <div>
-                <strong>学习记忆</strong>
-                <p aria-live="polite">
-                  {memoryLoadState === "loading"
-                    ? "正在读取记忆状态"
-                    : memory
-                      ? `${memory.resettable_count} 项可重置的偏好和资料记忆`
-                      : "暂时无法读取记忆状态"}
-                </p>
-              </div>
-              <button
-                className="ex-button ex-permission-change"
-                type="button"
-                disabled={memoryBusy || memoryLoadState === "loading" || memory?.resettable_count === 0}
-                onClick={() => setConfirmMemoryReset(true)}
-              >
-                一键重置
-              </button>
-            </div>
-            <p className="ex-settings-note">
-              只重置 e-Mate 从使用中学到的偏好和旧版导入记忆。不会删除内置知识、任务、消息或产物。
-            </p>
-            {memory?.latest_reset?.can_undo ? (
-              <div className="ex-memory-undo">
-                <div>
-                  <strong>最近一次重置可以撤销</strong>
-                  <p>
-                    已重置 {memory.latest_reset.affected_records + memory.latest_reset.affected_files} 项，
-                    可在 {new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(memory.latest_reset.undo_until))} 前恢复。
-                  </p>
-                </div>
-                <button
-                  className="ex-button"
-                  type="button"
-                  disabled={memoryBusy}
-                  onClick={() => void onUndoMemoryReset(memory.latest_reset!.reset_id)}
-                >
-                  <RotateCcw aria-hidden="true" />
-                  撤销重置
-                </button>
-              </div>
-            ) : null}
-            {confirmMemoryReset ? (
-              <div className="ex-permission-confirm" role="group" aria-label="确认重置学习记忆">
-                <div>
-                  <strong>确认重置学习记忆？</strong>
-                  <p>重置会立即停止使用这些记忆，并保留 24 小时撤销时间。</p>
-                </div>
-                <div className="ex-permission-confirm-actions">
-                  <button className="ex-button" type="button" disabled={memoryBusy} onClick={() => setConfirmMemoryReset(false)}>
-                    取消
-                  </button>
-                  <button
-                    className="ex-button is-primary"
-                    type="button"
-                    disabled={memoryBusy}
-                    aria-busy={memoryBusy}
-                    onClick={() => {
-                      void onResetMemory().then((reset) => {
-                        if (reset) setConfirmMemoryReset(false);
-                      });
-                    }}
-                  >
-                    {memoryBusy ? "正在重置" : "确认重置"}
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            {memoryLoadState === "error" && !memoryError ? (
-              <button className="ex-button ex-settings-retry" type="button" onClick={onRefreshMemory}>
-                重新读取记忆状态
-              </button>
-            ) : null}
-            {memoryError ? (
-              <div className="ex-settings-error" role="alert">
-                <AlertCircle aria-hidden="true" />
-                <span>{memoryError}</span>
-                <button className="ex-icon-button" type="button" aria-label="关闭记忆错误" onClick={onClearMemoryError}>
-                  <X aria-hidden="true" />
-                </button>
-              </div>
-            ) : null}
-          </section>
+          <MemorySettings
+            active={activePage === "memory"}
+            client={client}
+            memory={memory}
+            memoryLoadState={memoryLoadState}
+            memoryBusy={memoryBusy}
+            memoryError={memoryError}
+            onClearMemoryError={onClearMemoryError}
+            onRefreshMemory={onRefreshMemory}
+            onResetMemory={onResetMemory}
+            onUndoMemoryReset={onUndoMemoryReset}
+          />
 
           <section className="ex-settings-section" hidden={activePage !== "general"}>
             <h2>旧版凭证</h2>

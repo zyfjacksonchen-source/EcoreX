@@ -106,6 +106,51 @@ def test_bounded_process_rejects_invalid_limits_without_launching(tmp_path: Path
             max_stderr_bytes=1,
         )
 
+    with pytest.raises(ValueError, match="limits"):
+        run_bounded_process(
+            (sys.executable, "-c", "raise SystemExit(0)"),
+            payload=None,
+            cwd=tmp_path,
+            environment={},
+            timeout_seconds=1,
+            max_stdout_bytes=1,
+            max_stderr_bytes=1,
+            windows_process_memory_limit_bytes=128 * 1024 * 1024,
+        )
+
+    with pytest.raises(ValueError, match="limits"):
+        run_bounded_process(
+            (sys.executable, "-c", "raise SystemExit(0)"),
+            payload=None,
+            cwd=tmp_path,
+            environment={},
+            timeout_seconds=1,
+            max_stdout_bytes=1,
+            max_stderr_bytes=1,
+            windows_process_memory_limit_bytes=128.5 * 1024 * 1024,
+            windows_job_memory_limit_bytes=192 * 1024 * 1024,
+        )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object contract")
+def test_windows_job_memory_limit_kills_child_without_killing_parent(
+    tmp_path: Path,
+) -> None:
+    result = run_bounded_process(
+        (sys.executable, "-I", "-c", "bytearray(256*1024*1024)"),
+        payload=None,
+        cwd=tmp_path,
+        environment=dict(os.environ),
+        timeout_seconds=10,
+        max_stdout_bytes=1024,
+        max_stderr_bytes=1024,
+        windows_process_memory_limit_bytes=128 * 1024 * 1024,
+        windows_job_memory_limit_bytes=192 * 1024 * 1024,
+    )
+
+    assert result.returncode != 0
+    assert len(bytearray(1024 * 1024)) == 1024 * 1024
+
 
 def test_platform_stager_wrapper_fails_closed_on_adapter_output_flood(
     tmp_path: Path,

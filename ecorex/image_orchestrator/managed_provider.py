@@ -22,6 +22,8 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 
+from ecorex.json_boundary import validate_json_complexity
+
 from .cas import validate_image_payload
 from .models import ImageJob, ImageUsage, canonical_json
 from .provider import (
@@ -505,6 +507,7 @@ class ManagedHTTPSImageProvider:
 
         try:
             value = json.loads(payload.decode("utf-8"), object_pairs_hook=unique)
+            validate_json_complexity(value)
         except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
             raise ProviderRejected("managed image response is invalid") from None
         if not isinstance(value, dict):

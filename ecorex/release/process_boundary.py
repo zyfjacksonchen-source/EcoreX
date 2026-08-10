@@ -28,7 +28,11 @@ _POLL_SECONDS = 0.025
 _REAP_TIMEOUT_SECONDS = 5.0
 _CREATE_SUSPENDED = 0x00000004
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+_JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x00000100
+_JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+_MIN_MEMORY_LIMIT_BYTES = 64 * 1024 * 1024
+_MAX_MEMORY_LIMIT_BYTES = 16 * 1024 * 1024 * 1024
 
 
 class BoundedProcessError(RuntimeError):
@@ -66,6 +70,8 @@ def run_bounded_process(
     max_stdout_bytes: int,
     max_stderr_bytes: int,
     hide_window: bool = True,
+    windows_process_memory_limit_bytes: int | None = None,
+    windows_job_memory_limit_bytes: int | None = None,
 ) -> BoundedProcessResult:
     """Run one argv-only process without retaining unbounded pipe output.
 
@@ -74,11 +80,30 @@ def run_bounded_process(
     explicitly reaped.  ``payload=None`` closes stdin immediately.
     """
 
+    memory_limits = (
+        windows_process_memory_limit_bytes,
+        windows_job_memory_limit_bytes,
+    )
     if (
         not command
         or not 0 < timeout_seconds <= 24 * 60 * 60
         or not 0 <= max_stdout_bytes <= 64 * 1024 * 1024
         or not 0 <= max_stderr_bytes <= 64 * 1024 * 1024
+        or (memory_limits[0] is None) != (memory_limits[1] is None)
+        or any(
+            value is not None
+            and (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or not _MIN_MEMORY_LIMIT_BYTES <= value <= _MAX_MEMORY_LIMIT_BYTES
+            )
+            for value in memory_limits
+        )
+        or (
+            memory_limits[0] is not None
+            and memory_limits[1] is not None
+            and memory_limits[1] < memory_limits[0]
+        )
     ):
         raise ValueError("bounded process limits are invalid")
     normalized_command = [os.fspath(value) for value in command]
@@ -93,7 +118,10 @@ def run_bounded_process(
         # There must be no spawn-before-assign window.  Python closes the
         # primary thread handle internally, so NtResumeProcess resumes the
         # process only after its root is inside a kill-on-close Job Object.
-        windows_job = _create_windows_kill_job()
+        windows_job = _create_windows_kill_job(
+            process_memory_limit_bytes=windows_process_memory_limit_bytes,
+            job_memory_limit_bytes=windows_job_memory_limit_bytes,
+        )
         creation_flags |= (
             getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | _CREATE_SUSPENDED
         )
@@ -338,7 +366,11 @@ def _terminate_windows_process_tree(process: subprocess.Popen[bytes]) -> None:
         pass
 
 
-def _create_windows_kill_job() -> int:
+def _create_windows_kill_job(
+    *,
+    process_memory_limit_bytes: int | None = None,
+    job_memory_limit_bytes: int | None = None,
+) -> int:
     if os.name != "nt":
         raise OSError("Windows Job Object is unavailable")
 
@@ -390,6 +422,12 @@ def _create_windows_kill_job() -> int:
         raise OSError("Windows Job Object creation failed")
     value = _ExtendedLimitInformation()
     value.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if process_memory_limit_bytes is not None and job_memory_limit_bytes is not None:
+        value.BasicLimitInformation.LimitFlags |= (
+            _JOB_OBJECT_LIMIT_PROCESS_MEMORY | _JOB_OBJECT_LIMIT_JOB_MEMORY
+        )
+        value.ProcessMemoryLimit = process_memory_limit_bytes
+        value.JobMemoryLimit = job_memory_limit_bytes
     if not kernel32.SetInformationJobObject(
         handle,
         _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,

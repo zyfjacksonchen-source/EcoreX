@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 import hashlib
 import os
 from pathlib import Path
+import re
 import secrets
 import sqlite3
 import stat
@@ -43,6 +44,7 @@ _FLOW_TTL = timedelta(minutes=8)
 _MAX_RESPONSE_BYTES = 1024 * 1024
 _MAX_TEXT = 4000
 _SESSION_EXPIRED = -14
+_ERROR_RE = re.compile(r"^weixin_[a-z0-9_]{1,124}$")
 
 
 class _HTTPClient(Protocol):
@@ -169,7 +171,8 @@ class _WeixinStore:
                 """
                 SELECT channel_id, thread_id, turn_id, client_message_id,
                        conversation_sha256, conversation_id
-                FROM weixin_pending WHERE scope = ? ORDER BY rowid
+                FROM weixin_pending WHERE scope = ? AND state = 'pending'
+                ORDER BY rowid
                 """,
                 (self.scope,),
             ).fetchall()
@@ -187,11 +190,83 @@ class _WeixinStore:
             for row in rows
         )
 
-    def complete_pending(self, turn_id: str) -> None:
+    def finish_pending(
+        self, turn_id: str, state: str, error_code: str | None = None
+    ) -> None:
+        if state not in {"completed", "failed", "uncertain"}:
+            raise ValueError("weixin pending terminal state is invalid")
+        if (state == "completed") != (error_code is None) or (
+            error_code is not None and _ERROR_RE.fullmatch(error_code) is None
+        ):
+            raise ValueError("weixin pending terminal error is invalid")
+        with closing(self._connection()) as connection, connection:
+            row = connection.execute(
+                "SELECT conversation_id FROM weixin_pending "
+                "WHERE scope = ? AND turn_id = ? AND state = 'pending'",
+                (self.scope, turn_id),
+            ).fetchone()
+            connection.execute(
+                "UPDATE weixin_pending SET state = ?, error_code = ?, "
+                "channel_id = '', thread_id = '', client_message_id = '', "
+                "conversation_sha256 = '', conversation_id = '' "
+                "WHERE scope = ? AND turn_id = ? AND state = 'pending'",
+                (state, error_code, self.scope, turn_id),
+            )
+            if row is not None:
+                conversation_id = str(row[0])
+                connection.execute(
+                    "DELETE FROM weixin_context WHERE scope = ? "
+                    "AND conversation_id = ? AND NOT EXISTS ("
+                    "SELECT 1 FROM weixin_pending WHERE scope = ? "
+                    "AND state = 'pending' AND conversation_id = ?)",
+                    (
+                        self.scope,
+                        conversation_id,
+                        self.scope,
+                        conversation_id,
+                    ),
+                )
+
+    def terminal_error(self) -> tuple[str, bool] | None:
+        with closing(self._connection()) as connection:
+            row = connection.execute(
+                "SELECT state,error_code FROM weixin_pending WHERE scope = ? "
+                "AND state = 'uncertain' LIMIT 1",
+                (self.scope,),
+            ).fetchone()
+            delivery = connection.execute(
+                "SELECT state FROM weixin_deliveries WHERE scope=? "
+                "AND state IN ('sending','uncertain') LIMIT 1",
+                (self.scope,),
+            ).fetchone()
+        if row is None:
+            return (
+                ("weixin_delivery_uncertain", True)
+                if delivery is not None
+                else None
+            )
+        uncertain = str(row[0]) == "uncertain"
+        code = str(row[1] or "")
+        return (
+            code if _ERROR_RE.fullmatch(code) else (
+                "weixin_delivery_uncertain"
+                if uncertain
+                else "weixin_delivery_rejected"
+            ),
+            uncertain,
+        )
+
+    def resolve_uncertain(self) -> None:
         with closing(self._connection()) as connection, connection:
             connection.execute(
-                "DELETE FROM weixin_pending WHERE scope = ? AND turn_id = ?",
-                (self.scope, turn_id),
+                "UPDATE weixin_pending SET state='failed' "
+                "WHERE scope=? AND state='uncertain'",
+                (self.scope,),
+            )
+            connection.execute(
+                "UPDATE weixin_deliveries SET state='failed' "
+                "WHERE scope=? AND state IN ('sending','uncertain')",
+                (self.scope,),
             )
 
     def claim_delivery(self, key: str) -> str:
@@ -220,7 +295,7 @@ class _WeixinStore:
         return "send"
 
     def mark_delivery(self, key: str, state: str) -> None:
-        if state not in {"sent", "uncertain"}:
+        if state not in {"sent", "failed", "uncertain"}:
             raise ValueError("weixin delivery state is invalid")
         with closing(self._connection()) as connection, connection:
             connection.execute(
@@ -239,12 +314,7 @@ class _WeixinStore:
 
     def expire_session(self) -> None:
         with closing(self._connection()) as connection, connection:
-            for table in (
-                "weixin_state",
-                "weixin_context",
-                "weixin_pending",
-                "weixin_deliveries",
-            ):
+            for table in ("weixin_state", "weixin_context"):
                 connection.execute(f"DELETE FROM {table} WHERE scope = ?", (self.scope,))
 
     def _connection(self) -> sqlite3.Connection:
@@ -253,6 +323,7 @@ class _WeixinStore:
                 raise RuntimeError("weixin state path is invalid")
             connection = sqlite3.connect(self.path, timeout=5)
             connection.execute("PRAGMA busy_timeout = 5000")
+            connection.execute("PRAGMA secure_delete = ON")
             if not self._initialized:
                 connection.executescript(
                     """
@@ -274,17 +345,57 @@ class _WeixinStore:
                         client_message_id TEXT NOT NULL,
                         conversation_sha256 TEXT NOT NULL,
                         conversation_id TEXT NOT NULL,
+                        state TEXT NOT NULL DEFAULT 'pending' CHECK(
+                            state IN ('pending','completed','failed','uncertain')
+                        ),
+                        error_code TEXT,
                         PRIMARY KEY(scope, turn_id)
                     );
                     CREATE TABLE IF NOT EXISTS weixin_deliveries(
                         scope TEXT NOT NULL,
                         delivery_key TEXT NOT NULL,
-                        state TEXT NOT NULL CHECK(state IN ('sending','sent','uncertain')),
+                        state TEXT NOT NULL CHECK(state IN ('sending','sent','failed','uncertain')),
                         updated_at INTEGER NOT NULL,
                         PRIMARY KEY(scope, delivery_key)
                     );
                     """
                 )
+                columns = {
+                    str(row[1])
+                    for row in connection.execute("PRAGMA table_info(weixin_pending)")
+                }
+                if "state" not in columns:
+                    connection.execute(
+                        "ALTER TABLE weixin_pending ADD COLUMN state TEXT NOT NULL "
+                        "DEFAULT 'pending' CHECK(state IN "
+                        "('pending','completed','failed','uncertain'))"
+                    )
+                if "error_code" not in columns:
+                    connection.execute(
+                        "ALTER TABLE weixin_pending ADD COLUMN error_code TEXT"
+                    )
+                delivery_sql = str(
+                    connection.execute(
+                        "SELECT sql FROM sqlite_master WHERE type='table' "
+                        "AND name='weixin_deliveries'"
+                    ).fetchone()[0]
+                )
+                if "'failed'" not in delivery_sql:
+                    connection.executescript(
+                        """
+                        ALTER TABLE weixin_deliveries RENAME TO weixin_deliveries_v1;
+                        CREATE TABLE weixin_deliveries(
+                            scope TEXT NOT NULL, delivery_key TEXT NOT NULL,
+                            state TEXT NOT NULL CHECK(
+                                state IN ('sending','sent','failed','uncertain')
+                            ), updated_at INTEGER NOT NULL,
+                            PRIMARY KEY(scope, delivery_key)
+                        );
+                        INSERT INTO weixin_deliveries
+                        SELECT * FROM weixin_deliveries_v1;
+                        DROP TABLE weixin_deliveries_v1;
+                        """
+                    )
                 connection.commit()
                 os.chmod(self.path, 0o600)
                 self._initialized = True
@@ -312,6 +423,7 @@ class WeixinILinkAdapter:
         self._stop_event = threading.Event()
         self._lock = threading.RLock()
         self._flow: _DeviceFlow | None = None
+        self._staged: tuple[_HTTPClient, Mapping[str, Any]] | None = None
         self._health = ConnectorHealth.DISABLED
         self._last_error: str | None = None
 
@@ -451,21 +563,121 @@ class WeixinILinkAdapter:
                 if self._thread is not None and self._thread.is_alive():
                     return ConnectorHealthResult(self._health, self._last_error)
                 client = self.client_factory(base_url, token)
+                terminal = self._store.terminal_error()
                 self._client = client
-                self._stop_event = threading.Event()
-                self._health = ConnectorHealth.CONNECTED
-                self._last_error = None
+                stop_event = threading.Event()
+                self._stop_event = stop_event
+                self._health = (
+                    ConnectorHealth.CONNECTED
+                    if terminal is None
+                    else ConnectorHealth.DEGRADED
+                    if terminal[1]
+                    else ConnectorHealth.ERROR
+                )
+                self._last_error = terminal[0] if terminal else None
                 self._thread = threading.Thread(
                     target=self._run,
-                    args=(client,),
+                    args=(client, stop_event),
                     name="emate-weixin-channel",
                     daemon=True,
                 )
                 self._thread.start()
-            return ConnectorHealthResult(ConnectorHealth.CONNECTED)
+            return ConnectorHealthResult(self._health, self._last_error)
         except _WeixinFailure as error:
             return ConnectorHealthResult(ConnectorHealth.ERROR, error.code)
         except Exception:
+            return ConnectorHealthResult(
+                ConnectorHealth.ERROR, "weixin_transport_unavailable"
+            )
+
+    def prepare_replace(self, config: Mapping[str, Any]) -> ConnectorHealthResult:
+        """Validate a new iLink session without exposing it to the dispatcher."""
+        client: _HTTPClient | None = None
+        try:
+            base_url, token = _configuration(config)
+            with self._lock:
+                store = self._store
+                dispatcher = self._dispatcher
+            if store is None or dispatcher is None:
+                return ConnectorHealthResult(
+                    ConnectorHealth.ERROR, "weixin_runtime_unavailable"
+                )
+            client = self.client_factory(base_url, token)
+            initial_payload = self._updates(client, "")
+            with self._lock:
+                previous = self._staged
+                self._staged = (client, initial_payload)
+            if previous is not None:
+                _close(previous[0])
+            return ConnectorHealthResult(ConnectorHealth.CONNECTED)
+        except _WeixinFailure as error:
+            _close(client)
+            return ConnectorHealthResult(ConnectorHealth.ERROR, error.code)
+        except Exception:
+            _close(client)
+            return ConnectorHealthResult(
+                ConnectorHealth.ERROR, "weixin_transport_unavailable"
+            )
+
+    def commit_replace(self, timeout_seconds: float) -> ConnectorHealthResult:
+        """Start the staged worker only after the credential pointer is committed."""
+
+        with self._lock:
+            staged = self._staged
+            if staged is None:
+                return ConnectorHealthResult(
+                    ConnectorHealth.ERROR, "weixin_staged_session_missing"
+                )
+            client, initial_payload = staged
+            stop_event = threading.Event()
+            thread = threading.Thread(
+                target=self._run,
+                args=(client, stop_event, initial_payload),
+                name="emate-weixin-channel",
+                daemon=True,
+            )
+            with self._lock:
+                old_client = self._client
+                old_thread = self._thread
+                old_stop_event = self._stop_event
+                self._client = client
+                self._thread = thread
+                self._stop_event = stop_event
+                self._health = ConnectorHealth.CONNECTED
+                self._last_error = None
+                try:
+                    thread.start()
+                except BaseException:
+                    self._client = old_client
+                    self._thread = old_thread
+                    self._stop_event = old_stop_event
+                    raise
+                self._staged = None
+            old_stop_event.set()
+            _close(old_client)
+            if old_thread is not None:
+                old_thread.join(timeout_seconds)
+            return ConnectorHealthResult(ConnectorHealth.CONNECTED)
+
+    def abort_replace(self) -> None:
+        with self._lock:
+            staged = self._staged
+            self._staged = None
+        if staged is not None:
+            _close(staged[0])
+
+    def replace(
+        self, config: Mapping[str, Any], timeout_seconds: float
+    ) -> ConnectorHealthResult:
+        """Compatibility wrapper for callers without the staged contract."""
+
+        prepared = self.prepare_replace(config)
+        if prepared.health is not ConnectorHealth.CONNECTED:
+            return prepared
+        try:
+            return self.commit_replace(timeout_seconds)
+        except Exception:
+            self.abort_replace()
             return ConnectorHealthResult(
                 ConnectorHealth.ERROR, "weixin_transport_unavailable"
             )
@@ -479,11 +691,18 @@ class WeixinILinkAdapter:
                 self._last_error,
             )
 
+    def resolve_uncertain(self) -> None:
+        self._required_store().resolve_uncertain()
+
     def stop(self, timeout_seconds: float) -> bool:
         with self._lock:
             thread = self._thread
             client = self._client
+            staged = self._staged
+            self._staged = None
             self._stop_event.set()
+        if staged is not None:
+            _close(staged[0])
         if client is not None:
             _close(client)
         if thread is not None:
@@ -518,6 +737,8 @@ class WeixinILinkAdapter:
             state = store.claim_delivery(key)
             if state == "sent":
                 continue
+            if state == "failed":
+                raise _WeixinFailure("weixin_delivery_rejected", permanent=True)
             if state == "uncertain":
                 raise _WeixinFailure("weixin_delivery_uncertain", uncertain=True)
             context_token = store.context_token(conversation_id)
@@ -538,12 +759,14 @@ class WeixinILinkAdapter:
             try:
                 self._request(client, "ilink/bot/sendmessage", body, delivery=True)
             except _WeixinFailure as error:
-                if error.code == "weixin_reauthentication_required":
-                    store.expire_session()
                 if error.uncertain:
                     store.mark_delivery(key, "uncertain")
+                elif error.permanent:
+                    store.mark_delivery(key, "failed")
                 else:
                     store.release_delivery(key)
+                if error.code == "weixin_reauthentication_required":
+                    store.expire_session()
                 raise
             store.mark_delivery(key, "sent")
 
@@ -574,14 +797,24 @@ class WeixinILinkAdapter:
         finally:
             _close(client)
 
-    def _run(self, client: _HTTPClient) -> None:
+    def _run(
+        self,
+        client: _HTTPClient,
+        stop_event: threading.Event,
+        initial_payload: Mapping[str, Any] | None = None,
+    ) -> None:
         backoff = 1.0
         try:
-            while not self._stop_event.is_set():
+            while not stop_event.is_set():
                 try:
                     self._drain_pending()
                     store = self._required_store()
-                    payload = self._updates(client, store.cursor())
+                    payload = (
+                        initial_payload
+                        if initial_payload is not None
+                        else self._updates(client, store.cursor())
+                    )
+                    initial_payload = None
                     messages = payload.get("msgs", [])
                     if not isinstance(messages, list) or len(messages) > 100:
                         raise _WeixinFailure("weixin_provider_response_invalid")
@@ -595,12 +828,15 @@ class WeixinILinkAdapter:
                             _bounded(cursor, "weixin cursor", 64 * 1024, allow_empty=True)
                         )
                     self._drain_pending()
-                    self._set_health(ConnectorHealth.CONNECTED, None)
+                    self._set_ready_health(client)
                     backoff = 1.0
                 except _WeixinFailure as error:
                     if error.code == "weixin_reauthentication_required":
                         self._required_store().expire_session()
-                    self._set_health(
+                    if stop_event.is_set():
+                        continue
+                    self._set_session_health(
+                        client,
                         ConnectorHealth.DEGRADED
                         if error.uncertain
                         else ConnectorHealth.ERROR,
@@ -608,13 +844,16 @@ class WeixinILinkAdapter:
                     )
                     if error.permanent:
                         return
-                    self._stop_event.wait(backoff)
+                    stop_event.wait(backoff)
                     backoff = min(backoff * 2, 30.0)
                 except Exception:
-                    self._set_health(
+                    if stop_event.is_set():
+                        continue
+                    self._set_session_health(
+                        client,
                         ConnectorHealth.ERROR, "weixin_runtime_dispatch_failed"
                     )
-                    self._stop_event.wait(backoff)
+                    stop_event.wait(backoff)
                     backoff = min(backoff * 2, 30.0)
         finally:
             _close(client)
@@ -659,11 +898,48 @@ class WeixinILinkAdapter:
                     conversation_id=conversation_id,
                     transport=self,
                 )
-            except ChannelTurnTerminalFailure:
-                store.complete_pending(receipt.turn_id)
+            except ChannelTurnTerminalFailure as error:
+                store.finish_pending(
+                    receipt.turn_id,
+                    "failed",
+                    error.code.replace("channel_", "weixin_", 1),
+                )
                 continue
+            except _WeixinFailure as error:
+                if error.uncertain:
+                    store.finish_pending(receipt.turn_id, "uncertain", error.code)
+                    self._set_health(ConnectorHealth.DEGRADED, error.code)
+                    continue
+                if error.permanent:
+                    store.finish_pending(receipt.turn_id, "failed", error.code)
+                    self._set_health(ConnectorHealth.ERROR, error.code)
+                    continue
+                raise
             if delivered:
-                store.complete_pending(receipt.turn_id)
+                store.finish_pending(receipt.turn_id, "completed")
+
+    def _set_ready_health(self, client: _HTTPClient) -> None:
+        terminal = self._required_store().terminal_error()
+        if terminal is None:
+            self._set_session_health(client, ConnectorHealth.CONNECTED, None)
+            return
+        error, uncertain = terminal
+        self._set_session_health(
+            client,
+            ConnectorHealth.DEGRADED if uncertain else ConnectorHealth.ERROR,
+            error,
+        )
+
+    def _set_session_health(
+        self,
+        client: _HTTPClient,
+        health: ConnectorHealth,
+        error: str | None,
+    ) -> None:
+        with self._lock:
+            if self._client is client:
+                self._health = health
+                self._last_error = error
 
     def _updates(self, client: _HTTPClient, cursor: str) -> Mapping[str, Any]:
         return self._request(
@@ -715,7 +991,12 @@ class WeixinILinkAdapter:
                 uncertain=delivery,
             )
         if response.status_code != 200:
-            raise _WeixinFailure("weixin_provider_rejected")
+            raise _WeixinFailure(
+                "weixin_delivery_rejected"
+                if delivery
+                else "weixin_provider_rejected",
+                permanent=delivery,
+            )
         try:
             payload = response.json()
         except ValueError:
@@ -724,7 +1005,12 @@ class WeixinILinkAdapter:
                 uncertain=delivery,
             ) from None
         if not isinstance(payload, dict):
-            raise _WeixinFailure("weixin_provider_response_invalid")
+            raise _WeixinFailure(
+                "weixin_delivery_uncertain"
+                if delivery
+                else "weixin_provider_response_invalid",
+                uncertain=delivery,
+            )
         ret = payload.get("ret", 0)
         errcode = payload.get("errcode", 0)
         if ret == _SESSION_EXPIRED or errcode == _SESSION_EXPIRED:
@@ -732,7 +1018,12 @@ class WeixinILinkAdapter:
                 "weixin_reauthentication_required", permanent=True
             )
         if ret not in {0, None} or errcode not in {0, None}:
-            raise _WeixinFailure("weixin_provider_rejected")
+            raise _WeixinFailure(
+                "weixin_delivery_rejected"
+                if delivery
+                else "weixin_provider_rejected",
+                permanent=delivery,
+            )
         return payload
 
     def _required_flow(self, flow_id: str) -> _DeviceFlow:

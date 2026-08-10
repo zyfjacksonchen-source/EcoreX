@@ -31,6 +31,7 @@ from .models import ConnectorHealth, ConnectorHealthResult
 
 
 _APP_ID_RE = re.compile(r"^cli_[A-Za-z0-9_-]{6,128}$")
+_ERROR_RE = re.compile(r"^feishu_bot_[a-z0-9_]{1,124}$")
 _MAX_RESPONSE_BYTES = 1024 * 1024
 _MAX_TEXT_CHARS = 3500
 
@@ -208,7 +209,7 @@ class _FeishuAPI:
                 "feishu_bot_auth_rejected"
                 if credential_request
                 else "feishu_bot_provider_rejected",
-                permanent=credential_request,
+                permanent=credential_request or delivery,
             )
         try:
             payload = response.json()
@@ -220,13 +221,18 @@ class _FeishuAPI:
                 uncertain=delivery,
             ) from None
         if not isinstance(payload, dict):
-            raise _FeishuFailure("feishu_bot_provider_response_invalid")
+            raise _FeishuFailure(
+                "feishu_bot_delivery_uncertain"
+                if delivery
+                else "feishu_bot_provider_response_invalid",
+                uncertain=delivery,
+            )
         if payload.get("code") != 0:
             raise _FeishuFailure(
                 "feishu_bot_auth_rejected"
                 if credential_request
                 else "feishu_bot_provider_rejected",
-                permanent=credential_request,
+                permanent=credential_request or delivery,
             )
         return payload
 
@@ -268,7 +274,8 @@ class _FeishuStore:
                 """
                 SELECT channel_id, thread_id, turn_id, client_message_id,
                        conversation_sha256, conversation_id
-                FROM feishu_pending WHERE scope = ? ORDER BY rowid
+                FROM feishu_pending WHERE scope = ? AND state = 'pending'
+                ORDER BY rowid
                 """,
                 (self.scope,),
             ).fetchall()
@@ -286,11 +293,64 @@ class _FeishuStore:
             for row in rows
         )
 
-    def complete_pending(self, turn_id: str) -> None:
+    def finish_pending(
+        self, turn_id: str, state: str, error_code: str | None = None
+    ) -> None:
+        if state not in {"completed", "failed", "uncertain"}:
+            raise ValueError("feishu pending terminal state is invalid")
+        if (state == "completed") != (error_code is None) or (
+            error_code is not None and _ERROR_RE.fullmatch(error_code) is None
+        ):
+            raise ValueError("feishu pending terminal error is invalid")
         with closing(self._connection()) as connection, connection:
             connection.execute(
-                "DELETE FROM feishu_pending WHERE scope = ? AND turn_id = ?",
-                (self.scope, turn_id),
+                "UPDATE feishu_pending SET state = ?, error_code = ?, "
+                "channel_id = '', thread_id = '', client_message_id = '', "
+                "conversation_sha256 = '', conversation_id = '' "
+                "WHERE scope = ? AND turn_id = ? AND state = 'pending'",
+                (state, error_code, self.scope, turn_id),
+            )
+
+    def terminal_error(self) -> tuple[str, bool] | None:
+        with closing(self._connection()) as connection:
+            row = connection.execute(
+                "SELECT state,error_code FROM feishu_pending WHERE scope = ? "
+                "AND state = 'uncertain' LIMIT 1",
+                (self.scope,),
+            ).fetchone()
+            delivery = connection.execute(
+                "SELECT state FROM feishu_deliveries WHERE scope=? "
+                "AND state IN ('sending','uncertain') LIMIT 1",
+                (self.scope,),
+            ).fetchone()
+        if row is None:
+            return (
+                ("feishu_bot_delivery_uncertain", True)
+                if delivery is not None
+                else None
+            )
+        uncertain = str(row[0]) == "uncertain"
+        code = str(row[1] or "")
+        return (
+            code if _ERROR_RE.fullmatch(code) else (
+                "feishu_bot_delivery_uncertain"
+                if uncertain
+                else "feishu_bot_delivery_rejected"
+            ),
+            uncertain,
+        )
+
+    def resolve_uncertain(self) -> None:
+        with closing(self._connection()) as connection, connection:
+            connection.execute(
+                "UPDATE feishu_pending SET state='failed' "
+                "WHERE scope=? AND state='uncertain'",
+                (self.scope,),
+            )
+            connection.execute(
+                "UPDATE feishu_deliveries SET state='failed' "
+                "WHERE scope=? AND state IN ('sending','uncertain')",
+                (self.scope,),
             )
 
     def claim_delivery(self, key: str) -> str:
@@ -318,7 +378,7 @@ class _FeishuStore:
         return "send"
 
     def mark_delivery(self, key: str, state: str) -> None:
-        if state not in {"sent", "uncertain"}:
+        if state not in {"sent", "failed", "uncertain"}:
             raise ValueError("feishu delivery state is invalid")
         with closing(self._connection()) as connection, connection:
             connection.execute(
@@ -341,6 +401,7 @@ class _FeishuStore:
                 raise RuntimeError("feishu state path is invalid")
             connection = sqlite3.connect(self.path, timeout=5)
             connection.execute("PRAGMA busy_timeout = 5000")
+            connection.execute("PRAGMA secure_delete = ON")
             if not self._initialized:
                 connection.executescript(
                     """
@@ -352,17 +413,57 @@ class _FeishuStore:
                         client_message_id TEXT NOT NULL,
                         conversation_sha256 TEXT NOT NULL,
                         conversation_id TEXT NOT NULL,
+                        state TEXT NOT NULL DEFAULT 'pending' CHECK(
+                            state IN ('pending','completed','failed','uncertain')
+                        ),
+                        error_code TEXT,
                         PRIMARY KEY(scope, turn_id)
                     );
                     CREATE TABLE IF NOT EXISTS feishu_deliveries(
                         scope TEXT NOT NULL,
                         delivery_key TEXT NOT NULL,
-                        state TEXT NOT NULL CHECK(state IN ('sending','sent','uncertain')),
+                        state TEXT NOT NULL CHECK(state IN ('sending','sent','failed','uncertain')),
                         updated_at INTEGER NOT NULL,
                         PRIMARY KEY(scope, delivery_key)
                     );
                     """
                 )
+                columns = {
+                    str(row[1])
+                    for row in connection.execute("PRAGMA table_info(feishu_pending)")
+                }
+                if "state" not in columns:
+                    connection.execute(
+                        "ALTER TABLE feishu_pending ADD COLUMN state TEXT NOT NULL "
+                        "DEFAULT 'pending' CHECK(state IN "
+                        "('pending','completed','failed','uncertain'))"
+                    )
+                if "error_code" not in columns:
+                    connection.execute(
+                        "ALTER TABLE feishu_pending ADD COLUMN error_code TEXT"
+                    )
+                delivery_sql = str(
+                    connection.execute(
+                        "SELECT sql FROM sqlite_master WHERE type='table' "
+                        "AND name='feishu_deliveries'"
+                    ).fetchone()[0]
+                )
+                if "'failed'" not in delivery_sql:
+                    connection.executescript(
+                        """
+                        ALTER TABLE feishu_deliveries RENAME TO feishu_deliveries_v1;
+                        CREATE TABLE feishu_deliveries(
+                            scope TEXT NOT NULL, delivery_key TEXT NOT NULL,
+                            state TEXT NOT NULL CHECK(
+                                state IN ('sending','sent','failed','uncertain')
+                            ), updated_at INTEGER NOT NULL,
+                            PRIMARY KEY(scope, delivery_key)
+                        );
+                        INSERT INTO feishu_deliveries
+                        SELECT * FROM feishu_deliveries_v1;
+                        DROP TABLE feishu_deliveries_v1;
+                        """
+                    )
                 connection.commit()
                 os.chmod(self.path, 0o600)
                 self._initialized = True
@@ -490,6 +591,9 @@ class FeishuMessageBotAdapter:
                 self._last_error,
             )
 
+    def resolve_uncertain(self) -> None:
+        self._required_store().resolve_uncertain()
+
     def stop(self, timeout_seconds: float) -> bool:
         with self._lock:
             thread = self._thread
@@ -545,6 +649,10 @@ class FeishuMessageBotAdapter:
             state = store.claim_delivery(key)
             if state == "sent":
                 continue
+            if state == "failed":
+                raise _FeishuFailure(
+                    "feishu_bot_delivery_rejected", permanent=True
+                )
             if state == "uncertain":
                 raise _FeishuFailure(
                     "feishu_bot_delivery_uncertain", uncertain=True
@@ -554,6 +662,8 @@ class FeishuMessageBotAdapter:
             except _FeishuFailure as error:
                 if error.uncertain:
                     store.mark_delivery(key, "uncertain")
+                elif error.permanent:
+                    store.mark_delivery(key, "failed")
                 else:
                     store.release_delivery(key)
                 raise
@@ -566,13 +676,12 @@ class FeishuMessageBotAdapter:
                 await channel.start_background(timeout=self.connect_timeout_seconds)
                 if not channel.is_ready:
                     raise _FeishuFailure("feishu_bot_connect_timeout")
-                self._set_health(ConnectorHealth.CONNECTED, None)
+                self._set_ready_health()
                 ready.set()
                 while not self._stop_event.is_set():
                     try:
                         self._drain_pending()
-                        if self._health is ConnectorHealth.ERROR:
-                            self._set_health(ConnectorHealth.CONNECTED, None)
+                        self._set_ready_health()
                         backoff = 0.1
                     except _FeishuFailure as error:
                         self._set_health(
@@ -653,11 +762,36 @@ class FeishuMessageBotAdapter:
                     conversation_id=conversation_id,
                     transport=self,
                 )
-            except ChannelTurnTerminalFailure:
-                store.complete_pending(receipt.turn_id)
+            except ChannelTurnTerminalFailure as error:
+                store.finish_pending(
+                    receipt.turn_id,
+                    "failed",
+                    error.code.replace("channel_", "feishu_bot_", 1),
+                )
                 continue
+            except _FeishuFailure as error:
+                if error.uncertain:
+                    store.finish_pending(receipt.turn_id, "uncertain", error.code)
+                    self._set_health(ConnectorHealth.DEGRADED, error.code)
+                    continue
+                if error.permanent:
+                    store.finish_pending(receipt.turn_id, "failed", error.code)
+                    self._set_health(ConnectorHealth.ERROR, error.code)
+                    continue
+                raise
             if delivered:
-                store.complete_pending(receipt.turn_id)
+                store.finish_pending(receipt.turn_id, "completed")
+
+    def _set_ready_health(self) -> None:
+        terminal = self._required_store().terminal_error()
+        if terminal is None:
+            self._set_health(ConnectorHealth.CONNECTED, None)
+            return
+        error, uncertain = terminal
+        self._set_health(
+            ConnectorHealth.DEGRADED if uncertain else ConnectorHealth.ERROR,
+            error,
+        )
 
     def _reconnecting(self) -> None:
         self._set_health(ConnectorHealth.DEGRADED, "feishu_bot_reconnecting")

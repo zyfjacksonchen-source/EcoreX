@@ -41,6 +41,9 @@ export function runtimeUpdateStatusText(
   busy = false,
 ): string {
   if (!update) return "版本信息尚未读取";
+  if (update.state === "failed") {
+    return "更新检查失败，当前版本不受影响，可重新检查";
+  }
   if (!hasPendingRuntimeUpdate(update)) {
     return busy ? "正在检查更新…" : "当前已是最新可用版本";
   }
@@ -55,8 +58,6 @@ export function runtimeUpdateStatusText(
         : `e-Mate ${update.target_version} 正在完成安装准备`;
     case "activating":
       return `安装完成，正在打开 e-Mate ${update.target_version}`;
-    case "failed":
-      return "更新准备失败，当前版本不受影响，可重新检查";
     default:
       return "当前已是最新可用版本";
   }

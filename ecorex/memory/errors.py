@@ -15,3 +15,11 @@ class MemoryResetNotFound(MemoryError):
 
 class MemoryUndoExpired(MemoryError):
     code = "memory_undo_expired"
+
+
+class MemoryContentNotFound(MemoryError):
+    code = "memory_content_not_found"
+
+
+class MemoryContentUnavailable(MemoryError):
+    code = "memory_content_unavailable"

@@ -878,6 +878,10 @@ test("mobile session drawer remains inside the viewport and scrolls only its sum
 });
 
 test("settings persist output location, memory reset undo, and full-access revocation", async ({ guardedPage }) => {
+  const remoteMarkdownRequests: string[] = [];
+  guardedPage.on("request", (request) => {
+    if (request.url().includes("example.invalid")) remoteMarkdownRequests.push(request.url());
+  });
   await openArtifactScenario(guardedPage);
   await guardedPage.getByRole("button", { name: "设置", exact: true }).click();
   const dialog = guardedPage.getByTestId("settings-workspace");
@@ -904,12 +908,57 @@ test("settings persist output location, memory reset undo, and full-access revoc
   await dialog.getByRole("button", { name: "知识", exact: true }).click();
   await expect(dialog.getByRole("heading", { name: "知识", exact: true })).toBeVisible();
   await expect(dialog.getByRole("heading", { name: "记忆", exact: true })).toBeHidden();
-  await expect(dialog.getByRole("button", { name: "在会话中管理" })).toBeVisible();
+  const knowledgeSection = dialog.getByRole("heading", { name: "知识", exact: true }).locator("..");
+  await expect(knowledgeSection.getByRole("button", { name: "新建分类" })).toBeVisible();
+  await expect(knowledgeSection.getByRole("button", { name: "新建文档" })).toBeVisible();
+  await knowledgeSection.getByRole("button", { name: "README.md", exact: true }).click();
+  await expect(knowledgeSection.getByRole("heading", { name: "README.md" })).toBeVisible();
+  await knowledgeSection.getByRole("button", { name: "新建分类" }).click();
+  await knowledgeSection.getByLabel("分类路径").fill("验收分类");
+  await knowledgeSection.getByRole("button", { name: "创建", exact: true }).click();
+  const categorySummary = knowledgeSection.locator("summary").filter({ hasText: "验收分类" });
+  await expect(categorySummary).toBeVisible();
+  await categorySummary.focus();
+  await categorySummary.press("Enter");
+  await expect(categorySummary.locator("..")).toHaveAttribute("open", "");
+  await categorySummary.press("Enter");
+  await expect(categorySummary.locator("..")).not.toHaveAttribute("open", "");
+  await categorySummary.press("Enter");
+  await knowledgeSection.getByRole("button", { name: "新建文档" }).click();
+  await knowledgeSection.getByLabel("文档路径").fill("验收.md");
+  await knowledgeSection.getByLabel("初始内容").fill([
+    "# 真实知识验收",
+    "[坏编码](%ZZ.md)",
+    "[不存在](missing.md)",
+    "[不安全](http://example.invalid)",
+    "[安全外链](https://example.com)",
+    "![远程图片](https://example.invalid/tracker.png)",
+  ].join("\n"));
+  await knowledgeSection.getByRole("button", { name: "创建", exact: true }).click();
+  await expect(knowledgeSection.getByRole("heading", { name: "验收.md" })).toBeVisible();
+  await expect(knowledgeSection.getByRole("link", { name: "安全外链" })).toHaveAttribute("href", "https://example.com/");
+  await expect(knowledgeSection.getByRole("link", { name: /坏编码|不存在|不安全/u })).toHaveCount(0);
+  await expect(knowledgeSection.getByRole("img", { name: "远程图片" })).toHaveCount(0);
+  expect(remoteMarkdownRequests).toEqual([]);
+  await knowledgeSection.locator('input[type="file"][accept*=".md"]').setInputFiles({
+    name: "导入.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from("# 已导入"),
+  });
+  await expect(knowledgeSection.getByRole("heading", { name: "导入.md" })).toBeVisible();
+  await knowledgeSection.getByRole("tab", { name: "关系图" }).click();
+  await expect(knowledgeSection.getByRole("button", { name: "README README.md", exact: true })).toBeVisible();
 
   await dialog.getByRole("button", { name: "记忆", exact: true }).click();
   await expect(dialog.getByRole("heading", { name: "记忆", exact: true })).toBeVisible();
   await expect(dialog.getByRole("heading", { name: "知识", exact: true })).toBeHidden();
   const memorySection = dialog.getByRole("heading", { name: "记忆", exact: true }).locator("..");
+  await expect(memorySection.getByRole("tab", { name: "记忆文件" })).toBeVisible();
+  await memorySection.getByRole("button", { name: /factory\.md/u }).click();
+  await expect(memorySection.getByText("e-Mate 内置记忆", { exact: false })).toBeVisible();
+  await memorySection.getByRole("tab", { name: "进化记录" }).click();
+  await memorySection.getByRole("button", { name: /偏好\.md/u }).click();
+  await expect(memorySection.getByText(/专业严谨/u)).toBeVisible();
   await memorySection.getByRole("button", { name: "一键重置" }).click();
   await memorySection.getByRole("button", { name: "确认重置" }).click();
   await expect(memorySection.getByText("0 项可重置的偏好和资料记忆", { exact: true })).toBeVisible();
@@ -951,6 +1000,41 @@ test("account menu exposes the user name and performs a real lease-bound logout"
 
   const state = await guardedPage.evaluate(async () => fetch("/__ga/state").then((response) => response.json()));
   expect(state).toMatchObject({ authenticated: false, session_logout_count: 1 });
+});
+
+test("menu-launched confirmation dialogs release the workspace after cancel", async ({ guardedPage }) => {
+  await openArtifactScenario(guardedPage);
+  const body = guardedPage.locator("body");
+  const assertReleased = async () => {
+    await expect(guardedPage.getByRole("dialog")).toHaveCount(0);
+    await expect(body).not.toHaveCSS("pointer-events", "none");
+    await guardedPage.getByRole("button", { name: "设置", exact: true }).click();
+    await expect(guardedPage.getByTestId("settings-workspace")).toBeVisible();
+    await guardedPage.getByRole("button", { name: "关闭设置" }).click();
+  };
+
+  const manage = guardedPage.getByRole("button", { name: "管理任务：季度资料整理" });
+  await manage.locator("..").hover();
+  await manage.click();
+  await guardedPage.getByRole("menuitem", { name: "重命名" }).click();
+  await guardedPage.getByRole("dialog", { name: "重命名任务" }).getByRole("button", { name: "取消" }).click();
+  await assertReleased();
+
+  await guardedPage.getByRole("button", { name: "用户中心，验收账号" }).click();
+  await guardedPage.getByRole("menuitem", { name: "退出登录" }).click();
+  await guardedPage.getByRole("dialog", { name: "退出 e-Mate？" }).getByRole("button", { name: "取消" }).click();
+  await assertReleased();
+
+  await manage.locator("..").hover();
+  await manage.click();
+  await guardedPage.getByRole("menuitem", { name: "归档" }).click();
+  await guardedPage.locator("details.ex-archived-tasks > summary").click();
+  const manageArchived = guardedPage.getByRole("button", { name: "管理已归档任务：季度资料整理" });
+  await manageArchived.locator("..").hover();
+  await manageArchived.click();
+  await guardedPage.getByRole("menuitem", { name: "删除任务" }).click();
+  await guardedPage.getByRole("dialog", { name: "删除已归档任务？" }).getByRole("button", { name: "取消" }).click();
+  await assertReleased();
 });
 
 test("task inspection keeps implementation details collapsed and explicitly starts a new work step", async ({ guardedPage }) => {

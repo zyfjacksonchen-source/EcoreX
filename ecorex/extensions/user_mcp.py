@@ -89,6 +89,7 @@ class UserMCPServerRequest(BaseModel):
     oauth_client_id: str | None = Field(default=None, min_length=1, max_length=512)
     oauth_scope: str = Field(default="", max_length=2048)
     authorization_hosts: list[str] = Field(default_factory=list, max_length=8)
+    expected_revision: int | None = Field(default=None, ge=1, strict=True)
 
     @field_validator("display_name")
     @classmethod
@@ -334,16 +335,14 @@ class UserMCPService:
             except MCPOAuthError as error:
                 raise UserMCPError(error.code, 503) from None
         with self._lock, self._connect() as connection:
+            if current.credential_ref is not None:
+                self._queue_vault_cleanup(connection, current.credential_ref)
             connection.execute(
                 "DELETE FROM user_mcp_servers WHERE account_id=? AND organization_id=? "
                 "AND server_id=?",
                 (self.account_id, self.organization_id, current.server_id),
             )
-        if current.credential_ref is not None:
-            try:
-                await asyncio.to_thread(self.vault.delete, current.credential_ref)
-            except RuntimeError:
-                raise UserMCPError("mcp_vault_unavailable", 503) from None
+        await asyncio.to_thread(self._drain_vault_cleanup)
 
     async def test(
         self, server_id: str, *, oauth_service: MCPOAuthService | None
@@ -442,21 +441,40 @@ class UserMCPService:
             or request.authorization_hosts
         ):
             raise UserMCPError("mcp_oauth_configuration_invalid")
-        if request.auth_kind == "bearer" and credential is None and (
-            current is None or current.auth_kind != "bearer" or current.credential_ref is None
+        if (
+            request.auth_kind == "bearer"
+            and credential is None
+            and (
+                current is None
+                or current.auth_kind != "bearer"
+                or current.credential_ref is None
+                or current.endpoint != endpoint
+            )
         ):
             raise UserMCPError("mcp_bearer_credential_required")
-        credential_ref = (
-            self._credential_reference(server_id)
-            if request.auth_kind == "bearer"
-            else None
-        )
-        credential_written = False
+        if current is not None and request.expected_revision not in {
+            None,
+            current.revision,
+        }:
+            raise UserMCPError("mcp_server_revision_conflict", 409)
+        if current is None and request.expected_revision is not None:
+            raise UserMCPError("mcp_server_revision_conflict", 409)
+        credential_ref = None
+        if request.auth_kind == "bearer":
+            credential_ref = (
+                self._credential_reference(server_id)
+                if credential is not None
+                else current.credential_ref
+                if current is not None
+                else None
+            )
         if credential is not None and credential_ref is not None:
+            with self._lock, self._connect() as connection:
+                self._queue_vault_cleanup(connection, credential_ref)
             try:
                 self.vault.put(credential_ref, {"bearer_token": credential})
-                credential_written = True
             except RuntimeError:
+                self._drain_vault_cleanup()
                 raise UserMCPError("mcp_vault_unavailable", 503) from None
         previous_ref = current.credential_ref if current is not None else None
         connection_changed = current is None or any(
@@ -471,6 +489,12 @@ class UserMCPService:
         now = int(time.time())
         try:
             with self._lock, self._connect() as connection:
+                if credential is not None and credential_ref is not None:
+                    connection.execute(
+                        "DELETE FROM user_mcp_vault_cleanup WHERE account_id=? "
+                        "AND organization_id=? AND credential_ref=?",
+                        (self.account_id, self.organization_id, credential_ref),
+                    )
                 if current is None:
                     connection.execute(
                         "INSERT INTO user_mcp_servers(account_id,organization_id,server_id,"
@@ -498,12 +522,12 @@ class UserMCPService:
                         ),
                     )
                 else:
-                    connection.execute(
+                    updated = connection.execute(
                         "UPDATE user_mcp_servers SET display_name=?,endpoint=?,expected_host=?,"
                         "auth_kind=?,oauth_client_id=?,oauth_scope=?,authorization_hosts_json=?,"
                         "credential_ref=?,enabled=?,tool_catalog_json=?,tested_at=?,"
                         "revision=revision+1,updated_at=? WHERE account_id=? AND "
-                        "organization_id=? AND server_id=?",
+                        "organization_id=? AND server_id=? AND revision=?",
                         (
                             request.display_name,
                             endpoint,
@@ -520,20 +544,20 @@ class UserMCPService:
                             self.account_id,
                             self.organization_id,
                             server_id,
+                            current.revision,
                         ),
                     )
+                    if updated.rowcount != 1:
+                        raise UserMCPError("mcp_server_revision_conflict", 409)
+                if previous_ref is not None and previous_ref != credential_ref:
+                    self._queue_vault_cleanup(connection, previous_ref)
         except Exception:
-            if credential_written and current is None and credential_ref is not None:
-                try:
-                    self.vault.delete(credential_ref)
-                except RuntimeError:
-                    pass
-            raise
-        if previous_ref is not None and previous_ref != credential_ref:
             try:
-                self.vault.delete(previous_ref)
-            except RuntimeError:
-                raise UserMCPError("mcp_vault_unavailable", 503) from None
+                self._drain_vault_cleanup()
+            except Exception:
+                pass
+            raise
+        self._drain_vault_cleanup()
         return self.get(server_id)
 
     def _binding(self, item: UserMCPServer) -> MCPRuntimeBinding:
@@ -669,7 +693,7 @@ class UserMCPService:
         digest = hashlib.sha256(
             f"{self.account_id}\0{self.organization_id}\0{server_id}".encode("utf-8")
         ).hexdigest()
-        return f"ecorex/user-mcp/{digest}"
+        return f"ecorex/user-mcp/{digest}/{uuid.uuid4().hex}"
 
     def _initialize(self) -> None:
         with self._lock, self._connect() as connection:
@@ -684,10 +708,53 @@ class UserMCPService:
                 "created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,"
                 "PRIMARY KEY(account_id,organization_id,server_id))"
             )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS user_mcp_vault_cleanup("
+                "account_id TEXT NOT NULL,organization_id TEXT NOT NULL,"
+                "credential_ref TEXT NOT NULL,queued_at INTEGER NOT NULL,"
+                "PRIMARY KEY(account_id,organization_id,credential_ref))"
+            )
+        self._drain_vault_cleanup()
         try:
             os.chmod(self.database_path, 0o600)
         except OSError:
             pass
+
+    def _queue_vault_cleanup(
+        self, connection: sqlite3.Connection, credential_ref: str
+    ) -> None:
+        connection.execute(
+            "INSERT OR IGNORE INTO user_mcp_vault_cleanup("
+            "account_id,organization_id,credential_ref,queued_at) VALUES (?,?,?,?)",
+            (
+                self.account_id,
+                self.organization_id,
+                credential_ref,
+                int(time.time()),
+            ),
+        )
+
+    def _drain_vault_cleanup(self) -> None:
+        with self._lock, self._connect() as connection:
+            references = tuple(
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT credential_ref FROM user_mcp_vault_cleanup "
+                    "WHERE account_id=? AND organization_id=? ORDER BY queued_at,credential_ref",
+                    (self.account_id, self.organization_id),
+                ).fetchall()
+            )
+        for reference in references:
+            try:
+                self.vault.delete(reference)
+            except RuntimeError:
+                continue
+            with self._lock, self._connect() as connection:
+                connection.execute(
+                    "DELETE FROM user_mcp_vault_cleanup WHERE account_id=? "
+                    "AND organization_id=? AND credential_ref=?",
+                    (self.account_id, self.organization_id, reference),
+                )
 
     @contextmanager
     def _connect(self):

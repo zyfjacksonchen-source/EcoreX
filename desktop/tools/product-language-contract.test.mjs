@@ -12,6 +12,7 @@ const replay = source("../src/v1/components/ReplayDialog.tsx");
 const retouch = source("../src/v1/components/RetouchWorkspace.tsx");
 const extensionManager = source("../src/v1/components/SkillsWorkspace.tsx");
 const settings = source("../src/v1/components/SettingsDialog.tsx");
+const workspaceContentSettings = source("../src/v1/components/WorkspaceContentSettings.tsx");
 const extensionSession = source("../src/v1/state/useExtensionSession.ts");
 const extensionLabels = source("../src/v1/state/extensions.ts");
 const composer = source("../src/v1/components/Composer.tsx");
@@ -37,7 +38,7 @@ test("user-facing async failures use the controlled language boundary", () => {
 });
 
 test("default product copy hides implementation vocabulary and folds diagnostics", () => {
-  const visibleComponents = [app, replay, extensionManager, settings];
+  const visibleComponents = [app, replay, extensionManager, settings, workspaceContentSettings];
   const forbiddenLiterals = [
     "从 Runtime 事件事实源",
     "Mock Replay",
@@ -114,7 +115,8 @@ test("scheduled task actions return to the preserved Composer and only fill an e
 });
 
 test("settings and external connections stay on real product contracts", () => {
-  assert.match(settings, /data-testid="settings-workspace"[\s\S]*?settings-profile[\s\S]*?settings-general[\s\S]*?settings-knowledge[\s\S]*?settings-memory/u);
+  assert.match(settings, /data-testid="settings-workspace"[\s\S]*?settings-profile[\s\S]*?settings-general[\s\S]*?KnowledgeSettings[\s\S]*?MemorySettings/u);
+  assert.match(workspaceContentSettings, /settings-knowledge[\s\S]*?settings-memory/u);
   assert.match(settings, /仅保存在此设备，不会上传或改变企业账号资料/u);
   assert.match(settings, /changeSessionPassword\(currentPassword, newPassword, requestId\)/u);
   assert.match(settings, /onPermissionChange\(profile\)/u);
