@@ -395,7 +395,7 @@ export function AppV1() {
     );
   }
 
-  const authenticated = bootstrap?.login.authenticated === true;
+  const authenticated = !!bootstrap?.login.authenticated;
   if (bootstrap && !authenticated) {
     return (
       <LoginPage
