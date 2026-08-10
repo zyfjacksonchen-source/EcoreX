@@ -20,7 +20,7 @@ from .schema_catalog import (
 from .sqlite_connection import TransactionSafeConnection
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 _REQUIRED_COLUMNS: dict[str, frozenset[str]] = {
@@ -258,7 +258,7 @@ class SQLiteDatabase:
                 if not existing_schema:
                     product_digest = compiled_product_schema_digest()
                     connection.executescript(
-                        """
+                        f"""
                     BEGIN IMMEDIATE;
 
                     CREATE TABLE IF NOT EXISTS runtime_meta (
@@ -537,7 +537,7 @@ class SQLiteDatabase:
                         WHERE response_client_request_id IS NOT NULL;
 
                     INSERT INTO runtime_meta(key, value)
-                    VALUES ('storage_schema_version', '1')
+                    VALUES ('storage_schema_version', '{SCHEMA_VERSION}')
                     ON CONFLICT(key) DO NOTHING;
                         """
                         + product_schema_sql()

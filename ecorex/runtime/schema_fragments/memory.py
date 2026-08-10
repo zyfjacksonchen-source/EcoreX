@@ -7,7 +7,8 @@ from ..schema_catalog import SchemaFragment
 
 MEMORY_SCHEMA_FRAGMENT = SchemaFragment(
     fragment_id="local-memory",
-    sql="""
+    sql=(
+        """
     CREATE TABLE memory_canonical_records (
         record_id TEXT PRIMARY KEY,
         legacy_chunk_id TEXT NOT NULL UNIQUE,
@@ -80,6 +81,16 @@ MEMORY_SCHEMA_FRAGMENT = SchemaFragment(
         value TEXT NOT NULL
     );
 
+    """
+        '    CREATE TABLE "knowledge_mutation_requests" ('
+        '"client_request_id" TEXT NOT NULL PRIMARY KEY, '
+        '"operation" TEXT NOT NULL DEFAULT \'\', '
+        '"request_sha256" TEXT NOT NULL DEFAULT \'\', '
+        '"status" TEXT NOT NULL DEFAULT \'pending\', '
+        '"plan_json" TEXT NOT NULL DEFAULT \'\', '
+        '"created_at" TEXT NOT NULL DEFAULT \'\', '
+        '"updated_at" TEXT NOT NULL DEFAULT \'\');\n\n'
+        """
     CREATE INDEX memory_batches_expiry
         ON memory_reset_batches(status,undo_until);
 
@@ -114,7 +125,8 @@ MEMORY_SCHEMA_FRAGMENT = SchemaFragment(
     ON memory_reset_batches BEGIN
         SELECT RAISE(ABORT, 'memory reset identity is immutable');
     END;
-    """,
+    """
+    ),
     object_names=(
         "memory_canonical_records",
         "memory_files",
@@ -122,6 +134,7 @@ MEMORY_SCHEMA_FRAGMENT = SchemaFragment(
         "memory_mutation_requests",
         "memory_audit_events",
         "memory_meta",
+        "knowledge_mutation_requests",
         "memory_batches_expiry",
         "memory_records_resettable",
         "memory_files_resettable",

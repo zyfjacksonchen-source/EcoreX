@@ -1428,11 +1428,12 @@ def _product_migration_manifest_payload(definition: ArtifactBuildInput) -> bytes
         StorageMigrationError,
         StorageMigrationManifest,
         current_storage_schema_sha256,
+        product_storage_migration_manifest,
     )
 
     path = definition.source_dir / "storage-migrations.json"
     if not os.path.lexists(path):
-        return StorageMigrationManifest.current(SCHEMA_VERSION).to_bytes()
+        return product_storage_migration_manifest().to_bytes()
     try:
         before = path.lstat()
         if _metadata_is_link_or_reparse(before) or not stat.S_ISREG(before.st_mode):

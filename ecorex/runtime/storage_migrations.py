@@ -297,6 +297,88 @@ class StorageMigrationManifest:
         return tuple(selected)
 
 
+def product_storage_migration_manifest() -> StorageMigrationManifest:
+    """Return the signed migration chain for the compiled product schema."""
+
+    from .database import SCHEMA_VERSION
+
+    if SCHEMA_VERSION != 2:
+        raise StorageMigrationError("product storage migration chain is incomplete")
+    return StorageMigrationManifest.from_bytes(
+        _canonical_json_bytes(
+            {
+                "schema_version": STORAGE_MIGRATION_SCHEMA_VERSION,
+                "document_type": STORAGE_MIGRATION_DOCUMENT_TYPE,
+                "target_schema_version": SCHEMA_VERSION,
+                "target_schema_sha256": current_storage_schema_sha256(),
+                "steps": [
+                    {
+                        "step_id": "runtime-v1-to-v2-knowledge-requests",
+                        "from_schema_version": 1,
+                        "to_schema_version": 2,
+                        "operations": [
+                            {
+                                "op": "create_table",
+                                "table": "knowledge_mutation_requests",
+                                "columns": [
+                                    {
+                                        "name": "client_request_id",
+                                        "type": "TEXT",
+                                        "nullable": False,
+                                        "primary_key": True,
+                                    },
+                                    {
+                                        "name": "operation",
+                                        "type": "TEXT",
+                                        "nullable": False,
+                                        "primary_key": False,
+                                        "default": "",
+                                    },
+                                    {
+                                        "name": "request_sha256",
+                                        "type": "TEXT",
+                                        "nullable": False,
+                                        "primary_key": False,
+                                        "default": "",
+                                    },
+                                    {
+                                        "name": "status",
+                                        "type": "TEXT",
+                                        "nullable": False,
+                                        "primary_key": False,
+                                        "default": "pending",
+                                    },
+                                    {
+                                        "name": "plan_json",
+                                        "type": "TEXT",
+                                        "nullable": False,
+                                        "primary_key": False,
+                                        "default": "",
+                                    },
+                                    {
+                                        "name": "created_at",
+                                        "type": "TEXT",
+                                        "nullable": False,
+                                        "primary_key": False,
+                                        "default": "",
+                                    },
+                                    {
+                                        "name": "updated_at",
+                                        "type": "TEXT",
+                                        "nullable": False,
+                                        "primary_key": False,
+                                        "default": "",
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class StorageMigrationIdentity:
     release_id: str
@@ -740,25 +822,33 @@ def _apply_live_storage_migration(
             snapshot, new_database_schema=manifest.target_schema_version
         )
         source_sha = _sha256_file(snapshot)
+        if (
+            source_schema != preflight.source_schema_version
+            or source_sha != preflight.source_database_sha256
+            or not preflight.matches(
+                identity=identity,
+                manifest=manifest,
+                phase="live_preflight",
+                source_schema_sha256=source_schema_sha,
+            )
+            or dict(source_counts) != dict(preflight.source_table_counts)
+        ):
+            raise StorageMigrationError(
+                "live storage changed after its copy-on-write migration preflight"
+            )
+        if source_counts:
+            _persist_source_backup(
+                snapshot,
+                receipt_root=receipt_root,
+                identity=identity,
+                manifest=manifest,
+                expected_sha256=source_sha,
+            )
     finally:
         try:
             snapshot.unlink()
         except FileNotFoundError:
             pass
-    if (
-        source_schema != preflight.source_schema_version
-        or source_sha != preflight.source_database_sha256
-        or not preflight.matches(
-            identity=identity,
-            manifest=manifest,
-            phase="live_preflight",
-            source_schema_sha256=source_schema_sha,
-        )
-        or dict(source_counts) != dict(preflight.source_table_counts)
-    ):
-        raise StorageMigrationError(
-            "live storage changed after its copy-on-write migration preflight"
-        )
 
     if source_counts:
         _apply_plan_file(database, manifest, source_schema)
@@ -904,7 +994,14 @@ def _apply_plan_file(
         connection.execute("BEGIN IMMEDIATE")
         for step in selected:
             for operation in step.operations:
-                _execute_operation(connection, operation.to_dict())
+                value = operation.to_dict()
+                if not _adopt_legacy_knowledge_requests(
+                    connection,
+                    manifest=manifest,
+                    step=step,
+                    operation=value,
+                ):
+                    _execute_operation(connection, value)
             cursor = connection.execute(
                 "UPDATE runtime_meta SET value = ? "
                 "WHERE key = 'storage_schema_version'",
@@ -913,6 +1010,23 @@ def _apply_plan_file(
             if cursor.rowcount != 1:
                 raise StorageMigrationError(
                     "live storage has no authoritative schema version record"
+                )
+        from .database import SCHEMA_VERSION
+
+        if (
+            manifest.target_schema_version == SCHEMA_VERSION
+            and manifest.target_schema_sha256 == current_storage_schema_sha256()
+        ):
+            from .schema_catalog import compiled_product_schema_digest
+
+            cursor = connection.execute(
+                "UPDATE runtime_meta SET value = ? "
+                "WHERE key = 'product_schema_sha256'",
+                (compiled_product_schema_digest(),),
+            )
+            if cursor.rowcount != 1:
+                raise StorageMigrationError(
+                    "live storage has no authoritative product schema digest"
                 )
         connection.commit()
     except BaseException:
@@ -923,13 +1037,102 @@ def _apply_plan_file(
         connection.close()
 
 
+def _adopt_legacy_knowledge_requests(
+    connection: sqlite3.Connection,
+    *,
+    manifest: StorageMigrationManifest,
+    step: StorageMigrationStep,
+    operation: Mapping[str, Any],
+) -> bool:
+    """Converge the one pre-catalog knowledge table without losing requests."""
+
+    if not (
+        step.step_id == "runtime-v1-to-v2-knowledge-requests"
+        and step.from_schema_version == 1
+        and step.to_schema_version == 2
+        and operation.get("op") == "create_table"
+        and operation.get("table") == "knowledge_mutation_requests"
+        and manifest.target_schema_sha256 == current_storage_schema_sha256()
+    ):
+        return False
+    table = connection.execute(
+        "SELECT sql FROM sqlite_schema WHERE type='table' AND name=?",
+        ("knowledge_mutation_requests",),
+    ).fetchone()
+    if table is None:
+        return False
+    columns = ", ".join(_column_sql(column) for column in operation["columns"])
+    target_sql = f'CREATE TABLE "knowledge_mutation_requests" ({columns})'
+    legacy_sql = (
+        "CREATE TABLE knowledge_mutation_requests ("
+        "client_request_id TEXT PRIMARY KEY,operation TEXT NOT NULL,"
+        "request_sha256 TEXT NOT NULL,status TEXT NOT NULL "
+        "CHECK(status IN ('pending','completed')),plan_json TEXT NOT NULL,"
+        "created_at TEXT NOT NULL,updated_at TEXT NOT NULL)"
+    )
+    if " ".join(str(table[0]).split()) not in {target_sql, legacy_sql}:
+        raise StorageMigrationError("legacy knowledge request schema is invalid")
+    triggers = connection.execute(
+        "SELECT name,sql FROM sqlite_schema WHERE type='trigger' AND tbl_name=?",
+        ("knowledge_mutation_requests",),
+    ).fetchall()
+    expected_trigger = (
+        "CREATE TRIGGER knowledge_requests_identity_immutable BEFORE UPDATE OF "
+        "client_request_id,operation,request_sha256,plan_json,created_at ON "
+        "knowledge_mutation_requests BEGIN SELECT RAISE(ABORT,'knowledge request "
+        "identity is immutable'); END"
+    )
+    if len(triggers) > 1 or (
+        triggers
+        and (
+            triggers[0][0] != "knowledge_requests_identity_immutable"
+            or " ".join(str(triggers[0][1]).split()) != expected_trigger
+        )
+    ):
+        raise StorageMigrationError("legacy knowledge request trigger is invalid")
+    if connection.execute(
+        "SELECT 1 FROM sqlite_schema WHERE type='index' AND tbl_name=? "
+        "AND sql IS NOT NULL",
+        ("knowledge_mutation_requests",),
+    ).fetchone() is not None:
+        raise StorageMigrationError("legacy knowledge request indexes are invalid")
+    if connection.execute(
+        "SELECT 1 FROM knowledge_mutation_requests "
+        "WHERE status NOT IN ('pending','completed') LIMIT 1"
+    ).fetchone() is not None:
+        raise StorageMigrationError("legacy knowledge request status is invalid")
+    if connection.execute(
+        "SELECT 1 FROM sqlite_schema WHERE name='knowledge_mutation_requests_v1'"
+    ).fetchone() is not None:
+        raise StorageMigrationError("legacy knowledge request staging table exists")
+    before = connection.execute(
+        "SELECT COUNT(*) FROM knowledge_mutation_requests"
+    ).fetchone()[0]
+    connection.execute(
+        "ALTER TABLE knowledge_mutation_requests "
+        "RENAME TO knowledge_mutation_requests_v1"
+    )
+    _execute_operation(connection, operation)
+    names = tuple(column["name"] for column in operation["columns"])
+    quoted = ",".join(_quote(name) for name in names)
+    connection.execute(
+        f"INSERT INTO knowledge_mutation_requests ({quoted}) "
+        f"SELECT {quoted} FROM knowledge_mutation_requests_v1"
+    )
+    after = connection.execute(
+        "SELECT COUNT(*) FROM knowledge_mutation_requests"
+    ).fetchone()[0]
+    if after != before:
+        raise StorageMigrationError("legacy knowledge request rows changed")
+    connection.execute("DROP TABLE knowledge_mutation_requests_v1")
+    return True
+
+
 def _execute_operation(connection: sqlite3.Connection, operation: Mapping[str, Any]) -> None:
     kind = operation["op"]
     if kind == "create_table":
         columns = ", ".join(_column_sql(column) for column in operation["columns"])
-        connection.execute(
-            f"CREATE TABLE {_quote(operation['table'])} ({columns})"
-        )
+        connection.execute(f"CREATE TABLE {_quote(operation['table'])} ({columns})")
         return
     if kind == "add_column":
         connection.execute(
@@ -1099,7 +1302,7 @@ def _bootstrap_new_product_database(
 
     from .database import SCHEMA_VERSION, SQLiteDatabase
 
-    if manifest.target_schema_version != SCHEMA_VERSION or manifest.steps:
+    if manifest.target_schema_version != SCHEMA_VERSION:
         raise StorageMigrationError(
             "new product storage requires a supported signed bootstrap catalog"
         )
@@ -1255,6 +1458,58 @@ def _copy_database_snapshot(source: Path, target: Path) -> None:
     finally:
         target_connection.close()
         source_connection.close()
+
+
+def _persist_source_backup(
+    snapshot: Path,
+    *,
+    receipt_root: Path,
+    identity: StorageMigrationIdentity,
+    manifest: StorageMigrationManifest,
+    expected_sha256: str,
+) -> Path:
+    _validate_receipt_directory(receipt_root, create=True)
+    backups = receipt_root / "backups"
+    created = not os.path.lexists(backups)
+    _validate_receipt_directory(backups, create=True)
+    if created:
+        _fsync_directory(receipt_root)
+    name = hashlib.sha256(
+        _canonical_json_bytes(
+            {
+                "release_id": identity.release_id,
+                "build_digest": identity.build_digest,
+                "artifact_id": identity.artifact_id,
+                "artifact_sha256": identity.artifact_sha256,
+                "plan_sha256": manifest.sha256,
+                "source_database_sha256": expected_sha256,
+            }
+        )
+    ).hexdigest()
+    destination = backups / f"{name}.sqlite3"
+    if os.path.lexists(destination):
+        _validate_database_source(destination)
+        if destination.lstat().st_mode & 0o077:
+            raise StorageMigrationError("storage migration backup permissions are invalid")
+        if _sha256_file(destination) != expected_sha256:
+            raise StorageMigrationError("storage migration backup conflicts")
+        return destination
+    if _sha256_file(snapshot) != expected_sha256:
+        raise StorageMigrationError("storage migration backup changed")
+    os.chmod(snapshot, 0o600)
+    os.replace(snapshot, destination)
+    _fsync_directory(backups)
+    return destination
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _validate_database_source(path: Path) -> None:
@@ -1492,4 +1747,5 @@ __all__ = [
     "dry_run_storage_migration",
     "load_live_storage_migration_receipt",
     "migration_receipt_path",
+    "product_storage_migration_manifest",
 ]

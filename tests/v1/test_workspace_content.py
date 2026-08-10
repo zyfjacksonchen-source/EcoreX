@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor
 import os
 import hashlib
 from pathlib import Path
-import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
@@ -118,11 +117,16 @@ def test_knowledge_mutations_replay_persistently_and_import_reports_each_file(tm
         )
 
     with service.database.transaction() as connection:
-        with pytest.raises(sqlite3.IntegrityError):
-            connection.execute(
-                "UPDATE knowledge_mutation_requests SET plan_json='{}' "
-                "WHERE client_request_id='create-document-0001'"
-            )
+        connection.execute(
+            "UPDATE knowledge_mutation_requests SET plan_json='{}' "
+            "WHERE client_request_id='create-document-0001'"
+        )
+    with pytest.raises(WorkspaceContentUnavailable):
+        restarted.create_document(
+            "幂等.md",
+            "同一内容",
+            client_request_id="create-document-0001",
+        )
 
 
 def test_same_knowledge_request_converges_under_concurrency(tmp_path) -> None:
