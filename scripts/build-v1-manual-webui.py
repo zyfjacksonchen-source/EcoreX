@@ -674,7 +674,8 @@ def _prepare_stages(
                     "-I",
                     "-B",
                     "-c",
-                    "import ecorex.bootstrap.install_local, lark_channel, qrcode; "
+                    "import ecorex.bootstrap.install_local, "
+                    "ecorex.integration.dependency_pack_process, lark_channel, qrcode; "
                     "from ecorex.connectors.weixin import _qr_png_data_url; "
                     "assert _qr_png_data_url('https://weixin.qq.com/q/emate').startswith('data:image/png;base64,')",
                 ),

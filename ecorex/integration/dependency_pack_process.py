@@ -20,17 +20,20 @@ from typing import Any, Mapping
 import zipfile
 
 from ecorex.capabilities import VerifiedCapabilityPack
-from ecorex.integration.dependency_pack_worker import (
-    OFFICE_READ_JOB_MEMORY_LIMIT_BYTES,
-    OFFICE_READ_PROCESS_MEMORY_LIMIT_BYTES,
-)
+from ecorex.integration import dependency_pack_worker
 from ecorex.integration.pack_python import PackPythonIdentity
 
 _MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024
 _MAX_FILES = 50_000
 _MAX_REQUEST_BYTES = 12 * 1024 * 1024
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
-_WORKER_PATH = Path(__file__).with_name("dependency_pack_worker.py").resolve(strict=True)
+_MAX_WORKER_BYTES = 256 * 1024
+OFFICE_READ_JOB_MEMORY_LIMIT_BYTES = (
+    dependency_pack_worker.OFFICE_READ_JOB_MEMORY_LIMIT_BYTES
+)
+OFFICE_READ_PROCESS_MEMORY_LIMIT_BYTES = (
+    dependency_pack_worker.OFFICE_READ_PROCESS_MEMORY_LIMIT_BYTES
+)
 
 
 class DependencyPackProcessError(RuntimeError):
@@ -59,6 +62,7 @@ class VerifiedDependencyPackProcessAdapter:
             prefix=f"ecorex-{pack.manifest.pack_id}-service-"
         )
         self._root = Path(self._temporary.name) / "pack"
+        self._worker = Path(self._temporary.name) / "dependency_pack_worker.py"
         # Dependency packs can contain thousands of native-runtime files
         # (OCR currently carries more than four thousand).  Expanding and
         # hashing them while the HTTP application is being composed keeps the
@@ -120,11 +124,12 @@ class VerifiedDependencyPackProcessAdapter:
             # a false timeout on slower Windows disks or antivirus scans.
             process_timeout = min(30.0, max(15.0, float(timeout_seconds) + 8.0))
             office_read = self.pack.manifest.pack_id == "office" and operation == "read"
+            worker = self._verified_worker()
             command = (
                 str(self.python_executable),
                 "-I",
                 "-B",
-                str(_WORKER_PATH),
+                str(worker),
                 str(self._root),
             )
             if office_read:
@@ -175,6 +180,41 @@ class VerifiedDependencyPackProcessAdapter:
         ):
             raise DependencyPackProcessError("dependency_pack_response_invalid")
         return dict(value["result"])
+
+    def _verified_worker(self) -> Path:
+        loader = getattr(dependency_pack_worker, "__loader__", None)
+        source = getattr(dependency_pack_worker, "__file__", None)
+        read = getattr(loader, "get_data", None)
+        try:
+            payload = read(source) if callable(read) and isinstance(source, str) else b""
+        except (OSError, TypeError):
+            payload = b""
+        if not isinstance(payload, bytes) or not 1 <= len(payload) <= _MAX_WORKER_BYTES:
+            raise DependencyPackProcessError("dependency_pack_worker_unavailable")
+        try:
+            if not self._worker.exists():
+                descriptor = os.open(
+                    self._worker,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                    0o600,
+                )
+                with os.fdopen(descriptor, "wb") as output:
+                    output.write(payload)
+                    output.flush()
+                    os.fsync(output.fileno())
+            metadata = self._worker.lstat()
+            if (
+                stat.S_ISLNK(metadata.st_mode)
+                or not stat.S_ISREG(metadata.st_mode)
+                or (os.name != "nt" and metadata.st_mode & 0o077)
+                or self._worker.read_bytes() != payload
+            ):
+                raise OSError
+        except OSError:
+            raise DependencyPackProcessError(
+                "dependency_pack_worker_unavailable"
+            ) from None
+        return self._worker
 
     def _verify_artifact(self) -> None:
         path = self.pack.artifact_path
