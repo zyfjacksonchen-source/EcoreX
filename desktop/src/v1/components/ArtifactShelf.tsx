@@ -238,7 +238,7 @@ export function ImageArtifactGallery({
     if (!track || !slide) return;
     track.scrollTo({
       left: slide.offsetLeft - track.offsetLeft,
-      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      behavior: "auto",
     });
     setActiveIndex(target);
   };
