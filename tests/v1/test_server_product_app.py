@@ -433,6 +433,7 @@ def test_product_composes_message_channels_with_the_agent_runtime(tmp_path: Path
         "wecom_bot",
         "wechat_kf",
         "wechatcom_app",
+        "wechatmp",
         "wechatmp_service",
         "weixin",
     }
@@ -442,9 +443,6 @@ def test_product_composes_message_channels_with_the_agent_runtime(tmp_path: Path
         catalog[channel_id]["adapter_available"] for channel_id in channel_ids
     )
     assert all(catalog[channel_id]["instance"] is None for channel_id in channel_ids)
-    assert catalog["wechatmp"]["adapter_available"] is False
-    assert catalog["wechatmp"]["unavailable_reason"] == "passive_runtime_unavailable"
-    assert not any(catalog["wechatmp"]["actions"].values())
     assert app.state.channel_runtime_dispatcher is not None
     assert all(
         service.adapters[channel_id].health().health.value == "disabled"

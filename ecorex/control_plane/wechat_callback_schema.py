@@ -8,7 +8,7 @@ from pathlib import Path
 import sqlite3
 
 
-CURRENT_WECHAT_CALLBACK_SCHEMA_VERSION = 1
+CURRENT_WECHAT_CALLBACK_SCHEMA_VERSION = 2
 WECHAT_CALLBACK_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS wechat_callback_schema_migrations(
     version INTEGER PRIMARY KEY CHECK(version > 0),
@@ -107,13 +107,34 @@ CREATE INDEX IF NOT EXISTS idx_wechat_callback_audit_pending
 ON wechat_callback_audit_outbox(delivered_at, created_at, audit_id);
 """
 
+WECHAT_CALLBACK_SCHEMA_V2_SQL = """
+ALTER TABLE wechat_callback_inbox
+ADD COLUMN conversation_sha256 TEXT;
+ALTER TABLE wechat_callback_inbox
+ADD COLUMN passive_attempts INTEGER NOT NULL DEFAULT 0
+CHECK(passive_attempts BETWEEN 0 AND 3);
+ALTER TABLE wechat_callback_inbox
+ADD COLUMN passive_hard_deadline_at TEXT;
+ALTER TABLE wechat_callback_inbox
+ADD COLUMN passive_hint_sent INTEGER NOT NULL DEFAULT 0
+CHECK(passive_hint_sent IN (0,1));
+ALTER TABLE wechat_callback_inbox
+ADD COLUMN passive_original_replied INTEGER NOT NULL DEFAULT 0
+CHECK(passive_original_replied IN (0,1));
+"""
+
 WECHAT_CALLBACK_SCHEMA_SHA256 = hashlib.sha256(
-    WECHAT_CALLBACK_SCHEMA_SQL.encode("utf-8")
+    (WECHAT_CALLBACK_SCHEMA_SQL + WECHAT_CALLBACK_SCHEMA_V2_SQL).encode("utf-8")
 ).hexdigest()
 _MIGRATION_NAME = "managed-wechat-callback-ingress"
 _MIGRATION_CHECKSUM = hashlib.sha256(
     b"emate-wechat-callback-schema-v1\0"
     + WECHAT_CALLBACK_SCHEMA_SQL.encode("utf-8")
+).hexdigest()
+_MIGRATION_V2_NAME = "managed-wechat-passive-replies"
+_MIGRATION_V2_CHECKSUM = hashlib.sha256(
+    b"emate-wechat-callback-schema-v2\0"
+    + WECHAT_CALLBACK_SCHEMA_V2_SQL.encode("utf-8")
 ).hexdigest()
 
 
@@ -166,6 +187,22 @@ class WechatCallbackSchemaManager:
                 raise WechatCallbackSchemaError(
                     "wechat callback schema history is incompatible"
                 )
+            row = connection.execute(
+                "SELECT migration_name,migration_checksum FROM "
+                "wechat_callback_schema_migrations WHERE version=2"
+            ).fetchone()
+            if row is None:
+                _execute_sql(connection, WECHAT_CALLBACK_SCHEMA_V2_SQL)
+                connection.execute(
+                    "INSERT INTO wechat_callback_schema_migrations("
+                    "version,migration_name,migration_checksum,installed_at) "
+                    "VALUES(2,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+                    (_MIGRATION_V2_NAME, _MIGRATION_V2_CHECKSUM),
+                )
+            elif tuple(row) != (_MIGRATION_V2_NAME, _MIGRATION_V2_CHECKSUM):
+                raise WechatCallbackSchemaError(
+                    "wechat callback schema history is incompatible"
+                )
             connection.commit()
         except BaseException:
             if connection.in_transaction:
@@ -215,6 +252,33 @@ class WechatCallbackSchemaManager:
             if row is None or tuple(row) != (_MIGRATION_NAME, _MIGRATION_CHECKSUM):
                 raise WechatCallbackSchemaError(
                     "wechat callback schema history is incompatible"
+                )
+            row = connection.execute(
+                "SELECT migration_name,migration_checksum FROM "
+                "wechat_callback_schema_migrations WHERE version=2"
+            ).fetchone()
+            if row is None or tuple(row) != (
+                _MIGRATION_V2_NAME,
+                _MIGRATION_V2_CHECKSUM,
+            ):
+                raise WechatCallbackSchemaError(
+                    "wechat callback schema history is incompatible"
+                )
+            columns = {
+                str(row[1])
+                for row in connection.execute(
+                    "PRAGMA table_info(wechat_callback_inbox)"
+                )
+            }
+            if not {
+                "conversation_sha256",
+                "passive_attempts",
+                "passive_hard_deadline_at",
+                "passive_hint_sent",
+                "passive_original_replied",
+            }.issubset(columns):
+                raise WechatCallbackSchemaError(
+                    "wechat callback schema columns are incompatible"
                 )
         finally:
             connection.close()
