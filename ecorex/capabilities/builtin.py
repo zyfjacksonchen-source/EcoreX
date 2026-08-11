@@ -1176,7 +1176,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             aliases=("web-fetch",),
             effects=frozenset({CapabilityEffect.READ, CapabilityEffect.NETWORK}),
             intent_tags=frozenset(
-                {"web", "research", "fetch", "read", "page", "读取网页"}
+                {"web", "research", "fetch", "read", "page", "读取网页", "网页搜索"}
             ),
             recovery_hints=(
                 "Broaden the URL or search scope only when the user's goal permits it.",
@@ -1234,7 +1234,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             ),
             idempotency=IdempotencyClass.NON_IDEMPOTENT,
             approval_requirement=ApprovalRequirement.ON_REQUEST,
-            intent_tags=frozenset({"browser", "web", "cdp", "浏览器"}),
+            intent_tags=frozenset({"browser", "web", "cdp", "浏览器", "网页搜索"}),
             required_packs=frozenset({"browser"}),
         ),
         ToolSpec(
