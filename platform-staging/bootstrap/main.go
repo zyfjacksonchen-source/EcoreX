@@ -32,17 +32,18 @@ import (
 )
 
 const (
-	maxIndexBytes      = 256 * 1024
-	maxManifestBytes   = 1024 * 1024
-	maxMetadataBytes   = 16 * 1024 * 1024
-	maxSBOMBytes       = 64 * 1024 * 1024
-	maxBootstrapBytes  = 10 * 1024 * 1024
-	maxCoreBytes       = 150 * 1024 * 1024
-	maxPackBytes       = 500 * 1024 * 1024
-	maxFiles           = 50_000
-	artifactChunkBytes = 8 * 1024 * 1024
-	productWebUIURL    = "http://127.0.0.1:8765/"
-	runtimeOwnerDomain = "e-mate.runtime-owner.v1\x00"
+	maxIndexBytes        = 256 * 1024
+	maxManifestBytes     = 1024 * 1024
+	maxMetadataBytes     = 16 * 1024 * 1024
+	maxSBOMBytes         = 64 * 1024 * 1024
+	maxBootstrapBytes    = 10 * 1024 * 1024
+	maxCoreArchiveBytes  = 150 * 1024 * 1024
+	maxCoreExpandedBytes = 256 * 1024 * 1024
+	maxPackBytes         = 500 * 1024 * 1024
+	maxFiles             = 50_000
+	artifactChunkBytes   = 8 * 1024 * 1024
+	productWebUIURL      = "http://127.0.0.1:8765/"
+	runtimeOwnerDomain   = "e-mate.runtime-owner.v1\x00"
 )
 
 var (
@@ -2039,7 +2040,7 @@ func validateManifest(value *manifest, discovery *indexRelease, keys map[string]
 			return fmt.Errorf("release artifact contract is invalid")
 		}
 		seen[item.ArtifactID] = true
-		if strings.HasPrefix(item.ArtifactID, "core-") && item.SizeBytes > maxCoreBytes {
+		if strings.HasPrefix(item.ArtifactID, "core-") && item.SizeBytes > maxCoreArchiveBytes {
 			return fmt.Errorf("Core artifact exceeds its signed product bound")
 		}
 		if strings.HasSuffix(item.ArtifactID, "-manifest") && item.SizeBytes > maxManifestBytes {
@@ -2639,7 +2640,7 @@ func extractCore(archivePath, destination string) error {
 			continue
 		}
 		total += int64(entry.UncompressedSize64)
-		if total > maxCoreBytes {
+		if total > maxCoreExpandedBytes {
 			return fmt.Errorf("Core archive expands beyond its bound")
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {

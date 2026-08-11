@@ -21,6 +21,7 @@ from ecorex.release import (
     ArtifactKind,
     Ed25519MemorySigner,
     CoreDeltaBuildInput,
+    MAX_CORE_EXPANDED_BYTES,
     ReleaseBuildError,
     ReleaseBuilder,
     ReleaseBuildSpec,
@@ -609,6 +610,24 @@ def test_builder_rejects_sbom_above_bootstrap_bound(
     ):
         ReleaseBuilder(signer).build(
             _spec(_input(_source_tree(tmp_path / "source"))),
+            tmp_path / "release",
+        )
+
+
+def test_builder_rejects_core_above_bootstrap_expanded_bound(
+    tmp_path: Path,
+) -> None:
+    signer, _public, _private = _signer()
+    source = _source_tree(tmp_path / "source")
+    with (source / "oversized.bin").open("wb") as stream:
+        stream.truncate(MAX_CORE_EXPANDED_BYTES + 1)
+
+    with pytest.raises(
+        ReleaseBuildError,
+        match=f"source expands above the {MAX_CORE_EXPANDED_BYTES} byte hard limit",
+    ):
+        ReleaseBuilder(signer).build(
+            _spec(_input(source)),
             tmp_path / "release",
         )
 

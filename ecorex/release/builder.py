@@ -71,7 +71,9 @@ from .web_bundle import (
 )
 
 
-MAX_CORE_BYTES = MAX_CORE_ARTIFACT_BYTES
+MAX_CORE_ARCHIVE_BYTES = MAX_CORE_ARTIFACT_BYTES
+MAX_CORE_EXPANDED_BYTES = 256 * 1024 * 1024
+MAX_CORE_BYTES = MAX_CORE_ARCHIVE_BYTES
 MAX_BOOTSTRAP_BYTES = 10 * 1024 * 1024
 MAX_CAPABILITY_PACK_BYTES = MAX_CAPABILITY_PACK_ARTIFACT_BYTES
 MAX_RELEASE_METADATA_BYTES = 16 * 1024 * 1024
@@ -431,6 +433,11 @@ class ReleaseBuilder:
                 destination=artifact_path,
                 executable_paths=definition.executable_paths,
                 size_limit=limit,
+                expanded_limit=(
+                    MAX_CORE_EXPANDED_BYTES
+                    if definition.kind is ArtifactKind.CORE
+                    else MAX_UNPACKED_BYTES
+                ),
             )
             size_bytes = artifact_path.stat().st_size
             if size_bytes > limit:
@@ -519,6 +526,7 @@ class ReleaseBuilder:
                         built[artifact_index].artifact_id
                     ],
                     size_limit=self.max_core_bytes,
+                    expanded_limit=MAX_CORE_EXPANDED_BYTES,
                     staging=staging,
                 )
             web_manifest_path = staging / WEB_MANIFEST_FILE_NAME
@@ -913,8 +921,9 @@ def _build_deterministic_zip(
     destination: Path,
     executable_paths: Iterable[str],
     size_limit: int,
+    expanded_limit: int,
 ) -> tuple[_FileRecord, ...]:
-    entries = _scan_source_tree(source, executable_paths)
+    entries = _scan_source_tree(source, executable_paths, expanded_limit)
     temporary_fd, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
     )
@@ -968,6 +977,7 @@ def _rebuild_product_core_with_web(
     web_manifest_payload: bytes,
     storage_migration_payload: bytes,
     size_limit: int,
+    expanded_limit: int,
     staging: Path,
 ) -> _BuiltArtifact:
     """Inject the one signed React bundle into a platform Core deterministically."""
@@ -1091,6 +1101,7 @@ def _rebuild_product_core_with_web(
             destination=artifact.path,
             executable_paths=definition.executable_paths,
             size_limit=size_limit,
+            expanded_limit=expanded_limit,
         )
         return _BuiltArtifact(
             kind=artifact.kind,
@@ -1157,6 +1168,7 @@ def _copy_verified_web_file(
 def _scan_source_tree(
     source: Path,
     executable_paths: Iterable[str],
+    max_unpacked_bytes: int,
 ) -> tuple[_SourceEntry, ...]:
     _require_real_directory(source, "artifact source directory")
     explicit_executables = {
@@ -1229,9 +1241,9 @@ def _scan_source_tree(
                 pending.append((path, relative_path))
                 continue
             total_unpacked += metadata.st_size
-            if total_unpacked > MAX_UNPACKED_BYTES:
+            if total_unpacked > max_unpacked_bytes:
                 raise ReleaseBuildError(
-                    f"source expands above the {MAX_UNPACKED_BYTES} byte hard limit"
+                    f"source expands above the {max_unpacked_bytes} byte hard limit"
                 )
             # Source filesystem mode bits are intentionally ignored. They are
             # not stable between Windows and macOS checkout/build hosts.

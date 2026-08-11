@@ -9,6 +9,7 @@ import runpy
 import shutil
 import subprocess
 import sys
+from types import SimpleNamespace
 import zipfile
 
 import pytest
@@ -240,8 +241,8 @@ def test_manual_webui_release_evidence_matches_bootstrap_bounds(
     go_source = (ROOT / "platform-staging/bootstrap/main.go").read_text()
     assert builder["MAX_RELEASE_METADATA_BYTES"] == 16 * 1024 * 1024
     assert builder["MAX_RELEASE_SBOM_BYTES"] == 64 * 1024 * 1024
-    assert "maxMetadataBytes   = 16 * 1024 * 1024" in go_source
-    assert "maxSBOMBytes       = 64 * 1024 * 1024" in go_source
+    assert "maxMetadataBytes     = 16 * 1024 * 1024" in go_source
+    assert "maxSBOMBytes         = 64 * 1024 * 1024" in go_source
 
     with sbom_path.open("wb") as stream:
         stream.truncate(builder["MAX_RELEASE_SBOM_BYTES"] + 1)
@@ -250,6 +251,47 @@ def test_manual_webui_release_evidence_matches_bootstrap_bounds(
         match="manual_webui_release_evidence_invalid",
     ):
         builder["_verify_release_evidence_bounds"](metadata_path, sbom_path)
+
+
+def test_manual_webui_core_package_shape_matches_bootstrap_bounds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    builder = _builder()
+    archive_path = tmp_path / "core.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("payload.bin", b"bounded")
+    artifact = SimpleNamespace(
+        artifact_id="core-macos-arm64",
+        size_bytes=archive_path.stat().st_size,
+    )
+    built = SimpleNamespace(
+        manifest=SimpleNamespace(artifacts=(artifact,)),
+        artifact_paths={artifact.artifact_id: archive_path},
+    )
+
+    builder["_verify_release_core_bounds"](built)
+    assert 62_034_702 <= builder["MAX_CORE_ARCHIVE_BYTES"]
+    assert 166_490_214 <= builder["MAX_CORE_EXPANDED_BYTES"]
+    go_source = (ROOT / "platform-staging/bootstrap/main.go").read_text()
+    assert "maxCoreArchiveBytes  = 150 * 1024 * 1024" in go_source
+    assert "maxCoreExpandedBytes = 256 * 1024 * 1024" in go_source
+
+    function_globals = builder["_verify_release_core_bounds"].__globals__
+    archive_limit = function_globals["MAX_CORE_ARCHIVE_BYTES"]
+    monkeypatch.setitem(function_globals, "MAX_CORE_ARCHIVE_BYTES", 1)
+    with pytest.raises(
+        builder["ManualWebUIBuildError"],
+        match="manual_webui_release_core_bound_invalid",
+    ):
+        builder["_verify_release_core_bounds"](built)
+    monkeypatch.setitem(function_globals, "MAX_CORE_ARCHIVE_BYTES", archive_limit)
+    monkeypatch.setitem(function_globals, "MAX_CORE_EXPANDED_BYTES", 1)
+    with pytest.raises(
+        builder["ManualWebUIBuildError"],
+        match="manual_webui_release_core_bound_invalid",
+    ):
+        builder["_verify_release_core_bounds"](built)
 
 
 def test_manual_webui_runtime_overlay_tracks_the_complete_active_lock() -> None:

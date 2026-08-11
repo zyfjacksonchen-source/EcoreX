@@ -670,6 +670,49 @@ func TestCoreExtractionRejectsTraversal(t *testing.T) {
 	}
 }
 
+type zeroReader struct{}
+
+func (zeroReader) Read(buffer []byte) (int, error) {
+	clear(buffer)
+	return len(buffer), nil
+}
+
+func writeCompressedCore(t *testing.T, size int64) string {
+	t.Helper()
+	archivePath := filepath.Join(t.TempDir(), "core.zip")
+	file, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := zip.NewWriter(file)
+	entry, err := archive.Create("payload.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written, err := io.CopyN(entry, zeroReader{}, size); err != nil || written != size {
+		t.Fatalf("core fixture write failed: %d / %v", written, err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return archivePath
+}
+
+func TestCoreExtractionUsesDistinctExpandedBound(t *testing.T) {
+	archivePath := writeCompressedCore(t, 166_490_214)
+	if err := extractCore(archivePath, filepath.Join(t.TempDir(), "out")); err != nil {
+		t.Fatalf("current bounded Core expansion was rejected: %v", err)
+	}
+
+	archivePath = writeCompressedCore(t, maxCoreExpandedBytes+1)
+	if err := extractCore(archivePath, filepath.Join(t.TempDir(), "out")); err == nil {
+		t.Fatal("Core above the expanded bound was accepted")
+	}
+}
+
 func TestSafeFileNameRejectsPlatformEscapes(t *testing.T) {
 	for _, value := range []string{"../x", "a/b", `a\\b`, "C:drive", "line\nbreak"} {
 		if safeFileName(value) {

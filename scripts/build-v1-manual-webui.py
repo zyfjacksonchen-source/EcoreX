@@ -50,6 +50,8 @@ from ecorex.release import (  # noqa: E402
     ArtifactBuildInput,
     ArtifactKind,
     Ed25519MemorySigner,
+    MAX_CORE_ARCHIVE_BYTES,
+    MAX_CORE_EXPANDED_BYTES,
     MAX_RELEASE_METADATA_BYTES,
     MAX_RELEASE_SBOM_BYTES,
     ReleaseBuildSpec,
@@ -123,6 +125,25 @@ def _verify_release_evidence_bounds(metadata_path: Path, sbom_path: Path) -> Non
         or not 1 <= sbom_path.stat().st_size <= MAX_RELEASE_SBOM_BYTES
     ):
         _fail("manual_webui_release_evidence_invalid")
+
+
+def _verify_release_core_bounds(built: Any) -> None:
+    for artifact in built.manifest.artifacts:
+        if not artifact.artifact_id.startswith("core-"):
+            continue
+        path = built.artifact_paths[artifact.artifact_id]
+        try:
+            archive_size = path.stat().st_size
+            with zipfile.ZipFile(path) as archive:
+                expanded_size = sum(member.file_size for member in archive.infolist())
+        except (OSError, zipfile.BadZipFile):
+            _fail("manual_webui_release_core_bound_invalid")
+        if (
+            archive_size != artifact.size_bytes
+            or archive_size > MAX_CORE_ARCHIVE_BYTES
+            or expanded_size > MAX_CORE_EXPANDED_BYTES
+        ):
+            _fail("manual_webui_release_core_bound_invalid")
 
 
 def _canonical_json(value: object) -> bytes:
@@ -1275,6 +1296,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             source,
         )
         _verify_release_evidence_bounds(built.metadata_path, built.sbom_path)
+        _verify_release_core_bounds(built)
         verifier = Ed25519SignatureVerifier({key_id: public})
         verify_manifest_signature(built.manifest, verifier)
         for artifact in built.manifest.artifacts:
