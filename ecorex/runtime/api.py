@@ -50,6 +50,8 @@ from ecorex.connectors import (
     ChannelRuntimeDispatcher,
     ChannelTurnReceipt,
     ChannelSelfService,
+    CowChannelRuntimeBridge,
+    CowChannelService,
     ConnectorAuthKind,
     ConnectorComposition,
     ConnectorError,
@@ -2202,9 +2204,7 @@ def create_app(
         if callable(getattr(adapter, "bind_runtime", None))
     )
     channel_runtime_dispatcher = None
-    if bindable_channel_adapters:
-        if worker_supervisor is None:
-            raise ValueError("message channel adapters require the Agent worker")
+    if worker_supervisor is not None and not settings.acceptance_preview:
         channel_runtime_dispatcher = ChannelRuntimeDispatcher(
             owner=channel_owner,
             composition=composition,
@@ -2213,7 +2213,19 @@ def create_app(
         )
         for adapter in bindable_channel_adapters:
             adapter.bind_runtime(channel_owner, channel_runtime_dispatcher)
+    elif worker_supervisor is None and bindable_channel_adapters:
+        raise ValueError("message channel adapters require the Agent worker")
     app.state.channel_runtime_dispatcher = channel_runtime_dispatcher
+    cow_channel_service = (
+        CowChannelService(
+            config_path=Path(settings.database_path).expanduser().resolve().parent
+            / "config.json",
+            bridge=CowChannelRuntimeBridge(channel_runtime_dispatcher),
+        )
+        if channel_runtime_dispatcher is not None
+        else None
+    )
+    app.state.cow_channel_service = cow_channel_service
     scheduler_service = None
     scheduler_handler = settings.capability_handlers.get("scheduler")
     if isinstance(scheduler_handler, CowSchedulerTool) and worker_supervisor is not None:
@@ -2869,7 +2881,12 @@ def create_app(
         (1, "mcp", composition.mcp_supervisor),
         (1, "cow_mcp_config", cow_mcp_service),
         (1, "mcp_oauth", mcp_oauth_service),
-        (1, "channel_self_service", channel_self_service),
+        (
+            1,
+            "channel_self_service",
+            channel_self_service if settings.channel_lifecycle_adapters else None,
+        ),
+        (1, "cow_channel", cow_channel_service),
         (1, "scheduler", scheduler_service),
         (4, "model_gateway", gateway_lifecycle),
         (4, "image_gateway", image_client_lifecycle),
@@ -2949,6 +2966,7 @@ def create_app(
                             for candidate in (
                                 invariant_supervisor,
                                 system_observability_supervisor,
+                                cow_channel_service,
                             )
                         ):
                             continue

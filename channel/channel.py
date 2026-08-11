@@ -72,6 +72,16 @@ class Channel(object):
         """
         Build reply content, using agent if enabled in config
         """
+        # e-Mate binds this only while its durable Runtime owns Agent turns;
+        # the native Cow channel still owns receive/reply/reconnect semantics.
+        from channel.runtime_bridge import current_runtime_bridge
+
+        runtime_bridge = current_runtime_bridge()
+        if runtime_bridge is not None:
+            if context and "channel_type" not in context:
+                context["channel_type"] = self.channel_type
+            return runtime_bridge(query, context or Context())
+
         # Check if agent mode is enabled
         use_agent = conf().get("agent", True)
 

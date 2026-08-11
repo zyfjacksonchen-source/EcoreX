@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
-from typing import Any, Protocol
+from threading import Lock
+import time
+from typing import Any, Mapping, Protocol
 
 from ecorex.protocol import (
     CreateThreadRequest,
@@ -25,6 +27,8 @@ from .channel_self_service import ChannelCredentialOwner
 _CONTRACT_VERSION = "channel-runtime-dispatch-v1"
 _MAX_EXTERNAL_ID = 512
 _MAX_MESSAGE_TEXT = 1_000_000
+_channel_turn_contexts: dict[str, dict[str, Any]] = {}
+_channel_turn_contexts_lock = Lock()
 _UNSENDABLE_TERMINAL_STATUSES = frozenset(
     {
         TurnStatus.FAILED,
@@ -107,6 +111,8 @@ class ChannelInboundMessage:
     conversation_id: str
     message_id: str
     text: str
+    receiver: str = ""
+    is_group: bool = False
 
     def __post_init__(self) -> None:
         channel_id = normalize_channel_name(self.channel_id)
@@ -115,6 +121,10 @@ class ChannelInboundMessage:
         object.__setattr__(self, "channel_id", channel_id)
         _external_id(self.conversation_id, "conversation")
         _external_id(self.message_id, "message")
+        if self.receiver:
+            _external_id(self.receiver, "receiver")
+        if not isinstance(self.is_group, bool):
+            raise ValueError("channel group marker is invalid")
         if (
             not isinstance(self.text, str)
             or not self.text.strip()
@@ -140,6 +150,15 @@ class ChannelOutboundText:
     item_id: str
     text: str
     idempotency_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelOutboundReply:
+    channel_id: str
+    turn_id: str
+    item_id: str
+    text: str = ""
+    attachment: Mapping[str, Any] | None = None
 
 
 class ChannelRuntimeDispatcher:
@@ -206,6 +225,17 @@ class ChannelRuntimeDispatcher:
             ),
             thread_id=thread.thread_id,
         )
+        if accepted.turn.status not in {
+            TurnStatus.COMPLETED,
+            *_UNSENDABLE_TERMINAL_STATUSES,
+        }:
+            with _channel_turn_contexts_lock:
+                _channel_turn_contexts[accepted.turn.turn_id] = {
+                    "channel_id": message.channel_id,
+                    "conversation_id": message.conversation_id,
+                    "receiver": message.receiver,
+                    "is_group": message.is_group,
+                }
         self.worker.notify()
         return ChannelTurnReceipt(
             channel_id=message.channel_id,
@@ -218,6 +248,21 @@ class ChannelRuntimeDispatcher:
     def project_outbound(
         self, receipt: ChannelTurnReceipt
     ) -> ChannelOutboundText | None:
+        reply = self.project_outbound_reply(receipt)
+        if reply is None or not reply.text:
+            return None
+        return ChannelOutboundText(
+            channel_id=reply.channel_id,
+            turn_id=reply.turn_id,
+            item_id=reply.item_id,
+            text=reply.text,
+            idempotency_key="channel-delivery-"
+            + self._digest("delivery", reply.turn_id, reply.item_id, reply.text),
+        )
+
+    def project_outbound_reply(
+        self, receipt: ChannelTurnReceipt
+    ) -> ChannelOutboundReply | None:
         projection = self.kernel.projection(receipt.thread_id)
         turn = next(
             (turn for turn in projection.turns if turn.turn_id == receipt.turn_id),
@@ -242,17 +287,44 @@ class ChannelRuntimeDispatcher:
             ),
             None,
         )
-        if assistant is None:
+        artifact = next(
+            (
+                item
+                for item in reversed(projection.items)
+                if item.turn_id == receipt.turn_id
+                and item.kind is ItemKind.ARTIFACT
+                and item.status is ItemStatus.COMPLETED
+                and isinstance(item.content, Mapping)
+                and item.content.get("type") == "file_to_send"
+                and isinstance(item.content.get("path"), str)
+                and item.content["path"]
+            ),
+            None,
+        )
+        if assistant is None and artifact is None:
             return None
-        text = str(assistant.content["text"])
-        return ChannelOutboundText(
+        return ChannelOutboundReply(
             channel_id=receipt.channel_id,
             turn_id=receipt.turn_id,
-            item_id=assistant.item_id,
-            text=text,
-            idempotency_key="channel-delivery-"
-            + self._digest("delivery", receipt.turn_id, assistant.item_id, text),
+            item_id=(artifact or assistant).item_id,
+            text=str(assistant.content["text"]) if assistant is not None else "",
+            attachment=dict(artifact.content) if artifact is not None else None,
         )
+
+    def wait_for_reply(
+        self,
+        receipt: ChannelTurnReceipt,
+        *,
+        timeout_seconds: float = 900.0,
+    ) -> ChannelOutboundReply:
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            reply = self.project_outbound_reply(receipt)
+            if reply is not None:
+                return reply
+            if time.monotonic() >= deadline:
+                raise TimeoutError("channel Turn reply timed out")
+            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
 
     def deliver(
         self,
@@ -302,11 +374,24 @@ def _channel_title(channel_id: str) -> str:
     return f"{label.get('zh') or label.get('en') or channel_id} 会话"
 
 
+def channel_context_for_turn(turn_id: str) -> Mapping[str, Any]:
+    with _channel_turn_contexts_lock:
+        return dict(_channel_turn_contexts.get(turn_id) or {})
+
+
+def clear_channel_context_for_turn(turn_id: str) -> None:
+    with _channel_turn_contexts_lock:
+        _channel_turn_contexts.pop(turn_id, None)
+
+
 __all__ = [
     "ChannelInboundMessage",
+    "ChannelOutboundReply",
     "ChannelOutboundText",
     "ChannelRuntimeDispatcher",
     "ChannelTextTransport",
     "ChannelTurnTerminalFailure",
     "ChannelTurnReceipt",
+    "channel_context_for_turn",
+    "clear_channel_context_for_turn",
 ]

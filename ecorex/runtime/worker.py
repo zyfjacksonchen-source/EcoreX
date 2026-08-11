@@ -5770,6 +5770,34 @@ class AgentTurnWorker:
                 return Path(roots[0]).expanduser().resolve()
         return self.workspace_root
 
+    @staticmethod
+    def _attach_scheduler_context(
+        agent: Any, channel_context: Mapping[str, Any]
+    ) -> None:
+        from agent.tools.scheduler.integration import attach_scheduler_to_tool
+        from bridge.context import Context
+
+        scheduler = next(
+            (
+                tool
+                for tool in agent.tools
+                if getattr(tool, "name", None) == "scheduler"
+            ),
+            None,
+        )
+        if scheduler is not None:
+            attach_scheduler_to_tool(
+                scheduler,
+                Context(
+                    kwargs={
+                        "channel_type": channel_context.get("channel_id"),
+                        "session_id": channel_context.get("conversation_id"),
+                        "receiver": channel_context.get("receiver"),
+                        "isgroup": bool(channel_context.get("is_group", False)),
+                    }
+                ),
+            )
+
     def _history(self, thread_id: str, current_turn_id: str) -> list[dict[str, Any]]:
         with self.kernel.database.reader() as connection:
             rows = connection.execute(
@@ -5921,7 +5949,11 @@ class AgentTurnWorker:
                 turn_id=turn_id,
                 kind=ItemKind.ARTIFACT,
                 status=ItemStatus.COMPLETED,
-                content={"source": "cow-2.1.5", **data},
+                content={
+                    "source": "cow-2.1.5",
+                    **data,
+                    "type": data.get("type") or event_type,
+                },
                 job_id=job_id,
                 lease_token=lease_token,
             )
@@ -6004,6 +6036,7 @@ class AgentTurnWorker:
         cancel_event: threading.Event,
         inbox: Any,
         managed_image_executor: Callable[[dict[str, Any], str | None], Any] | None,
+        channel_context: Mapping[str, Any] | None = None,
     ) -> str:
         from bridge.agent_initializer import AgentInitializer
         from common.ecorex_tool_permissions import (
@@ -6027,6 +6060,8 @@ class AgentTurnWorker:
             agent = AgentInitializer(object(), bridge).initialize_agent(
                 session_id=f"emate-{thread_id}", workspace_root=workspace
             )
+            if channel_context:
+                self._attach_scheduler_context(agent, channel_context)
             self._bind_browser_pack(
                 agent,
                 loop=model.loop,
@@ -6079,6 +6114,9 @@ class AgentTurnWorker:
             )
             execution_token = bind_cow_turn_execution()
             turn = await _run_blocking(self.kernel.get_turn, job.turn_id)
+            from ecorex.connectors.channel_runtime import channel_context_for_turn
+
+            channel_context = channel_context_for_turn(job.turn_id)
             if turn.status in {TurnStatus.QUEUED, TurnStatus.RETRY_WAIT}:
                 turn = await _run_blocking(
                     self.kernel.transition_turn,
@@ -6201,6 +6239,7 @@ class AgentTurnWorker:
                 cancel_event=cancel_event,
                 inbox=inbox,
                 managed_image_executor=managed_image_executor,
+                channel_context=channel_context,
             )
             watch_stop.set()
             applied = await watcher
@@ -6225,6 +6264,7 @@ class AgentTurnWorker:
                     cancel_event=cancel_event,
                     inbox=next_inbox,
                     managed_image_executor=managed_image_executor,
+                    channel_context=channel_context,
                 )
                 applied = revision.ordinal
             for usage_index, (response_id, usage) in enumerate(model.usage_events, 1):
@@ -6294,3 +6334,6 @@ class AgentTurnWorker:
             if execution_token is not None:
                 reset_cow_turn_execution(execution_token)
             self._cancel_events.pop(job.turn_id, None)
+            from ecorex.connectors.channel_runtime import clear_channel_context_for_turn
+
+            clear_channel_context_for_turn(job.turn_id)

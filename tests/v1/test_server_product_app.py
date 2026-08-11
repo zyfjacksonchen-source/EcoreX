@@ -410,7 +410,7 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
     assert asset.headers["etag"]
 
 
-def test_product_composes_message_channels_with_the_agent_runtime(tmp_path: Path) -> None:
+def test_product_composes_native_cow_channels_with_the_agent_runtime(tmp_path: Path) -> None:
     signed = _write_signed_bundle(tmp_path)
     managed_session, _lease = _installed_managed_session(tmp_path)
     app = create_product_app(
@@ -438,18 +438,21 @@ def test_product_composes_message_channels_with_the_agent_runtime(tmp_path: Path
         "weixin",
     }
 
-    assert set(service.adapters) == channel_ids
+    assert service.adapters == {}
     assert all(
-        catalog[channel_id]["adapter_available"] for channel_id in channel_ids
+        not catalog[channel_id]["adapter_available"] for channel_id in channel_ids
     )
     assert all(catalog[channel_id]["instance"] is None for channel_id in channel_ids)
     assert app.state.channel_runtime_dispatcher is not None
-    assert all(
-        service.adapters[channel_id].health().health.value == "disabled"
-        for channel_id in channel_ids
+    assert app.state.cow_channel_service is not None
+    assert (
+        app.state.cow_channel_service.manager.__class__.__module__
+        == "channel.channel_manager"
     )
+    assert all(catalog[channel_id]["label"] for channel_id in channel_ids)
+    assert all(catalog[channel_id]["icon"] for channel_id in channel_ids)
     with TestClient(app, base_url=ORIGIN):
-        assert service.adapters["telegram"].health().health.value == "disabled"
+        assert app.state.cow_channel_service.started is True
 
 
 def test_installed_payload_builtin_skill_search_read_run_chain(tmp_path: Path) -> None:
