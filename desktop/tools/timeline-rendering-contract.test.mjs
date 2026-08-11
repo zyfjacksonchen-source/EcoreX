@@ -114,6 +114,19 @@ test("jump to latest is a transient centered circular affordance", () => {
   assert.match(features, /\.ex-timeline-jump-button\s*\{[\s\S]*width:\s*32px[\s\S]*border-radius:\s*var\(--radius-pill\)/u);
 });
 
+test("the conversation directory reuses virtualized turn identity and scrolling", () => {
+  assert.match(timeline, /aria-label="对话目录"/u);
+  assert.match(timeline, /timelineTurns\.map\(\(entry, index\) =>/u);
+  assert.match(timeline, /key=\{entry\.turn\.turn_id\}/u);
+  assert.match(timeline, /directorySummary\(entry\.turn\.input, index\)/u);
+  assert.match(
+    timeline,
+    /virtuosoRef\.current\?\.scrollToIndex\(\{ index, align: "start", behavior: "auto" \}\)/u,
+  );
+  assert.match(timeline, /<Tooltip\.Content className="ex-tooltip ex-timeline-directory-tooltip"/u);
+  assert.match(features, /\.ex-timeline-directory-list\s*\{[\s\S]*max-height:[\s\S]*overflow-y:\s*auto/u);
+});
+
 test("streaming output has one automatic scroll owner", () => {
   assert.doesNotMatch(timeline, /followOutput=/u);
   assert.doesNotMatch(
