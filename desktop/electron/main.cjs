@@ -221,6 +221,9 @@ function setupIpc() {
   ipcMain.handle("emate:restart-runtime", restartRuntime);
   ipcMain.handle("emate:check-for-updates", () => updater?.check(true));
   ipcMain.handle("emate:open-update-page", () => updater?.openPage());
+  ipcMain.handle("emate:download-update", () => updater?.download());
+  ipcMain.handle("emate:install-update", () => updater?.install());
+  ipcMain.handle("emate:desktop-update-status", () => updater?.status() ?? null);
 }
 
 async function launch() {
