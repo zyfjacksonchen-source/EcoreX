@@ -1740,8 +1740,6 @@ def build_account_usage_projection(
 
     return {
         "schema_version": 1,
-        "projection_version": payload["projection_version"],
-        "reconciliation": payload["reconciliation"],
         "scope": "account",
         "timezone": timezone_name,
         "today": totals([row for row in rows if row.get("date") == today_label]),
