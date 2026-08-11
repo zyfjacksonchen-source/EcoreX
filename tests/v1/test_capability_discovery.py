@@ -94,6 +94,45 @@ def test_storage_query_discovers_shell_without_bypassing_permission_policy() -> 
 @pytest.mark.parametrize(
     "query",
     (
+        "真实联网搜索并打开网页：搜索 IANA 官方 Example Domains 页面，读取页面标题、页面说明这些域名保留用于什么用途、以及实际访问的最终 URL；需要网页搜索和网页打开能力。",
+        "真实联网搜索并访问网页，获取 IANA 官方 Example Domains 页面标题、页面用途说明和最终 URL；需要只读网页搜索/浏览工具",
+    ),
+)
+def test_real_web_search_discovers_browser_tools_without_bypassing_policy(
+    query: str,
+) -> None:
+    full_access = _search(
+        query,
+        policy=ExecutionPolicy(
+            snapshot_id="perm_full_web_search_discovery",
+            profile=PermissionProfile.FULL_ACCESS,
+        ),
+    )
+    assert {result.tool_id for result in full_access} == {"fetch", "cdp"}
+    assert all(result.exposure is Exposure.DEFERRED for result in full_access)
+    assert all(result.requires_approval is False for result in full_access)
+
+    default = _search(
+        query,
+        policy=ExecutionPolicy(snapshot_id="perm_default_web_search_discovery"),
+    )
+    assert {result.tool_id for result in default} == {"fetch", "cdp"}
+    assert next(result for result in default if result.tool_id == "cdp").requires_approval
+
+    denied = _search(
+        query,
+        policy=ExecutionPolicy(
+            snapshot_id="perm_denied_web_search_discovery",
+            profile=PermissionProfile.FULL_ACCESS,
+            admin_hard_denies=frozenset({"web-fetch", "browser"}),
+        ),
+    )
+    assert denied == ()
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
         "design",
         "设计",
         "poster",
