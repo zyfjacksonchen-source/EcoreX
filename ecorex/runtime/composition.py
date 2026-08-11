@@ -1617,17 +1617,7 @@ class RuntimeComposition:
             ).fetchone()
         if row is None:
             raise ValueError("Skill execution batch is invalid")
-        frozen_snapshot_id = str(row["extension_snapshot_id"])
-        frozen = self.extension_service.repository.snapshot_payload(frozen_snapshot_id)
-        frozen_generation = frozen.get("extension_generation")
-        current_generation = self.extension_service.repository.generation()
-        if frozen_generation == current_generation:
-            return frozen_snapshot_id
-        # Skill state is intentionally live between model tool rounds. The
-        # capability and permission snapshots remain batch-frozen; only the
-        # content-addressed Extension catalog advances to the current durable
-        # generation.
-        return self.extension_service.snapshot().snapshot_id
+        return str(row["extension_snapshot_id"])
 
     def _connector_snapshot_for_scope(self, scope: ToolExecutionScope):
         if (

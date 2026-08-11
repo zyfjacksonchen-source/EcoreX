@@ -7,4 +7,4 @@ from sandbox_pack import handle
 
 
 if __name__ == "__main__":
-    raise SystemExit(run("sandbox", frozenset({"shell"}), handle))
+    raise SystemExit(run("sandbox", frozenset({"bash"}), handle))

@@ -737,47 +737,6 @@ test("managed logout carries the current lease digest, CSRF, and one stable inte
   }
 });
 
-test("permission changes carry CSRF, optimistic revision, and a stable idempotency ID", async () => {
-  const requests: Request[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input, init) => {
-    const request = new Request(input, init);
-    requests.push(request);
-    return Response.json({
-      permissions: {
-        ...bootstrap.permissions,
-        profile: "full_access",
-        revision: 2,
-        full_access: true,
-        sandbox: "danger-full-access",
-        approval: "never",
-      },
-    });
-  };
-  try {
-    const client = new RuntimeClient({
-      apiBase: "http://127.0.0.1:8765",
-      bearerToken: "b".repeat(43),
-    });
-    client.acceptBootstrap(bootstrap);
-    const result = await client.updatePermission(
-      "full_access",
-      bootstrap.permissions.revision,
-      "permission_stable_retry",
-    );
-    const body = JSON.parse(await requests[0].text());
-
-    assert.equal(requests[0].method, "PUT");
-    assert.equal(requests[0].headers.get("x-ecorex-csrf"), bootstrap.csrf_token);
-    assert.equal(body.profile, "full_access");
-    assert.equal(body.expected_revision, 1);
-    assert.equal(body.client_request_id, "permission_stable_retry");
-    assert.equal(result.permissions.full_access, true);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
 test("extension catalog and actions use backend projections, revision fencing, and stable identity", async () => {
   const requests: Request[] = [];
   const originalFetch = globalThis.fetch;

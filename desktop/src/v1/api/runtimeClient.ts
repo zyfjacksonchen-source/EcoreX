@@ -46,7 +46,6 @@ import type {
   OutputLocationCatalog,
   OutputMaterialization,
   OutputPreference,
-  PermissionMutationResponse,
   ProjectListResponse,
   ProjectProjection,
   ReplaceTurnResponse,
@@ -1293,25 +1292,6 @@ export class RuntimeClient {
       {
         method: "DELETE",
         headers: { "X-EcoreX-Client-Request-ID": clientRequestId },
-      },
-      true,
-    );
-  }
-
-  updatePermission(
-    profile: "default" | "full_access",
-    expectedRevision: number,
-    clientRequestId = createClientRequestId("permission"),
-  ): Promise<PermissionMutationResponse> {
-    return this.json(
-      "/api/v1/settings/permissions",
-      {
-        method: "PUT",
-        body: JSON.stringify({
-          profile,
-          expected_revision: expectedRevision,
-          client_request_id: clientRequestId,
-        }),
       },
       true,
     );

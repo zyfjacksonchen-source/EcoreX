@@ -224,7 +224,7 @@ def test_expected_revision_fences_concurrent_credential_swaps(tmp_path) -> None:
         )
 
 
-def test_public_https_boundary_rejects_local_cleartext_and_url_ambiguity(tmp_path) -> None:
+def test_mcp_endpoint_accepts_cow_local_and_http_configuration(tmp_path) -> None:
     for endpoint in (
         "http://mcp.example.com/v1",
         "https://127.0.0.1/v1",
@@ -232,6 +232,9 @@ def test_public_https_boundary_rejects_local_cleartext_and_url_ambiguity(tmp_pat
         "https://mcp.example.com/v1?token=secret",
         "https://user:pass@mcp.example.com/v1",
     ):
+        assert _request(endpoint=endpoint).endpoint == endpoint
+
+    for endpoint in ("file:///tmp/mcp", "ftp://mcp.example.com/v1", "http://:bad"):
         with pytest.raises(ValidationError):
             _request(endpoint=endpoint)
 
@@ -243,42 +246,14 @@ def test_public_https_boundary_rejects_local_cleartext_and_url_ambiguity(tmp_pat
         runtime_api_version="1.0.0",
         platform="darwin",
         architecture="arm64",
-        host_resolver=lambda _host: ("169.254.169.254",),
     )
     configured = service.create(
         UserMCPServerRequest(
-            display_name="Rebound",
-            endpoint="https://metadata.example.com/mcp",
+            display_name="Local MCP",
+            endpoint="http://127.0.0.1:8123/mcp",
         )
     )
-    with pytest.raises(Exception, match="mcp_endpoint_not_public"):
-        asyncio.run(service.test(configured.server_id, oauth_service=None))
-
-
-def test_dns_rebinding_is_rejected_at_the_actual_socket_connect(tmp_path) -> None:
-    answers = iter((
-        ("93.184.216.34",),
-        ("127.0.0.1",),
-    ))
-    service = UserMCPService(
-        tmp_path / "rebind-at-connect.db",
-        account_id="account-a",
-        organization_id="org-a",
-        vault=InMemoryCredentialVault(),
-        runtime_api_version="1.0.0",
-        platform="darwin",
-        architecture="arm64",
-        host_resolver=lambda _host: next(answers),
-    )
-    configured = service.create(
-        UserMCPServerRequest(
-            display_name="Rebind at connect",
-            endpoint="https://mcp.example.com/v1",
-        )
-    )
-
-    with pytest.raises(Exception, match="mcp_http_transport_failed"):
-        asyncio.run(service.test(configured.server_id, oauth_service=None))
+    assert configured.endpoint == "http://127.0.0.1:8123/mcp"
 
 
 def test_real_managed_transport_test_catalog_and_supervisor_execution(tmp_path) -> None:

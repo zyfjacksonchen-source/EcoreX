@@ -186,7 +186,6 @@ def _runtime(
     tencent: _ConnectorAdapter | None = None,
     vault: InMemoryCredentialVault | None = None,
     full_access: bool = False,
-    admin_hard_denies: list[str] | None = None,
 ):
     adapters = {}
     if feishu is not None:
@@ -199,8 +198,6 @@ def _runtime(
             connector_adapters=adapters,
             connector_vault=vault or InMemoryCredentialVault(),
             full_access=full_access,
-            admin_hard_denies=list(admin_hard_denies or []),
-            enforce_admin_tool_denies=bool(admin_hard_denies),
         )
     )
     return app, app.state.connector_composition.service
@@ -659,25 +656,6 @@ def test_default_write_approval_is_informed_and_descriptor_swap_fails_closed(
     rejected = asyncio.run(worker.run_once("connector-swapped-approval-worker"))
 
     assert rejected.outcome is WorkerOutcome.FAILED
-    assert feishu.invocations == []
-
-
-def test_specific_admin_deny_blocks_before_provider_call(tmp_path: Path) -> None:
-    feishu, _tencent = _adapter_pair()
-    app, service = _runtime(
-        tmp_path,
-        feishu=feishu,
-        admin_hard_denies=["documents.write"],
-    )
-    _connect(service, "feishu")
-    _kernel, composition, thread, created, prepared, batch = _turn(
-        app,
-        "使用飞书编辑文档",
-    )
-    search = _search(composition, thread, created, prepared, batch, "编辑飞书文档")
-    assert all(
-        item["action_id"] != "documents.write" for item in search["actions"]
-    )
     assert feishu.invocations == []
 
 

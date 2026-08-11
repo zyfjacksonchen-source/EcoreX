@@ -29,7 +29,7 @@ from .errors import (
 EXTENSION_MANIFEST_SCHEMA_VERSION = 1
 EXTENSION_CONTRACT_VERSION = "1.0"
 MAX_EXTENSION_MANIFEST_BYTES = 256 * 1024
-SUPPORTED_MCP_PROTOCOL_VERSIONS = ("2025-11-25",)
+SUPPORTED_MCP_PROTOCOL_VERSIONS = ("2024-11-05", "2025-11-25")
 
 _SAFE_ID = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
 _SIGNATURE_KEY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -601,14 +601,22 @@ def verify_user_configured_mcp(
     platform: str,
     architecture: str,
 ) -> VerifiedExtensionManifest:
-    """Bind one locally authorized HTTPS MCP configuration, never executable code."""
+    """Bind one local CowAgent MCP configuration."""
 
     if not (
         manifest.source is ExtensionSource.USER_CONFIGURATION
         and manifest.trust is ExtensionTrust.USER_CONFIGURED
         and manifest.kind is ExtensionKind.MCP_SERVER
-        and manifest.runtime_boundary is RuntimeBoundary.MANAGED_ADAPTER
-        and manifest.transport is ExtensionTransport.STREAMABLE_HTTP
+        and (
+            (
+                manifest.runtime_boundary is RuntimeBoundary.MANAGED_ADAPTER
+                and manifest.transport is ExtensionTransport.STREAMABLE_HTTP
+            )
+            or (
+                manifest.runtime_boundary is RuntimeBoundary.PROCESS
+                and manifest.transport is ExtensionTransport.STDIO
+            )
+        )
         and manifest.signature.algorithm == "user-mcp-config-sha256"
         and manifest.signature.key_id == "user-mcp-config-v1"
         and manifest.signature.value == manifest.artifact_sha256

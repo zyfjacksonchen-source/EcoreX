@@ -82,12 +82,6 @@ type ClientOperationOutboxInstance = InstanceType<
 export type SendDisposition = Exclude<ClientOperationDisposition, "create">;
 export type LoadState = "loading" | "ready" | "error";
 
-interface PendingPermissionMutation {
-  profile: "default" | "full_access";
-  expectedRevision: number;
-  clientRequestId: string;
-}
-
 interface PendingUpdateActivation {
   transactionId: string;
   clientRequestId: string;
@@ -193,10 +187,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const recoveringOperationsRef = useRef(false);
   const recoverPendingOperationsRef = useRef<() => Promise<void>>(async () => undefined);
   const pendingSendOperation = useRef<ClientOperation | null>(null);
-  const [permissionUpdating, setPermissionUpdating] = useState(false);
-  const [permissionError, setPermissionError] = useState<string | null>(null);
-  const permissionUpdatingRef = useRef(false);
-  const pendingPermissionMutation = useRef<PendingPermissionMutation | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const pendingUpdateActivation = useRef<PendingUpdateActivation | null>(null);
@@ -1398,79 +1388,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     }
   }, [client, refreshProjection]);
 
-  const updatePermission = useCallback(async (
-    profile: "default" | "full_access",
-  ) => {
-    if (permissionUpdatingRef.current) return false;
-    const currentBootstrap = stateRef.current.bootstrap;
-    if (!currentBootstrap) {
-      setPermissionError("权限尚未加载，请重新连接后再试。");
-      return false;
-    }
-    if (currentBootstrap.permissions.profile === profile) {
-      pendingPermissionMutation.current = null;
-      setPermissionError(null);
-      return true;
-    }
-    const existing = pendingPermissionMutation.current;
-    const mutation = existing
-      && existing.profile === profile
-      && existing.expectedRevision === currentBootstrap.permissions.revision
-      ? existing
-      : {
-          profile,
-          expectedRevision: currentBootstrap.permissions.revision,
-          clientRequestId: `permission_${crypto.randomUUID().replaceAll("-", "")}`,
-        };
-    pendingPermissionMutation.current = mutation;
-    permissionUpdatingRef.current = true;
-    setPermissionUpdating(true);
-    setPermissionError(null);
-    try {
-      const response = await client.updatePermission(
-        mutation.profile,
-        mutation.expectedRevision,
-        mutation.clientRequestId,
-      );
-      const bootstrap = stateRef.current.bootstrap;
-      if (bootstrap) {
-        const nextBootstrap = { ...bootstrap, permissions: response.permissions };
-        stateRef.current = { ...stateRef.current, bootstrap: nextBootstrap };
-        dispatch({
-          type: "bootstrap.received",
-          bootstrap: nextBootstrap,
-        });
-      }
-      pendingPermissionMutation.current = null;
-      if (response.permissions.profile !== profile) {
-        setPermissionError("权限已在其他位置变更，已同步当前设置。");
-        return false;
-      }
-      return true;
-    } catch (error) {
-      if (error instanceof RuntimeApiError && error.status === 409) {
-        pendingPermissionMutation.current = null;
-        try {
-          const fresh = await client.bootstrap();
-          client.acceptBootstrap(fresh);
-          stateRef.current = { ...stateRef.current, bootstrap: fresh };
-          dispatch({ type: "bootstrap.received", bootstrap: fresh });
-          setPermissionError("权限已变更，已刷新设置，请确认后重试。");
-        } catch (refreshError) {
-          setPermissionError(
-            `权限已发生并发变更，且刷新失败：${errorMessage(refreshError)}`,
-          );
-        }
-      } else {
-        setPermissionError(errorMessage(error));
-      }
-      return false;
-    } finally {
-      permissionUpdatingRef.current = false;
-      setPermissionUpdating(false);
-    }
-  }, [chatModel, client, imageModel]);
-
   const checkUpdate = useCallback(async () => {
     if (updateBusy) return false;
     setUpdateBusy(true);
@@ -1919,9 +1836,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     clearTransportError: () => setTransportError(null),
     retryBootstrap: () => void loadBootstrap(),
     submitting,
-    permissionUpdating,
-    permissionError,
-    clearPermissionError: () => setPermissionError(null),
     updateBusy,
     updateError,
     clearUpdateError: () => setUpdateError(null),
@@ -2012,7 +1926,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     loadInputAttachmentThumbnail,
     interrupt,
     respondInteraction,
-    updatePermission,
     checkUpdate,
     activateUpdate,
     resetLearnedMemory,

@@ -27,12 +27,11 @@ _MAX_JSON_DEPTH = 20
 _MAX_JSON_NODES = 50_000
 _MAX_JSON_STRING = 1_000_000
 
-# The model-facing tool working set is deliberately much smaller than the
-# searchable capability catalog.  These are protocol limits, not tuning
-# hints: both the local Runtime request model and the cloud provider adapter
-# enforce them before a model request can cross the network boundary.
+# First-party tools are a single model-facing working set, matching the
+# CowAgent desktop runtime.  The byte budget remains the hard boundary for
+# provider requests; use the provider's 64-tool envelope for built-ins and MCP.
 TOOL_PROJECTION_BUDGET_VERSION = "1.0.0"
-MAX_MODEL_VISIBLE_TOOLS = 16
+MAX_MODEL_VISIBLE_TOOLS = 64
 MAX_DISCLOSED_WORKING_SET = 12
 MAX_TOOL_DESCRIPTOR_BYTES = 96 * 1024
 MAX_TOOL_SCHEMA_BATCH_BYTES = 256 * 1024

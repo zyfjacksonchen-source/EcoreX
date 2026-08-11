@@ -49,6 +49,16 @@ def read_request(*, pack_id: str, tools: frozenset[str]) -> Request:
     payload = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
     if not 1 <= len(payload) <= MAX_REQUEST_BYTES:
         raise ContractError("pack_request_size_invalid")
+    return parse_request(payload, pack_id=pack_id, tools=tools)
+
+
+def parse_request(
+    payload: bytes, *, pack_id: str, tools: frozenset[str]
+) -> Request:
+    """Parse one canonical request for one-shot and session Pack transports."""
+
+    if not 1 <= len(payload) <= MAX_REQUEST_BYTES:
+        raise ContractError("pack_request_size_invalid")
     try:
         value = json.loads(
             payload.decode("utf-8"),
@@ -192,6 +202,62 @@ def run(pack_id: str, tools: frozenset[str], handler: Any) -> int:
         return 0
 
 
+def run_session(pack_id: str, tools: frozenset[str], handler: Any) -> int:
+    """Serve bounded length-prefixed requests until Core closes stdin.
+
+    Browser state belongs to a chat session, so the signed browser Pack stays
+    alive while Core does. Other Packs keep the one-request ``run`` contract.
+    """
+
+    try:
+        while True:
+            header = _read_exact(sys.stdin.buffer, 8, allow_eof=True)
+            if header is None:
+                return 0
+            size = int.from_bytes(header, "big")
+            if not 1 <= size <= MAX_REQUEST_BYTES:
+                return 2
+            payload = _read_exact(sys.stdin.buffer, size)
+            assert payload is not None
+            request: Request | None = None
+            sandbox_contract_id: str | None = None
+            try:
+                request = parse_request(payload, pack_id=pack_id, tools=tools)
+                raw_contract = request.context.get("sandbox_contract")
+                if isinstance(raw_contract, Mapping):
+                    candidate = raw_contract.get("contract_id")
+                    if isinstance(candidate, str) and _safe_id(candidate):
+                        sandbox_contract_id = candidate
+                response = _completed_value(
+                    request,
+                    handler(request),
+                    sandbox_contract_id=sandbox_contract_id,
+                )
+            except ContractError as error:
+                response = _failed_value(
+                    request.request_id if request is not None else "invalid-request",
+                    error,
+                    sandbox_contract_id=sandbox_contract_id,
+                )
+            except BaseException:
+                response = _failed_value(
+                    request.request_id if request is not None else "invalid-request",
+                    ContractError("pack_internal_failure"),
+                    sandbox_contract_id=sandbox_contract_id,
+                )
+            encoded = _encode(response)
+            sys.stdout.buffer.write(len(encoded).to_bytes(8, "big"))
+            sys.stdout.buffer.write(encoded)
+            sys.stdout.buffer.flush()
+    finally:
+        close = getattr(handler, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
+
 def require_exact_arguments(
     arguments: Mapping[str, Any],
     *,
@@ -221,6 +287,11 @@ def bounded_int(
 
 
 def _write(value: Mapping[str, Any]) -> None:
+    sys.stdout.buffer.write(_encode(value))
+    sys.stdout.buffer.flush()
+
+
+def _encode(value: Mapping[str, Any]) -> bytes:
     try:
         payload = json.dumps(
             value,
@@ -239,8 +310,56 @@ def _write(value: Mapping[str, Any]) -> None:
             b'{"error_code":"pack_response_too_large","request_id":"invalid-request",'
             b'"retryable":false,"schema_version":1,"status":"failed"}'
         )
-    sys.stdout.buffer.write(payload)
-    sys.stdout.buffer.flush()
+    return payload
+
+
+def _completed_value(
+    request: Request,
+    result: Any,
+    *,
+    sandbox_contract_id: str | None = None,
+) -> dict[str, Any]:
+    value: dict[str, Any] = {
+        "schema_version": 1,
+        "request_id": request.request_id,
+        "status": "completed",
+        "result": result,
+    }
+    if sandbox_contract_id is not None:
+        value["sandbox_contract_id"] = sandbox_contract_id
+    return value
+
+
+def _failed_value(
+    request_id: str,
+    error: ContractError,
+    *,
+    sandbox_contract_id: str | None = None,
+) -> dict[str, Any]:
+    value: dict[str, Any] = {
+        "schema_version": 1,
+        "request_id": request_id if _safe_id(request_id) else "invalid-request",
+        "status": "failed",
+        "error_code": error.code,
+        "retryable": error.retryable,
+    }
+    if sandbox_contract_id is not None and _safe_id(sandbox_contract_id):
+        value["sandbox_contract_id"] = sandbox_contract_id
+    return value
+
+
+def _read_exact(stream: Any, size: int, *, allow_eof: bool = False) -> bytes | None:
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining:
+        chunk = stream.read(remaining)
+        if not chunk:
+            if allow_eof and not chunks:
+                return None
+            raise ContractError("pack_request_invalid")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
 
 
 def _valid_execution_scope(value: Any) -> bool:

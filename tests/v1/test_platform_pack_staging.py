@@ -247,7 +247,7 @@ def _sandbox_shell_request(
 ) -> dict:
     request = _request(
         "sandbox",
-        "shell",
+        "bash",
         {"command": command, "timeout_seconds": timeout_seconds},
         workspace,
     )
@@ -494,76 +494,162 @@ def test_image_pack_is_only_a_managed_core_handshake(tmp_path: Path) -> None:
     assert denied["error_code"] == "managed_image_core_required"
 
 
-def test_browser_pack_evaluate_requires_full_access(tmp_path: Path) -> None:
-    artifact = _zipapp(tmp_path, "browser")
-    request = _request(
-        "browser",
-        "cdp",
-        {
-            "operation": "evaluate",
-            "target": "data:text/html,<body>blocked</body>",
-            "parameters": {"expression": "document.body.textContent"},
-        },
-        tmp_path,
-    )
-    request["context"]["effective_sandbox"] = "workspace-write"
-    response = _invoke(
-        artifact,
-        request,
-    )
-    assert response["status"] == "failed"
-    assert response["error_code"] == "browser_evaluate_requires_full_access"
-
-
-def test_browser_batch_keeps_one_page_for_evaluate_and_snapshot(
+def test_browser_pack_evaluate_matches_cowagent_without_an_approval_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.syspath_prepend(str(PACKS / "common"))
     browser = runpy.run_path(str(PACKS / "browser" / "browser_pack.py"))
 
-    class Locator:
-        first = None
-
-        def __init__(self, page):
-            self.page = page
-            self.first = self
-
-        def inner_text(self, timeout):
-            del timeout
-            return self.page.text
-
     class Page:
         url = "https://example.com/"
-        text = "before"
+
+        def evaluate(self, expression):  # noqa: ANN001
+            assert expression == "document.body.textContent"
+            return "Example content"
+
+    result = browser["_perform_page_operation"](
+        Page(),
+        "evaluate",
+        {"script": "document.body.textContent"},
+    )
+    assert result == {
+        "url": "https://example.com/",
+        "value": "Example content",
+    }
+
+
+def test_browser_navigate_returns_a_snapshot_without_a_second_tool_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(PACKS / "common"))
+    browser = runpy.run_path(str(PACKS / "browser" / "browser_pack.py"))
+
+    class Page:
+        url = "about:blank"
+
+        def set_default_timeout(self, timeout):
+            assert timeout == 20_000
+
+        def goto(self, url, *, wait_until, timeout):
+            assert wait_until == "domcontentloaded"
+            assert timeout == 20_000
+            self.url = url
 
         def evaluate(self, expression):
-            assert expression == "document.body.textContent = 'after'"
-            self.text = "after"
-            return self.text
-
-        def locator(self, selector):
-            assert selector == "body"
-            return Locator(self)
+            assert "data-emate-ref" in expression
+            return {"text": "Example content", "interactive": []}
 
         def title(self):
             return "Example"
 
-    result = browser["_perform_page_operation"](
-        Page(),
-        "batch",
-        {
-            "steps": [
-                {
-                    "operation": "evaluate",
-                    "parameters": {"expression": "document.body.textContent = 'after'"},
-                },
-                {"operation": "snapshot", "parameters": {}},
-            ]
-        },
-        full_access=True,
+    result = browser["_BrowserSession"](object(), Page()).execute(
+        {"action": "navigate", "url": "about:blank"}
     )
-    assert result["results"][0]["value"] == "after"
-    assert result["results"][1]["text"] == "after"
+    assert result == {
+        "url": "about:blank",
+        "title": "Example",
+        "text": "Example content",
+        "interactive": [],
+    }
+
+
+def test_browser_pack_reuses_one_cowagent_session_across_tool_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(PACKS / "common"))
+    browser = runpy.run_path(str(PACKS / "browser" / "browser_pack.py"))
+    request_type = browser["Request"]
+    created = []
+
+    class Session:
+        def __init__(self) -> None:
+            self.calls = []
+            self.closed = False
+
+        def execute(self, arguments):  # noqa: ANN001
+            self.calls.append(dict(arguments))
+            return {"call_count": len(self.calls)}
+
+        def close(self) -> None:
+            self.closed = True
+
+    class Engine:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def new_session(self):  # noqa: ANN201
+            session = Session()
+            created.append(session)
+            return session
+
+        def close(self) -> None:
+            self.closed = True
+
+    handler_type = browser["BrowserPackHandler"]
+    monkeypatch.setitem(handler_type.__init__.__globals__, "_BrowserEngine", Engine)
+    handler = handler_type()
+
+    def request(thread_id: str, action: str, url: str | None = None):  # noqa: ANN202
+        arguments = {"action": action}
+        if url is not None:
+            arguments["url"] = url
+        return request_type(
+            request_id=f"request-{thread_id}-{action}",
+            pack_id="browser",
+            tool_id="browser",
+            arguments=arguments,
+            context={
+                "effective_sandbox": "danger-full-access",
+                "execution_scope": {"thread_id": thread_id},
+            },
+        )
+
+    assert handler(request("thread-a", "navigate", "https://example.com")) == {
+        "call_count": 1
+    }
+    assert handler(request("thread-a", "snapshot")) == {"call_count": 2}
+    assert handler(request("thread-b", "snapshot")) == {"call_count": 3}
+    assert len(created) == 1
+    assert created[0].calls[1] == {"action": "snapshot"}
+    handler.close()
+    assert all(session.closed for session in created)
+
+
+def test_browser_fetch_returns_readable_content_instead_of_base64(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(PACKS / "common"))
+    browser = runpy.run_path(str(PACKS / "browser" / "browser_pack.py"))
+    title, text, links = browser["_readable_web_content"](
+        b"<html><head><title>Example</title><style>hidden</style></head>"
+        b"<body><h1>Readable page</h1><a href='/about'>About us</a></body></html>",
+        "text/html; charset=utf-8",
+        "https://example.com/start",
+    )
+    assert title == "Example"
+    assert "Readable page" in text
+    assert "hidden" not in text
+    assert links == [{"url": "https://example.com/about", "text": "About us"}]
+
+
+def test_browser_search_returns_structured_public_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(PACKS / "common"))
+    browser = runpy.run_path(str(PACKS / "browser" / "browser_pack.py"))
+    parser = browser["_DuckSearchHTML"]()
+    parser.feed(
+        "<a class='result__a' href='//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fdoc'>"
+        "Example document</a><div class='result__snippet'>Useful public summary</div>"
+    )
+    parser.close()
+    assert parser.results == [
+        {
+            "title": "Example document",
+            "url": "https://example.com/doc",
+            "snippet": "Useful public summary",
+        }
+    ]
 
 
 def test_browser_pack_retries_function_body_and_sandbox_classifies_soft_exits(
@@ -589,8 +675,7 @@ def test_browser_pack_retries_function_body_and_sandbox_classifies_soft_exits(
     result = browser["_perform_page_operation"](
         page,
         "evaluate",
-        {"expression": "return 'ok'"},
-        full_access=True,
+        {"script": "return 'ok'"},
     )
     assert result["value"] == "ok"
     assert page.calls[-1] == "(() => {\nreturn 'ok'\n})()"
@@ -994,7 +1079,7 @@ def test_macos_browser_signature_gate_uses_archive_equivalent_round_trip(
     )
 
 
-def test_browser_pack_guards_every_subrequest_and_denies_websockets(
+def test_browser_pack_allows_local_workflows_but_blocks_metadata_and_websockets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.syspath_prepend(str(PACKS / "common"))
@@ -1012,10 +1097,15 @@ def test_browser_pack_guards_every_subrequest_and_denies_websockets(
         def abort(self, *, error_code: str) -> None:
             self.aborted = error_code
 
-    private = Route("http://127.0.0.1/private")
-    browser["_guard_browser_request"](private)
-    assert private.aborted == "blockedbyclient"
-    assert private.continued is False
+    local = Route("http://127.0.0.1:8765/local-app")
+    browser["_guard_browser_request"](local)
+    assert local.continued is True
+    assert local.aborted is None
+
+    metadata = Route("http://169.254.169.254/latest/meta-data")
+    browser["_guard_browser_request"](metadata)
+    assert metadata.aborted == "blockedbyclient"
+    assert metadata.continued is False
 
     local_document = Route("data:text/html,<body>safe document</body>")
     browser["_guard_browser_request"](local_document)
@@ -1205,7 +1295,7 @@ def test_sandbox_pack_acknowledges_exact_core_contract_and_fixed_shell(
     artifact = _zipapp(tmp_path, "sandbox")
     request = _request(
         "sandbox",
-        "shell",
+        "bash",
         {"command": "pwd"},
         tmp_path,
     )
@@ -1247,7 +1337,7 @@ def test_sandbox_pack_accepts_attested_windows_workspace_runtime_read_scope(
     artifact = _zipapp(tmp_path, "sandbox")
     request = _request(
         "sandbox",
-        "shell",
+        "bash",
         {"command": "echo ecorex-workspace-runtime", "timeout_seconds": 5},
         tmp_path,
     )
@@ -3924,7 +4014,7 @@ def test_platform_stager_rejects_semantically_drifted_process_pack_descriptor(
     pack = tmp_path / "browser"
     pack.mkdir()
     drifted = stager["_expected_process_pack_descriptor"]("browser")
-    drifted["tools"] = ["fetch"]
+    drifted["tools"] = ["web_fetch"]
     (pack / "ecorex-pack.json").write_text(
         json.dumps(drifted, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",

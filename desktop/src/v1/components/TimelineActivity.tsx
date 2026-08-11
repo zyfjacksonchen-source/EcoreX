@@ -41,9 +41,9 @@ export default function TimelineActivity({ item, elapsed }: { item: ItemProjecti
       switch (activity.tool_id) {
         case "vision": return <Images aria-hidden="true" />;
         case "imagegen": return <Image aria-hidden="true" />;
-        case "shell": return <TerminalSquare aria-hidden="true" />;
-        case "cdp": return <Globe2 aria-hidden="true" />;
-        case "fetch": return <Link2 aria-hidden="true" />;
+        case "bash": return <TerminalSquare aria-hidden="true" />;
+        case "browser": return <Globe2 aria-hidden="true" />;
+        case "web_fetch": return <Link2 aria-hidden="true" />;
         case "read":
         case "artifact_read": return <FileSearch aria-hidden="true" />;
         case "skill_search":
@@ -74,7 +74,7 @@ export default function TimelineActivity({ item, elapsed }: { item: ItemProjecti
         </section>
       );
     }
-    const webSearch = activity.tool_id === "fetch" || activity.tool_id === "web_search";
+    const webSearch = activity.tool_id === "web_fetch" || activity.tool_id === "web_search";
     return (
       <details className={`ex-activity${webSearch ? " is-web-search" : ""}`} data-status={item.status}>
         <summary className="ex-activity-row">

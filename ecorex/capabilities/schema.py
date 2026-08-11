@@ -31,6 +31,8 @@ _ALLOWED_KEYWORDS = frozenset(
         "enum",
         "const",
         "pattern",
+        "oneOf",
+        "anyOf",
     }
 )
 _JSON_TYPES = frozenset(
@@ -120,6 +122,21 @@ def validate_schema_contract(
             _validate_json_graph(list(enum), label=f"{label}.enum")
         if "const" in current:
             _validate_json_graph(current["const"], label=f"{label}.const")
+        for alternatives_key in ("oneOf", "anyOf"):
+            alternatives = current.get(alternatives_key)
+            if alternatives is None:
+                continue
+            if (
+                isinstance(alternatives, (str, bytes, bytearray))
+                or not isinstance(alternatives, Sequence)
+                or not 1 <= len(alternatives) <= 8
+                or any(not isinstance(item, Mapping) for item in alternatives)
+            ):
+                raise SchemaContractError(
+                    f"{label}.{alternatives_key} is invalid at {path}"
+                )
+            for index, child in enumerate(alternatives):
+                visit(child, f"{path}.{alternatives_key}[{index}]", depth + 1)
 
         if "object" in declared_types:
             properties = current.get("properties", {})
@@ -225,6 +242,25 @@ def validate_schema_instance(
             raise SchemaInstanceError(f"{label} contains too many values")
         if depth > _MAX_INSTANCE_DEPTH:
             raise SchemaInstanceError(f"{label} is nested too deeply")
+        for alternatives_key, exact in (("oneOf", True), ("anyOf", False)):
+            alternatives = contract.get(alternatives_key)
+            if alternatives is None:
+                continue
+            matches = 0
+            for alternative in alternatives:
+                try:
+                    validate_schema_instance(
+                        current,
+                        alternative,
+                        label=label,
+                    )
+                except SchemaInstanceError:
+                    continue
+                matches += 1
+            if (exact and matches != 1) or (not exact and matches < 1):
+                raise SchemaInstanceError(
+                    f"{label} does not match {alternatives_key} at {path}"
+                )
         declared = contract["type"]
         declared_types = (
             {declared}

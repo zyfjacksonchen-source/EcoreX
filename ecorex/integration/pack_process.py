@@ -39,8 +39,8 @@ MAX_STDERR_BYTES = 64 * 1024
 MAX_UNPACKED_BYTES = 512 * 1024 * 1024
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_.:-]{1,127}$")
 _PACK_TOOLS = {
-    "browser": frozenset({"cdp", "fetch"}),
-    "sandbox": frozenset({"shell"}),
+    "browser": frozenset({"browser", "web_fetch", "web_search"}),
+    "sandbox": frozenset({"bash"}),
 }
 
 # These failures are returned by the reviewed sandbox pack before it resolves
@@ -57,11 +57,10 @@ _PRE_EXECUTION_PACK_FAILURE_CODES = frozenset(
         "shell_sandbox_contract_invalid",
         "shell_process_supervision_unavailable",
         "browser_operation_not_supported",
-        "browser_parameters_invalid",
-        "browser_evaluate_requires_full_access",
-        "browser_batch_invalid",
+        "pack_arguments_invalid",
+        "browser_target_only_for_navigation",
         "browser_selector_invalid",
-        "browser_evaluate_invalid",
+        "browser_script_invalid",
         "browser_url_not_allowed",
     }
 )
@@ -210,6 +209,9 @@ class ProcessCapabilityPackAdapter:
             _normalized_path_text(str(path.resolve()))
             for path in (*self.workspace_roots, self.artifact_path, executable)
         ) + tuple(_normalized_path_text(value) for value in environment_paths)
+        self._browser_session_process: asyncio.subprocess.Process | None = None
+        self._browser_session_lock: asyncio.Lock | None = None
+        self._browser_session_temp: Path | None = None
 
     def handlers(self) -> Mapping[str, Callable[..., Any]]:
         return {
@@ -233,30 +235,6 @@ class ProcessCapabilityPackAdapter:
         # Put the Turn-bound project first so relative shell paths and the
         # child cwd match the project conversation the user selected.
         return tuple(dict.fromkeys((*additional, *self.workspace_roots)))
-
-    @property
-    def sandbox_profile_availability(self) -> Mapping[str, str | None]:
-        if self.descriptor.pack_id != "sandbox":
-            return {}
-        probe = self.sandbox_probe
-        workspace_reason = None
-        if probe is None or not probe.complete:
-            workspace_reason = (
-                probe.reason if probe is not None else "workspace_sandbox_unavailable"
-            )
-        danger_reason = None
-        if os.name == "nt" and (probe is None or not probe.complete):
-            # On Windows a bare child process cannot guarantee descendant
-            # cleanup after the pack exits. The trusted helper owns a Job
-            # Object for both profiles; without it even full access is disabled.
-            danger_reason = "windows_process_tree_supervisor_unavailable"
-        # danger-full-access is deliberately not described as a sandbox. It is
-        # still required to have a bounded timeout/output/process-tree owner.
-        return {
-            "workspace-write": workspace_reason,
-            "danger-full-access": danger_reason,
-            "read-only": "shell_read_only_profile_unsupported",
-        }
 
     async def invoke(
         self,
@@ -320,6 +298,13 @@ class ProcessCapabilityPackAdapter:
             raise CapabilityPackProcessError("pack_request_invalid") from None
         if not 1 <= len(payload) <= MAX_REQUEST_BYTES:
             raise CapabilityPackProcessError("pack_request_too_large")
+        if self.descriptor.pack_id == "browser" and tool_id == "browser":
+            return await self._invoke_browser_session(
+                payload=payload,
+                context=context,
+                timeout=timeout,
+                workspace_roots=workspace_roots,
+            )
         await asyncio.to_thread(_verify_pack_artifact, self.pack)
         temporary_root = await asyncio.to_thread(
             _create_pack_invocation_temp, self.workspace_roots[0]
@@ -341,6 +326,158 @@ class ProcessCapabilityPackAdapter:
                 workspace_roots=workspace_roots,
             )
         finally:
+            await asyncio.to_thread(_remove_pack_invocation_temp, temporary_root)
+
+    async def _invoke_browser_session(
+        self,
+        *,
+        payload: bytes,
+        context: ToolInvocationContext,
+        timeout: float,
+        workspace_roots: tuple[Path, ...],
+    ) -> Any:
+        """Use one signed browser Pack process for the Runtime lifetime."""
+
+        if self._browser_session_lock is None:
+            self._browser_session_lock = asyncio.Lock()
+        async with self._browser_session_lock:
+            process = self._browser_session_process
+            if process is None or process.returncode is not None:
+                await self._stop_browser_session()
+                await asyncio.to_thread(_verify_pack_artifact, self.pack)
+                temporary_root = await asyncio.to_thread(
+                    _create_pack_invocation_temp, self.workspace_roots[0]
+                )
+                child_environment = dict(self._child_environment)
+                child_environment.update(
+                    {"TEMP": str(temporary_root), "TMP": str(temporary_root)}
+                )
+                if os.name != "nt":
+                    child_environment["TMPDIR"] = str(temporary_root)
+                try:
+                    process = await self._spawn_browser_session(
+                        child_environment=child_environment,
+                        workspace_roots=workspace_roots,
+                    )
+                except Exception:
+                    await asyncio.to_thread(
+                        _remove_pack_invocation_temp, temporary_root
+                    )
+                    raise
+                self._browser_session_process = process
+                self._browser_session_temp = temporary_root
+            request_dispatched = False
+            try:
+                assert process.stdin is not None and process.stdout is not None
+                process.stdin.write(len(payload).to_bytes(8, "big") + payload)
+                await process.stdin.drain()
+                request_dispatched = True
+                header = await asyncio.wait_for(
+                    process.stdout.readexactly(8), timeout=timeout
+                )
+                size = int.from_bytes(header, "big")
+                if not 1 <= size <= MAX_STDOUT_BYTES:
+                    raise CapabilityPackProcessError("pack_response_size_invalid")
+                response_payload = await asyncio.wait_for(
+                    process.stdout.readexactly(size), timeout=timeout
+                )
+            except asyncio.CancelledError:
+                await self._stop_browser_session()
+                raise
+            except TimeoutError:
+                await self._stop_browser_session()
+                raise CapabilityPackProcessError(
+                    "pack_process_timeout",
+                    retryable=True,
+                    side_effect_uncertain=request_dispatched,
+                ) from None
+            except (asyncio.IncompleteReadError, BrokenPipeError, ConnectionResetError):
+                await self._stop_browser_session()
+                raise CapabilityPackProcessError(
+                    "pack_process_transport_failed",
+                    retryable=True,
+                    side_effect_uncertain=request_dispatched,
+                ) from None
+            except CapabilityPackProcessError as error:
+                await self._stop_browser_session()
+                error.side_effect_uncertain = request_dispatched
+                raise
+            try:
+                response = _parse_response(
+                    response_payload,
+                    request_id=context.invocation_id,
+                    sandbox_contract_id=None,
+                )
+            except CapabilityPackProcessError as error:
+                await self._stop_browser_session()
+                error.side_effect_uncertain = request_dispatched
+                raise
+            if response[0] == "failed":
+                raise CapabilityPackProcessError(
+                    response[1],
+                    retryable=response[2],
+                    side_effect_uncertain=(
+                        request_dispatched
+                        and response[1] not in _PRE_EXECUTION_PACK_FAILURE_CODES
+                    ),
+                )
+            result = response[1]
+            protected_paths = self._protected_paths + tuple(
+                _normalized_path_text(path) for path in workspace_roots
+            )
+            if _contains_protected_path(result, protected_paths):
+                await self._stop_browser_session()
+                raise CapabilityPackProcessError(
+                    "pack_result_exposed_host_path",
+                    side_effect_uncertain=request_dispatched,
+                )
+            return result
+
+    async def _spawn_browser_session(
+        self,
+        *,
+        child_environment: Mapping[str, str],
+        workspace_roots: tuple[Path, ...],
+    ) -> asyncio.subprocess.Process:
+        kwargs: dict[str, Any] = {
+            "stdin": asyncio.subprocess.PIPE,
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.DEVNULL,
+            "cwd": str(workspace_roots[0]),
+            "env": dict(child_environment),
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = getattr(
+                subprocess, "CREATE_NO_WINDOW", 0
+            ) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            kwargs["start_new_session"] = True
+        return await asyncio.create_subprocess_exec(
+            str(self.python_executable),
+            "-I",
+            str(self.artifact_path),
+            "--session",
+            **kwargs,
+        )
+
+    async def _stop_browser_session(self) -> None:
+        process = self._browser_session_process
+        self._browser_session_process = None
+        temporary_root = self._browser_session_temp
+        self._browser_session_temp = None
+        if process is not None and process.returncode is None:
+            if process.stdin is not None:
+                process.stdin.close()
+                try:
+                    await process.stdin.wait_closed()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except TimeoutError:
+                await _kill_process_tree(process)
+                await process.wait()
+        if temporary_root is not None:
             await asyncio.to_thread(_remove_pack_invocation_temp, temporary_root)
 
     async def _invoke_process(
@@ -484,7 +621,7 @@ class ProcessCapabilityPackAdapter:
             kwargs["start_new_session"] = True
         argv = (str(self.python_executable), "-I", str(self.artifact_path))
         use_backend = bool(
-            tool_id == "shell"
+            tool_id == "bash"
             and sandbox_contract is not None
             and (
                 sandbox_contract.os_enforced
@@ -530,7 +667,7 @@ class ProcessCapabilityPackAdapter:
         timeout_seconds: float,
         workspace_roots: tuple[Path, ...],
     ) -> SandboxIsolationContract | None:
-        if tool_id != "shell":
+        if tool_id != "bash":
             return None
         roots_digest = hashlib.sha256(
             "\0".join(str(path) for path in workspace_roots).encode("utf-8")
@@ -582,7 +719,7 @@ class ProcessCapabilityPackAdapter:
         )
 
     def _timeout(self, tool_id: str, arguments: Mapping[str, Any]) -> float:
-        if tool_id != "shell":
+        if tool_id != "bash":
             return self.default_timeout_seconds
         raw = arguments.get("timeout_seconds", self.default_timeout_seconds)
         if isinstance(raw, bool) or not isinstance(raw, int):
@@ -598,17 +735,11 @@ class _ProcessPackToolHandler:
         self._tool_id = tool_id
 
     @property
-    def sandbox_profile_availability(self) -> Mapping[str, str | None]:
-        if self._tool_id != "shell":
-            return {}
-        return self._adapter.sandbox_profile_availability
-
-    @property
     def controlled_skill_sandbox_authority(
         self,
     ) -> tuple[Any, Path, PackPythonIdentity] | None:
         if (
-            self._tool_id != "shell"
+            self._tool_id != "bash"
             or self._adapter.descriptor.pack_id != "sandbox"
             or self._adapter.python_identity is None
         ):

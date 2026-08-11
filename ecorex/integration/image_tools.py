@@ -1059,7 +1059,7 @@ class RuntimeImageToolBackend:
         attachment_ids = tuple(arguments.get("attachment_ids", ()))
         if not artifact_ids and not attachment_ids:
             raise ImageToolError("vision requires at least one image identity")
-        if len(artifact_ids) + len(attachment_ids) > 4:
+        if len(artifact_ids) + len(attachment_ids) > 8:
             raise ImageToolError("vision image selection exceeds the product limit")
         inspected = []
         evidence: list[dict[str, str]] = []

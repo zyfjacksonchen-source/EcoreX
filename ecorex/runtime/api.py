@@ -48,6 +48,7 @@ from ecorex.capabilities.planner import availability_reasons
 from ecorex.connectors import (
     ChannelCredentialOwner,
     ChannelRuntimeDispatcher,
+    ChannelTurnReceipt,
     ChannelSelfService,
     ConnectorAuthKind,
     ConnectorComposition,
@@ -65,6 +66,7 @@ from ecorex.gateway import (
 )
 from ecorex.ids import is_id
 from ecorex.extensions.api import register_extension_routes
+from ecorex.extensions.cow_mcp import CowMCPConfigService
 from ecorex.extensions.mcp_oauth import MCPOAuthService, register_mcp_oauth_routes
 from ecorex.extensions.user_mcp import (
     UserMCPService,
@@ -169,7 +171,6 @@ from ecorex.protocol import (
     ModelDescriptor,
     ModelServiceSnapshot,
     MockReplayResponse,
-    PermissionMutationResponse,
     PermissionSnapshot,
     PickProjectFolderRequest,
     PolicyLeaseSnapshot,
@@ -192,7 +193,6 @@ from ecorex.protocol import (
     TraceProjectionResponse,
     TurnMutationResponse,
     UpdateSnapshot,
-    UpdatePermissionRequest,
 )
 from ecorex.protocol.models import utc_now
 from ecorex.replay import ReplayIntegrityError, ReplayService
@@ -248,6 +248,7 @@ from .composition import (
     project_connector_catalog,
     project_model_catalog,
 )
+from .cow_scheduler import CowSchedulerService, CowSchedulerTool
 
 
 @dataclass(slots=True)
@@ -276,11 +277,6 @@ class RuntimeSettings:
     device_authorization_poll_seconds: float = 1.0
     close_device_authorization_broker_on_shutdown: bool = True
     full_access: bool = False
-    admin_hard_denies: list[str] = field(default_factory=list)
-    # The cloud control plane observes/audits local execution.  It does not
-    # normally veto a local user's tools; local permission profiles are the
-    # execution authority.  Reserved for explicit regulated deployments.
-    enforce_admin_tool_denies: bool = False
     runtime_bearer_token: str | None = field(default=None, repr=False)
     csrf_token: str | None = field(default=None, repr=False)
     webui_origins: tuple[str, ...] = ("http://127.0.0.1:8765", "http://localhost:8765")
@@ -298,9 +294,6 @@ class RuntimeSettings:
     installed_capability_packs: frozenset[str] = frozenset()
     disabled_capability_tools: Mapping[str, str] = field(
         default_factory=dict, repr=False
-    )
-    capability_sandbox_profile_availability: Mapping[str, Mapping[str, str | None]] = (
-        field(default_factory=dict, repr=False)
     )
     connected_connectors: frozenset[str] = frozenset()
     online: bool = True
@@ -781,7 +774,6 @@ def _durable_bootstrap(
         {
             "account_id": settings.account_id,
             "authenticated": settings.authenticated,
-            "admin_hard_denies": sorted(settings.admin_hard_denies),
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -1203,8 +1195,6 @@ def create_app(
         raise ValueError("CSRF token must contain at least 32 characters")
     if not isinstance(settings.acceptance_preview, bool):
         raise ValueError("acceptance preview mode must be a boolean")
-    if not isinstance(settings.enforce_admin_tool_denies, bool):
-        raise ValueError("admin tool-deny enforcement must be a boolean")
     if settings.event_poll_interval_seconds <= 0:
         raise ValueError("event poll interval must be positive")
     if settings.event_idle_poll_interval_seconds < settings.event_poll_interval_seconds:
@@ -1399,12 +1389,6 @@ def create_app(
             managed_session.bind_runtime(startup_data_scope)
             settings.account_id = startup_data_scope.account_id
             settings.account_display_name = startup_data_scope.display_name
-            settings.admin_hard_denies = sorted(
-                {
-                    *settings.admin_hard_denies,
-                    *startup_data_scope.admin_denies,
-                }
-            )
         if startup_session is not None:
             settings.authenticated = True
         else:
@@ -1483,28 +1467,19 @@ def create_app(
         kernel.database,
         account_id=settings.account_id,
         initial_full_access=settings.full_access,
-        admin_hard_denies=frozenset(settings.admin_hard_denies),
+        admin_hard_denies=frozenset(),
         initialize=startup_convergence_allowed,
     )
-    if startup_convergence_allowed and settings.full_access:
-        marker_key = "permission_default_migration_v030"
+    if startup_convergence_allowed:
         with permission_authority.mutation_lock:
             with kernel.database.transaction() as connection:
-                migrated = connection.execute(
-                    "SELECT 1 FROM runtime_meta WHERE key = ?", (marker_key,)
-                ).fetchone()
-                if migrated is None:
-                    current_permission = permission_authority.current()
-                    if not current_permission.full_access:
-                        permission_authority.update_in_transaction(
-                            connection,
-                            "full_access",
-                            expected_revision=current_permission.revision,
-                            client_request_id="v030-default-full-access",
-                        )
-                    connection.execute(
-                        "INSERT INTO runtime_meta(key, value) VALUES (?, ?)",
-                        (marker_key, "complete"),
+                current_permission = permission_authority.current()
+                if not current_permission.full_access:
+                    permission_authority.update_in_transaction(
+                        connection,
+                        "full_access",
+                        expected_revision=current_permission.revision,
+                        client_request_id="cowagent-runtime-boundary",
                     )
     permission_projection = permission_authority.current()
     from ecorex.permission_bridge import sync_verified_runtime_permission
@@ -1621,9 +1596,7 @@ def create_app(
         vault=connector_vault,
         event_sink=connector_event_sink,
         hard_deny_provider=lambda _instance_id, _action_id: (
-            frozenset(permission_authority.current().admin_hard_denies)
-            if settings.enforce_admin_tool_denies
-            else frozenset()
+            frozenset()
         ),
         maintenance_interval_seconds=settings.connector_maintenance_seconds,
         maintenance_stop_timeout_seconds=settings.lifecycle_shutdown_seconds,
@@ -1645,8 +1618,18 @@ def create_app(
         reload_requester=settings.session_reload_requester,
         initialize=startup_convergence_allowed,
     )
+    cow_mcp_service = CowMCPConfigService(
+        settings.workspace_root
+        or (Path(settings.database_path).expanduser().resolve().parent / "workspace"),
+        runtime_api_version="1.0.0",
+        platform=settings.platform,
+        architecture=settings.architecture,
+        reload_requester=settings.session_reload_requester,
+    )
     effective_mcp_bindings = (
-        tuple(settings.mcp_runtime_bindings) + user_mcp_service.runtime_bindings()
+        tuple(settings.mcp_runtime_bindings)
+        + cow_mcp_service.bindings()
+        + user_mcp_service.runtime_bindings()
     )
     mcp_oauth_registrations = tuple(
         binding.oauth_registration
@@ -1679,7 +1662,10 @@ def create_app(
         stop_timeout_seconds=settings.lifecycle_shutdown_seconds,
     )
     connector_catalog = connector_composition.service.catalog()
-    extension_governance_enabled = settings.extension_service is not None
+    # CowAgent treats local Skills and MCP servers as user data-plane
+    # configuration.  The Extension repository may still back the e-Mate UI,
+    # but it is not an execution-policy authority.
+    extension_governance_enabled = False
     extension_service = settings.extension_service or ExtensionService(
         SQLiteExtensionRepository(
             kernel.database,
@@ -1755,24 +1741,6 @@ def create_app(
             | settings.connected_connectors
         )
         disabled_tools = dict(settings.disabled_capability_tools)
-        active_permission = permission_authority.current()
-        sandbox_profile = (
-            "danger-full-access" if active_permission.full_access else "workspace-write"
-        )
-        for (
-            tool_id,
-            profiles,
-        ) in settings.capability_sandbox_profile_availability.items():
-            reason = profiles.get(sandbox_profile)
-            if reason:
-                disabled_tools[str(tool_id)] = str(reason)
-            else:
-                prior = disabled_tools.get(str(tool_id))
-                profile_reasons = {
-                    value for value in profiles.values() if isinstance(value, str)
-                }
-                if prior in profile_reasons:
-                    disabled_tools.pop(str(tool_id), None)
         return RuntimeAvailability(
             platform=settings.platform,
             installed_packs=settings.installed_capability_packs,
@@ -1972,7 +1940,6 @@ def create_app(
         mcp_oauth_service=mcp_oauth_service,
         tenant_id=settings.account_id,
         mcp_tenant_id=user_mcp_service.tenant_namespace,
-        enforce_admin_tool_denies=settings.enforce_admin_tool_denies,
         persist_startup_snapshots=startup_convergence_allowed,
     )
     office_skill_backend = None
@@ -1993,6 +1960,7 @@ def create_app(
     app.state.runtime_composition = composition
     app.state.office_skill_backend = office_skill_backend
     app.state.mcp_client_supervisor = composition.mcp_supervisor
+    app.state.cow_mcp_service = cow_mcp_service
     app.state.mcp_oauth_service = mcp_oauth_service
     app.state.user_mcp_service = user_mcp_service
     app.state.channel_self_service = channel_self_service
@@ -2003,6 +1971,7 @@ def create_app(
     memory_service = MemoryService(
         kernel.database,
         blob_loader=artifact_service.blobs.read_bytes,
+        workspace_root=settings.workspace_root,
         initialize=startup_convergence_allowed,
     )
     app.state.memory_service = memory_service
@@ -2209,6 +2178,7 @@ def create_app(
                 image_execution_timeout_seconds=(
                     settings.image_execution_timeout_seconds
                 ),
+                workspace_root=settings.workspace_root,
                 max_model_rounds=settings.agent_max_model_rounds,
                 token_budget=settings.agent_token_budget,
                 finalization_reserve=settings.agent_finalization_reserve,
@@ -2241,6 +2211,100 @@ def create_app(
         for adapter in bindable_channel_adapters:
             adapter.bind_runtime(channel_owner, channel_runtime_dispatcher)
     app.state.channel_runtime_dispatcher = channel_runtime_dispatcher
+    scheduler_service = None
+    scheduler_handler = settings.capability_handlers.get("scheduler")
+    if isinstance(scheduler_handler, CowSchedulerTool) and worker_supervisor is not None:
+
+        async def execute_scheduled_task(task: Mapping[str, Any]) -> bool:
+            action = dict(task.get("action") or {})
+            thread_id = str(action.get("thread_id") or "")
+            content = str(action.get("content") or "").strip()
+            if not thread_id or not content:
+                return False
+            thread = await asyncio.to_thread(kernel.get_thread, thread_id)
+            channel = dict(thread.metadata.get("channel") or {})
+            channel_id = str(channel.get("channel_id") or "")
+            conversation_id = str(channel.get("conversation_id") or "")
+            adapter = settings.channel_lifecycle_adapters.get(channel_id)
+            execution_key = (
+                f"scheduler-{task['id']}-{task.get('next_run_at') or 'due'}"
+            )
+            if (
+                action.get("type") == "send_message"
+                and adapter is not None
+                and channel_id
+                and conversation_id
+            ):
+                await asyncio.to_thread(
+                    adapter.send_text,
+                    channel_id=channel_id,
+                    conversation_id=conversation_id,
+                    text=content,
+                    idempotency_key=execution_key,
+                )
+                return True
+            prompt = (
+                content
+                if action.get("type") == "agent_task"
+                else "请原样发送以下定时提醒，不要添加前缀或解释：\n" + content
+            )
+            request = CreateTurnRequest(
+                input=prompt,
+                client_message_id=execution_key,
+                metadata={"scheduler": {"task_id": str(task["id"])}},
+            )
+            accepted = await asyncio.to_thread(
+                composition.admit_turn,
+                request,
+                lambda prepared: kernel.create_turn(
+                    thread_id,
+                    prepared.request,
+                    snapshot_context=prepared.snapshot_context,
+                    permission_account_id=composition.permission_account_id,
+                    causation_id=execution_key,
+                    correlation_id=execution_key,
+                ),
+                thread_id=thread_id,
+            )
+            worker_supervisor.notify()
+            if (
+                not bool(action.get("silent"))
+                and adapter is not None
+                and channel_runtime_dispatcher is not None
+                and channel_id
+                and conversation_id
+            ):
+
+                async def deliver_when_ready() -> None:
+                    receipt = ChannelTurnReceipt(
+                        channel_id=channel_id,
+                        thread_id=thread_id,
+                        turn_id=accepted.turn.turn_id,
+                        client_message_id=execution_key,
+                        conversation_sha256=str(channel["conversation_sha256"]),
+                    )
+                    for _ in range(900):
+                        await asyncio.sleep(1)
+                        try:
+                            delivered = await asyncio.to_thread(
+                                channel_runtime_dispatcher.deliver,
+                                receipt,
+                                conversation_id=conversation_id,
+                                transport=adapter,
+                            )
+                        except Exception:
+                            return
+                        if delivered:
+                            return
+
+                asyncio.create_task(deliver_when_ready())
+            return True
+
+        scheduler_service = CowSchedulerService(
+            scheduler_handler.store,
+            execute_scheduled_task,
+        )
+    app.state.scheduler_service = scheduler_service
     gateway_lifecycle = (
         _AsyncResourceCloser(settings.model_gateway)
         if settings.model_gateway is not None
@@ -2795,8 +2859,10 @@ def create_app(
         (3, "runtime_invariant", invariant_supervisor),
         (2, "agent_worker", worker_supervisor),
         (1, "mcp", composition.mcp_supervisor),
+        (1, "cow_mcp_config", cow_mcp_service),
         (1, "mcp_oauth", mcp_oauth_service),
         (1, "channel_self_service", channel_self_service),
+        (1, "scheduler", scheduler_service),
         (4, "model_gateway", gateway_lifecycle),
         (4, "image_gateway", image_client_lifecycle),
         (1, "retouch_worker", retouch_supervisor),
@@ -3709,43 +3775,6 @@ def create_app(
                     "message": "update activation could not be completed",
                 },
             ) from error
-
-    @app.put(
-        "/api/v1/settings/permissions",
-        response_model=PermissionMutationResponse,
-    )
-    def update_permissions(
-        request: UpdatePermissionRequest,
-    ) -> PermissionMutationResponse:
-        # Keep the durable mutation, immutable snapshot publication, and default
-        # event context in request order even when FastAPI runs sync handlers on
-        # different worker threads. New Turns independently read the authority,
-        # so they can never inherit a stale in-memory preference.
-        with permission_authority.mutation_lock:
-            with kernel.jobs.control_transaction(
-                scope="permission_update",
-                subject=request.client_request_id,
-            ) as connection:
-                permissions = permission_authority.update_in_transaction(
-                    connection,
-                    request.profile,
-                    expected_revision=request.expected_revision,
-                    client_request_id=request.client_request_id,
-                )
-                permission_snapshot, permission_policy = (
-                    composition.record_permission_in_transaction(
-                        connection,
-                        permissions,
-                    )
-                )
-                audit_outbox.backfill_permissions_in_transaction(connection)
-            composition.apply_recorded_permission(
-                permission_snapshot,
-                permission_policy,
-            )
-            kernel.events.default_permission_snapshot_id = permissions.snapshot_id
-            sync_verified_runtime_permission(full_access=permissions.full_access)
-            return PermissionMutationResponse(permissions=permissions)
 
     @app.get("/api/v1/projects", response_model=ProjectListResponse)
     def list_projects() -> ProjectListResponse:

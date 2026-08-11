@@ -413,10 +413,6 @@ export function AppV1() {
   const modelUnavailable = modelServiceReady && !bootstrap?.models.chat.length
     ? "无可用 Agent 模型，请联系管理员。"
     : modelUnavailableMessage(authenticated, bootstrap?.model_service.reason);
-  const accessLabel = bootstrap?.permissions.full_access ? "完全访问" : "默认权限";
-  const accessDescription = bootstrap?.permissions.full_access
-    ? "完全访问：可访问本机和网络，可随时在设置中关闭。"
-    : "默认权限：仅修改工作区文件，扩大范围前会询问。";
   const update = bootstrap?.update;
   const shareUnavailableReason = !authenticated
     ? "登录后才能分享任务。"
@@ -611,17 +607,10 @@ export function AppV1() {
         imageModel={runtime.imageModel}
         quota={bootstrap?.quota || null}
         usage={runtime.conversationUsage}
-        permissionLabel={accessLabel}
-        permissionDescription={accessDescription}
         capabilityMentions={runtime.capabilityMentions}
         capabilityMentionState={runtime.capabilityMentionState}
         onChatModelChange={runtime.setChatModel}
         onImageModelChange={runtime.setImageModel}
-        onOpenPermissionSettings={() => {
-          captureFeatureTrigger(settingsReturnFocusRef);
-          warmFeature(loadSettingsDialog);
-          setSettingsOpen(true);
-        }}
         onOpenConnections={() => {
           warmFeature(loadSkillsWorkspace);
           setSettingsOpen(false);
@@ -1039,10 +1028,6 @@ export function AppV1() {
               if (open) setSettingsOpen(true);
               else closeSettings();
             }}
-            permissionUpdating={runtime.permissionUpdating}
-            permissionError={runtime.permissionError}
-            onClearPermissionError={runtime.clearPermissionError}
-            onPermissionChange={runtime.updatePermission}
             extensions={runtime.extensionSnapshot}
             extensionLoadState={runtime.extensionCatalogState}
             onManageExtensions={() => {

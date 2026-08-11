@@ -20,7 +20,7 @@ LIVE_ACCEPTANCE_GATES = frozenset(
     {"live-model", "live-image", "cdp-acceptance"}
 )
 REQUIRED_LIVE_TOOL_IDS = frozenset(
-    {"read", "fetch", "vision", "cdp", "shell", "imagegen"}
+    {"read", "web_fetch", "vision", "browser", "bash", "imagegen"}
 )
 REQUIRED_CDP_SCENARIOS = frozenset(
     {

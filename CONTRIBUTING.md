@@ -57,6 +57,86 @@ cow start
 
 ## EcoreX release validation
 
+
+## CowAgent data-plane compatibility boundary
+
+e-Mate keeps its own desktop UI and enterprise control plane, but its Agent
+data plane follows upstream CowAgent 2.1.5
+(`e3ac1b952500f60934862c6bf0bd0de91b415ed8`) as the behavioral baseline.
+
+- The enterprise control plane may manage only accounts/passwords, Token usage,
+  version publication, and audit records.
+- Account isolation, release-artifact integrity, Token accounting, and audit
+  collection must observe the Agent data plane without changing which tools
+  the model sees, their JSON schemas, their execution lifetime, or their
+  results.
+- First-party tools are available out of the box. Do not add permission
+  profiles, “default/full access” modes, per-tool approval prompts,
+  administrator tool-deny lists, intent-keyword hiding, profile-dependent tool
+  availability, or a second schema interpreter.
+- A Tool contract has one source of truth from model schema through execution.
+  Adapters and Packs may transport a call, but must not narrow or reinterpret
+  its accepted arguments.
+- Preserve CowAgent lifetimes and semantics: the browser is stateful across
+  tool calls in one Runtime, navigation returns a usable snapshot, later
+  actions do not require another URL, Shell is directly callable, Fetch returns
+  readable content, and Web Search is a first-class capability.
+- Release verification happens when an immutable tool artifact is admitted or
+  loaded. Do not re-verify or add policy decisions after every ordinary tool
+  call unless a concrete integrity failure proves that boundary necessary.
+- Do not invent a stricter e-Mate behavior “for safety.” A deviation from
+  CowAgent requires a reproduced OS/platform, provider, legal, or data-loss
+  constraint plus the smallest regression that proves it. The deviation must
+  be documented at the exact boundary and must not be controlled remotely by
+  the enterprise management plane.
+- Frontend labels and controls must reflect the same boundary. Do not expose a
+  permission switch that has no CowAgent equivalent.
+
+Any change touching tool discovery, schemas, prompts, execution, browser
+lifetime, Shell/Fetch/Search, or result envelopes must run a CowAgent-parity
+regression. Before a frozen release, the current-platform development candidate
+must also prove context continuity, real Web Search, and the complete default
+capability catalog.
+
+
+### Channels, Skills, MCP, and scheduling
+
+The CowAgent baseline also covers channels, Skills, MCP, and scheduled tasks.
+
+- Channels use CowAgent connection, receive/send, retry, and reconnect
+  semantics. e-Mate may keep its existing user-facing channel display names,
+  icons, and layout, but those presentation names must not select a different
+  transport or runtime policy.
+- Skills are discovered and loaded from the user's local Skill directories as
+  CowAgent does. Cloud catalogs, signatures, revisions, or discovery receipts
+  may provide optional distribution metadata but must not gate a valid local
+  Skill.
+- MCP uses CowAgent's local configuration, lazy server startup, OAuth flow, and
+  dynamic tool registration. Enterprise policy must not hide or rewrite an MCP
+  tool contract.
+- Scheduled tasks use CowAgent's local Scheduler tool and durable local task
+  store. They do not require an enterprise approval or remote policy lease to
+  run.
+- e-Mate adapters may translate presentation and event envelopes only. They
+  must not fork the underlying CowAgent state machine or retry semantics.
+
+### Memory and knowledge
+
+- `MEMORY.md`, `memory/**/*.md`, and `knowledge/**/*.md` are the user-owned
+  source of truth. The Agent tools, prompt context, and the e-Mate Memory and
+  Knowledge pages must read the same files; do not copy them into a competing
+  canonical store for ordinary execution.
+- Keep CowAgent's `memory_search` and `memory_get` contracts. Recall is
+  mandatory for past decisions, preferences, relationships, and to-dos.
+- Restore CowAgent's proactive writes: durable preferences and decisions go to
+  `MEMORY.md`, daily progress to `memory/YYYY-MM-DD.md`, and structured sources,
+  analysis, entities, and concepts to matching `knowledge/` pages. Updating a
+  knowledge page also updates `knowledge/index.md`.
+- Memory and knowledge writes use the ordinary CowAgent file tools. Do not add
+  a knowledge request, approval, remote policy lease, revision ticket, or
+  administrator gate to the model path.
+- Never store credentials, passwords, API keys, or Tokens in memory files.
+
 For everyday development and release-candidate preflight, run the lightweight
 real-release check:
 

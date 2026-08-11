@@ -1,6 +1,6 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { AtSign, Cable, ChevronDown, FileText, LoaderCircle, Plus, Send, ShieldCheck, Square, X } from "lucide-react";
+import { AtSign, Cable, ChevronDown, FileText, LoaderCircle, Plus, Send, Square, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { SendDisposition } from "../state/useRuntimeSession.ts";
@@ -37,13 +37,10 @@ interface ComposerProps {
     limits: Record<string, number>;
   } | null;
   usage: ConversationUsageProjection | null;
-  permissionLabel: string;
-  permissionDescription: string;
   capabilityMentions: CapabilityMentionProjection[];
   capabilityMentionState: "loading" | "ready" | "error";
   onChatModelChange: (modelId: string) => void;
   onImageModelChange: (modelId: string) => void;
-  onOpenPermissionSettings: () => void;
   onOpenConnections: () => void;
   onSend: (
     input: string,
@@ -80,13 +77,10 @@ export function Composer({
   imageModel,
   quota,
   usage,
-  permissionLabel,
-  permissionDescription,
   capabilityMentions,
   capabilityMentionState,
   onChatModelChange,
   onImageModelChange,
-  onOpenPermissionSettings,
   onOpenConnections,
   onSend,
   onRefreshCapabilityMentions,
@@ -471,24 +465,6 @@ export function Composer({
               <Tooltip.Portal>
                 <Tooltip.Content className="ex-tooltip ex-permission-tooltip" side="top" sideOffset={8}>
                   <span>连接飞书、邮箱等外部服务，并管理消息通道。</span>
-                  <Tooltip.Arrow className="ex-tooltip-arrow" />
-                </Tooltip.Content>
-              </Tooltip.Portal>
-            </Tooltip.Root>
-            <Tooltip.Root delayDuration={900}>
-              <Tooltip.Trigger asChild>
-                <button
-                  type="button"
-                  className="ex-permission-inline"
-                  onClick={onOpenPermissionSettings}
-                >
-                  <ShieldCheck aria-hidden="true" />{permissionLabel}
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Portal>
-                <Tooltip.Content className="ex-tooltip ex-permission-tooltip" side="top" sideOffset={8}>
-                  <span>{permissionDescription}</span>
-                  <span>需要权限或信息时会询问；长任务可排队，重启后继续。</span>
                   <Tooltip.Arrow className="ex-tooltip-arrow" />
                 </Tooltip.Content>
               </Tooltip.Portal>

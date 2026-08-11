@@ -1,4 +1,4 @@
-import { Activity, AlertCircle, Blocks, Camera, FolderOutput, KeyRound, RefreshCw, Shield, UserRound, X } from "lucide-react";
+import { Activity, AlertCircle, Blocks, Camera, FolderOutput, KeyRound, RefreshCw, UserRound, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
@@ -33,10 +33,6 @@ interface SettingsDialogProps {
   open: boolean;
   bootstrap: BootstrapResponse | null;
   onOpenChange: (open: boolean) => void;
-  permissionUpdating: boolean;
-  permissionError: string | null;
-  onClearPermissionError: () => void;
-  onPermissionChange: (profile: "default" | "full_access") => Promise<boolean>;
   extensions: ExtensionCatalogSnapshot | null;
   extensionLoadState: ExtensionLoadState;
   onManageExtensions: () => void;
@@ -79,10 +75,6 @@ export function SettingsDialog({
   open,
   bootstrap,
   onOpenChange,
-  permissionUpdating,
-  permissionError,
-  onClearPermissionError,
-  onPermissionChange,
   extensions,
   extensionLoadState,
   onManageExtensions,
@@ -119,8 +111,6 @@ export function SettingsDialog({
   onActivateUpdate,
 }: SettingsDialogProps) {
   const authenticated = bootstrap?.login.authenticated === true;
-  const fullAccess = bootstrap?.permissions.profile === "full_access";
-  const [confirmElevation, setConfirmElevation] = useState(false);
   const [confirmQuarantineDelete, setConfirmQuarantineDelete] = useState(false);
   const [migrationQuarantine, setMigrationQuarantine] = useState<MigrationQuarantineProjection | null>(null);
   const [migrationQuarantineLoadState, setMigrationQuarantineLoadState] = useState<"loading" | "ready" | "error">("loading");
@@ -182,10 +172,6 @@ export function SettingsDialog({
   }, [client, migrationQuarantine?.can_delete, migrationQuarantineBusy]);
 
   useEffect(() => {
-    if (!open || fullAccess) setConfirmElevation(false);
-  }, [fullAccess, open]);
-
-  useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
     void refreshMigrationQuarantine(controller.signal);
@@ -206,11 +192,6 @@ export function SettingsDialog({
       passwordRequestId.current = null;
     }
   }, [open]);
-
-  const applyPermission = async (profile: "default" | "full_access") => {
-    const applied = await onPermissionChange(profile);
-    if (applied) setConfirmElevation(false);
-  };
 
   const changePassword = async () => {
     if (passwordBusy) return;
@@ -646,97 +627,6 @@ export function SettingsDialog({
                   type="button"
                   aria-label="关闭旧版凭证错误"
                   onClick={() => setMigrationQuarantineError(null)}
-                >
-                  <X aria-hidden="true" />
-                </button>
-              </div>
-            ) : null}
-          </section>
-
-          <section className="ex-settings-section" hidden={activePage !== "general"}>
-            <h2>权限</h2>
-            <div className="ex-settings-row">
-              <span className="ex-settings-icon"><Shield aria-hidden="true" /></span>
-              <div>
-                <strong>{fullAccess ? "完全访问" : "默认权限"}</strong>
-                <p>
-                  {fullAccess
-                    ? "可在已授权位置执行操作，不再逐项询问"
-                    : "主要在工作区内操作，敏感步骤会先询问"}
-                </p>
-              </div>
-              <button
-                className="ex-skill-switch ex-permission-switch"
-                type="button"
-                role="switch"
-                aria-checked={fullAccess}
-                aria-label={fullAccess ? "关闭完全访问" : "开启完全访问"}
-                disabled={!bootstrap || !authenticated || permissionUpdating}
-                aria-busy={permissionUpdating}
-                title={fullAccess ? "切换为默认权限" : "切换为完全访问"}
-                onClick={() => {
-                  if (fullAccess) {
-                    void applyPermission("default");
-                  } else {
-                    setConfirmElevation(true);
-                  }
-                }}
-              ><span /></button>
-            </div>
-            <p className="ex-settings-note" aria-live="polite">
-              {fullAccess
-                ? "完全访问会跳过一般工具审批；可随时一键撤销，管理员硬限制仍然生效。"
-                : authenticated
-                  ? "默认权限在工具需要更高权限或外部写入时向你确认。"
-                  : "登录托管账号并重启 e-Mate 后才能修改执行权限。"}
-            </p>
-            {bootstrap?.permissions.admin_hard_denies.length ? (
-              <p className="ex-settings-note">
-                组织策略限制了 {bootstrap.permissions.admin_hard_denies.length} 项高风险操作。
-              </p>
-            ) : null}
-            {confirmElevation ? (
-              <div
-                className="ex-permission-confirm"
-                role="group"
-                aria-label="确认启用完全访问"
-              >
-                <div>
-                  <strong>确认启用完全访问？</strong>
-                  <p>
-                    e-Mate 将可在本机执行命令并写入工作区，不再逐项请求一般工具审批；管理员限制仍不可绕过。
-                  </p>
-                </div>
-                <div className="ex-permission-confirm-actions">
-                  <button
-                    className="ex-button"
-                    type="button"
-                    disabled={permissionUpdating}
-                    onClick={() => setConfirmElevation(false)}
-                  >
-                    取消
-                  </button>
-                  <button
-                    className="ex-button is-primary"
-                    type="button"
-                    disabled={permissionUpdating}
-                    aria-busy={permissionUpdating}
-                    onClick={() => void applyPermission("full_access")}
-                  >
-                    {permissionUpdating ? "正在应用" : "确认启用"}
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            {permissionError ? (
-              <div className="ex-settings-error" role="alert">
-                <AlertCircle aria-hidden="true" />
-                <span>{permissionError}</span>
-                <button
-                  className="ex-icon-button"
-                  type="button"
-                  aria-label="关闭权限错误"
-                  onClick={onClearPermissionError}
                 >
                   <X aria-hidden="true" />
                 </button>

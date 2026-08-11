@@ -46,6 +46,7 @@ from ecorex.observability import AuditIntegrityError, ManagedOTLPHTTPTraceExport
 from ecorex.observability.recovery import is_unreadable_observability_error
 from ecorex.runtime import RuntimeSettings
 from ecorex.runtime.api import create_app as register_runtime
+from ecorex.runtime.cow_scheduler import CowSchedulerTool, CowTaskStore
 from ecorex.projects import ProjectWorkspaceAuthority
 from ecorex.session import (
     ManagedDeviceAuthorizationService,
@@ -128,9 +129,6 @@ class ProductServerSettings:
     secret_factory: SecretFactory | None = field(
         default=None, repr=False, compare=False
     )
-    full_access: bool = True
-    admin_hard_denies: tuple[str, ...] = ()
-    enforce_admin_tool_denies: bool = False
     managed_session_service: ManagedSessionService | None = field(
         default=None, repr=False, compare=False
     )
@@ -620,10 +618,19 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         raise ServerConfigurationError("runtime bearer and CSRF secrets must differ")
 
     capability_registry = builtin_capability_registry()
+    scheduler_tool = CowSchedulerTool(
+        CowTaskStore(
+            Path(settings.database_path).expanduser().resolve().parent
+            / "scheduler"
+            / "tasks.json"
+        )
+    )
+    trusted_core_handlers = dict(settings.capability_handlers)
+    trusted_core_handlers["scheduler"] = scheduler_tool
     capability_runtime = build_capability_handler_set(
         capability_registry,
         workspace_roots=settings.workspace_roots,
-        trusted_core_handlers=settings.capability_handlers,
+        trusted_core_handlers=trusted_core_handlers,
         pack_runtime=settings.capability_pack_runtime,
         workspace_root_resolver=(
             (lambda _scope: ())
@@ -642,13 +649,6 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
             "verified Capability Pack service adapters are incomplete"
         )
     disabled_capability_tools = dict(capability_runtime.disabled_tools)
-    initial_sandbox_profile = (
-        "danger-full-access" if settings.full_access else "workspace-write"
-    )
-    for tool_id, profiles in capability_runtime.sandbox_profile_availability.items():
-        reason = profiles.get(initial_sandbox_profile)
-        if reason:
-            disabled_capability_tools[tool_id] = reason
     if (
         settings.image_orchestration_client is None
         and "imagegen" in capability_runtime.handlers
@@ -663,7 +663,7 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         raise ServerConfigurationError(
             "retouch adapter requires a verified image capability pack"
         )
-    shell_handler = capability_runtime.handlers.get("shell")
+    shell_handler = capability_runtime.handlers.get("bash")
     skill_sandbox_authority = getattr(
         shell_handler, "controlled_skill_sandbox_authority", None
     )
@@ -710,9 +710,7 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         platform=settings.platform,
         architecture=settings.architecture,
         extension_service=extension_service,
-        full_access=settings.full_access,
-        admin_hard_denies=list(settings.admin_hard_denies),
-        enforce_admin_tool_denies=settings.enforce_admin_tool_denies,
+        full_access=True,
         require_managed_session=not settings.allow_unmanaged_session_for_testing,
         allow_unmanaged_model_gateway_for_testing=(
             settings.allow_unmanaged_session_for_testing
@@ -745,9 +743,6 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         mcp_runtime_bindings=tuple(settings.mcp_runtime_bindings),
         installed_capability_packs=capability_runtime.installed_pack_ids,
         disabled_capability_tools=disabled_capability_tools,
-        capability_sandbox_profile_availability=(
-            capability_runtime.sandbox_profile_availability
-        ),
         workspace_root=settings.workspace_roots[0],
         output_roots=(settings.output_roots or None),
         output_default_location=settings.output_default_location,

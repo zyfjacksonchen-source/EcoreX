@@ -1,4 +1,4 @@
-"""User-owned HTTPS MCP registration built on the existing MCP authority."""
+"""User-owned CowAgent-compatible MCP registration."""
 
 from __future__ import annotations
 
@@ -6,26 +6,21 @@ import asyncio
 from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
-import ipaddress
 import json
 import os
 from pathlib import Path
 import re
-import socket
 import sqlite3
-import ssl
 import threading
 import time
 from typing import Any, Literal, Mapping
 from urllib.parse import urlsplit
 import uuid
 
-import httpcore
 import httpx
 from fastapi import APIRouter, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
-from ecorex import __version__
 from ecorex.capabilities import (
     ApprovalRequirement,
     CapabilityEffect,
@@ -35,15 +30,13 @@ from ecorex.capabilities import (
 from ecorex.connectors.vault import CredentialVault
 
 from .mcp import (
-    MAX_MCP_MESSAGE_BYTES,
-    MAX_MCP_TOOL_PAGES,
     MAX_MCP_TOOLS,
     MCP_PROTOCOL_VERSION,
     MCPProtocolError,
     MCPRuntimeBinding,
     MCPToolContract,
     ManagedHTTPMCPTransport,
-    _validate_mcp_initialize_result,
+    discover_mcp_tools,
 )
 from .mcp_oauth import MCPOAuthError, MCPOAuthRegistration, MCPOAuthService
 from .models import (
@@ -83,7 +76,7 @@ class UserMCPServerRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     display_name: str = Field(min_length=1, max_length=128)
-    endpoint: str = Field(min_length=9, max_length=2048)
+    endpoint: str = Field(min_length=7, max_length=2048)
     auth_kind: Literal["none", "bearer", "oauth2"] = "none"
     credential: SecretStr | None = None
     oauth_client_id: str | None = Field(default=None, min_length=1, max_length=512)
@@ -101,7 +94,7 @@ class UserMCPServerRequest(BaseModel):
     @field_validator("authorization_hosts")
     @classmethod
     def safe_authorization_hosts(cls, value: list[str]) -> list[str]:
-        normalized = [_validated_public_host(item) for item in value]
+        normalized = [_validated_host(item) for item in value]
         if normalized != sorted(set(normalized)):
             raise ValueError("authorization_hosts must be unique and sorted")
         return normalized
@@ -112,7 +105,7 @@ class UserMCPServerRequest(BaseModel):
         try:
             _validated_https_endpoint(value)
         except (UserMCPError, ValueError):
-            raise ValueError("endpoint must be one explicit public HTTPS URL") from None
+            raise ValueError("endpoint must be one explicit HTTP or HTTPS URL") from None
         return value
 
 
@@ -167,64 +160,6 @@ class _VaultBearerProvider:
         return None
 
 
-class _PublicNetworkBackend(httpcore.AsyncNetworkBackend):
-    """Resolve once, reject mixed/private answers, then connect to that IP."""
-
-    def __init__(self, resolver: Any, backend: Any | None = None) -> None:
-        self.resolver = resolver
-        self.backend = backend or httpcore.AnyIOBackend()
-
-    async def connect_tcp(
-        self,
-        host: str,
-        port: int,
-        timeout: float | None = None,
-        local_address: str | None = None,
-        socket_options: Any | None = None,
-    ) -> Any:
-        try:
-            addresses = tuple(
-                ipaddress.ip_address(value) for value in self.resolver(host)
-            )
-        except Exception:
-            raise httpcore.ConnectError("MCP endpoint resolution failed") from None
-        if not addresses or any(not address.is_global for address in addresses):
-            raise httpcore.ConnectError("MCP endpoint is not public")
-        last_error: Exception | None = None
-        for address in addresses:
-            try:
-                return await self.backend.connect_tcp(
-                    str(address),
-                    port,
-                    timeout=timeout,
-                    local_address=local_address,
-                    socket_options=socket_options,
-                )
-            except httpcore.ConnectError as error:
-                last_error = error
-        assert last_error is not None
-        raise last_error
-
-    async def connect_unix_socket(self, *args: Any, **kwargs: Any) -> Any:
-        del args, kwargs
-        raise httpcore.UnsupportedProtocol("Unix sockets are forbidden for user MCP")
-
-    async def sleep(self, seconds: float) -> None:
-        await self.backend.sleep(seconds)
-
-
-class _PublicHTTPTransport(httpx.AsyncHTTPTransport):
-    def __init__(self, resolver: Any) -> None:
-        self._pool = httpcore.AsyncConnectionPool(
-            ssl_context=ssl.create_default_context(),
-            max_connections=2,
-            max_keepalive_connections=1,
-            http2=False,
-            retries=0,
-            network_backend=_PublicNetworkBackend(resolver),
-        )
-
-
 class UserMCPService:
     """Account+organization scoped MCP config; secrets never enter SQLite."""
 
@@ -257,7 +192,7 @@ class UserMCPService:
         self.architecture = architecture
         self.reload_requester = reload_requester
         self.http_client = http_client
-        self.host_resolver = host_resolver or _resolve_host_addresses
+        del host_resolver
         self._lock = threading.RLock()
         self._initialized = bool(initialize)
         if initialize:
@@ -595,7 +530,7 @@ class UserMCPService:
                 ExtensionExport(
                     export_id=item.server_id,
                     kind=ExtensionExportKind.MCP_SERVER,
-                    exposure=ExtensionExposure.DEFERRED,
+                    exposure=ExtensionExposure.DIRECT,
                     permission_effects=("network", "read", "write"),
                 ),
             ),
@@ -636,10 +571,9 @@ class UserMCPService:
         own_client = False
         if client is None:
             client = httpx.AsyncClient(
-                transport=_PublicHTTPTransport(self.host_resolver),
                 timeout=httpx.Timeout(connect=10, read=60, write=30, pool=10),
-                follow_redirects=False,
-                trust_env=False,
+                follow_redirects=True,
+                trust_env=True,
             )
             own_client = True
         transport = ManagedHTTPMCPTransport(
@@ -667,15 +601,6 @@ class UserMCPService:
         *,
         oauth_service: MCPOAuthService | None = None,
     ) -> ManagedHTTPMCPTransport:
-        try:
-            addresses = await asyncio.to_thread(
-                self.host_resolver, item.expected_host
-            )
-            parsed = tuple(ipaddress.ip_address(value) for value in addresses)
-        except Exception:
-            raise UserMCPError("mcp_endpoint_resolution_failed", 503) from None
-        if not parsed or any(not address.is_global for address in parsed):
-            raise UserMCPError("mcp_endpoint_not_public")
         return self._transport(item, oauth_service=oauth_service)
 
     @staticmethod
@@ -772,7 +697,7 @@ class UserMCPService:
             hosts_raw = json.loads(str(row["authorization_hosts_json"]))
             if not isinstance(hosts_raw, list):
                 raise ValueError
-            hosts = tuple(_validated_public_host(item) for item in hosts_raw)
+            hosts = tuple(_validated_host(item) for item in hosts_raw)
             if hosts != tuple(sorted(set(hosts))):
                 raise ValueError
             tools = _decode_tools(str(row["tool_catalog_json"]))
@@ -900,97 +825,7 @@ def create_user_mcp_router(
 async def _discover_tools(
     transport: ManagedHTTPMCPTransport,
 ) -> tuple[MCPToolContract, ...]:
-    prefix = uuid.uuid4().hex
-    initialize = await transport.exchange(
-        {
-            "jsonrpc": "2.0",
-            "id": f"{prefix}:1",
-            "method": "initialize",
-            "params": {
-                "protocolVersion": MCP_PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": {"name": "e-Mate", "version": __version__},
-            },
-        },
-        timeout_seconds=30,
-        max_response_bytes=MAX_MCP_MESSAGE_BYTES,
-    )
-    _validate_mcp_initialize_result(initialize.get("result"))
-    await transport.notify(
-        {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
-        timeout_seconds=30,
-    )
-    raw_tools: list[Any] = []
-    cursor: str | None = None
-    seen: set[str] = set()
-    for page in range(MAX_MCP_TOOL_PAGES):
-        response = await transport.exchange(
-            {
-                "jsonrpc": "2.0",
-                "id": f"{prefix}:{page + 2}",
-                "method": "tools/list",
-                "params": ({"cursor": cursor} if cursor is not None else {}),
-            },
-            timeout_seconds=30,
-            max_response_bytes=MAX_MCP_MESSAGE_BYTES,
-        )
-        result = response.get("result")
-        if not isinstance(result, Mapping) or set(result) - {"tools", "nextCursor"}:
-            raise MCPProtocolError("mcp_tool_catalog_shape_invalid")
-        tools = result.get("tools")
-        if not isinstance(tools, list):
-            raise MCPProtocolError("mcp_tool_catalog_shape_invalid")
-        raw_tools.extend(tools)
-        if not 1 <= len(raw_tools) <= MAX_MCP_TOOLS:
-            raise MCPProtocolError("mcp_tool_catalog_size_invalid")
-        next_cursor = result.get("nextCursor")
-        if next_cursor is None:
-            break
-        if (
-            not isinstance(next_cursor, str)
-            or not next_cursor
-            or len(next_cursor.encode("utf-8")) > 256
-            or next_cursor in seen
-            or any(ord(character) < 32 or ord(character) == 127 for character in next_cursor)
-        ):
-            raise MCPProtocolError("mcp_tool_catalog_cursor_invalid")
-        seen.add(next_cursor)
-        cursor = next_cursor
-    else:
-        raise MCPProtocolError("mcp_tool_catalog_page_limit")
-    contracts: list[MCPToolContract] = []
-    for raw in raw_tools:
-        if (
-            not isinstance(raw, Mapping)
-            or set(raw) - _TOOL_FIELDS
-            or not {"name", "description", "inputSchema"} <= set(raw)
-        ):
-            raise MCPProtocolError("mcp_tool_descriptor_invalid")
-        try:
-            contracts.append(
-                MCPToolContract(
-                    name=raw["name"],
-                    description=raw["description"],
-                    input_schema=raw["inputSchema"],
-                    output_schema=raw.get("outputSchema", {"type": "object"}),
-                    effects=frozenset(
-                        {
-                            CapabilityEffect.READ,
-                            CapabilityEffect.WRITE,
-                            CapabilityEffect.NETWORK,
-                        }
-                    ),
-                    idempotency=IdempotencyClass.NON_IDEMPOTENT,
-                    approval_requirement=ApprovalRequirement.ALWAYS,
-                    required_sandbox=SandboxLevel.READ_ONLY,
-                )
-            )
-        except (TypeError, ValueError):
-            raise MCPProtocolError("mcp_tool_descriptor_invalid") from None
-    names = [tool.name for tool in contracts]
-    if len(set(names)) != len(names) or len({name.casefold() for name in names}) != len(names):
-        raise MCPProtocolError("mcp_tool_name_invalid")
-    return tuple(sorted(contracts, key=lambda item: item.name))
+    return await discover_mcp_tools(transport)
 
 
 def _tool_payload(tool: MCPToolContract) -> dict[str, Any]:
@@ -1029,8 +864,8 @@ def _decode_tools(payload: str) -> tuple[MCPToolContract, ...]:
                 }
             ),
             idempotency=IdempotencyClass.NON_IDEMPOTENT,
-            approval_requirement=ApprovalRequirement.ALWAYS,
-            required_sandbox=SandboxLevel.READ_ONLY,
+            approval_requirement=ApprovalRequirement.NEVER,
+            required_sandbox=SandboxLevel.DANGER_FULL_ACCESS,
         )
         for item in value
         if isinstance(item, Mapping) and set(item) == _TOOL_FIELDS
@@ -1049,50 +884,26 @@ def _validated_https_endpoint(value: str) -> tuple[str, str]:
         port = parsed.port
     except ValueError:
         raise UserMCPError("mcp_endpoint_invalid") from None
-    host = _validated_public_host(parsed.hostname or "")
+    host = (parsed.hostname or "").casefold().rstrip(".")
     if (
-        parsed.scheme != "https"
-        or parsed.username is not None
-        or parsed.password is not None
-        or port not in {None, 443}
-        or parsed.query
-        or parsed.fragment
-        or parsed.hostname != host
+        parsed.scheme not in {"http", "https"}
+        or not host
+        or port is not None and not 1 <= port <= 65535
         or (parsed.path and not parsed.path.startswith("/"))
     ):
         raise UserMCPError("mcp_endpoint_invalid")
     return value, host
 
 
-def _validated_public_host(value: Any) -> str:
+def _validated_host(value: Any) -> str:
     if not isinstance(value, str):
         raise ValueError("host is invalid")
     host = value.casefold().rstrip(".")
-    if host in {"localhost", "localhost.localdomain"} or host.endswith(".local"):
-        raise ValueError("host is not public")
-    try:
-        address = ipaddress.ip_address(host.strip("[]"))
-    except ValueError:
-        if _SAFE_HOST.fullmatch(host) is None:
-            raise ValueError("host is invalid") from None
-    else:
-        if not address.is_global:
-            raise ValueError("host is not public")
-        host = address.compressed
+    if _SAFE_HOST.fullmatch(host) is None and not (
+        host.startswith("[") and host.endswith("]")
+    ):
+        raise ValueError("host is invalid")
     return host
-
-
-def _resolve_host_addresses(host: str) -> tuple[str, ...]:
-    return tuple(
-        sorted(
-            {
-                str(sockaddr[0])
-                for _family, _type, _protocol, _canonname, sockaddr in socket.getaddrinfo(
-                    host, 443, type=socket.SOCK_STREAM
-                )
-            }
-        )
-    )
 
 
 def _safe_scope(value: str, label: str) -> str:

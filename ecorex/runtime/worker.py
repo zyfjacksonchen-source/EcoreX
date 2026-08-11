@@ -12,6 +12,7 @@ from enum import StrEnum
 from functools import partial
 import hashlib
 import json
+from pathlib import Path
 import threading
 import time
 from typing import Any, Protocol
@@ -87,18 +88,57 @@ _EMATE_MODEL_INSTRUCTIONS = (
     "are or asks for an introduction, say '我是智能体小芯，来自 e-Mate Agent'. Do not add "
     "this self-introduction to ordinary greetings, task replies, follow-up turns, or tool "
     "results. Do not claim to be e-Mate, Claude, Codex, ChatGPT, or the underlying model. "
-    "Use a professional and rigorous tone by default. When a direct form of address is natural "
-    "in Chinese, use 同学 unless the user requests another form; do not prepend any form of "
-    "address to every reply. When asked what you can do, explain only "
+    "Use a professional and rigorous tone by default. Do not prepend 同学 or another fixed form "
+    "of address to ordinary replies unless the user explicitly asks for it. When asked what you can do, explain only "
     "capabilities actually available in the current request, such as analysis, research, "
     "writing, files, code, data, images, office work, tools, connectors, or scheduled tasks. "
     "Reply in the user's language. Treat tool failures as evidence: adjust the plan, "
     "parameters, or safe tool choice instead of blindly repeating the same call. "
-    "Never repeat an already completed side-effecting tool call. Tools already present in "
-    "the request are directly callable; tool_search discovers deferred tools only. Treat an "
-    "empty search result as a completed fact and do not repeat an equivalent search."
+    "Never repeat an already completed side-effecting tool call. Every tool present in the "
+    "request is directly callable; use it without searching for it again. tool_search is only "
+    "for installed extensions that are absent from the current tool list. Treat an empty "
+    "search result as a completed fact and do not repeat an equivalent search."
 )
 _GATEWAY_INSTRUCTION_LIMIT = 131_072
+
+
+def _cow_workspace_instructions(workspace_root: Path | None) -> str | None:
+    if workspace_root is None:
+        return None
+
+    def read(relative: str, limit: int) -> str:
+        path = workspace_root / relative
+        try:
+            if not path.is_file() or path.is_symlink():
+                return ""
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return ""
+        encoded = content.encode("utf-8")
+        if len(encoded) <= limit:
+            return content.strip()
+        return encoded[-limit:].decode("utf-8", errors="ignore").strip()
+
+    memory = read("MEMORY.md", 24 * 1024)
+    knowledge = read("knowledge/index.md", 24 * 1024)
+    sections = [
+        "## CowAgent-compatible memory and knowledge\n"
+        "Recall is mandatory when the user refers to earlier events, decisions, preferences, "
+        "relationships or to-dos. Use memory_search when the location is unknown and memory_get "
+        "when the path is known. MEMORY.md is the concise long-term index; memory/YYYY-MM-DD.md "
+        "holds daily progress; knowledge/ holds structured topic pages. Proactively maintain these "
+        "files with write/edit without asking for a separate approval: stable preferences and "
+        "decisions go to MEMORY.md, current progress to today's daily file, articles to "
+        "knowledge/sources, conclusions to knowledge/analysis, entities to knowledge/entities, "
+        "and concepts to knowledge/concepts. After changing a knowledge page, update "
+        "knowledge/index.md. Never store passwords, API keys or tokens. Use remembered facts "
+        "naturally and do not announce internal file operations unless asked."
+    ]
+    if memory:
+        sections.append(f"### MEMORY.md (current snapshot)\n{memory}")
+    if knowledge:
+        sections.append(f"### knowledge/index.md (current snapshot)\n{knowledge}")
+    return "\n\n".join(sections)
 
 
 class WorkerOutcome(StrEnum):
@@ -334,6 +374,7 @@ class AgentTurnWorker:
         image_execution_concurrency: int = 2,
         image_execution_queue_capacity: int = 8,
         image_execution_timeout_seconds: float = 900.0,
+        workspace_root: str | Path | None = None,
     ) -> None:
         if lease_seconds < 5:
             raise ValueError("Agent worker lease must be at least five seconds")
@@ -371,6 +412,11 @@ class AgentTurnWorker:
         self._tool_circuits: dict[str, _CircuitState] = {}
         self.extension_fence = extension_fence
         self.workflow_instruction_resolver = workflow_instruction_resolver
+        self.workspace_root = (
+            Path(workspace_root).expanduser().resolve()
+            if workspace_root is not None
+            else None
+        )
         self._workflow_guidance_cache: dict[
             tuple[str, tuple[str, ...]], Mapping[str, Any] | None
         ] = {}
@@ -2183,9 +2229,15 @@ class AgentTurnWorker:
         )
         gateway_instructions = "\n\n".join(
             value
-            for value in (_EMATE_MODEL_INSTRUCTIONS, workflow_instructions)
+            for value in (
+                _EMATE_MODEL_INSTRUCTIONS,
+                _cow_workspace_instructions(self.workspace_root),
+                workflow_instructions,
+            )
             if value
         )
+        if len(gateway_instructions.encode("utf-8")) > _GATEWAY_INSTRUCTION_LIMIT:
+            raise ConflictError("Agent instructions exceed the model instruction limit")
 
         def input_with_attachments(input_text: str, metadata: Mapping[str, Any]) -> str:
             raw = metadata.get("input_attachments")
