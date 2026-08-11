@@ -678,7 +678,7 @@ def test_image_workflow_guidance_is_frozen_injected_and_cached(tmp_path) -> None
     assert all(
         request.instructions is not None
         and request.instructions.endswith(instructions)
-        and "Always identify yourself as 小芯" in request.instructions
+        and "Only when the user explicitly asks who you are" in request.instructions
         for request in gateway.requests
     )
     assert len(calls) == 1
@@ -763,10 +763,17 @@ def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> No
     assert gateway.requests[0].model_policy.upstream_model_id == "gpt-5.6-luna"
     assert gateway.requests[0].model_policy.reasoning_effort == "max"
     assert gateway.requests[0].instructions is not None
-    assert "Always identify yourself as 小芯" in gateway.requests[0].instructions
+    assert "Always identify yourself as 小芯" not in gateway.requests[0].instructions
+    assert "Only when the user explicitly asks who you are" in gateway.requests[0].instructions
+    assert (
+        "Do not add this self-introduction to ordinary greetings, task replies, "
+        "follow-up turns, or tool results"
+        in gateway.requests[0].instructions
+    )
     assert "我是智能体小芯，来自 e-Mate Agent" in gateway.requests[0].instructions
     assert "professional and rigorous" in gateway.requests[0].instructions
-    assert "Address the user as 同学" in gateway.requests[0].instructions
+    assert "Address the user as 同学" not in gateway.requests[0].instructions
+    assert "do not prepend any form of address to every reply" in gateway.requests[0].instructions
     assert "capabilities actually available" in gateway.requests[0].instructions
     assert "blindly repeating the same call" in gateway.requests[0].instructions
     assert (
