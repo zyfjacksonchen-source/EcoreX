@@ -804,6 +804,20 @@ def test_failed_first_install_pin_requires_authorized_recovery(tmp_path: Path) -
 
     with pytest.raises(PinnedTargetError, match="not authorized"):
         coordinator.recover_first_install_pin("wrong")
+    replacement_payload = _package("1.0.1")
+    replacement = InstallCoordinator(
+        tmp_path / "install",
+        fetcher=_fetcher(tmp_path / "replacement", replacement_payload),
+        verifier=AcceptingTestVerifier(),
+        health_checker=lambda _slot: True,
+    )
+    with pytest.raises(PinnedTargetError, match="no durable verified terminal"):
+        replacement.prepare(
+            _manifest("1.0.1", replacement_payload),
+            "core-windows-x64",
+            first_install=True,
+        )
+    assert replacement.pinned_target == coordinator.pinned_target
     coordinator.recover_first_install_pin("authorized")
     assert coordinator.pinned_target is None
 
