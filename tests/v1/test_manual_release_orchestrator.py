@@ -225,6 +225,30 @@ def test_manual_workflows_have_no_automatic_trigger_or_publication_permission():
     assert "runs-on: macos-15-intel" not in online  # matrix value, not ambient runner
     assert "os: macos-15-intel" in online
 
+    pull_request = (ROOT / ".github/workflows/ecorex-v1-pr.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "  pull_request:" in pull_request
+    assert "  workflow_dispatch:" not in pull_request
+    assert "  push:" not in pull_request
+    assert "contents: read" in pull_request
+    assert "name: v1 PR development gate" in pull_request
+    assert "fetch-depth: 0" in pull_request
+    assert pull_request.index("run: npm run build:web") < pull_request.index(
+        "run: npm run test:v1"
+    )
+    assert "git diff --name-only -z --diff-filter=ACMRT" in pull_request
+    assert 'python -m pytest -q "${tests[@]}"' in pull_request
+    for forbidden in (
+        "environment:",
+        "secrets.",
+        "sign",
+        "electron-builder",
+        "deploy",
+        "release-v1.py",
+    ):
+        assert forbidden not in pull_request.lower()
+
 
 def test_online_smokes_use_the_installed_old_bootstrap_not_the_new_installer():
     for name in (
