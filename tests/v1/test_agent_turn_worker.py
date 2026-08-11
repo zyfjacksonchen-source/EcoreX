@@ -1238,7 +1238,7 @@ def test_blocked_image_turn_releases_worker_for_ordinary_turn(tmp_path) -> None:
             await release_image.wait()
             return {
                 "artifact_id": "artifact_image",
-                "instruction": arguments["instruction"],
+                "prompt": arguments["prompt"],
             }
 
         app, kernel, composition, _thread, image_created = _runtime(
@@ -1257,7 +1257,7 @@ def test_blocked_image_turn_releases_worker_for_ordinary_turn(tmp_path) -> None:
                         "response_id": "resp_image",
                         "tool_call_id": "call_image_blocked",
                         "tool_name": "imagegen",
-                        "arguments": {"instruction": "orange office poster"},
+                        "arguments": {"prompt": "orange office poster"},
                     }
                 ],
                 [
