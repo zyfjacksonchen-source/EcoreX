@@ -210,6 +210,7 @@ ENV_NAMES = {
 SAFE_RELEASE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{5,127}\Z")
 SAFE_ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,127}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+UNSIGNED_WAIVER_NAME = "cloud-unsigned-release-waiver.json"
 RELEASE_NAMESPACE = re.compile(
     r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
@@ -282,6 +283,9 @@ class CloudDeploymentSpec:
     target_machine_id_sha256: str
     encryption_attestation_path: Path
     encryption_attestation_sha256: str
+    unsigned_release_waivers: Mapping[str, str] = dataclasses.field(
+        default_factory=dict
+    )
     python_binary: Path = Path("/opt/ecorex/platform/python-3.11.9/bin/python3.11")
     postgres_binary: Path = Path("/usr/bin/psql")
     minio_binary: Path = Path("/opt/ecorex/platform/minio/minio")
@@ -317,9 +321,13 @@ class CloudDeploymentSpec:
             "nginx_server_config",
             "systemctl_binary",
             "legacy_admin_migration",
+            "unsigned_release_waivers",
         }
         if set(raw) - expected:
             raise CloudDeployError("deployment_spec_unknown_field")
+        waivers = raw.get("unsigned_release_waivers", {})
+        if not isinstance(waivers, Mapping):
+            raise CloudDeployError("unsigned_release_waivers_invalid")
         try:
             spec = cls(
                 release_id=str(raw["release_id"]),
@@ -338,6 +346,7 @@ class CloudDeploymentSpec:
                 encryption_attestation_sha256=str(
                     raw["encryption_attestation_sha256"]
                 ),
+                unsigned_release_waivers=dict(waivers),
                 python_binary=Path(
                     str(
                         raw.get(
@@ -387,6 +396,14 @@ class CloudDeploymentSpec:
         ):
             if not SHA256.fullmatch(digest):
                 raise CloudDeployError("deployment_digest_invalid")
+        if not isinstance(self.unsigned_release_waivers, Mapping) or any(
+            not isinstance(release_id, str)
+            or not isinstance(digest, str)
+            or not SAFE_RELEASE_ID.fullmatch(release_id)
+            or not SHA256.fullmatch(digest)
+            for release_id, digest in self.unsigned_release_waivers.items()
+        ):
+            raise CloudDeployError("unsigned_release_waivers_invalid")
         for path in (
             self.artifact_root,
             self.release_keyring_path,
@@ -595,14 +612,11 @@ def _validate_artifact(
 ) -> Mapping[str, Any]:
     manifest_path = spec.artifact_root / "cloud-release-manifest.json"
     signature_path = spec.artifact_root / "cloud-release-manifest.sig.json"
+    waiver_path = spec.artifact_root / UNSIGNED_WAIVER_NAME
     if _sha256_file(manifest_path) != spec.artifact_manifest_sha256:
         raise CloudDeployError("artifact_manifest_digest_mismatch")
     manifest = _read_json(manifest_path, "artifact_manifest_invalid")
-    signature = _read_json(signature_path, "artifact_signature_invalid")
-    keyring = _read_json(spec.release_keyring_path, "release_keyring_invalid")
-    if _sha256_file(spec.release_keyring_path) != spec.release_keyring_sha256:
-        raise CloudDeployError("release_keyring_digest_mismatch")
-    if not isinstance(manifest, Mapping) or not isinstance(signature, Mapping):
+    if not isinstance(manifest, Mapping):
         raise CloudDeployError("artifact_manifest_invalid")
     if set(manifest) != {
         "schema_version",
@@ -636,22 +650,66 @@ def _validate_artifact(
         != spec.dependency_lock_manifest_sha256
     ):
         raise CloudDeployError("artifact_target_mismatch")
-    if signature.get("manifest_sha256") != spec.artifact_manifest_sha256:
-        raise CloudDeployError("artifact_signature_invalid")
-    key_id = signature.get("key_id")
-    if not isinstance(key_id, str) or not isinstance(keyring, Mapping):
-        raise CloudDeployError("artifact_signature_invalid")
-    encoded_key = keyring.get(key_id)
-    encoded_signature = signature.get("signature_b64")
-    try:
-        public_key = base64.b64decode(encoded_key, validate=True)
-        signed = base64.b64decode(encoded_signature, validate=True)
-        Ed25519PublicKey.from_public_bytes(public_key).verify(
-            signed,
-            CLOUD_MANIFEST_SIGNING_DOMAIN + _canonical_json(manifest),
+    if signature_path.exists() and waiver_path.exists():
+        raise CloudDeployError("artifact_authentication_ambiguous")
+    if signature_path.exists():
+        signature = _read_json(signature_path, "artifact_signature_invalid")
+        keyring = _read_json(spec.release_keyring_path, "release_keyring_invalid")
+        if _sha256_file(spec.release_keyring_path) != spec.release_keyring_sha256:
+            raise CloudDeployError("release_keyring_digest_mismatch")
+        if not isinstance(signature, Mapping) or signature.get(
+            "manifest_sha256"
+        ) != spec.artifact_manifest_sha256:
+            raise CloudDeployError("artifact_signature_invalid")
+        encoded_key = (
+            keyring.get(signature.get("key_id"))
+            if isinstance(keyring, Mapping)
+            else None
         )
-    except Exception:
-        raise CloudDeployError("artifact_signature_invalid") from None
+        try:
+            public_key = base64.b64decode(encoded_key, validate=True)
+            signed = base64.b64decode(signature.get("signature_b64"), validate=True)
+            Ed25519PublicKey.from_public_bytes(public_key).verify(
+                signed, CLOUD_MANIFEST_SIGNING_DOMAIN + _canonical_json(manifest)
+            )
+        except Exception:
+            raise CloudDeployError("artifact_signature_invalid") from None
+    else:
+        expected_waiver = spec.unsigned_release_waivers.get(spec.release_id)
+        if expected_waiver is None or _sha256_file(waiver_path) != expected_waiver:
+            raise CloudDeployError("artifact_unsigned_waiver_required")
+        waiver = _read_json(waiver_path, "artifact_unsigned_waiver_invalid")
+        if not isinstance(waiver, Mapping):
+            raise CloudDeployError("artifact_unsigned_waiver_invalid")
+        expected_fields = {
+            "schema_version",
+            "document_type",
+            "status",
+            "represented_as_signed",
+            "scope",
+            "operator_instruction_sha256",
+            "release_id",
+            "version",
+            "source_commit",
+            "dependency_lock_manifest_sha256",
+            "manifest_sha256",
+        }
+        if (
+            set(waiver) != expected_fields
+            or waiver.get("schema_version") != 1
+            or waiver.get("document_type") != "ecorex.cloud-unsigned-release-waiver"
+            or waiver.get("status") != "operator-waived-unsigned"
+            or waiver.get("represented_as_signed") is not False
+            or waiver.get("scope") != "single-release"
+            or not SHA256.fullmatch(str(waiver.get("operator_instruction_sha256")))
+            or waiver.get("release_id") != spec.release_id
+            or waiver.get("version") != version
+            or waiver.get("source_commit") != spec.source_commit
+            or waiver.get("dependency_lock_manifest_sha256")
+            != spec.dependency_lock_manifest_sha256
+            or waiver.get("manifest_sha256") != spec.artifact_manifest_sha256
+        ):
+            raise CloudDeployError("artifact_unsigned_waiver_invalid")
     files = manifest.get("files")
     if not isinstance(files, list) or not files:
         raise CloudDeployError("artifact_manifest_invalid")
@@ -724,13 +782,27 @@ def _validate_artifact(
                 observed.add(path.relative_to(spec.artifact_root).as_posix())
     except OSError:
         raise CloudDeployError("artifact_file_unreadable") from None
-    allowed = seen | {
-        "cloud-release-manifest.json",
-        "cloud-release-manifest.sig.json",
-    }
+    authority = (
+        "cloud-release-manifest.sig.json"
+        if signature_path.exists()
+        else UNSIGNED_WAIVER_NAME
+    )
+    allowed = seen | {"cloud-release-manifest.json", authority}
     if observed != allowed:
         raise CloudDeployError("artifact_unlisted_file")
     return manifest
+
+
+def _artifact_authentication(spec: CloudDeploymentSpec) -> Mapping[str, Any]:
+    unsigned = (spec.artifact_root / UNSIGNED_WAIVER_NAME).exists() and not (
+        spec.artifact_root / "cloud-release-manifest.sig.json"
+    ).exists()
+    if unsigned:
+        return {
+            "mode": "operator-waived-unsigned",
+            "waiver_sha256": spec.unsigned_release_waivers.get(spec.release_id),
+        }
+    return {"mode": "signed", "waiver_sha256": None}
 
 
 def _validate_attestation(spec: CloudDeploymentSpec) -> None:
@@ -889,7 +961,12 @@ def build_plan(spec: CloudDeploymentSpec, *, inspect_files: bool = True) -> Clou
     target_slot = "blue" if current_slot in {None, "green"} else "green"
     actions = (
         "verify_target_fence",
-        "verify_signed_release",
+        (
+            "verify_operator_waived_unsigned_release"
+            if _artifact_authentication(spec)["mode"]
+            == "operator-waived-unsigned"
+            else "verify_signed_release"
+        ),
         "verify_encrypted_persistent_volume_attestation",
         "verify_python_3_11_9_postgresql_15_nginx",
         "verify_encrypted_volume_secret_environment_files",
@@ -3585,7 +3662,7 @@ def deploy(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, Any]
             if isinstance(error, CloudDeployError):
                 raise
             raise CloudDeployError("activation_commit_failed") from None
-        return receipt
+        return {**receipt, "artifact_authentication": _artifact_authentication(dataclasses.replace(spec, artifact_root=release))}
 
 
 def stage(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, Any]:
@@ -3635,6 +3712,7 @@ def stage(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, Any]:
             "version": PRODUCT_VERSION,
             "target_slot": target,
             "artifact_manifest_sha256": spec.artifact_manifest_sha256,
+            "artifact_authentication": _artifact_authentication(dataclasses.replace(spec, artifact_root=release)),
             "api_health": "passed",
             "worker_contract": "passed",
             "live_routes_changed": False,

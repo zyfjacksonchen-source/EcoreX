@@ -20,6 +20,7 @@ from ecorex.deployment.cloud_artifact_builder import (  # noqa: E402
     CloudArtifactPipelineError,
     attach_detached_cloud_signature,
     build_linux_cloud_artifact,
+    finalize_operator_waived_unsigned_artifact,
 )
 
 
@@ -37,6 +38,10 @@ def _parser() -> argparse.ArgumentParser:
     attach.add_argument("--handoff-root", type=Path, required=True)
     attach.add_argument("--signature-response", type=Path, required=True)
     attach.add_argument("--release-keyring", type=Path, required=True)
+    waive = commands.add_parser("waive")
+    waive.add_argument("--artifact-root", type=Path, required=True)
+    waive.add_argument("--handoff-root", type=Path, required=True)
+    waive.add_argument("--operator-instruction-sha256", required=True)
     pack = commands.add_parser("pack")
     pack.add_argument("--artifact-root", type=Path, required=True)
     pack.add_argument("--archive", type=Path, required=True)
@@ -142,6 +147,12 @@ def main(argv: list[str] | None = None) -> int:
                 args.handoff_root,
                 args.signature_response,
                 args.release_keyring,
+            )
+        elif args.command == "waive":
+            result = finalize_operator_waived_unsigned_artifact(
+                args.artifact_root,
+                args.handoff_root,
+                operator_instruction_sha256=args.operator_instruction_sha256,
             )
         elif args.command == "pack":
             result = _pack(args.artifact_root, args.archive)
