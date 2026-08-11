@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -55,11 +56,33 @@ def test_public_download_site_uses_real_product_assets_and_dynamic_release_data(
     assert "/e-mate/update/download-index.json" in javascript
     assert "normalizeDownloadIndex" in javascript
     assert "targetFromPlatformSignals" in javascript
+    assert 'summary.textContent = "核对 SHA-256"' in javascript
     assert 'label.textContent = "立即下载"' in javascript
     assert "WEBUI_RELEASE" not in javascript
     for version in ("1.0.0", "2.0.0"):
         assert version not in html
         assert version not in javascript
+
+
+def test_macos_unsigned_install_guide_is_local_accessible_and_safe() -> None:
+    html = (SITE / "index.html").read_text(encoding="utf-8")
+    guide = (SITE / "install-macos.html").read_text(encoding="utf-8")
+
+    assert 'data-mac-install-guide hidden href="./install-macos.html"' in html
+    assert "DMG" in guide
+    assert "应用程序" in guide
+    assert "按住 Control 键点按" in guide
+    assert "仍要打开" in guide
+    assert "先核对下载页标注的 SHA-256" in guide
+    assert 'xattr -dr com.apple.quarantine "/Applications/e-Mate.app"' in guide
+    assert 'open -a "e-Mate"' in guide
+    assert "sudo" not in guide
+    assert "spctl --master-disable" not in guide
+    assert 'data-copy-macos-command aria-label="复制允许打开命令"' in guide
+    references = re.findall(r'(?:src|href)="([^"]+)"', guide)
+    assert not any(
+        value.startswith(("http://", "https://", "//")) for value in references
+    )
 
 
 def test_public_release_routes_hide_channel_but_map_to_channel_storage() -> None:
@@ -93,6 +116,11 @@ def test_public_asset_builder_writes_new_hashes_before_switching_html(
         '<script type="module" src="./site.000000000000.js"></script>\n',
         encoding="utf-8",
     )
+    (site / "install-macos.html").write_text(
+        '<link rel="stylesheet" href="./styles.000000000000.css">\n'
+        '<script type="module" src="./site.000000000000.js"></script>\n',
+        encoding="utf-8",
+    )
 
     command = [
         sys.executable,
@@ -120,6 +148,9 @@ def test_public_asset_builder_writes_new_hashes_before_switching_html(
     html = (site / "index.html").read_text(encoding="utf-8")
     assert f'./{script_name}' in html
     assert f'./{style_name}' in html
+    guide = (site / "install-macos.html").read_text(encoding="utf-8")
+    assert f'./{script_name}' in guide
+    assert f'./{style_name}' in guide
 
 
 def test_public_browser_download_index_contract_fails_closed() -> None:
@@ -173,6 +204,9 @@ assert.equal(contract.targetFromPlatformSignals({ source: "MacIntel", architectu
 assert.equal(contract.targetFromPlatformSignals({ source: "MacIntel" }), null);
 assert.equal(contract.targetFromPlatformSignals({ source: "iPhone", architecture: "arm64" }), null);
 assert.equal(contract.targetFromPlatformSignals({ source: "iPad", renderer: "Apple M2" }), null);
+assert.equal(contract.isMacDesktop({ source: "MacIntel Mozilla/5.0 (Macintosh)" }), true);
+assert.equal(contract.isMacDesktop({ source: "Win32 Mozilla/5.0 (Windows NT 10.0)" }), false);
+assert.equal(contract.isMacDesktop({ source: "iPhone Mac OS X" }), false);
 assert.deepEqual(contract.indexSources({ hostname: "127.0.0.1", pathname: "/" }), ["./download-index.json"]);
 assert.deepEqual(contract.indexSources({ hostname: "mvdcm.ecoremedia.net", pathname: "/e-mate/" }), ["/e-mate/update/download-index.json"]);
 assert.deepEqual(contract.indexSources({ hostname: "dl.ecoremedia.net", pathname: "/ecorex-agent/" }), ["https://mvdcm.ecoremedia.net/e-mate/update/download-index.json"]);
