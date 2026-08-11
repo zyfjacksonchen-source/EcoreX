@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from importlib import metadata
 import json
 from pathlib import Path
 import runpy
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -224,32 +226,22 @@ def test_manual_webui_macos_core_keeps_both_runtime_entries_executable() -> None
     assert builder["_core_executable_paths"]("windows") == ("bin/ecorex.exe",)
 
 
-def test_manual_webui_channel_overlay_keeps_fastapi_multipart_authority() -> None:
+def test_manual_webui_runtime_overlay_tracks_the_complete_active_lock() -> None:
     builder = _builder()
 
-    assert builder["_canonical_distribution_name"](
-        Path("web.py-0.61.dist-info")
-    ) == "web-py"
-    assert "multipart" not in builder["CHANNEL_RUNTIME_PACKAGES"]
-    assert "multipart" not in builder["CHANNEL_RUNTIME_DISTRIBUTIONS"]
-    assert {
-        "aiohappyeyeballs",
-        "aiohttp",
-        "dingtalk-stream",
-        "discord-py",
-        "lark-oapi",
-        "python-telegram-bot",
-        "slack-bolt",
-        "web-py",
-        "websocket-client",
-        "wechatpy",
-    } <= builder["CHANNEL_RUNTIME_DISTRIBUTIONS"]
+    versions = builder["active_lock_versions"](
+        ROOT / "requirements" / "locks" / "runtime.lock"
+    )
+    assert "regex" in versions
+    assert "python-multipart" in versions
+    assert len(versions) >= 55
 
 
 def test_manual_webui_product_overlay_contains_the_cow_runtime_spine(
     tmp_path: Path,
 ) -> None:
     builder = _builder()
+    original_run = builder["_run"]
     core = tmp_path / "core"
     site_packages = builder["_runtime_site_packages"](core, "macos")
     archive = tmp_path / "python311.zip"
@@ -259,6 +251,32 @@ def test_manual_webui_product_overlay_contains_the_cow_runtime_spine(
         member.external_attr = (0o100644) << 16
         output.writestr(member, b"stale = True\n")
 
+    def fake_run(command, **kwargs):  # noqa: ANN001
+        if tuple(command[:3]) == (sys.executable, "-m", "pip"):
+            staging = Path(command[command.index("--target") + 1])
+            versions = builder["active_lock_versions"](
+                ROOT / "requirements" / "locks" / "runtime.lock"
+            )
+            for name, version in versions.items():
+                info = staging / f"{name.replace('-', '_')}-{version}.dist-info"
+                info.mkdir(parents=True)
+                (info / "METADATA").write_text(
+                    f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n",
+                    encoding="utf-8",
+                )
+            regex_package = Path(metadata.distribution("regex").locate_file("regex"))
+            shutil.copytree(regex_package, staging / "regex")
+            return b""
+        return original_run(command, **kwargs)
+
+    builder["_run"] = fake_run
+    builder["_install_locked_runtime_overlay"](
+        ROOT,
+        core,
+        tmp_path,
+        platform="macos",
+        architecture="arm64",
+    )
     builder["_install_cow_runtime_overlay"](
         ROOT,
         core,
@@ -281,10 +299,14 @@ def test_manual_webui_product_overlay_contains_the_cow_runtime_spine(
             "import sys; "
             f"sys.path.insert(0, {str(archive)!r}); "
             f"sys.path.insert(0, {str(site_packages)!r}); "
+            "import regex; "
+            "from agent.tools.search_files.search_files import SearchFiles; "
             "from agent.tools.tool_manager import ToolManager; "
             "from ecorex.runtime.worker import AgentTurnWorker; "
+            "assert SearchFiles.__module__ == 'agent.tools.search_files.search_files'; "
             "assert ToolManager.__module__ == 'agent.tools.tool_manager'; "
             "assert AgentTurnWorker.__module__ == 'ecorex.runtime.worker'; "
+            f"assert regex.__file__.startswith({str(site_packages)!r}); "
             f"assert sys.modules[ToolManager.__module__].__file__.startswith({str(site_packages)!r})",
         ),
         cwd=tmp_path,

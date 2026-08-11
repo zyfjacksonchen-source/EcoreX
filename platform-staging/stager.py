@@ -66,6 +66,7 @@ from ecorex.release.dependency_lock import (  # noqa: E402
     DependencyLockError,
     load_dependency_lock_manifest,
 )
+from ecorex.release.build_dependency_lock import active_lock_versions  # noqa: E402
 from ecorex.release.web_bundle import scan_web_bundle  # noqa: E402
 from ecorex.release.secret_scan import detect_secret  # noqa: E402
 from ecorex.server.config import ProductRuntimeConfig  # noqa: E402
@@ -4386,46 +4387,10 @@ def _locked_inventory_evidence(
 
 
 def _active_lock_versions(path: Path) -> dict[str, str]:
-    entries: list[str] = []
-    pending = ""
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeError):
+        return active_lock_versions(path)
+    except DependencyLockError:
         raise StageError("python_dependency_lock_invalid") from None
-    for raw in lines:
-        stripped = raw.strip()
-        if not stripped or (stripped.startswith("#") and not pending):
-            continue
-        continued = stripped.endswith("\\")
-        if continued:
-            stripped = stripped[:-1].strip()
-        pending = f"{pending} {stripped}".strip()
-        if not continued:
-            entries.append(pending)
-            pending = ""
-    if pending or not entries:
-        raise StageError("python_dependency_lock_invalid")
-    versions: dict[str, str] = {}
-    for entry in entries:
-        try:
-            requirement = Requirement(entry.split(" --hash=", 1)[0].strip())
-            if requirement.marker is not None and not requirement.marker.evaluate(
-                {"extra": ""}
-            ):
-                continue
-        except (InvalidRequirement, ValueError):
-            raise StageError("python_dependency_lock_invalid") from None
-        specifiers = tuple(requirement.specifier)
-        name = canonicalize_name(requirement.name)
-        if (
-            requirement.url is not None
-            or len(specifiers) != 1
-            or specifiers[0].operator != "=="
-            or name in versions
-        ):
-            raise StageError("python_dependency_lock_invalid")
-        versions[name] = specifiers[0].version
-    return versions
 
 
 _RUNTIME_DISTRIBUTIONS = tuple(

@@ -54,6 +54,8 @@ from ecorex.release import (  # noqa: E402
     ReleaseBuilder,
     WebBundleBuildInput,
 )
+from ecorex.release.build_dependency_lock import active_lock_versions  # noqa: E402
+from ecorex.release.dependency_lock import DependencyLockError  # noqa: E402
 from ecorex.release.candidate import PACK_SERVICES, PACK_TOOLS  # noqa: E402
 from ecorex.release.dependency_lock import load_dependency_lock_manifest  # noqa: E402
 from ecorex.release.windows_webui import _verify_webui_contract  # noqa: E402
@@ -97,65 +99,6 @@ PURE_RUNTIME_OVERLAYS = {
     "requests-toolbelt": ("requests_toolbelt", "1.0.0"),
     "urllib3": ("urllib3", "2.7.0"),
 }
-CHANNEL_RUNTIME_PACKAGES = (
-    "aiohappyeyeballs",
-    "aiohttp",
-    "aiosignal",
-    "attr",
-    "attrs",
-    "cheroot",
-    "Crypto",
-    "dateutil",
-    "dingtalk_stream",
-    "discord",
-    "frozenlist",
-    "jaraco",
-    "lark_oapi",
-    "more_itertools",
-    "multidict",
-    "optionaldict",
-    "propcache",
-    "six.py",
-    "slack_bolt",
-    "slack_sdk",
-    "telegram",
-    "web",
-    "websocket",
-    "wechatpy",
-    "xmltodict.py",
-    "yarl",
-)
-CHANNEL_RUNTIME_DISTRIBUTIONS = frozenset(
-    {
-        "aiohappyeyeballs",
-        "aiohttp",
-        "aiosignal",
-        "attrs",
-        "cheroot",
-        "dingtalk-stream",
-        "discord-py",
-        "frozenlist",
-        "jaraco-functools",
-        "lark-oapi",
-        "more-itertools",
-        "multidict",
-        "optionaldict",
-        "propcache",
-        "pycryptodome",
-        "python-dateutil",
-        "python-telegram-bot",
-        "six",
-        "slack-bolt",
-        "slack-sdk",
-        "web-py",
-        "websocket-client",
-        "wechatpy",
-        "xmltodict",
-        "yarl",
-    }
-)
-
-
 class ManualWebUIBuildError(RuntimeError):
     pass
 
@@ -485,11 +428,7 @@ def _pure_runtime_overlay_files() -> tuple[tuple[str, Path], ...]:
     return tuple(files)
 
 
-def _canonical_distribution_name(dist_info: Path) -> str:
-    return re.sub(r"[-_.]+", "-", dist_info.name.split("-", 1)[0]).casefold()
-
-
-def _install_channel_runtime_overlay(
+def _install_locked_runtime_overlay(
     source: Path,
     core: Path,
     root: Path,
@@ -503,6 +442,15 @@ def _install_channel_runtime_overlay(
         ("windows", "x64"): "win_amd64",
     }.get((platform, architecture))
     if target_platform is None:
+        _fail("manual_webui_runtime_overlay_invalid")
+    try:
+        lock_set = load_dependency_lock_manifest(
+            source / "requirements" / "locks" / "manifest.json"
+        )
+        profile = lock_set.profiles["runtime"]
+        runtime_lock = lock_set.path.parent / profile["lock"]
+        expected = active_lock_versions(runtime_lock)
+    except (DependencyLockError, KeyError):
         _fail("manual_webui_runtime_overlay_invalid")
     with tempfile.TemporaryDirectory(
         dir=root, prefix=f".{platform}-{architecture}-runtime-overlay-"
@@ -529,29 +477,29 @@ def _install_channel_runtime_overlay(
                 "--target",
                 str(staging),
                 "-r",
-                str(source / "requirements" / "locks" / "runtime.lock"),
+                str(runtime_lock),
             ),
             cwd=source,
             timeout=300,
             code="manual_webui_runtime_overlay_install_failed",
         )
         destination = _runtime_site_packages(core, platform)
-        selected = [staging / name for name in CHANNEL_RUNTIME_PACKAGES]
-        if any(not path.exists() for path in selected):
-            _fail("manual_webui_runtime_overlay_invalid")
-        for info in staging.glob("*.dist-info"):
-            project = _canonical_distribution_name(info)
-            if project in CHANNEL_RUNTIME_DISTRIBUTIONS:
-                selected.append(info)
-        observed = {
-            _canonical_distribution_name(path)
-            for path in selected
-            if path.name.endswith(".dist-info")
-        }
-        if observed != CHANNEL_RUNTIME_DISTRIBUTIONS:
+        observed: dict[str, str] = {}
+        for distribution in metadata.distributions(path=[str(staging)]):
+            name = re.sub(
+                r"[-_.]+",
+                "-",
+                str(distribution.metadata.get("Name") or ""),
+            ).casefold()
+            if not name or name in observed:
+                _fail("manual_webui_runtime_overlay_invalid")
+            observed[name] = distribution.version
+        if observed != expected:
             _fail("manual_webui_runtime_overlay_invalid")
         destination.mkdir(parents=True, exist_ok=True)
-        for source_path in selected:
+        for source_path in sorted(staging.iterdir(), key=lambda path: path.name.casefold()):
+            if source_path.name == "bin" or source_path.name == "__pycache__":
+                continue
             target = destination / source_path.name
             if target.is_dir():
                 shutil.rmtree(target)
@@ -745,7 +693,7 @@ def _prepare_stages(
         imports = tuple(core.rglob("python311.zip"))
         if len(imports) != 1:
             _fail("manual_webui_pack_python_invalid")
-        _install_channel_runtime_overlay(
+        _install_locked_runtime_overlay(
             source,
             core,
             target_root,
