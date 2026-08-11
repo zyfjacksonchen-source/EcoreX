@@ -6,7 +6,7 @@ function source(name: string): string {
   return readFileSync(new URL(name, import.meta.url), "utf8");
 }
 
-test("settings keep CowAgent local configuration semantics", () => {
+test("settings keep upstream local configuration semantics", () => {
   const app = source("../AppV1.tsx");
   const client = source("../api/runtimeClient.ts");
   const settings = source("./SettingsDialog.tsx");
