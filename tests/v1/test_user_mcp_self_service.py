@@ -490,6 +490,7 @@ def test_runtime_product_mount_enforces_existing_auth_origin_and_csrf(tmp_path) 
             session_reload_requester=lambda reason: reloads.append(reason) or True,
         )
     )
+    app.state.cow_mcp_service.manager.refresh_mcp_if_changed = lambda: None
     payload = {
         "display_name": "Mounted MCP",
         "endpoint": "https://mcp.example.com/v1",
