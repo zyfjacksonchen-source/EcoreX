@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import hashlib
@@ -285,8 +286,11 @@ class ManagedImageOrchestrationClient:
         self.max_poll_seconds = max_poll_seconds
         self.max_json_bytes = max_json_bytes
         self.max_result_bytes = max_result_bytes
-        self._binding: tuple[str, int, str, int] | None = None
+        self._account_id: str | None = None
         self._binding_lock = threading.Lock()
+        self._operation_binding: ContextVar[
+            tuple[str, int, str, int] | None
+        ] = ContextVar("managed_image_operation_binding", default=None)
         self._owns_client = client is None
         self.client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10, read=60, write=120, pool=10),
@@ -312,10 +316,13 @@ class ManagedImageOrchestrationClient:
             snapshot.revision,
         )
         with self._binding_lock:
-            if self._binding is None:
-                self._binding = binding
-            elif self._binding != binding:
+            if self._account_id is None:
+                self._account_id = snapshot.account_id
+            elif self._account_id != snapshot.account_id:
                 raise ManagedImageClientError("managed_image_session_changed", retryable=False)
+        expected = self._operation_binding.get()
+        if expected is not None and expected != binding:
+            raise ManagedImageClientError("managed_image_session_changed", retryable=False)
         if (
             not isinstance(token, str)
             or not 24 <= len(token) <= 4096
@@ -466,27 +473,35 @@ class ManagedImageOrchestrationClient:
         *,
         inputs: tuple[ManagedImageInputAsset, ...] = (),
     ) -> ManagedImageDownloadedResult:
-        snapshot, _binding, _token = self._session()
-        record = await asyncio.to_thread(
-            self.journal.get, snapshot.account_id, request.client_request_id
-        )
-        if record is not None:
-            if record.request_fingerprint != request.fingerprint():
-                raise ManagedImageClientError("managed_image_journal_conflict", retryable=False)
-            recovery_id = "imgrecover_" + hashlib.sha256(
-                f"{snapshot.account_id}\0{request.client_request_id}".encode("utf-8")
-            ).hexdigest()
-            # A known cloud identity is always recovered before any submit.
-            job = await self.recover(record.job_id, recovery_request_id=recovery_id)
-        else:
-            by_digest = {asset.sha256: asset for asset in inputs}
-            if set(by_digest) != set(request.input_sha256):
-                raise ManagedImageClientError("managed_image_inputs_incomplete", retryable=False)
-            for digest in request.input_sha256:
-                await self.upload_input(by_digest[digest])
-            job, _created = await self.submit(request)
-        completed = await self.poll(job, timeout_seconds=request.deadline_seconds)
-        return await self.download_result(completed)
+        snapshot, binding, _token = self._session()
+        operation = self._operation_binding.set(binding)
+        try:
+            record = await asyncio.to_thread(
+                self.journal.get, snapshot.account_id, request.client_request_id
+            )
+            if record is not None:
+                if record.request_fingerprint != request.fingerprint():
+                    raise ManagedImageClientError(
+                        "managed_image_journal_conflict", retryable=False
+                    )
+                recovery_id = "imgrecover_" + hashlib.sha256(
+                    f"{snapshot.account_id}\0{request.client_request_id}".encode("utf-8")
+                ).hexdigest()
+                # A known cloud identity is always recovered before any submit.
+                job = await self.recover(record.job_id, recovery_request_id=recovery_id)
+            else:
+                by_digest = {asset.sha256: asset for asset in inputs}
+                if set(by_digest) != set(request.input_sha256):
+                    raise ManagedImageClientError(
+                        "managed_image_inputs_incomplete", retryable=False
+                    )
+                for digest in request.input_sha256:
+                    await self.upload_input(by_digest[digest])
+                job, _created = await self.submit(request)
+            completed = await self.poll(job, timeout_seconds=request.deadline_seconds)
+            return await self.download_result(completed)
+        finally:
+            self._operation_binding.reset(operation)
 
     async def recover_result(
         self,
@@ -494,16 +509,22 @@ class ManagedImageOrchestrationClient:
         *,
         timeout_seconds: float | None = None,
     ) -> ManagedImageDownloadedResult | None:
-        snapshot, _binding, _token = self._session()
-        record = await asyncio.to_thread(self.journal.get, snapshot.account_id, client_request_id)
-        if record is None:
-            return None
-        recovery_id = "imgrecover_" + hashlib.sha256(
-            f"{snapshot.account_id}\0{client_request_id}".encode("utf-8")
-        ).hexdigest()
-        job = await self.recover(record.job_id, recovery_request_id=recovery_id)
-        completed = await self.poll(job, timeout_seconds=timeout_seconds)
-        return await self.download_result(completed)
+        snapshot, binding, _token = self._session()
+        operation = self._operation_binding.set(binding)
+        try:
+            record = await asyncio.to_thread(
+                self.journal.get, snapshot.account_id, client_request_id
+            )
+            if record is None:
+                return None
+            recovery_id = "imgrecover_" + hashlib.sha256(
+                f"{snapshot.account_id}\0{client_request_id}".encode("utf-8")
+            ).hexdigest()
+            job = await self.recover(record.job_id, recovery_request_id=recovery_id)
+            completed = await self.poll(job, timeout_seconds=timeout_seconds)
+            return await self.download_result(completed)
+        finally:
+            self._operation_binding.reset(operation)
 
     async def _request(
         self,
