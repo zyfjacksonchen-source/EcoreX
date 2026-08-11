@@ -252,21 +252,18 @@ class BackendManager extends EventEmitter {
     });
     child.once("exit", (code) => {
       if (this.child === child) this.child = null;
-      if (code !== 0) startupFailure = new Error(`e-Mate Bootstrap stopped during startup (${code ?? "terminated"}).`);
+      startupFailure = new Error(`e-Mate Bootstrap stopped during startup (${code ?? "terminated"}).`);
       this.emit("exit", code);
     });
 
-    const deadline = Date.now() + 5 * 60_000;
-    while (Date.now() < deadline) {
+    while (!startupFailure) {
       if (await runtimeResponds(this.port, this.dataDir)) {
         this.emit("ready", this.origin);
         return this.origin;
       }
-      if (startupFailure) throw startupFailure;
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
-    this.stop();
-    throw new Error("e-Mate Runtime did not become ready within 5 minutes.");
+    throw startupFailure;
   }
 
   async restart() {

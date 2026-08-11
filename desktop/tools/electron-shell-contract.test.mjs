@@ -64,6 +64,10 @@ test("desktop loads the existing loopback Runtime and never packages a second re
   assert.match(backend, /runtime-owner\.json/);
   assert.match(backend, /x-ecorex-runtime-owner/);
   assert.match(backend, /ECOREX_BOOTSTRAPPED === "1"/);
+  assert.match(backend, /startupFailure = new Error\(`e-Mate Bootstrap stopped during startup/);
+  assert.doesNotMatch(backend, /if \(code !== 0\) startupFailure/);
+  assert.match(backend, /while \(!startupFailure\)/);
+  assert.doesNotMatch(backend, /Date\.now\(\) \+ 5 \* 60_000/);
   assert.doesNotMatch(backend, /exited before the Runtime became ready/);
   assert.match(staging, /ecorex-bootstrap/);
   assert.match(staging, /release-manifest\.json/);

@@ -14,6 +14,18 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_cow_logger_stays_out_of_the_signed_runtime_payload(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from common.log import _runtime_log_path
+
+    monkeypatch.setenv("EMATE_DATA_DIR", str(tmp_path))
+    assert _runtime_log_path() == tmp_path / "run.log"
+
+    monkeypatch.delenv("EMATE_DATA_DIR")
+    assert _runtime_log_path() == Path("run.log")
+
+
 def test_platform_python_closure_imports_the_real_cow_spine(
     tmp_path: Path, monkeypatch,
 ) -> None:
