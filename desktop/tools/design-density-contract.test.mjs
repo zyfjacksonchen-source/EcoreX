@@ -171,6 +171,11 @@ test("Codex-density typography is owned by the system UI and code tokens", () =>
   );
 });
 
+test("session summaries stay left aligned", () => {
+  const taskRows = rule(layout, ".ex-task-row,\n.ex-sidebar-action");
+  assert.match(taskRows, /text-align:\s*left;/);
+});
+
 test("ordinary controls are frameless until hover, focus, or active state", () => {
   const idle = rule(primitives, ".ex-button,\n.ex-icon-button,");
   assert.match(idle, /border:\s*1px solid var\(--control-idle-border\);/);
