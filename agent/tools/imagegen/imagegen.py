@@ -8,7 +8,7 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextvars import ContextVar
+from contextvars import ContextVar, copy_context
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -783,7 +783,10 @@ class ImageGenTool(BaseTool):
                     stop_after_cancel = True
         else:
             with ThreadPoolExecutor(max_workers=max_parallel, thread_name_prefix="imagegen-batch") as executor:
-                futures = {executor.submit(run_one, index, raw_task): index for index, raw_task in enumerate(tasks)}
+                futures = {
+                    executor.submit(copy_context().run, run_one, index, raw_task): index
+                    for index, raw_task in enumerate(tasks)
+                }
                 next_emit_index = 0
                 for future in as_completed(futures):
                     index = futures[future]

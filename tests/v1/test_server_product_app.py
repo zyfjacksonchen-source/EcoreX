@@ -15,7 +15,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
 from ecorex.capabilities import (
-    Exposure,
     SandboxLevel,
     ToolExecutionScope,
     ToolInvocationContext,
@@ -290,6 +289,8 @@ def _installed_managed_session(
 
 
 def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
+    from agent.tools.scheduler import integration as scheduler_integration
+
     signed = _write_signed_bundle(tmp_path)
     secrets = iter(
         [
@@ -301,8 +302,18 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
         _settings(tmp_path, signed, secret_factory=lambda _bytes: next(secrets))
     )
     capability_service = app.state.runtime_composition.capability_service
-    assert set(capability_service.handlers) == {
+    handlers = set(capability_service.handlers)
+    assert {
         "read",
+        "write",
+        "edit",
+        "ls",
+        "search_files",
+        "bash",
+        "memory_search",
+        "memory_get",
+        "scheduler",
+        "send",
         "skill_search",
         "skill_read",
         "skill_run",
@@ -315,7 +326,16 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
         "connector_write",
         "artifact_read",
         "input_attachment_read",
-    }
+    } <= handlers
+    assert handlers.isdisjoint(
+        {"ecorex_cli", "host_diagnostics", "optional_abilities", "agent_capability"}
+    )
+    scheduler = capability_service.handlers["scheduler"]
+    if app.state.scheduler_service is None:
+        assert scheduler_integration.get_scheduler_service() is None
+    else:
+        assert scheduler.task_store is scheduler_integration.get_task_store()
+        assert app.state.scheduler_service is scheduler_integration.get_scheduler_service()
     connector_runtime = app.state.runtime_composition.connector_agent_runtime
     artifact_runtime = app.state.runtime_composition.artifact_read_runtime
     input_attachment_runtime = (
@@ -338,24 +358,17 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
     )
     assert app.state.runtime_composition.availability.installed_packs == frozenset()
     assert app.state.runtime_composition.availability.disabled_tools == {
-        "cdp": "verified_handler_not_installed",
-        "fetch": "verified_handler_not_installed",
+        "browser": "verified_handler_not_installed",
         "imagegen": "verified_handler_not_installed",
         "ocr": "input_attachment_ocr_runtime_not_bound",
-        "shell": "verified_handler_not_installed",
         "vision": "verified_handler_not_installed",
+        "web_fetch": "verified_handler_not_installed",
+        "web_search": "verified_handler_not_installed",
     }
     specs = capability_service.registry.all()
-    assert len(specs) == 19
-    handlers = set(capability_service.handlers)
-    pack_bound = {spec.tool_id for spec in specs if spec.required_packs}
-    assert {spec.tool_id for spec in specs} == handlers | pack_bound
-    for spec in specs:
-        if spec.default_exposure is Exposure.DIRECT:
-            assert spec.tool_id in handlers
-            assert spec.tool_id not in (
-                app.state.runtime_composition.availability.disabled_tools
-            )
+    spec_ids = {spec.tool_id for spec in specs}
+    assert len(specs) == len(spec_ids)
+    assert handlers <= spec_ids
     client = TestClient(app, base_url=ORIGIN)
 
     index = client.get("/")

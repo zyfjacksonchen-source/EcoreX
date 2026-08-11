@@ -5,8 +5,9 @@ import os
 import threading
 import time
 import uuid
+from contextvars import ContextVar, copy_context
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 from agent.protocol.cancel import AgentCancelledError, get_cancel_registry
 from agent.tools.base_tool import BaseTool, ToolResult
@@ -26,6 +27,19 @@ ROLES = {
     "explorer": "Research-oriented child agent for investigation and options.",
 }
 _LOCK = threading.RLock()
+_MANAGED_REPLY: ContextVar[
+    Callable[[str, Any, threading.Event | None], str] | None
+] = ContextVar("cow_managed_subagent_reply", default=None)
+
+
+def bind_managed_subagent_reply(
+    reply: Callable[[str, Any, threading.Event | None], str],
+):
+    return _MANAGED_REPLY.set(reply)
+
+
+def reset_managed_subagent_reply(token: Any) -> None:
+    _MANAGED_REPLY.reset(token)
 
 
 def _workspace_for(tool: BaseTool) -> Path:
@@ -388,7 +402,6 @@ def _run_child(workspace: Path, task: Dict[str, Any]) -> None:
             return
         if current_status in TERMINAL_STATUSES:
             return
-        from bridge.bridge import Bridge
         from bridge.context import Context, ContextType
 
         _update_task(workspace, task_id, {"status": "waiting_model", "lastHeartbeatAt": int(time.time())})
@@ -401,7 +414,15 @@ def _run_child(workspace: Path, task: Dict[str, Any]) -> None:
             "subagent_name": task.get("name", ""),
             "subagent_expected_output": task.get("expectedOutput", ""),
         })
-        result = Bridge().get_agent_bridge().agent_reply(task["prompt"], context=context, clear_history=True)
+        managed_reply = _MANAGED_REPLY.get()
+        if managed_reply is None:
+            from bridge.bridge import Bridge
+
+            result = Bridge().get_agent_bridge().agent_reply(
+                task["prompt"], context=context, clear_history=True
+            )
+        else:
+            result = managed_reply(task["prompt"], context, cancel_event)
         current = _task_snapshot(workspace, task_id)
         current_status = str(current.get("status") or "")
         if current_status in {"cancelled", "cancelling"} or _cancel_requested():
@@ -556,7 +577,13 @@ class SubagentTool(BaseTool):
             })
         _mark_subagent_run_created(task)
         try:
-            threading.Thread(target=_run_child, args=(workspace, task), daemon=True, name=f"subagent-{task_id}").start()
+            context = copy_context()
+            threading.Thread(
+                target=context.run,
+                args=(_run_child, workspace, task),
+                daemon=True,
+                name=f"subagent-{task_id}",
+            ).start()
         except Exception as exc:
             task = _update_task(workspace, task_id, {
                 "status": "failed",

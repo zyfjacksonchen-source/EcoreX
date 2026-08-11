@@ -250,7 +250,32 @@ from .composition import (
     project_connector_catalog,
     project_model_catalog,
 )
-from .cow_scheduler import CowSchedulerService, CowSchedulerTool
+from agent.tools.scheduler.integration import bind_scheduler_runtime
+from agent.tools.scheduler.scheduler_service import SchedulerService
+from agent.tools.scheduler.scheduler_tool import SchedulerTool
+
+
+class _SchedulerLifecycle:
+    """Run Cow's single threaded SchedulerService inside the async Runtime."""
+
+    def __init__(self, service: SchedulerService, execute) -> None:
+        self.service = service
+        self.execute = execute
+        self.loop: asyncio.AbstractEventLoop | None = None
+
+    async def start(self) -> None:
+        self.loop = asyncio.get_running_loop()
+        await asyncio.to_thread(self.service.start)
+
+    async def stop(self) -> None:
+        await asyncio.to_thread(self.service.stop)
+        self.loop = None
+
+    def execute_from_scheduler(self, task: Mapping[str, Any]) -> bool:
+        if self.loop is None:
+            return False
+        future = asyncio.run_coroutine_threadsafe(self.execute(task), self.loop)
+        return bool(future.result())
 
 
 @dataclass(slots=True)
@@ -2227,13 +2252,21 @@ def create_app(
     )
     app.state.cow_channel_service = cow_channel_service
     scheduler_service = None
+    scheduler_lifecycle = None
     scheduler_handler = settings.capability_handlers.get("scheduler")
-    if isinstance(scheduler_handler, CowSchedulerTool) and worker_supervisor is not None:
+    if isinstance(scheduler_handler, SchedulerTool) and worker_supervisor is not None:
 
         async def execute_scheduled_task(task: Mapping[str, Any]) -> bool:
             action = dict(task.get("action") or {})
-            thread_id = str(action.get("thread_id") or "")
-            content = str(action.get("content") or "").strip()
+            thread_id = str(
+                action.get("thread_id")
+                or action.get("notify_session_id")
+                or action.get("receiver")
+                or ""
+            )
+            content = str(
+                action.get("content") or action.get("task_description") or ""
+            ).strip()
             if not thread_id or not content:
                 return False
             thread = await asyncio.to_thread(kernel.get_thread, thread_id)
@@ -2315,10 +2348,16 @@ def create_app(
                 asyncio.create_task(deliver_when_ready())
             return True
 
-        scheduler_service = CowSchedulerService(
-            scheduler_handler.store,
+        scheduler_service = SchedulerService(
+            scheduler_handler.task_store,
+            lambda _task: False,
+        )
+        scheduler_lifecycle = _SchedulerLifecycle(
+            scheduler_service,
             execute_scheduled_task,
         )
+        scheduler_service.execute_callback = scheduler_lifecycle.execute_from_scheduler
+        bind_scheduler_runtime(scheduler_handler.task_store, scheduler_service)
     app.state.scheduler_service = scheduler_service
     gateway_lifecycle = (
         _AsyncResourceCloser(settings.model_gateway)
@@ -2887,7 +2926,7 @@ def create_app(
             channel_self_service if settings.channel_lifecycle_adapters else None,
         ),
         (1, "cow_channel", cow_channel_service),
-        (1, "scheduler", scheduler_service),
+        (1, "scheduler", scheduler_lifecycle),
         (4, "model_gateway", gateway_lifecycle),
         (4, "image_gateway", image_client_lifecycle),
         (1, "retouch_worker", retouch_supervisor),

@@ -526,13 +526,6 @@ class AgentInitializer:
         
         for tool_name in tool_manager.tool_classes.keys():
             try:
-                # Skip web_search if no API key is available
-                if tool_name == "web_search":
-                    from agent.tools.web_search.web_search import WebSearch
-                    if not WebSearch.is_available():
-                        logger.debug("[AgentInitializer] WebSearch skipped - no search provider configured")
-                        continue
-
                 # Skip evolution_undo when self-evolution is disabled: with no
                 # evolution there is nothing to roll back, so the tool is dead weight.
                 if tool_name == "evolution_undo":
@@ -554,7 +547,7 @@ class AgentInitializer:
                     # config.json's `tools.<name>` section) instead of replacing
                     # it, otherwise per-tool user configs (e.g. browser.cdp_endpoint)
                     # would be silently dropped.
-                    if tool_name in ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls', 'web_fetch', 'send', 'browser', 'ocr', 'ecorex_cli', 'feishu_cli', 'tongxin_cli', 'host_diagnostics', 'office_documents', 'office_pdf', 'office_presentations', 'office_spreadsheets']:
+                    if tool_name in ['read', 'write', 'edit', 'bash', 'search_files', 'ls', 'web_fetch', 'send', 'browser', 'ocr', 'feishu_cli', 'tongxin_cli', 'office_documents', 'office_pdf', 'office_presentations', 'office_spreadsheets']:
                         merged_config = dict(getattr(tool, 'config', None) or {})
                         merged_config.update(file_config)
                         apply_config = getattr(tool, "apply_config", None)
@@ -600,7 +593,20 @@ class AgentInitializer:
         """
         from config import conf
 
-        if not conf().get("scheduler_enabled", False):
+        from agent.tools.scheduler.integration import (
+            get_scheduler_service,
+            get_task_store,
+        )
+
+        task_store = get_task_store()
+        scheduler_service = get_scheduler_service()
+        if task_store is not None and scheduler_service is not None:
+            self.agent_bridge.scheduler_initialized = True
+
+        if (
+            not self.agent_bridge.scheduler_initialized
+            and not conf().get("scheduler_enabled", False)
+        ):
             return
 
         if not self.agent_bridge.scheduler_initialized:
@@ -618,7 +624,6 @@ class AgentInitializer:
         # Inject scheduler dependencies
         if self.agent_bridge.scheduler_initialized:
             try:
-                from agent.tools.scheduler.integration import get_task_store, get_scheduler_service
                 from agent.tools import SchedulerTool
                 from config import conf
                 

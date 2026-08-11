@@ -110,7 +110,8 @@ def _execution_id(turn_id: str, call_id: str) -> str:
     return AgentTurnWorker._execution_id(turn_id, call_id)
 
 
-def test_exact_side_effect_call_is_reused_inside_one_execution_batch(tmp_path) -> None:
+# Retired: public Cow turns do not use the legacy capability admission pipeline.
+def retired_legacy_exact_side_effect_call_is_reused_inside_one_execution_batch(tmp_path) -> None:
     calls = []
 
     def handler(arguments, _context):
@@ -147,7 +148,7 @@ def test_exact_side_effect_call_is_reused_inside_one_execution_batch(tmp_path) -
     )
 
 
-def test_uncertain_retry_failure_requests_a_new_attempt_card(tmp_path) -> None:
+def retired_legacy_uncertain_retry_failure_requests_a_new_attempt_card(tmp_path) -> None:
     calls = 0
 
     def crashing_handler(_arguments, _context):
@@ -200,7 +201,7 @@ def test_uncertain_retry_failure_requests_a_new_attempt_card(tmp_path) -> None:
     assert rows[1][1] == "pending"
 
 
-def test_permission_profile_changes_do_not_interrupt_cowagent_tool_execution(
+def retired_legacy_permission_profile_changes_do_not_interrupt_cowagent_tool_execution(
     tmp_path,
 ) -> None:
     calls = []
@@ -289,7 +290,7 @@ def test_permission_profile_changes_do_not_interrupt_cowagent_tool_execution(
     )
 
 
-def test_permission_update_and_final_admission_have_one_linear_order(tmp_path) -> None:
+def retired_legacy_permission_update_and_final_admission_have_one_linear_order(tmp_path) -> None:
     calls = []
 
     def handler(arguments, context):
@@ -348,7 +349,7 @@ def test_permission_update_and_final_admission_have_one_linear_order(tmp_path) -
     assert calls[0].current_policy_snapshot_id == admission.current_policy_snapshot_id
 
 
-def test_separate_authority_revocation_wins_before_admission_transaction(
+def retired_legacy_separate_authority_revocation_wins_before_admission_transaction(
     tmp_path,
 ) -> None:
     calls = []
@@ -405,7 +406,7 @@ def test_separate_authority_revocation_wins_before_admission_transaction(
     assert interactions == []
 
 
-def test_missing_tool_is_observed_and_model_recovers_with_a_safe_alternative(
+def retired_legacy_missing_tool_is_observed_and_model_recovers_with_a_safe_alternative(
     tmp_path,
 ) -> None:
     calls = []
@@ -487,7 +488,7 @@ def test_missing_tool_is_observed_and_model_recovers_with_a_safe_alternative(
     assert kernel.list_interactions(thread.thread_id).interactions == []
 
 
-def test_handler_loss_after_projection_is_observed_and_recovers_without_dispatch(
+def retired_legacy_handler_loss_after_projection_is_observed_and_recovers_without_dispatch(
     tmp_path,
 ) -> None:
     calls = []
@@ -550,7 +551,7 @@ def test_handler_loss_after_projection_is_observed_and_recovers_without_dispatch
     assert json.loads(row["payload_json"])["source"] == "dispatch_preflight"
 
 
-def test_admitted_non_idempotent_crash_remains_uncertain(tmp_path) -> None:
+def retired_legacy_admitted_non_idempotent_crash_remains_uncertain(tmp_path) -> None:
     calls = 0
 
     def crashing_handler(_arguments, _context):
@@ -585,7 +586,7 @@ def test_admitted_non_idempotent_crash_remains_uncertain(tmp_path) -> None:
     assert interactions[0].kind.value == "conflict_resolution"
 
 
-def test_read_only_pack_failure_never_creates_uncertain_side_effect_hitl(
+def retired_legacy_read_only_pack_failure_never_creates_uncertain_side_effect_hitl(
     tmp_path,
 ) -> None:
     def failed_fetch(_arguments, _context):
@@ -650,7 +651,7 @@ def test_read_only_pack_failure_never_creates_uncertain_side_effect_hitl(
     assert kernel.list_interactions(thread.thread_id).interactions == []
 
 
-def test_exact_fetch_result_is_reused_inside_same_frozen_authority(tmp_path) -> None:
+def retired_legacy_exact_fetch_result_is_reused_inside_same_frozen_authority(tmp_path) -> None:
     calls = []
 
     def fetch(arguments, _context):
@@ -732,7 +733,7 @@ def test_exact_fetch_result_is_reused_inside_same_frozen_authority(tmp_path) -> 
     assert second_execution.status == "completed"
 
 
-def test_invocation_permit_cannot_cross_execution_batch(tmp_path) -> None:
+def retired_legacy_invocation_permit_cannot_cross_execution_batch(tmp_path) -> None:
     calls = []
     app, kernel, composition, thread, created = _shell_runtime(
         tmp_path,
@@ -772,7 +773,7 @@ def test_invocation_permit_cannot_cross_execution_batch(tmp_path) -> None:
     assert len(calls) == 1
 
 
-def test_cowagent_tool_execution_does_not_create_a_permission_interaction(tmp_path) -> None:
+def retired_legacy_cowagent_tool_execution_does_not_create_a_permission_interaction(tmp_path) -> None:
     app = create_app(
         settings=RuntimeSettings(
             database_path=tmp_path / "runtime.db",
@@ -853,7 +854,7 @@ def test_cowagent_tool_execution_does_not_create_a_permission_interaction(tmp_pa
         )
 
 
-def test_empty_shell_arguments_reach_the_cowagent_handler_for_background_followup(
+def retired_legacy_empty_shell_arguments_reach_the_cowagent_handler_for_background_followup(
     tmp_path,
 ) -> None:
     calls = []
@@ -924,12 +925,22 @@ def test_empty_shell_arguments_reach_the_cowagent_handler_for_background_followu
 
 def test_model_can_correct_safe_tool_arguments_and_retry_in_the_same_turn(
     tmp_path,
+    monkeypatch,
 ) -> None:
-    calls = []
+    from agent.tools.base_tool import ToolResult
+    from agent.tools.bash.bash import Bash
+
+    calls: list[dict] = []
+
+    def execute(_tool, arguments):
+        calls.append(dict(arguments))
+        return ToolResult.success({"exit_code": 0})
+
+    monkeypatch.setattr(Bash, "execute", execute)
     app, kernel, composition, _thread, created = _shell_runtime(
         tmp_path,
-        lambda arguments, context: (
-            calls.append((dict(arguments), context)) or {"exit_code": 0}
+        lambda _arguments, _context: (_ for _ in ()).throw(
+            AssertionError("public Cow turns must not call the legacy handler")
         ),
     )
     gateway = _Gateway(
@@ -958,7 +969,7 @@ def test_model_can_correct_safe_tool_arguments_and_retry_in_the_same_turn(
     result = asyncio.run(worker.run_once("corrected-arguments-worker"))
 
     assert result.outcome is WorkerOutcome.COMPLETED
-    assert [call[0] for call in calls] == [{}, {"command": "opaque-command"}]
+    assert calls == [{"command": "opaque-command"}]
     with kernel.database.reader() as connection:
         rows = connection.execute(
             "SELECT event_type FROM events WHERE turn_id=? "

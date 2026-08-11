@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import sys
-from types import SimpleNamespace
 
 from ecorex.capabilities import (
     ApprovalRequirement,
@@ -17,11 +16,11 @@ from ecorex.capabilities import (
 from ecorex.capabilities.builtin import builtin_capability_registry
 from ecorex.capabilities.cow_local_tools import CowLocalTools
 from ecorex.artifacts import ArtifactService
-from ecorex.capabilities.service import ToolExecutionScope
 from ecorex.extensions.cow_mcp import CowMCPConfigService
 from ecorex.extensions.mcp import discover_mcp_tools
 from ecorex.memory import MemoryService
-from ecorex.runtime.cow_scheduler import CowSchedulerService, CowSchedulerTool, CowTaskStore
+from agent.tools.scheduler.scheduler_service import SchedulerService
+from agent.tools.scheduler.task_store import TaskStore
 from ecorex.runtime.worker import _cow_workspace_instructions
 from ecorex.workspace_content import WorkspaceContentService
 
@@ -122,34 +121,32 @@ def test_cow_send_publishes_a_real_user_artifact(tmp_path: Path) -> None:
 
 
 def test_cow_scheduler_runs_due_task_from_local_store(tmp_path: Path) -> None:
-    store = CowTaskStore(tmp_path / "scheduler" / "tasks.json")
-    tool = CowSchedulerTool(store)
-    context = SimpleNamespace(
-        execution_scope=ToolExecutionScope(
-            job_id="job-1", thread_id="thread-1", turn_id="turn-1"
-        )
-    )
-    created = tool(
-        {
-            "action": "create",
-            "name": "reminder",
-            "message": "stand up",
-            "schedule_type": "once",
-            "schedule_value": "+1s",
+    store = TaskStore(str(tmp_path / "scheduler" / "tasks.json"))
+    due = (datetime.now() - timedelta(seconds=1)).isoformat()
+    created = {
+        "id": "reminder",
+        "name": "reminder",
+        "enabled": True,
+        "schedule": {"type": "once", "run_at": due},
+        "action": {
+            "type": "send_message",
+            "content": "stand up",
+            "receiver": "thread-1",
+            "notify_session_id": "thread-1",
         },
-        context,
-    )["task"]
+        "next_run_at": due,
+    }
+    store.add_task(created)
     observed: list[str] = []
 
-    async def execute(task):
+    def execute(task):
         observed.append(task["action"]["content"])
         return True
 
-    service = CowSchedulerService(store, execute)
-    due = created["next_run_at"]
-    asyncio.run(service.run_due(now=datetime.fromisoformat(due)))
+    service = SchedulerService(store, execute)
+    service._check_and_execute_tasks()
     assert observed == ["stand up"]
-    assert store.get(created["id"]) is None
+    assert store.get_task(created["id"]) is None
 
 
 def test_cow_mcp_json_loads_stdio_tools_without_enterprise_registration(

@@ -1701,18 +1701,79 @@ def test_managed_http_transport_runs_true_protocol_and_pins_session(
 
 def test_agent_turn_worker_discovers_and_invokes_namespaced_mcp_tool(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
-    session = _FakeSession(_tool())
-    service, binding, _unused, _snapshot = _mcp_setup(
-        tmp_path,
-        lambda _tenant: session,
+    from agent.tools.mcp.mcp_client import McpClientRegistry
+    from agent.tools.tool_manager import ToolManager
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    server = workspace / "fixture_mcp.py"
+    server.write_text(
+        """import json
+import sys
+
+for line in sys.stdin:
+    message = json.loads(line)
+    request_id = message.get("id")
+    if request_id is None:
+        continue
+    method = message.get("method")
+    if method == "initialize":
+        result = {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "fixture", "version": "1"},
+        }
+    elif method == "tools/list":
+        result = {
+            "tools": [{
+                "name": "lookup",
+                "description": "Look up a fixture record",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            }]
+        }
+    elif method == "tools/call":
+        result = {"content": [{"type": "text", "text": "fixture-ok"}]}
+    else:
+        result = {}
+    print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}), flush=True)
+""",
+        encoding="utf-8",
     )
+    (workspace / "mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "fixture": {
+                        "command": sys.executable,
+                        "args": [str(server)],
+                        "timeout": 5,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "agent.tools.tool_manager.conf",
+        lambda: {
+            "agent_workspace": str(workspace),
+            "mcp_auto_start": False,
+            "mcp_servers": [],
+        },
+    )
+    monkeypatch.setattr(ToolManager, "_instance", None)
+    monkeypatch.setattr(McpClientRegistry, "_instance", None)
     app = create_app(
         settings=RuntimeSettings(
             database_path=tmp_path / "runtime.db",
-            extension_service=service,
-            mcp_runtime_bindings=(binding,),
             full_access=True,
+            workspace_root=workspace,
         )
     )
     kernel = app.state.runtime
@@ -1744,8 +1805,14 @@ def test_agent_turn_worker_discovers_and_invokes_namespaced_mcp_tool(
                     event_type="tool_call.requested",
                     response_id="mcp-tool-response",
                     tool_call_id="mcp-call-1",
-                    tool_name="mcp.ecorex.mcp.office:lookup",
+                    tool_name="lookup",
                     arguments={"query": "quarterly"},
+                )
+                yield GatewayEvent(
+                    seq=2,
+                    event_type="response.completed",
+                    response_id="mcp-tool-response",
+                    usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
                 )
             else:
                 yield GatewayEvent(
@@ -1758,29 +1825,33 @@ def test_agent_turn_worker_discovers_and_invokes_namespaced_mcp_tool(
                     seq=2,
                     event_type="response.completed",
                     response_id="mcp-response-2",
+                    usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
                 )
 
     gateway = Gateway()
     worker = AgentTurnWorker(
         kernel,
         gateway=gateway,
-        capabilities=composition.capability_service,
-        extension_fence=composition.extension_invocation_fence,
+        workspace_root=workspace,
     )
-    result = asyncio.run(worker.run_once("mcp-worker"))
-    assert result.outcome is WorkerOutcome.COMPLETED
-    assert kernel.jobs.get(created.job.job_id).status.value == "completed"
-    assert "mcp.ecorex.mcp.office:lookup" in {
-        tool["spec"]["tool_id"] for tool in gateway.requests[0].direct_tools
-    }
-    assert gateway.requests[1].tool_outputs[0].output["content"][0]["text"] == "ok"
-    tool_item = next(
-        item
-        for item in kernel.projection(thread.thread_id).items
-        if item.kind is ItemKind.TOOL_CALL
-        and item.content.get("tool_name") == "mcp.ecorex.mcp.office:lookup"
-    )
-    assert tool_item.content["display_label"] == "使用已连接的应用"
-    assert tool_item.content["result_summary"] == "已完成应用操作"
-    assert tool_item.content["result_sha256"]
-    assert "result" not in tool_item.content
+    try:
+        result = asyncio.run(worker.run_once("mcp-worker"))
+        assert result.outcome is WorkerOutcome.COMPLETED
+        assert kernel.jobs.get(created.job.job_id).status.value == "completed"
+        assert "lookup" in {
+            tool["spec"]["tool_id"] for tool in gateway.requests[0].direct_tools
+        }
+        outputs = gateway.requests[1].ordered_input_items()
+        assert any("fixture-ok" in str(item.output) for item in outputs if hasattr(item, "output"))
+        tool_item = next(
+            item
+            for item in kernel.projection(thread.thread_id).items
+            if item.kind is ItemKind.TOOL_CALL
+            and item.content.get("tool_name") == "lookup"
+        )
+        assert tool_item.content["result_sha256"]
+        assert "result" not in tool_item.content
+    finally:
+        ToolManager().shutdown_mcp()
+        ToolManager._instance = None
+        McpClientRegistry._instance = None

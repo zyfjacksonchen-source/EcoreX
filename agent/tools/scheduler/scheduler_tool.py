@@ -119,6 +119,14 @@ class SchedulerTool(BaseTool):
         # Will be set by agent bridge
         self.task_store = None
         self.current_context = None
+
+    def __call__(self, arguments, _context=None):
+        """Keep the same SchedulerTool instance usable by e-Mate adapters."""
+
+        result = self.execute(dict(arguments or {}))
+        if result.status != "success":
+            raise RuntimeError(str(result.result))
+        return result.result
     
     def execute(self, params: dict) -> ToolResult:
         """

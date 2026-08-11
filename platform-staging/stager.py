@@ -84,6 +84,7 @@ _RUNTIME_DISTRIBUTIONS = (
     "pydantic",
     "python-multipart",
     "qrcode",
+    "regex",
     "tzdata",
     "uvicorn",
     "websockets",
@@ -2687,8 +2688,10 @@ except BaseException:
  raise SystemExit(81)
 try:
  from bridge.agent_initializer import AgentInitializer
+ from agent.tools.search_files.search_files import SearchFiles
  from agent.tools.tool_manager import ToolManager
- assert AgentInitializer and ToolManager
+ import regex
+ assert AgentInitializer and SearchFiles and ToolManager and regex
 except BaseException:
  print('__ECOREX_PACK_PROBE_COW_SPINE_FAILED__')
  raise SystemExit(87)

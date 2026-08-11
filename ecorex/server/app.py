@@ -36,7 +36,8 @@ from ecorex.observability import AuditIntegrityError, ManagedOTLPHTTPTraceExport
 from ecorex.observability.recovery import is_unreadable_observability_error
 from ecorex.runtime import RuntimeSettings
 from ecorex.runtime.api import create_app as register_runtime
-from ecorex.runtime.cow_scheduler import CowSchedulerTool, CowTaskStore
+from agent.tools.scheduler.scheduler_tool import SchedulerTool
+from agent.tools.scheduler.task_store import TaskStore
 from ecorex.projects import ProjectWorkspaceAuthority
 from ecorex.session import (
     ManagedDeviceAuthorizationService,
@@ -559,8 +560,9 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         raise ServerConfigurationError("runtime bearer and CSRF secrets must differ")
 
     capability_registry = builtin_capability_registry()
-    scheduler_tool = CowSchedulerTool(
-        CowTaskStore(
+    scheduler_tool = SchedulerTool()
+    scheduler_tool.task_store = TaskStore(
+        str(
             Path(settings.database_path).expanduser().resolve().parent
             / "scheduler"
             / "tasks.json"

@@ -55,14 +55,11 @@ Read = _safe_import("agent.tools.read.read", "Read")
 Write = _safe_import("agent.tools.write.write", "Write")
 Edit = _safe_import("agent.tools.edit.edit", "Edit")
 Bash = _safe_import("agent.tools.bash.bash", "Bash")
-EcoreXCli = _safe_import("agent.tools.ecorex_cli.ecorex_cli", "EcoreXCli")
 FeishuCli = _safe_import("agent.tools.feishu_cli.feishu_cli", "FeishuCli")
 TongxinCli = _safe_import("agent.tools.tongxin_cli.tongxin_cli", "TongxinCli")
-HostDiagnostics = _safe_import("agent.tools.host_diagnostics.host_diagnostics", "HostDiagnostics")
-OptionalAbilities = _safe_import("agent.tools.optional_abilities.optional_abilities", "OptionalAbilities")
-AgentCapabilityTool = _safe_import("agent.tools.agent_capability.agent_capability", "AgentCapabilityTool")
 SubagentTool = _safe_import("agent.tools.subagent.subagent", "SubagentTool")
 Find = _safe_import("agent.tools.find.find", "Find")
+SearchFiles = _safe_import("agent.tools.search_files.search_files", "SearchFiles")
 Ls = _safe_import("agent.tools.ls.ls", "Ls")
 Send = _safe_import("agent.tools.send.send", "Send")
 MemorySearchTool = _safe_import("agent.tools.memory.memory_search", "MemorySearchTool")
@@ -91,14 +88,10 @@ __all__ = [
     "Write",
     "Edit",
     "Bash",
-    "EcoreXCli",
     "FeishuCli",
     "TongxinCli",
-    "HostDiagnostics",
-    "OptionalAbilities",
-    "AgentCapabilityTool",
     "SubagentTool",
-    "Find",
+    "SearchFiles",
     "Ls",
     "Send",
     "MemorySearchTool",

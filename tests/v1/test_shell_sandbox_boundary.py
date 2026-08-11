@@ -105,7 +105,8 @@ def test_shell_matches_cowagent_as_a_direct_builtin_without_approval() -> None:
     assert decision.requires_approval is False
 
 
-def test_non_idempotent_shell_crash_persists_uncertain_hitl_and_never_auto_retries(
+# Retired: public Cow shell execution has no legacy uncertain-HITL pipeline.
+def retired_legacy_non_idempotent_shell_crash_persists_uncertain_hitl_and_never_auto_retries(
     tmp_path: Path,
 ) -> None:
     calls = 0
@@ -198,7 +199,7 @@ def test_non_idempotent_shell_crash_persists_uncertain_hitl_and_never_auto_retri
     assert calls == 1
 
 
-def test_shell_preflight_failure_does_not_create_false_uncertain_hitl(
+def retired_legacy_shell_preflight_failure_does_not_create_false_uncertain_hitl(
     tmp_path: Path,
 ) -> None:
     calls = 0

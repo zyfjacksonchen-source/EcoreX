@@ -1,7 +1,5 @@
-import hashlib
 import importlib
 import importlib.util
-import re
 import threading
 import time
 from pathlib import Path
@@ -29,28 +27,6 @@ def _normalize_mcp_configs(raw) -> list:
             result.append(entry)
         return result
     return []
-
-
-def _sanitize_mcp_name_part(value: Any, fallback: str) -> str:
-    text = re.sub(r"[^A-Za-z0-9_-]+", "_", str(value or "").strip())
-    text = text.strip("_-")
-    return text[:48] or fallback
-
-
-def _mcp_public_tool_name(server_name: str, tool_name: str) -> str:
-    """Return the local model-visible name for a remote MCP tool.
-
-    MCP servers are untrusted host capabilities. Their tool names must not
-    collide with first-party tools like ``bash`` or ``browser`` because those
-    names carry EcoreX permission, diagnostics, and convergence semantics.
-    """
-    server_part = _sanitize_mcp_name_part(server_name, "server")
-    tool_part = _sanitize_mcp_name_part(tool_name, "tool")
-    public = f"mcp__{server_part}__{tool_part}"
-    if len(public) <= 96:
-        return public
-    digest = hashlib.sha1(f"{server_name}:{tool_name}".encode("utf-8", "ignore")).hexdigest()[:8]
-    return f"mcp__{server_part[:32]}__{tool_part[:48]}_{digest}"
 
 
 class ToolManager:
@@ -189,10 +165,10 @@ class ToolManager:
                                     error_msg = str(e)
                                     if "playwright" in error_msg:
                                         logger.warning(
-                                            f"[ToolManager] Browser tool not loaded - missing dependencies.\n"
-                                            f"  To enable browser tool, run:\n"
-                                            f"    pip install playwright\n"
-                                            f"    playwright install chromium"
+                                            "[ToolManager] Browser tool not loaded - missing dependencies.\n"
+                                            "  To enable browser tool, run:\n"
+                                            "    pip install playwright\n"
+                                            "    playwright install chromium"
                                         )
                                     elif "markdownify" in error_msg:
                                         logger.warning(
@@ -264,10 +240,10 @@ class ToolManager:
                                 error_msg = str(e)
                                 if "playwright" in error_msg:
                                     logger.warning(
-                                        f"[ToolManager] Browser tool not loaded - missing dependencies.\n"
-                                        f"  To enable browser tool, run:\n"
-                                        f"    pip install playwright\n"
-                                        f"    playwright install chromium"
+                                        "[ToolManager] Browser tool not loaded - missing dependencies.\n"
+                                        "  To enable browser tool, run:\n"
+                                        "    pip install playwright\n"
+                                        "    playwright install chromium"
                                     )
                                 elif "markdownify" in error_msg:
                                     logger.warning(
@@ -306,16 +282,16 @@ class ToolManager:
                 for tool_name in missing_tools:
                     if tool_name == "browser":
                         logger.warning(
-                            f"[ToolManager] Browser tool is configured but not loaded.\n"
-                            f"  To enable browser tool, run:\n"
-                            f"    pip install playwright\n"
-                            f"  Only run `playwright install chromium` when CDP fallback is required."
+                            "[ToolManager] Browser tool is configured but not loaded.\n"
+                            "  To enable browser tool, run:\n"
+                            "    pip install playwright\n"
+                            "  Only run `playwright install chromium` when CDP fallback is required."
                         )
                     elif tool_name == "google_search":
                         logger.warning(
-                            f"[ToolManager] Google Search tool is configured but may need API key.\n"
-                            f"  Get API key from: https://serper.dev\n"
-                            f"  Configure in config.json: tools.google_search.api_key"
+                            "[ToolManager] Google Search tool is configured but may need API key.\n"
+                            "  Get API key from: https://serper.dev\n"
+                            "  Configure in config.json: tools.google_search.api_key"
                         )
                     else:
                         logger.warning(f"[ToolManager] Tool '{tool_name}' is configured but could not be loaded.")
@@ -552,7 +528,9 @@ class ToolManager:
         """Shut down one MCP server and drop its tools from the registry."""
         if self._mcp_registry is None:
             return
-        client = self._mcp_registry.unregister(server_name)
+        client = None
+        with self._mcp_registry._registry_lock:
+            client = self._mcp_registry._clients.pop(server_name, None)
         if client is not None:
             try:
                 client.shutdown()
@@ -574,39 +552,50 @@ class ToolManager:
         the others, and never raises out of the worker thread.
         """
         try:
-            from agent.tools.mcp.mcp_client import McpClient, McpClientRegistry
+            from agent.tools.mcp.mcp_client import (
+                McpClient,
+                McpClientRegistry,
+                set_reload_callback,
+            )
             from agent.tools.mcp.mcp_tool import McpTool
 
             registry = McpClientRegistry()
             self._mcp_registry = registry
+            set_reload_callback(self.reload_mcp_server)
 
             for cfg in mcp_servers_config:
                 server_name = cfg.get("name", "<unnamed>")
                 try:
                     client = McpClient(cfg)
                     if not client.initialize():
-                        self._mcp_status[server_name] = "failed"
-                        logger.warning(
-                            f"[MCP] Server '{server_name}' failed to initialize — skipping"
-                        )
+                        if getattr(client, "needs_auth", False):
+                            self._mcp_status[server_name] = "needs_auth"
+                            logger.info(
+                                f"[MCP] Server '{server_name}' needs authorization"
+                            )
+                        else:
+                            self._mcp_status[server_name] = "failed"
+                            logger.warning(
+                                f"[MCP] Server '{server_name}' failed to initialize — skipping"
+                            )
                         continue
 
                     tool_schemas = client.list_tools()
                     added = []
                     for schema in tool_schemas:
-                        remote_tool_name = schema.get("name", "")
-                        if not remote_tool_name:
+                        tool_name = schema.get("name", "")
+                        if not tool_name:
                             continue
-                        tool_name = _mcp_public_tool_name(server_name, remote_tool_name)
-                        mcp_tool = McpTool(client, schema, server_name, public_name=tool_name)
+                        mcp_tool = McpTool(client, schema, server_name)
                         # Atomic dict assignment is GIL-safe; readers iterate
                         # over a list() snapshot to avoid concurrent mutation.
                         self._mcp_tool_instances[tool_name] = mcp_tool
-                        added.append(f"{tool_name}->{remote_tool_name}")
+                        added.append(tool_name)
 
                     # Register client into the shared registry only after its
                     # tools are visible, so callers never see a half-loaded server.
-                    registry.register(server_name, client)
+                    with registry._registry_lock:
+                        registry._clients[server_name] = client
                     self._mcp_status[server_name] = "ready"
                     logger.info(
                         f"[MCP] Server '{server_name}' ready — "
@@ -625,6 +614,23 @@ class ToolManager:
             )
         except Exception as e:
             logger.warning(f"[ToolManager] MCP background loader crashed: {e}")
+
+    def reload_mcp_server(self, server_name: str) -> None:
+        """Restart one configured MCP server after OAuth or config refresh."""
+
+        with self._mcp_lock:
+            config = self._mcp_active_configs.get(server_name)
+        if not config:
+            logger.warning(f"[MCP] reload requested for unknown server '{server_name}'")
+            return
+        self._teardown_mcp_server(server_name)
+        self._mcp_status[server_name] = "pending"
+        threading.Thread(
+            target=self._load_mcp_tools_async,
+            args=([config],),
+            daemon=True,
+            name=f"mcp-reload-{server_name}",
+        ).start()
 
     def list_mcp_status(self) -> dict:
         """Return {server_name: status} snapshot for UI / debugging."""

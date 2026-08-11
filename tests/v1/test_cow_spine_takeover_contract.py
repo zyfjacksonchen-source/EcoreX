@@ -21,6 +21,7 @@ def test_platform_python_closure_imports_the_real_cow_spine(
 
     stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
     runtime_globals = stager["_build_python_closure"].__globals__
+    copy_distribution_closure = runtime_globals["_copy_distribution_closure"]
     source = tmp_path / "python-source"
     stdlib = source / "stdlib"
     executable = source / "python3"
@@ -34,7 +35,13 @@ def test_platform_python_closure_imports_the_real_cow_spine(
         "_base_python_runtime_source",
         lambda _platform: (source, executable, stdlib),
     )
-    monkeypatch.setitem(runtime_globals, "_copy_distribution_closure", lambda *_args: ())
+    monkeypatch.setitem(
+        runtime_globals,
+        "_copy_distribution_closure",
+        lambda _distributions, destination: copy_distribution_closure(
+            ("regex",), destination
+        ),
+    )
     for name in (
         "_prune_macos_cpython_build_support",
         "_reject_macos_build_objects",
@@ -85,10 +92,14 @@ def test_platform_python_closure_imports_the_real_cow_spine(
             "import sys; "
             f"sys.path.insert(0, {str(site_packages)!r}); "
             "import agent, bridge; "
+            "import regex; "
             "from bridge.agent_initializer import AgentInitializer; "
+            "from agent.tools.search_files.search_files import SearchFiles; "
             "from agent.tools.tool_manager import ToolManager; "
             "assert AgentInitializer.__module__ == 'bridge.agent_initializer'; "
-            "assert ToolManager.__module__ == 'agent.tools.tool_manager'",
+            "assert SearchFiles.__module__ == 'agent.tools.search_files.search_files'; "
+            "assert ToolManager.__module__ == 'agent.tools.tool_manager'; "
+            f"assert regex.__file__.startswith({str(site_packages)!r})",
         ),
         cwd=tmp_path,
         capture_output=True,
@@ -99,7 +110,10 @@ def test_platform_python_closure_imports_the_real_cow_spine(
     assert probe.returncode == 0, probe.stderr
     production_probe = stager["_pack_python_probe_command"](Path("pack-python"))[-1]
     assert "from bridge.agent_initializer import AgentInitializer" in production_probe
+    assert "from agent.tools.search_files.search_files import SearchFiles" in production_probe
     assert "from agent.tools.tool_manager import ToolManager" in production_probe
+    assert "import regex" in production_probe
+    assert "regex" in runtime_globals["_RUNTIME_DISTRIBUTIONS"]
 
 
 def test_actual_initializer_and_tool_manager_are_the_default_tool_contract(

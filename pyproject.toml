@@ -17,6 +17,7 @@ dependencies = [
     "pydantic==2.12.5",
     "python-multipart==0.0.26",
     "qrcode==8.2",
+    "regex==2026.7.19",
     "tzdata==2026.2",
     "uvicorn==0.30.0",
     "websockets==15.0.1",
