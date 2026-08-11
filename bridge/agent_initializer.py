@@ -47,6 +47,8 @@ class AgentInitializer:
         session_id: Optional[str] = None,
         workspace_root: Optional[str] = None,
         builtin_skill_root: Optional[str] = None,
+        conversation_store=None,
+        conversation_max_turns: Optional[int] = None,
     ) -> Agent:
         """
         Initialize agent for a session
@@ -134,18 +136,36 @@ class AgentInitializer:
         if memory_manager:
             agent.memory_manager = memory_manager
             if hasattr(agent, 'model') and agent.model:
-                memory_manager.flush_manager.llm_model = agent.model
+                fork = getattr(agent.model, "fork", None)
+                memory_manager.flush_manager.llm_model = (
+                    fork("memory-summary") if callable(fork) else agent.model
+                )
 
         # Restore persisted conversation history for this session
         if session_id:
-            self._restore_conversation_history(agent, session_id)
+            if conversation_store is None and conversation_max_turns is None:
+                self._restore_conversation_history(agent, session_id)
+            else:
+                self._restore_conversation_history(
+                    agent,
+                    session_id,
+                    store=conversation_store,
+                    max_turns=conversation_max_turns,
+                )
 
         # Start daily memory flush timer (once, on first agent init regardless of session)
         self._start_daily_flush_timer()
 
         return agent
 
-    def _restore_conversation_history(self, agent, session_id: str) -> None:
+    def _restore_conversation_history(
+        self,
+        agent,
+        session_id: str,
+        *,
+        store=None,
+        max_turns: Optional[int] = None,
+    ) -> None:
         """
         Load persisted conversation messages from SQLite and inject them
         into the agent's in-memory message list.
@@ -164,18 +184,21 @@ class AgentInitializer:
             return
 
         try:
-            from agent.memory import get_conversation_store
-            store = get_conversation_store()
-            max_turns = conf().get("agent_max_context_turns", 20)
+            if store is None:
+                from agent.memory import get_conversation_store
+                store = get_conversation_store()
+            configured_max_turns = conf().get("agent_max_context_turns", 20)
             # Scheduler tasks run on a stable isolated session per task and
             # can fire many times a day; a smaller restore window keeps prompt
             # cost bounded while still letting the agent see "last few" runs
             # for trend / dedup style logic. Regular chat sessions keep the
             # original heuristic so user dialogues feel continuous.
             if session_id.startswith("scheduler_"):
-                restore_turns = max(1, max_turns // 5)
+                restore_turns = max(1, configured_max_turns // 5)
+            elif max_turns is not None:
+                restore_turns = max(1, int(max_turns))
             else:
-                restore_turns = max(3, max_turns // 6)
+                restore_turns = max(3, configured_max_turns // 6)
             saved = store.load_messages(session_id, max_turns=restore_turns)
             if saved:
                 filtered = self._filter_text_only_messages(saved)

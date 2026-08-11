@@ -272,6 +272,37 @@ def cancel_children_for_default_workspace(
     return cancel_children_for_parent(target_workspace, parent_session_id)
 
 
+def wait_for_children_for_parent(
+    workspace: Path | str,
+    parent_session_id: str,
+    *,
+    parent_cancel_event: threading.Event | None = None,
+) -> Dict[str, Any]:
+    """Join every child started by a parent before its durable turn settles."""
+    workspace_path = Path(os.path.expanduser(str(workspace))).resolve()
+    parent_session_id = str(parent_session_id or "").strip()
+    cascaded = False
+    while parent_session_id:
+        snapshot = _task_snapshot(workspace_path)
+        children = [
+            task
+            for task in snapshot.get("tasks", [])
+            if str(task.get("parentSessionId") or "") == parent_session_id
+        ]
+        active = [
+            task
+            for task in children
+            if str(task.get("status") or "") not in TERMINAL_STATUSES
+        ]
+        if not active:
+            return {"tasks": children, "active": 0}
+        if parent_cancel_event is not None and parent_cancel_event.is_set() and not cascaded:
+            cancel_children_for_parent(workspace_path, parent_session_id)
+            cascaded = True
+        time.sleep(0.05)
+    return {"tasks": [], "active": 0}
+
+
 def interrupt_orphan_task(
     workspace: Path | str,
     *,

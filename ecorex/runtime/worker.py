@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+import copy
 from contextlib import aclosing, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -5410,7 +5412,7 @@ class _CowGatewayModel:
         self.previous_response_id: str | None = None
         self.last_usage: dict[str, int] | None = None
         self.usage_events = usage_events if usage_events is not None else []
-        self._user_images: dict[str, list[GatewayImageInput]] = {}
+        self._user_images: deque[tuple[str, list[GatewayImageInput]]] = deque()
         self._user_images_lock = threading.Lock()
         self._round = 0
 
@@ -5432,15 +5434,44 @@ class _CowGatewayModel:
     ) -> None:
         if images:
             with self._user_images_lock:
-                self._user_images[user_text] = images
+                self._user_images.append((user_text, images))
 
-    def _images_for_text(self, text: str) -> list[GatewayImageInput]:
+    def _image_assignments(
+        self, messages: list[dict[str, Any]]
+    ) -> dict[int, list[GatewayImageInput]]:
+        last_assistant = max(
+            (
+                index
+                for index, message in enumerate(messages)
+                if message.get("role") == "assistant"
+            ),
+            default=-1,
+        )
+        candidates = [
+            (index, self._text(message.get("content")))
+            for index, message in enumerate(messages)
+            if index > last_assistant and message.get("role") == "user"
+        ]
+        assignments: dict[int, list[GatewayImageInput]] = {}
         with self._user_images_lock:
-            key = next(
-                (candidate for candidate in self._user_images if candidate in text),
-                None,
-            )
-            return [] if key is None else self._user_images.pop(key)
+            cursor = 0
+            while self._user_images:
+                bound_text, images = self._user_images[0]
+                matched = next(
+                    (
+                        offset
+                        for offset in range(cursor, len(candidates))
+                        if bound_text in candidates[offset][1]
+                    ),
+                    None,
+                )
+                if matched is None:
+                    break
+                message_index = candidates[matched][0]
+                assignments[message_index] = images
+                self._user_images.popleft()
+                cursor = matched + 1
+        return assignments
 
     @staticmethod
     def _text(content: Any) -> str:
@@ -5459,7 +5490,9 @@ class _CowGatewayModel:
     def _inputs(self, messages: list[dict[str, Any]]) -> list[Any]:
         if self.previous_response_id:
             continuation: list[Any] = []
-            for message_index, message in enumerate(messages[-1:]):
+            latest = messages[-1:]
+            image_assignments = self._image_assignments(latest)
+            for message_index, message in enumerate(latest):
                 content = message.get("content")
                 if not isinstance(content, list):
                     content = [{"type": "text", "text": content}]
@@ -5485,13 +5518,14 @@ class _CowGatewayModel:
                                         f"{message_index}:{block_index}"
                                     ),
                                     content=text,
-                                    images=self._images_for_text(text),
+                                    images=image_assignments.get(message_index, []),
                                 )
                             )
             return continuation
 
         inputs: list[Any] = []
-        for index, message in enumerate(messages[-96:]):
+        image_assignments = self._image_assignments(messages)
+        for index, message in enumerate(messages):
             text = self._text(message.get("content"))
             if not text:
                 continue
@@ -5505,7 +5539,7 @@ class _CowGatewayModel:
                     GatewayUserMessageInput(
                         message_id=identity,
                         content=text,
-                        images=self._images_for_text(text),
+                        images=image_assignments.get(index, []),
                     )
                 )
         return inputs
@@ -5736,6 +5770,7 @@ class AgentTurnWorker:
         self.browser_handler = browser_handler
         self._cancel_events: dict[str, threading.Event] = {}
         self._cow_bridge = _CowAgentBridge()
+        self._conversation_stores: dict[Path, Any] = {}
 
     def bind_visual_evidence_resolver(self, _resolver: Any) -> None:
         return None
@@ -5844,24 +5879,97 @@ class AgentTurnWorker:
                 ),
             )
 
-    def _history(self, thread_id: str, current_turn_id: str) -> list[dict[str, Any]]:
-        with self.kernel.database.reader() as connection:
-            rows = connection.execute(
-                "SELECT content_json FROM items WHERE thread_id = ? AND turn_id != ? "
-                "AND kind = 'message' AND status = 'completed' "
-                "ORDER BY created_at DESC, item_id DESC LIMIT 96",
-                (thread_id, current_turn_id),
-            ).fetchall()
-        history: list[dict[str, Any]] = []
-        for row in reversed(rows):
-            content = json_loads(row["content_json"], {})
-            role = content.get("role")
-            text = str(content.get("text") or "").strip()
-            if role in {"user", "assistant"} and text:
-                history.append(
-                    {"role": role, "content": [{"type": "text", "text": text}]}
-                )
-        return history
+    def _conversation_store(self, workspace: Path):
+        from agent.memory.config import MemoryConfig
+        from agent.memory.conversation_store import ConversationStore
+
+        database_path = MemoryConfig(workspace_root=str(workspace)).get_db_path()
+        store = self._conversation_stores.get(database_path)
+        if store is None:
+            store = ConversationStore(database_path)
+            self._conversation_stores[database_path] = store
+        return store
+
+    @staticmethod
+    def _project_context(
+        metadata: Mapping[str, Any], workspace: Path
+    ) -> dict[str, str] | None:
+        project_id = str(metadata.get("project_id") or "").strip()
+        if not project_id:
+            return None
+        return {
+            "project_id": project_id,
+            "project_name": str(metadata.get("project_name") or project_id),
+            "project_path": str(workspace),
+            "project_memory_path": str(workspace / "MEMORY.md"),
+            "project_dreams_path": str(workspace / "memory" / "dreams"),
+        }
+
+    @staticmethod
+    def _without_injected_compaction_summary(
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        snapshot = copy.deepcopy(messages)
+        marker = "\n\n---\n\n"
+        for message in snapshot:
+            if message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                text = block.get("text") if isinstance(block, dict) else None
+                if (
+                    isinstance(text, str)
+                    and text.startswith("[System: Previous conversation summary")
+                    and marker in text
+                ):
+                    block["text"] = text.split(marker, 1)[1]
+                    return snapshot
+        return snapshot
+
+    @staticmethod
+    def _wait_for_memory_compaction(agent: Any) -> None:
+        manager = getattr(agent, "memory_manager", None)
+        flush_manager = getattr(manager, "flush_manager", None)
+        thread = getattr(flush_manager, "_last_flush_thread", None)
+        if thread is not None and thread.is_alive():
+            thread.join()
+
+    def _persist_cow_history(
+        self,
+        *,
+        store: Any,
+        session_id: str,
+        agent: Any,
+        channel_type: str,
+        project_context: dict[str, str] | None,
+    ) -> None:
+        new_messages = list(getattr(agent, "_last_run_new_messages", ()) or ())
+        if new_messages:
+            store.append_messages(
+                session_id,
+                new_messages,
+                channel_type=channel_type,
+                project_context=project_context,
+            )
+        if not getattr(agent, "_last_run_context_compacted", False):
+            return
+        summary = str(getattr(agent, "_last_compaction_summary", "") or "").strip()
+        if not summary:
+            return
+        context_start_seq = store.append_messages(
+            session_id,
+            self._without_injected_compaction_summary(list(agent.messages)),
+            channel_type=channel_type,
+            project_context=project_context,
+        )
+        store.set_compaction_state(
+            session_id,
+            summary=summary,
+            turn_count=int(getattr(agent, "_last_compaction_turn_count", 0) or 0),
+            context_start_seq=context_start_seq,
+        )
 
     @staticmethod
     def _delivery_context(
@@ -6207,7 +6315,6 @@ class AgentTurnWorker:
         thread_id: str,
         turn_id: str,
         input_text: str,
-        history: list[dict[str, Any]],
         callback: Callable[[dict[str, Any]], None],
         cancel_event: threading.Event,
         inbox: Any,
@@ -6215,6 +6322,8 @@ class AgentTurnWorker:
         channel_context: Mapping[str, Any] | None = None,
         channel_type: str,
         receiver: str,
+        conversation_store: Any,
+        project_context: dict[str, str] | None,
     ) -> str:
         from bridge.agent_initializer import AgentInitializer
         from agent.tools.subagent.subagent import (
@@ -6246,7 +6355,6 @@ class AgentTurnWorker:
                 thread_id=str(context.get("session_id") or "subagent"),
                 turn_id=str(context.get("request_id") or "subagent"),
                 input_text=prompt,
-                history=[],
                 callback=lambda _event: None,
                 cancel_event=child_cancel or threading.Event(),
                 inbox=None,
@@ -6254,13 +6362,17 @@ class AgentTurnWorker:
                 channel_context=channel_context,
                 channel_type=channel_type,
                 receiver=receiver,
+                conversation_store=conversation_store,
+                project_context=project_context,
             )
         )
         try:
             agent = AgentInitializer(object(), bridge).initialize_agent(
-                session_id=f"emate-{thread_id}",
+                session_id=thread_id,
                 workspace_root=workspace,
                 builtin_skill_root=self.builtin_skill_root,
+                conversation_store=conversation_store,
+                conversation_max_turns=_COW_MAX_CONTEXT_TURNS,
             )
             if channel_context:
                 self._attach_scheduler_context(agent, channel_context)
@@ -6283,15 +6395,35 @@ class AgentTurnWorker:
                 turn_id=turn_id,
             )
             bridge.agents[thread_id] = agent
-            agent.messages = history
             agent._current_session_id = thread_id
             agent._current_request_id = turn_id
-            return agent.run_stream(
-                input_text,
-                on_event=callback,
-                cancel_event=cancel_event,
-                steer_inbox=inbox,
-            )
+            from agent.tools.subagent.subagent import wait_for_children_for_parent
+
+            try:
+                result = agent.run_stream(
+                    input_text,
+                    on_event=callback,
+                    cancel_event=cancel_event,
+                    steer_inbox=inbox,
+                )
+            except BaseException:
+                cancel_event.set()
+                raise
+            finally:
+                wait_for_children_for_parent(
+                    workspace,
+                    thread_id,
+                    parent_cancel_event=cancel_event,
+                )
+                self._wait_for_memory_compaction(agent)
+                self._persist_cow_history(
+                    store=conversation_store,
+                    session_id=thread_id,
+                    agent=agent,
+                    channel_type=channel_type,
+                    project_context=project_context,
+                )
+            return result
         finally:
             if image_token is not None:
                 reset_managed_image_executor(image_token)
@@ -6364,9 +6496,8 @@ class AgentTurnWorker:
             workspace = await _run_blocking(
                 self._workspace, job.job_id, job.thread_id, job.turn_id
             )
-            history = await _run_blocking(
-                self._history, job.thread_id, job.turn_id
-            )
+            conversation_store = self._conversation_store(workspace)
+            project_context = self._project_context(turn.metadata, workspace)
             channel_type, receiver = self._delivery_context(
                 turn.metadata, job.thread_id
             )
@@ -6440,17 +6571,6 @@ class AgentTurnWorker:
                     job.job_id, worker_id, lease_token, cancel_event
                 )
             )
-            watcher = asyncio.create_task(
-                self._watch_revisions(
-                    job.turn_id,
-                    job.thread_id,
-                    workspace,
-                    model,
-                    inbox,
-                    cancel_event,
-                    watch_stop,
-                )
-            )
             initial_input = self._input_with_attachments(
                 turn.input,
                 turn.metadata,
@@ -6466,6 +6586,17 @@ class AgentTurnWorker:
                     turn_id=job.turn_id,
                 ),
             )
+            watcher = asyncio.create_task(
+                self._watch_revisions(
+                    job.turn_id,
+                    job.thread_id,
+                    workspace,
+                    model,
+                    inbox,
+                    cancel_event,
+                    watch_stop,
+                )
+            )
             await asyncio.to_thread(
                 self._run_agent,
                 model=model,
@@ -6474,7 +6605,6 @@ class AgentTurnWorker:
                 thread_id=job.thread_id,
                 turn_id=job.turn_id,
                 input_text=initial_input,
-                history=history,
                 callback=callback,
                 cancel_event=cancel_event,
                 inbox=inbox,
@@ -6482,6 +6612,8 @@ class AgentTurnWorker:
                 channel_context=channel_context,
                 channel_type=channel_type,
                 receiver=receiver,
+                conversation_store=conversation_store,
+                project_context=project_context,
             )
             watch_stop.set()
             applied = await watcher
@@ -6516,7 +6648,6 @@ class AgentTurnWorker:
                     thread_id=job.thread_id,
                     turn_id=job.turn_id,
                     input_text=revision_input,
-                    history=history,
                     callback=callback,
                     cancel_event=cancel_event,
                     inbox=next_inbox,
@@ -6524,6 +6655,8 @@ class AgentTurnWorker:
                     channel_context=channel_context,
                     channel_type=channel_type,
                     receiver=receiver,
+                    conversation_store=conversation_store,
+                    project_context=project_context,
                 )
                 applied = revision.ordinal
             for usage_index, (response_id, usage) in enumerate(model.usage_events, 1):

@@ -435,6 +435,9 @@ class Agent:
         with self.messages_lock:
             messages_copy = self.messages.copy()
             original_length = len(self.messages)
+        original_message_ids = [id(message) for message in messages_copy]
+        self._last_compaction_summary = ""
+        self._last_compaction_turn_count = 0
 
         # Get max_context_turns from config
         from config import conf
@@ -472,10 +475,15 @@ class Agent:
         # original_length, so we must replace rather than append.
         with self.messages_lock:
             self.messages = list(executor.messages)
-            # Track messages added in this run (user query + all assistant/tool messages)
-            # original_length may exceed executor.messages length after trimming
-            trim_adjusted_start = min(original_length, len(executor.messages))
-            self._last_run_new_messages = list(executor.messages[trim_adjusted_start:])
+            current_ids = [id(message) for message in executor.messages]
+            prefix_ids = current_ids[:original_length]
+            self._last_run_context_compacted = prefix_ids != original_message_ids
+            original_ids = set(original_message_ids)
+            self._last_run_new_messages = [
+                message
+                for message in executor.messages
+                if id(message) not in original_ids
+            ]
         
         # Store executor reference for agent_bridge to access files_to_send
         self.stream_executor = executor

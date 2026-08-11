@@ -1819,6 +1819,8 @@ class AgentStreamExecutor:
             target_block["text"] = build_compaction_summary_text(
                 summary, turn_count, original_text
             )
+            self.agent._last_compaction_summary = summary.strip()
+            self.agent._last_compaction_turn_count = turn_count
             logger.info(
                 f"📝 Context summary injected "
                 f"({len(summary)} chars, {turn_count} turns)"
