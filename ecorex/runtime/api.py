@@ -306,6 +306,7 @@ class RuntimeSettings:
     online: bool = True
     artifact_root: str | Path | None = None
     workspace_root: str | Path | None = None
+    workspace_root_resolver: Any | None = field(default=None, repr=False)
     output_roots: Mapping[str, str | Path] | None = field(default=None, repr=False)
     output_default_location: str = "workspace"
     artifact_action_launcher: ArtifactLauncher | None = field(default=None, repr=False)
@@ -2209,6 +2210,8 @@ def create_app(
                 image_execution_timeout_seconds=(
                     settings.image_execution_timeout_seconds
                 ),
+                workspace_root=settings.workspace_root,
+                workspace_root_resolver=settings.workspace_root_resolver,
                 max_model_rounds=settings.agent_max_model_rounds,
                 token_budget=settings.agent_token_budget,
                 finalization_reserve=settings.agent_finalization_reserve,
