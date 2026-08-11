@@ -42,7 +42,11 @@ class AgentInitializer:
         self.bridge = bridge
         self.agent_bridge = agent_bridge
     
-    def initialize_agent(self, session_id: Optional[str] = None) -> Agent:
+    def initialize_agent(
+        self,
+        session_id: Optional[str] = None,
+        workspace_root: Optional[str] = None,
+    ) -> Agent:
         """
         Initialize agent for a session
         
@@ -55,7 +59,9 @@ class AgentInitializer:
         from config import conf
         
         # Get workspace from config
-        workspace_root = expand_path(conf().get("agent_workspace", "~/cow"))
+        workspace_root = expand_path(
+            str(workspace_root or conf().get("agent_workspace", "~/cow"))
+        )
         
         # Migrate API keys
         self._migrate_config_to_env(workspace_root)
@@ -755,7 +761,7 @@ class AgentInitializer:
                     for key, value in sorted(existing_env_vars.items()):
                         f.write(f'{key}={value}\n')
 
-                logger.info(f"[AgentInitializer] Synced API keys from config.json to .env")
+                logger.info("[AgentInitializer] Synced API keys from config.json to .env")
             except Exception as e:
                 logger.warning(f"[AgentInitializer] Failed to sync API keys: {e}")
 

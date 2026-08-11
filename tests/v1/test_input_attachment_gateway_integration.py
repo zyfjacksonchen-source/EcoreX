@@ -12,7 +12,7 @@ from PIL import Image
 from ecorex.gateway import GatewayEvent
 from ecorex.gateway.responses_provider import ManagedHTTPSResponsesProvider
 from ecorex.runtime import RuntimeSettings, create_app
-from ecorex.runtime.worker import AgentTurnWorker
+from ecorex.runtime.worker import LegacyAgentTurnWorker as AgentTurnWorker
 
 
 TOKEN = "m" * 32

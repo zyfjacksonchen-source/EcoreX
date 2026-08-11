@@ -5,7 +5,7 @@ import threading
 
 from common.log import logger
 from agent.protocol.models import LLMRequest, LLMModel
-from agent.protocol.agent_stream import AgentStreamExecutor, new_messages_since_user_query
+from agent.protocol.agent_stream import AgentStreamExecutor
 from agent.protocol.result import AgentAction, AgentActionType, ToolResult, AgentResult
 from agent.tools.base_tool import BaseTool, ToolStage
 
@@ -57,7 +57,7 @@ class Agent:
         # on top of the full context (tools, workspace, user preferences, time)
         # so it both follows the user's preferences and knows its evolution job.
         self.extra_system_suffix = None
-        
+
         # Initialize skill manager
         self.skill_manager = None
         if enable_skills:
@@ -72,7 +72,7 @@ class Agent:
                     logger.debug(f"Initialized SkillManager with {len(self.skill_manager.skills)} skills")
                 except Exception as e:
                     logger.warning(f"Failed to initialize SkillManager: {e}")
-        
+
         if tools:
             for tool in tools:
                 self.add_tool(tool)
@@ -160,36 +160,54 @@ class Agent:
     def _get_model_context_window(self) -> int:
         """
         Get the model's context window size in tokens.
+        Auto-detect based on model name.
 
-        Uses the shared model capability policy so Web model switching, UI
-        meters, and backend context trimming agree on the same boundary.
+        Model context windows:
+        - Claude 3.5/3.7 Sonnet: 200K tokens
+        - Claude 3 Opus: 200K tokens
+        - GPT-4 Turbo/128K: 128K tokens
+        - GPT-4: 8K-32K tokens
+        - GPT-3.5: 16K tokens
+        - DeepSeek: 64K tokens
 
         :return: Context window size in tokens
         """
-        configured = None
-        try:
-            from config import conf
-            configured = int(conf().get("model_context_window") or 0)
-        except Exception:
-            configured = None
-        if configured and configured > 0:
-            return configured
+        if self.model and hasattr(self.model, 'model'):
+            model_name = self.model.model.lower()
 
-        model_name = ""
-        provider_id = ""
-        try:
-            model_name = self.model.model if self.model and hasattr(self.model, "model") else ""
-            resolver = getattr(self.model, "_resolve_bot_type", None)
-            if callable(resolver):
-                provider_id = resolver(model_name)
-        except Exception:
-            provider_id = ""
-        try:
-            from models.model_capabilities import context_policy_for_model
+            # Claude models - 200K context
+            if 'claude' in model_name:
+                return 200000
 
-            return int(context_policy_for_model(model_name, provider_id).context_window_tokens)
-        except Exception:
-            return 258000
+            # GPT-4 models
+            elif 'gpt-4' in model_name:
+                if 'turbo' in model_name or '128k' in model_name:
+                    return 128000
+                elif '32k' in model_name:
+                    return 32000
+                else:
+                    return 8000
+
+            # GPT-3.5
+            elif 'gpt-3.5' in model_name:
+                if '16k' in model_name:
+                    return 16000
+                else:
+                    return 4000
+
+            # DeepSeek
+            elif 'deepseek' in model_name:
+                return 64000
+
+            # Gemini models
+            elif 'gemini' in model_name:
+                if '2.0' in model_name or 'exp' in model_name:
+                    return 2000000  # Gemini 2.0: 2M tokens
+                else:
+                    return 1000000  # Gemini 1.5: 1M tokens
+
+        # Default conservative value
+        return 128000
 
     def _get_context_reserve_tokens(self) -> int:
         """
@@ -249,36 +267,25 @@ class Agent:
             return max(1, total_tokens)
         return 1
 
-    def _estimate_text_tokens(self, text: str) -> int:
+    @staticmethod
+    def _estimate_text_tokens(text: str) -> int:
         """
         Estimate token count for a text string.
 
-        This is provider-aware where a local tokenizer is available. It remains
-        a pre-call estimate; provider usage returned after a request is still
-        the source of truth for actual billing tokens.
+        Chinese / CJK characters typically use ~1.5 tokens each,
+        while ASCII uses ~0.25 tokens per char (4 chars/token).
+        We use a weighted average based on the character mix.
 
         :param text: Input text
         :return: Estimated token count
         """
-        model_name = ""
-        provider_id = ""
-        try:
-            model_name = self.model.model if self.model and hasattr(self.model, "model") else ""
-            resolver = getattr(self.model, "_resolve_bot_type", None)
-            if callable(resolver):
-                provider_id = resolver(model_name)
-        except Exception:
-            provider_id = ""
-        try:
-            from models.token_estimator import estimate_text_tokens
-
-            return estimate_text_tokens(text, model_name, provider_id)
-        except Exception:
-            if not text:
-                return 0
-            non_ascii = sum(1 for c in text if ord(c) > 127)
-            ascii_count = len(text) - non_ascii
-            return int(non_ascii * 1.2 + ascii_count * 0.27) + 1
+        if not text:
+            return 0
+        # Count non-ASCII characters (CJK, emoji, etc.)
+        non_ascii = sum(1 for c in text if ord(c) > 127)
+        ascii_count = len(text) - non_ascii
+        # CJK chars: ~1.5 tokens each; ASCII: ~0.25 tokens per char
+        return int(non_ascii * 1.5 + ascii_count * 0.25) + 1
 
     def _find_tool(self, tool_name: str):
         """Find and return a tool with the specified name"""
@@ -374,7 +381,7 @@ class Agent:
         return action
 
     def run_stream(self, user_message: str, on_event=None, clear_history: bool = False,
-                   skill_filter=None, cancel_event=None) -> str:
+                   skill_filter=None, cancel_event=None, steer_inbox=None) -> str:
         """
         Execute single agent task with streaming (based on tool-call)
 
@@ -384,6 +391,7 @@ class Agent:
         - Event callbacks
         - Persistent conversation history across calls
         - User-initiated cancellation via ``cancel_event``
+        - Explicit active-turn guidance via ``steer_inbox``
 
         Args:
             user_message: User message
@@ -396,6 +404,8 @@ class Agent:
                 "[Interrupted by user]" assistant note, and returns the
                 partial response. ``messages`` stays in a valid state
                 (tool_use/tool_result pairs preserved).
+            steer_inbox: Optional SteerInbox drained at safe checkpoints. New
+                instructions guide this run without entering the normal queue.
 
         Returns:
             Final response text
@@ -441,43 +451,34 @@ class Agent:
             messages=messages_copy,  # Pass copied message history
             max_context_turns=max_context_turns,
             cancel_event=cancel_event,
+            steer_inbox=steer_inbox,
         )
 
         # Execute
         try:
             response = executor.run_stream(user_message)
         except Exception:
-            # Keep the repaired/current run boundary so a provider-format failure
-            # cannot erase completed tool facts or make the next turn start over.
-            with self.messages_lock:
-                self._last_run_new_messages = new_messages_since_user_query(
-                    executor.messages,
-                    original_length,
-                    user_message,
-                )
-                self.messages = list(executor.messages)
-            self.stream_executor = executor
-            self._last_run_outcome = executor.last_outcome
-            self._last_run_final_response_persistable = executor.final_response_persistable
+            # If executor cleared its messages (context overflow / message format error),
+            # sync that back to the Agent's own message list so the next request
+            # starts fresh instead of hitting the same overflow forever.
+            if len(executor.messages) == 0:
+                with self.messages_lock:
+                    self.messages.clear()
+                    logger.info("[Agent] Cleared Agent message history after executor recovery")
             raise
 
-        # Sync executor's messages back to agent (thread-safe). Persist the
-        # current run from the actual user-query boundary because trim + long
-        # tool chains can grow the final list back past original_length.
+        # Sync executor's messages back to agent (thread-safe).
+        # If the executor trimmed context, its message list is shorter than
+        # original_length, so we must replace rather than append.
         with self.messages_lock:
-            new_messages = new_messages_since_user_query(
-                executor.messages,
-                original_length,
-                user_message,
-            )
             self.messages = list(executor.messages)
-            # Track messages added in this run (user query + all assistant/tool messages).
-            self._last_run_new_messages = new_messages
+            # Track messages added in this run (user query + all assistant/tool messages)
+            # original_length may exceed executor.messages length after trimming
+            trim_adjusted_start = min(original_length, len(executor.messages))
+            self._last_run_new_messages = list(executor.messages[trim_adjusted_start:])
         
         # Store executor reference for agent_bridge to access files_to_send
         self.stream_executor = executor
-        self._last_run_outcome = executor.last_outcome
-        self._last_run_final_response_persistable = executor.final_response_persistable
 
         # Execute all post-process tools
         self._execute_post_process_tools()
@@ -488,3 +489,116 @@ class Agent:
         """Clear conversation history and captured actions"""
         self.messages = []
         self.captured_actions = []
+
+    def compact_context(self, keep_recent_turns: int = 2) -> dict:
+        """Manually compact the conversation history right now.
+
+        Reuses the same turn-splitting and summary-injection logic as the
+        automatic context trimming in AgentStreamExecutor (via shared helpers
+        in message_utils), the only difference being that this summarizes
+        synchronously and runs on demand regardless of token usage — so the
+        /compact command frees context immediately and consistently.
+
+        :param keep_recent_turns: How many most-recent turns to keep verbatim.
+        :return: dict with keys: ok, reason, compacted_turns, before, after.
+        """
+        from agent.protocol.message_utils import (
+            identify_complete_turns,
+            build_compaction_summary_text,
+            find_first_user_text_block,
+            _extract_text_from_content,
+        )
+
+        with self.messages_lock:
+            before = len(self.messages)
+            turns = identify_complete_turns(self.messages)
+
+            if len(turns) <= keep_recent_turns:
+                return {
+                    "ok": False,
+                    "reason": "nothing_to_compact",
+                    "compacted_turns": 0,
+                    "before": before,
+                    "after": before,
+                }
+
+            discarded_turns = turns[:-keep_recent_turns]
+            kept_turns = turns[-keep_recent_turns:]
+            discarded_messages = []
+            for turn in discarded_turns:
+                discarded_messages.extend(turn["messages"])
+
+        # Summarize discarded turns synchronously so the injected note is ready
+        # before we return. The SAME summary is reused for context injection and
+        # daily-memory persistence — one LLM call serves both (mirrors the
+        # context_summary_callback path used by automatic trimming, but sync).
+        # Falls back to a plain-text digest when no LLM is available.
+        summary = ""
+        llm_summary = False
+        flush_mgr = None
+        if self.memory_manager:
+            flush_mgr = getattr(self.memory_manager, "flush_manager", None)
+        if flush_mgr:
+            try:
+                raw = flush_mgr._summarize_messages(discarded_messages, max_messages=0) or ""
+                summary = flush_mgr._clean_summary_output(raw)
+                llm_summary = bool(summary.strip())
+            except Exception as e:
+                logger.warning(f"[Agent] compact summarize failed: {e}")
+
+        if not summary.strip():
+            fragments = []
+            for msg in discarded_messages:
+                text = _extract_text_from_content(msg.get("content", ""))
+                if text:
+                    fragments.append(f"{msg.get('role', '?')}: {text[:200]}")
+            summary = "\n".join(fragments[-20:])
+
+        # Persist the same LLM summary to daily memory (no second LLM call).
+        # Skip when we only have the plain-text fallback — it isn't worth
+        # recording as long-term memory.
+        if flush_mgr and llm_summary:
+            try:
+                user_id = getattr(self, "_current_user_id", None)
+                flush_mgr.write_daily_summary(summary, user_id=user_id, reason="trim")
+            except Exception as e:
+                logger.debug(f"[Agent] compact write_daily_summary skipped: {e}")
+
+        # Rebuild kept turns, injecting the summary into the first kept user
+        # text block (same as auto-trim) to avoid two adjacent user messages
+        # that would break strict user/assistant alternation on some providers.
+        turn_count = len(discarded_turns)
+        with self.messages_lock:
+            new_messages = []
+            for turn in kept_turns:
+                new_messages.extend(turn["messages"])
+
+            target_block = find_first_user_text_block(kept_turns)
+            if target_block is not None:
+                target_block["text"] = build_compaction_summary_text(
+                    summary, turn_count, target_block.get("text", "")
+                )
+            else:
+                # Fallback: no injectable target, prepend a standalone note.
+                new_messages.insert(0, {
+                    "role": "user",
+                    "content": [{
+                        "type": "text",
+                        "text": build_compaction_summary_text(summary, turn_count, ""),
+                    }],
+                })
+
+            self.messages = new_messages
+            after = len(self.messages)
+
+        logger.info(
+            f"[Agent] Manual compact: {turn_count} turns summarized, "
+            f"{before} -> {after} messages"
+        )
+        return {
+            "ok": True,
+            "reason": "compacted",
+            "compacted_turns": turn_count,
+            "before": before,
+            "after": after,
+        }

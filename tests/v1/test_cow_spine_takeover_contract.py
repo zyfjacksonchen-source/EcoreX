@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import ast
 import inspect
 from pathlib import Path
@@ -132,6 +133,163 @@ def test_actual_initializer_and_tool_manager_are_the_default_tool_contract(
     for tool in tools:
         if tool.name in {"read", "write", "edit", "bash", "ls", "web_fetch", "browser"}:
             assert Path(tool.config["cwd"]) == tmp_path
+
+
+def test_cow_model_request_uses_the_real_tool_manager_contract(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from agent.protocol.models import LLMRequest
+    from agent.tools.tool_manager import ToolManager
+    from bridge.agent_initializer import AgentInitializer
+    from ecorex.runtime.worker import _CowGatewayModel
+
+    monkeypatch.setattr(ToolManager, "_instance", None)
+    initializer = AgentInitializer(SimpleNamespace(), SimpleNamespace())
+    tools = initializer._load_tools(str(tmp_path), None, [], "model-contract")
+    schemas = [
+        {
+            "name": tool.name,
+            "description": tool.description,
+            "input_schema": tool.get_json_schema(),
+        }
+        for tool in tools
+    ]
+    loop = asyncio.new_event_loop()
+    try:
+        model = _CowGatewayModel(
+            SimpleNamespace(),
+            loop,
+            thread_id="thread_contract",
+            turn_id="turn_contract",
+            model_id="ecorex-chat",
+        )
+        request = model._request(
+            LLMRequest(
+                messages=[
+                    {"role": "user", "content": [{"type": "text", "text": "read"}]}
+                ],
+                tools=schemas,
+                system="cow",
+            )
+        )
+        model.previous_response_id = "response_contract"
+        continuation = model._request(
+            LLMRequest(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "call_contract",
+                                "content": "done",
+                            },
+                            {"type": "text", "text": "steer now"},
+                        ],
+                    }
+                ],
+                tools=schemas,
+                system="cow",
+            )
+        )
+    finally:
+        loop.close()
+
+    assert [entry["spec"]["tool_id"] for entry in request.direct_tools] == [
+        tool.name for tool in tools
+    ]
+    assert [entry["spec"]["input_schema"] for entry in request.direct_tools] == [
+        tool.get_json_schema() for tool in tools
+    ]
+    assert continuation.previous_response_id == "response_contract"
+    assert [item.type for item in continuation.input_items or []] == [
+        "function_call_output",
+        "user_message",
+    ]
+
+
+def test_real_cow_agent_stream_runs_through_the_managed_gateway(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from agent.tools.tool_manager import ToolManager
+    from bridge.agent_initializer import AgentInitializer
+    from ecorex.gateway import GatewayEvent, GatewayEventType
+    from ecorex.runtime.worker import _CowAgentBridge, _CowGatewayModel
+
+    monkeypatch.setattr(ToolManager, "_instance", None)
+    monkeypatch.setattr(AgentInitializer, "_migrate_config_to_env", lambda *_args: None)
+    monkeypatch.setattr(AgentInitializer, "_load_env_file", lambda *_args: None)
+    monkeypatch.setattr(
+        AgentInitializer,
+        "_setup_memory_system",
+        lambda *_args: (None, []),
+    )
+    monkeypatch.setattr(AgentInitializer, "_initialize_scheduler", lambda *_args: None)
+    monkeypatch.setattr(
+        AgentInitializer,
+        "_initialize_skill_manager",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(AgentInitializer, "_start_daily_flush_timer", lambda *_args: None)
+
+    class Gateway:
+        def __init__(self) -> None:
+            self.requests = []
+
+        async def stream(self, request):
+            self.requests.append(request)
+            yield GatewayEvent(
+                seq=1,
+                event_type=GatewayEventType.OUTPUT_TEXT_DELTA,
+                response_id="response_contract",
+                delta="done",
+            )
+            yield GatewayEvent(
+                seq=2,
+                event_type=GatewayEventType.RESPONSE_COMPLETED,
+                response_id="response_contract",
+                usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            )
+
+    async def run() -> tuple[str, Gateway, _CowGatewayModel]:
+        gateway = Gateway()
+        bridge = _CowAgentBridge()
+        model = _CowGatewayModel(
+            gateway,
+            asyncio.get_running_loop(),
+            thread_id="thread_contract",
+            turn_id="turn_contract",
+            model_id="ecorex-chat",
+        )
+
+        def invoke() -> str:
+            token = bridge.bind_model(model)
+            try:
+                agent = AgentInitializer(SimpleNamespace(), bridge).initialize_agent(
+                    session_id="contract-session",
+                    workspace_root=str(tmp_path),
+                )
+                return agent.run_stream("reply once")
+            finally:
+                bridge.reset_model(token)
+
+        return await asyncio.to_thread(invoke), gateway, model
+
+    response, gateway, model = asyncio.run(run())
+    assert response == "done"
+    assert len(gateway.requests) == 1
+    assert {entry["spec"]["tool_id"] for entry in gateway.requests[0].direct_tools} >= {
+        "read",
+        "write",
+        "bash",
+        "web_fetch",
+    }
+    assert model.usage_events == [
+        (
+            "response_contract",
+            {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        )
+    ]
 
 
 def test_project_root_drives_cow_initializer_trim_and_durable_memory(

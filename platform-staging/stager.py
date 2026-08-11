@@ -840,6 +840,24 @@ def _build_python_closure(
         site_packages / "ecorex",
         excluded=frozenset({"__pycache__"}),
     )
+    for package in (
+        "agent",
+        "bridge",
+        "models",
+        "channel",
+        "plugins",
+        "common",
+        "skills",
+        "voice",
+        "translate",
+        "cli",
+    ):
+        _copy_tree(
+            ROOT / package,
+            site_packages / package,
+            excluded=frozenset({"__pycache__", "test", "tests"}),
+        )
+    _copy_regular(ROOT / "config.py", site_packages / "config.py")
     _prune_runtime_tree(destination)
     if platform == "macos":
         _reject_macos_build_objects(destination)
@@ -2667,6 +2685,13 @@ def _pack_python_probe_command(interpreter: Path) -> tuple[str, ...]:
 except BaseException:
  print('__ECOREX_PACK_PROBE_BOOTSTRAP_FAILED__')
  raise SystemExit(81)
+try:
+ from bridge.agent_initializer import AgentInitializer
+ from agent.tools.tool_manager import ToolManager
+ assert AgentInitializer and ToolManager
+except BaseException:
+ print('__ECOREX_PACK_PROBE_COW_SPINE_FAILED__')
+ raise SystemExit(87)
 try:
  import cryptography
  import pydantic_core

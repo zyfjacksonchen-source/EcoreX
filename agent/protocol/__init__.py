@@ -28,6 +28,13 @@ from .image_job_service import (
     resolve_image_job_parallelism_policy,
     reset_image_job_service_for_tests,
 )
+from .steer import (
+    SteerInbox,
+    SteerRegistry,
+    SteerResult,
+    SteerStatus,
+    get_steer_registry,
+)
 
 __all__ = [
     'Agent', 
@@ -59,4 +66,9 @@ __all__ = [
     'get_image_job_service',
     'resolve_image_job_parallelism_policy',
     'reset_image_job_service_for_tests',
+    'SteerInbox',
+    'SteerRegistry',
+    'SteerResult',
+    'SteerStatus',
+    'get_steer_registry',
 ]

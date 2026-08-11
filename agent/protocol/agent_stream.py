@@ -4,31 +4,22 @@ Agent Stream Execution Module - Multi-turn reasoning based on tool-call
 Provides streaming output, event system, and complete tool-call loop
 """
 import json
-import hashlib
-import os
 import re
-import shlex
-import threading
 import time
 from typing import List, Dict, Any, Optional, Callable, Tuple
 
 from agent.protocol.cancel import AgentCancelledError
 from agent.protocol.models import LLMRequest, LLMModel
-from agent.protocol.message_utils import sanitize_claude_messages, compress_turn_to_text_only
-from agent.protocol.task_observer import TaskObserver
-from agent.core.tool_router import ToolRouterPolicy
-from agent.skills.tool_bridge import SKILL_CALLABLE_TOOL_ALIASES
+from agent.protocol.message_utils import (
+    sanitize_claude_messages,
+    compress_turn_to_text_only,
+    identify_complete_turns,
+    build_compaction_summary_text,
+    find_first_user_text_block,
+)
 from agent.tools.base_tool import BaseTool, ToolResult
-from common.ecorex_public_payload import mask_sensitive_text, redact_public_tool_value
-from common.ecorex_identity import sanitize_assistant_identity, sanitize_message_identity
 from common.log import logger
 from common.i18n import t as _t
-from ecorex.capabilities import (
-    Exposure,
-    builtin_capability_registry,
-    builtin_intent_routing_policy,
-    intent_inherits_image_context,
-)
 
 # Optional: repair malformed JSON args from non-strict providers (e.g. unescaped quotes in long content).
 try:
@@ -43,485 +34,59 @@ except ImportError:
 # time (subject to its own SSE / rendering limits); this bound only controls what
 # is stored in DB and replayed in history. Long reasoning is not useful for later
 # context (the LLM never sees thinking blocks anyway) and bloats DB.
-# Keep aligned with the Web SSE reasoning cap so refresh/recovery does not
-# collapse a long visible thinking trace back to a tiny historical preview.
-MAX_STORED_REASONING_CHARS = 256 * 1024
+# Keep aligned with the frontend REASONING_RENDER_CAP and the SSE
+# MAX_REASONING_STREAM_CHARS so that storage / stream / display all match.
+MAX_STORED_REASONING_CHARS = 4 * 1024  # 4 KB
 
 # Marker inserted between head and tail when reasoning is truncated.
 _REASONING_TRUNCATE_MARKER = "\n\n... [reasoning truncated, {omitted} chars omitted] ...\n\n"
 
+# --------------------------------------------------------------------------
+# Fatal-error classification.
+#
+# Both branches below drop the whole in-memory context, so a false positive
+# costs the user their working conversation. Every marker must therefore be
+# specific enough that it cannot appear in an unrelated failure: generic words
+# ("without", "each", "must have", "not found") matched far too much, and a
+# bare "400" substring also matched token counts such as 4000.
+# --------------------------------------------------------------------------
 
-def _public_agent_exception_summary(value: Any) -> Dict[str, Any]:
-    text = str(value or "")
-    text_bytes = text.encode("utf-8", errors="replace")
-    text_hash = hashlib.sha256(text_bytes).hexdigest()[:16] if text else ""
-    error_type = value.__class__.__name__ if value is not None else ""
-    return {
-        "errorHash": text_hash,
-        "error_hash": text_hash,
-        "errorType": error_type,
-        "error_exception_type": error_type,
-        "errorLength": len(text),
-        "error_chars": len(text),
-        "errorBytes": len(text_bytes),
-        "error_bytes": len(text_bytes),
-        "redacted": True,
-        "errorRedacted": True,
-    }
+# Word-bounded so "4000" / "40096" are not read as HTTP 400.
+_RE_HTTP_400 = re.compile(r"\b400\b")
 
-
-def _public_agent_exception_message(prefix: str, value: Any) -> str:
-    summary = _public_agent_exception_summary(value)
-    if not summary["errorHash"]:
-        return prefix
-    return (
-        f"{prefix} Details redacted "
-        f"(type={summary['errorType']}, hash={summary['errorHash']}, "
-        f"chars={summary['errorLength']}, bytes={summary['errorBytes']})."
-    )
-
-
-def _private_agent_exception_text_for_classification(value: Any) -> str:
-    """Use exception text only for local retry/overflow classification."""
-    if value is None:
-        return ""
-    return "{}".format(value)
-
-
-def _model_content_to_text(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, (int, float, bool)):
-        return str(value)
-    if isinstance(value, list):
-        return "".join(_model_content_to_text(item) for item in value)
-    if isinstance(value, dict):
-        if "text" in value:
-            return _model_content_to_text(value.get("text"))
-        if "content" in value:
-            return _model_content_to_text(value.get("content"))
-        if "output_text" in value:
-            return _model_content_to_text(value.get("output_text"))
-        if "value" in value and value.get("type") in ("text", "output_text", None):
-            return _model_content_to_text(value.get("value"))
-        return ""
-    return str(value)
-
-
-def _safe_tool_arg_log_value(key: Any, value: Any, max_chars: int = 200) -> str:
-    key_text = str(key or "")
-    try:
-        safe_container = redact_public_tool_value({key_text: value}, max_depth=4, max_items=20, max_chars=max_chars)
-        safe_value = safe_container.get(key_text) if isinstance(safe_container, dict) else safe_container
-    except Exception:
-        safe_value = "[redacted]"
-    if isinstance(safe_value, (dict, list)):
-        text = json.dumps(safe_value, ensure_ascii=False)
-    else:
-        text = str(safe_value)
-    if len(text) > max_chars:
-        text = text[:max_chars] + f"...({len(text)} chars)"
-    return text
-
-
-def _safe_tool_result_log_preview(value: Any, max_chars: int = 200) -> str:
-    try:
-        safe_value = redact_public_tool_value(value, max_depth=5, max_items=20, max_chars=max(512, max_chars))
-    except Exception:
-        safe_value = "[redacted]"
-    if isinstance(safe_value, (dict, list)):
-        text = json.dumps(safe_value, ensure_ascii=False)
-    else:
-        text = mask_sensitive_text(safe_value, max_chars=max(512, max_chars))
-    if len(text) > max_chars:
-        return text[:max_chars] + "..."
-    return text
-
-
-def _public_agent_tool_error_result(prefix: str, value: Any, *, execution_time: float = 0) -> Dict[str, Any]:
-    message = _public_agent_exception_message(prefix, value)
-    return {
-        "status": "error",
-        "result": message,
-        "error": message,
-        "execution_time": execution_time,
-        **_public_agent_exception_summary(value),
-    }
-
-TOOL_SCHEMA_BUDGET_ENABLED_DEFAULT = True
-CONTEXT_BUDGET_WARN_RATIO_DEFAULT = 0.85
-TOOL_EXECUTION_HEARTBEAT_SECONDS = 12
-TOOL_EXECUTION_DEFAULT_LEASE_SECONDS = 15 * 60
-TOOL_EXECUTION_DEFAULT_MAX_SECONDS = 90 * 60
-TOOL_EXECUTION_LONG_TASK_MAX_SECONDS = 3 * 60 * 60
-TOOL_EXECUTION_EXTENSION_SECONDS = 15 * 60
-TOOL_EXECUTION_LONG_TASK_KEYWORDS = (
-    "image",
-    "images",
-    "png",
-    "jpg",
-    "jpeg",
-    "webp",
-    "generate",
-    "render",
-    "comfy",
-    "diffusion",
-    "stable-diffusion",
-    "gpt-image",
-    "dall",
-    "midjourney",
-    "remotion",
-    "video",
-    "ffmpeg",
-    "playwright install",
-    "browser-automation",
-    "npm install",
-    "pip install",
-    "docker build",
-    "pytest",
-    "npm run build",
-    "生图",
-    "生成图片",
-    "图片",
-    "渲染",
-    "视频",
+_CONTEXT_OVERFLOW_MARKERS = (
+    "context length exceeded", "maximum context length", "prompt is too long",
+    "context overflow", "context window", "exceeds model context",
+    "request_too_large", "request exceeds the maximum size",
+    "too many tokens", "input is too long",
 )
-CONTEXT_OVERFLOW_KEYWORDS = (
-    "context length exceeded",
-    "maximum context length",
-    "prompt is too long",
-    "context overflow",
-    "context window",
-    "exceeds model context",
-    "request_too_large",
-    "request too large",
-    "prompt too large",
-    "input too large",
-    "request exceeds the maximum size",
-    "tokens exceed",
+
+# Structural tool_use/tool_result pairing complaints only.
+_MESSAGE_FORMAT_MARKERS = (
+    "tool_use", "tool_result", "tool_call_id", "tool_calls",
+    "tool result", "tool id",
+    "must be a response to a preceeding message",
 )
 
 
-def _env_int(name: str, default: int, *, minimum: int = 1, maximum: int = 24 * 60 * 60) -> int:
-    raw_value = os.environ.get(name, "")
-    if raw_value:
-        try:
-            parsed = int(float(raw_value))
-            return max(minimum, min(parsed, maximum))
-        except Exception:
-            logger.warning(
-                "[Agent] invalid %s=%r; using default %ss",
-                name,
-                raw_value,
-                default,
-            )
-    return max(minimum, min(default, maximum))
+def _is_context_overflow(error_str_lower: str) -> bool:
+    if "[context_overflow]" in error_str_lower:
+        return True
+    return any(m in error_str_lower for m in _CONTEXT_OVERFLOW_MARKERS)
 
 
-def _coerce_timeout_hint_seconds(value: Any) -> Optional[int]:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    if parsed <= 0:
-        return None
-    if parsed > 24 * 60 * 60 * 100:
-        parsed = parsed / 1000.0
-    return int(parsed)
+def _is_message_format_error(error_str_lower: str) -> bool:
+    """Detect broken tool_use/tool_result pairing rejected by the provider.
 
-
-def _tool_timeout_policy(tool_name: str, arguments: Any) -> Dict[str, Any]:
-    args = arguments if isinstance(arguments, dict) else {}
-    args_text = ""
-    try:
-        args_text = json.dumps(args, ensure_ascii=False).lower()
-    except Exception:
-        args_text = str(args).lower()
-
-    explicit_hint = None
-    for key in ("timeout_seconds", "timeout_secs", "timeout"):
-        explicit_hint = _coerce_timeout_hint_seconds(args.get(key))
-        if explicit_hint:
-            break
-    if explicit_hint is None:
-        explicit_hint = _coerce_timeout_hint_seconds(args.get("timeout_ms"))
-
-    base_seconds = _env_int(
-        "ECOREX_TOOL_EXECUTION_LEASE_SECONDS",
-        TOOL_EXECUTION_DEFAULT_LEASE_SECONDS,
-        minimum=60,
-        maximum=24 * 60 * 60,
-    )
-    max_seconds = _env_int(
-        "ECOREX_TOOL_EXECUTION_MAX_SECONDS",
-        TOOL_EXECUTION_DEFAULT_MAX_SECONDS,
-        minimum=base_seconds,
-        maximum=24 * 60 * 60,
-    )
-    extension_seconds = _env_int(
-        "ECOREX_TOOL_EXECUTION_EXTENSION_SECONDS",
-        TOOL_EXECUTION_EXTENSION_SECONDS,
-        minimum=60,
-        maximum=24 * 60 * 60,
-    )
-
-    name = str(tool_name or "").lower()
-    is_long_task = name in {"subagent", "agent_capability", "optional_abilities"} or any(
-        keyword in args_text or keyword in name for keyword in TOOL_EXECUTION_LONG_TASK_KEYWORDS
-    )
-    reason = "default"
-
-    if is_long_task:
-        base_seconds = max(base_seconds, 30 * 60)
-        max_seconds = max(max_seconds, TOOL_EXECUTION_LONG_TASK_MAX_SECONDS)
-        reason = "long_running_tool"
-
-    if explicit_hint:
-        base_seconds = max(base_seconds, min(explicit_hint + 60, 24 * 60 * 60))
-        max_seconds = max(max_seconds, min(explicit_hint + 30 * 60, 24 * 60 * 60))
-        reason = "tool_requested_timeout"
-
-    max_seconds = max(base_seconds, max_seconds)
-    adaptive = is_long_task or explicit_hint is not None
-    return {
-        "lease_seconds": base_seconds,
-        "max_seconds": max_seconds,
-        "extension_seconds": extension_seconds,
-        "adaptive": adaptive,
-        "reason": reason,
-    }
-
-TOOL_SCHEMA_CORE_NAMES = {
-    "read",
-    "ls",
-    "find",
-    "bash",
-    "write",
-    "edit",
-    "send",
-    "host_diagnostics",
-    "browser",
-    "optional_abilities",
-    "agent_capability",
-    "feishu_cli",
-    "tongxin_cli",
-    "ecorex_cli",
-}
-
-TOOL_NAME_ALIASES = {
-    "shell": "bash",
-    "terminal": "bash",
-    "cmd": "bash",
-    "powershell": "bash",
-    "image_generation": "imagegen",
-    "image-generation": "imagegen",
-    "tongxin": "tongxin_cli",
-    "tongxin-cli": "tongxin_cli",
-    "xin_agent_cli": "tongxin_cli",
-    "xin-agent-cli": "tongxin_cli",
-}
-TOOL_NAME_ALIASES.update(SKILL_CALLABLE_TOOL_ALIASES)
-
-TOOL_SCHEMA_INTENT_KEYWORDS = {
-    "workspace": (
-        "read", "ls", "find", "file", "files", "path", "directory", "folder",
-        "附件", "文件", "路径", "目录", "文件夹", "本地", "读取文件", "找文件", "查看文件",
-    ),
-    "browser": (
-        "browser", "chrome", "cdp", "devtools", "playwright", "http://", "https://",
-        "xhslink", "xiaohongshu", "小红书", "网页", "浏览器", "打开网页", "读取链接", "链接", "点击", "截图",
-    ),
-    "web": (
-        "web", "search", "fetch", "http://", "https://", "latest", "today", "新闻", "搜索", "联网", "查一下",
-    ),
-    "feishu": (
-        "feishu", "lark", "飞书", "多维表格", "妙搭", "妙记", "日历", "审批", "通讯录", "bitable",
-    ),
-    "tongxin": (
-        "tongxin", "xin_agent", "xin agent", "芯助手", "通芯", "实时消耗", "账号数据", "三端口",
-        "本土小红书", "医美小红书", "乘风小红书", "mpi", "广告主", "消耗", "展现", "点击",
-    ),
-    "office": (
-        "office", "document", "documents", "word", "doc", "docx", "pdf",
-        "presentation", "presentations", "powerpoint", "ppt", "pptx", "slides",
-        "spreadsheet", "spreadsheets", "excel", "workbook", "xlsx", "xlsm", "csv", "tsv",
-        "文档", "word文档", "docx", "pdf", "幻灯片", "演示文稿", "ppt", "pptx",
-        "表格", "电子表格", "excel", "xlsx", "工作簿", "质量检查", "渲染预览",
-    ),
-    "scheduler": (
-        "schedule", "scheduler", "remind", "cron", "定时", "提醒", "自动化", "每天", "每周",
-    ),
-    "subagent": (
-        "subagent", "sub-agent", "sub agent", "parallel", "并发", "子任务", "多角度", "复审",
-    ),
-    "vision": (
-        "image", "vision", "screenshot", "图片", "图像", "截图", "识别",
-    ),
-    "ocr": (
-        "ocr", "extract text", "extract url", "screenshot link", "image link",
-        "图片链接", "截图链接", "识别链接", "读取链接", "读链接", "识别文字", "识别文本",
-    ),
-    "memory": (
-        "memory", "remember", "recall", "记忆", "回忆",
-    ),
-    "diagnostics": (
-        "diagnostic", "diagnose", "mcp", "permission", "install", "ability", "tool missing",
-        "config", "configure", "api key", "api_key", "_api_key", "apikey", "secret", "env", "environment",
-        "诊断", "权限", "安装", "能力", "工具缺失", "配置", "密钥", "环境变量",
-    ),
-}
-
-IMAGEGEN_PRIORITY_TOOL_NAMES = {
-    "imagegen",
-    "host_diagnostics",
-    "optional_abilities",
-    "agent_capability",
-    "ecorex_cli",
-}
-IMAGEGEN_COMPANION_INTENT_GROUPS = {
-    "browser",
-    "web",
-    "ocr",
-    "workspace",
-}
-IMAGEGEN_SHELL_SEMANTIC_SIGNAL_REGEXES = (
-    re.compile(r"(?i)(?:^|[\s;,{(\[])(?:prompt|instruction|description)\s*[:=]"),
-    re.compile(r"(?i)--prompt(?:=|\s+)"),
-    re.compile(r"(?i)\"prompt\"\s*:"),
-)
-
-_IMAGEGEN_ROUTE_POLICY = builtin_intent_routing_policy()
-_IMAGEGEN_ROUTE_SPEC = builtin_capability_registry().get("imagegen")
-
-TOOL_SCHEMA_FOLLOWUP_CONFIRMATIONS = {
-    "ok", "okay", "yes", "y", "go", "continue", "proceed", "do it", "run it", "execute",
-    "好的", "好", "可以", "继续", "执行", "开始", "确认", "嗯", "行",
-    "已登录", "已经登录", "登录完成", "我已登录", "我已经登录",
-    "已扫码", "扫码完成", "已授权", "授权完成",
-}
-
-
-def _is_real_user_query_message(message: dict, expected_text: str = "") -> bool:
-    """True for the user's prompt, false for role=user tool_result messages."""
-    if not isinstance(message, dict) or message.get("role") != "user":
-        return False
-    content = message.get("content", [])
-    if isinstance(content, str):
-        return not expected_text or content == expected_text
-    if not isinstance(content, list):
-        return False
-    has_tool_result = any(
-        isinstance(block, dict) and block.get("type") == "tool_result"
-        for block in content
-    )
-    if has_tool_result:
-        return False
-    text_blocks = [
-        str(block.get("text") or "")
-        for block in content
-        if isinstance(block, dict) and block.get("type") == "text"
-    ]
-    if not text_blocks:
-        return False
-    return not expected_text or "\n".join(text_blocks) == expected_text
-
-
-def new_messages_since_user_query(messages: list, original_length: int, user_message: str = "") -> list:
-    """Return the current user query plus all messages produced by this run.
-
-    Context trimming can make the final message list shorter than the original
-    list, but a long tool chain can grow it back past ``original_length``. A
-    length-only test then persists only the tail, so locate the run boundary by
-    the real user query instead.
+    Requires both a structural marker and a 400-class signal, so an unrelated
+    400 (bad model name, missing parameter, oversized upload) never qualifies.
     """
-    if not isinstance(messages, list):
-        return []
-    fallback_start = min(max(int(original_length or 0), 0), len(messages))
-    for idx in range(len(messages) - 1, -1, -1):
-        if _is_real_user_query_message(messages[idx], user_message):
-            return list(messages[idx:])
-    for idx in range(len(messages) - 1, -1, -1):
-        if _is_real_user_query_message(messages[idx]):
-            return list(messages[idx:])
-    return list(messages[fallback_start:])
-
-
-def _coerce_usage_int(value) -> int:
-    try:
-        return max(0, int(value or 0))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _normalize_usage(usage: dict, model_name: str = "") -> dict:
-    """Normalize OpenAI-compatible usage envelopes for desktop telemetry."""
-    if not isinstance(usage, dict):
-        return {}
-    input_tokens = _coerce_usage_int(
-        usage.get("prompt_tokens")
-        or usage.get("input_tokens")
-        or usage.get("inputTokens")
-        or usage.get("promptTokens")
-    )
-    output_tokens = _coerce_usage_int(
-        usage.get("completion_tokens")
-        or usage.get("output_tokens")
-        or usage.get("completionTokens")
-        or usage.get("outputTokens")
-    )
-    total_tokens = _coerce_usage_int(
-        usage.get("total_tokens")
-        or usage.get("totalTokens")
-    )
-    if total_tokens <= 0 and (input_tokens or output_tokens):
-        total_tokens = input_tokens + output_tokens
-    if total_tokens <= 0:
-        return {}
-    return {
-        "inputTokens": input_tokens,
-        "outputTokens": output_tokens,
-        "totalTokens": total_tokens,
-        "model": model_name or "",
-    }
-
-
-def _user_visible_llm_error(message: Any, status_code: Any = "", error_code: Any = "", error_type: Any = "") -> str:
-    raw = str(message or "").strip()
-    raw_lower = raw.lower()
-    status_text = str(status_code or "").strip()
-    if (
-        status_text in ("0", "N/A")
-        or "connectionreseterror" in raw_lower
-        or "connection reset by peer" in raw_lower
-        or "connection aborted" in raw_lower
-        or raw_lower.startswith("connection error")
-        or raw_lower.startswith("stream interrupted")
-        or raw_lower.startswith("stream error")
-    ):
-        return _t(
-            "网络连接被中断，请稍后重试；如果持续出现，请检查当前网络、代理或模型接口地址。",
-            "The network connection was interrupted. Please try again later; if it keeps happening, check the network, proxy, or model endpoint.",
-        )
-    if "timed out" in raw_lower or "timeout" in raw_lower:
-        return _t(
-            "模型接口响应超时，请稍后重试；如果持续出现，请检查当前网络、代理或模型接口地址。",
-            "The model endpoint timed out. Please try again later; if it keeps happening, check the network, proxy, or model endpoint.",
-        )
-    if status_text and status_text not in ("", "N/A"):
-        code_text = str(error_code or "").strip()
-        type_text = str(error_type or "").strip()
-        extras = []
-        if code_text:
-            extras.append(f"Code: {code_text}")
-        if type_text:
-            extras.append(f"Type: {type_text}")
-        suffix = f" ({', '.join(extras)})" if extras else ""
-        return f"{raw} (Status: {status_text}){suffix}"
-    return re.sub(r"\s+\(Status:\s*0,\s*Code:\s*,\s*Type:\s*\)\s*$", "", raw).strip() or _t(
-        "模型接口请求失败，请稍后重试。",
-        "The model request failed. Please try again later.",
+    if not any(m in error_str_lower for m in _MESSAGE_FORMAT_MARKERS):
+        return False
+    return bool(
+        _RE_HTTP_400.search(error_str_lower)
+        or "invalid_request" in error_str_lower
+        or "invalidparameter" in error_str_lower
     )
 
 
@@ -543,19 +108,46 @@ def _truncate_reasoning_for_storage(text: str) -> str:
     return head + _REASONING_TRUNCATE_MARKER.format(omitted=omitted) + tail
 
 
-def _parse_tool_args(args_str: str, finish_reason: Optional[str]) -> Tuple[dict, Optional[str]]:
+# Appended only for the file-writing tools, where "send less" needs to say how.
+_SPLIT_WRITE_ADVICE = (
+    "To change an existing file, use edit rather than rewriting the whole file. "
+    "To create a large file, write the first part, then append each remaining part "
+    "with edit using an empty oldText (calling write again would overwrite what you "
+    "just wrote)."
+)
+
+
+def _cut_off_message(cause: str, tool_name: Optional[str]) -> str:
+    message = (
+        f"Your tool call was cut off by {cause}, so it did not run and nothing was written. "
+        "Repeating the same call will be cut off again - send less in one call instead."
+    )
+    if tool_name in ("write", "edit"):
+        message += " " + _SPLIT_WRITE_ADVICE
+    return message
+
+
+def _parse_tool_args(args_str: str, finish_reason: Optional[str],
+                     tool_name: Optional[str] = None) -> Tuple[dict, Optional[str]]:
     """Parse tool args JSON. Returns (args, error_msg); error_msg is None on success.
 
     On JSONDecodeError: detect truncation first (skip repair, surface max_tokens hint);
     otherwise try json-repair for escape issues; finally fall back to the raw decoder error.
     """
+    truncated_by_limit = finish_reason in ("length", "max_tokens")
     if not args_str:
+        # No arguments at all is valid for tools that take none, so only the
+        # finish reason can convict here. _execute_tool catches the rest by
+        # checking the call against the tool's required parameters.
+        if truncated_by_limit:
+            return {}, _cut_off_message("the output token limit", tool_name)
         return {}, None
     try:
         return json.loads(args_str), None
     except json.JSONDecodeError as e:
-        if finish_reason in ("length", "max_tokens") or not args_str.rstrip().endswith("}"):
-            return {}, "Output truncated (max_tokens reached). Split content into smaller chunks across multiple tool calls."
+        if truncated_by_limit or not args_str.rstrip().endswith("}"):
+            cause = "the output token limit" if truncated_by_limit else "arguments ending mid-JSON"
+            return {}, _cut_off_message(cause, tool_name)
         if _HAS_JSON_REPAIR:
             try:
                 repaired = _repair_json(args_str, return_objects=True)
@@ -589,10 +181,11 @@ class AgentStreamExecutor:
             messages: Optional[List[Dict]] = None,
             max_context_turns: int = 30,
             cancel_event=None,
+            steer_inbox=None,
     ):
         """
         Initialize stream executor
-        
+
         Args:
             agent: Agent instance (for accessing context)
             model: LLM model
@@ -606,6 +199,8 @@ class AgentStreamExecutor:
                 Checked at every safe point (turn boundary, before tool execution,
                 during LLM streaming). When set, raises AgentCancelledError which
                 run_stream catches to gracefully wind down.
+            steer_inbox: Optional SteerInbox for explicit instructions sent to
+                this active run. Drained only at message-safe checkpoints.
         """
         self.agent = agent
         self.model = model
@@ -616,27 +211,20 @@ class AgentStreamExecutor:
         self.on_event = on_event
         self.max_context_turns = max_context_turns
         self.cancel_event = cancel_event
+        self.steer_inbox = steer_inbox
 
         # Message history - use provided messages or create new list
         self.messages = messages if messages is not None else []
-        
+
         # Tool failure tracking for retry protection
         self.tool_failure_history = []  # List of (tool_name, args_hash, success) tuples
-        # Tool-chain tracking catches loops where the model changes arguments but
-        # keeps probing the same external system (for example bash -> lark-cli).
-        self.tool_chain_history = []  # List of (chain_key, tool_name, success) tuples
-        self._last_convergence_hint_key = ""
-        self._force_text_response_next_turn = False
-        self._force_text_response_reason = ""
-        self._internal_hint_texts = []
-        self._last_model_retry_evidence: Dict[str, Any] = {}
-        self._current_user_message_text = ""
-        self._current_turn_imagegen_success = False
-        self.last_outcome = "completed"
-        self.final_response_persistable = True
-        
+
         # Track files to send (populated by read tool)
         self.files_to_send = []  # List of file metadata dicts
+
+        # Absolute paths already reported as artifacts, so a write-then-edit
+        # sequence on the same file only surfaces one card in the UI.
+        self._emitted_artifacts = set()
 
     def _check_cancelled(self) -> None:
         """Raise AgentCancelledError if the user requested cancellation.
@@ -646,6 +234,72 @@ class AgentStreamExecutor:
         """
         if self.cancel_event is not None and self.cancel_event.is_set():
             raise AgentCancelledError("agent cancelled by user")
+
+    def _drain_steering(self) -> List[str]:
+        if self.steer_inbox is None:
+            return []
+        return self.steer_inbox.drain()
+
+    @staticmethod
+    def _steering_text(updates: List[str]) -> str:
+        if len(updates) == 1:
+            body = updates[0]
+        else:
+            body = "\n".join(f"{idx}. {text}" for idx, text in enumerate(updates, 1))
+        return (
+            "[Steering update for the active task]\n"
+            "Use this new instruction for the current task before continuing.\n\n"
+            f"{body}"
+        )
+
+    def _append_steering(
+        self,
+        updates: List[str],
+        pending_tool_calls: Optional[List[Dict]] = None,
+        content_blocks: Optional[List[Dict]] = None,
+    ) -> None:
+        """Append guidance, closing any tool_use blocks that will be skipped."""
+        if not updates:
+            return
+        blocks = content_blocks if content_blocks is not None else []
+        for tool_call in pending_tool_calls or []:
+            blocks.append({
+                "type": "tool_result",
+                "tool_use_id": tool_call["id"],
+                "content": "Skipped because the user redirected the active task.",
+                "is_error": True,
+            })
+        blocks.append({"type": "text", "text": self._steering_text(updates)})
+        if content_blocks is None:
+            self.messages.append({"role": "user", "content": blocks})
+        self._emit_event("agent_steered", {"count": len(updates)})
+        logger.info(f"[Agent] Applied {len(updates)} steering update(s)")
+
+    def _close_or_apply_final_steering(self) -> bool:
+        """Return True only when the run can finish without losing a steer."""
+        updates = self._drain_steering()
+        if updates:
+            self._append_steering(updates)
+            return False
+        if self.steer_inbox is None:
+            return True
+        if self.steer_inbox.close_if_empty():
+            return True
+        updates = self._drain_steering()
+        if updates:
+            self._append_steering(updates)
+        return False
+
+    def _drain_and_close_steering(self) -> None:
+        """Preserve any final guidance before the max-step summary call."""
+        if self.steer_inbox is None:
+            return
+        while True:
+            updates = self._drain_steering()
+            if updates:
+                self._append_steering(updates)
+            if self.steer_inbox.close_if_empty():
+                return
 
     def _handle_cancelled(self, partial_response: str) -> None:
         """Wind down ``self.messages`` after a user-initiated cancel.
@@ -700,10 +354,30 @@ class AgentStreamExecutor:
             # clear stop boundary on the next turn.
             self.messages.append({
                 "role": "assistant",
-                "content": [{"type": "text", "text": "_(Cancelled by user)_"}],
+                "content": [{"type": "text", "text": self._cancellation_marker()}],
             })
         except Exception as e:
-            logger.warning(f"[Agent] _handle_cancelled cleanup failed: {_public_agent_exception_message('Cleanup failed.', e)}")
+            logger.warning(f"[Agent] _handle_cancelled cleanup failed: {e}")
+
+    @staticmethod
+    def _cancellation_marker() -> str:
+        """Stop-boundary note, listing background jobs a cancel does not kill."""
+        marker = "_(Cancelled by user)_"
+        try:
+            from agent.tools.bash import background
+            running = [job for job in background.list_jobs() if job["running"]]
+        except Exception:
+            return marker
+        if not running:
+            return marker
+        lines = "\n".join(
+            f"- {job['id']}: {job['command']} ({job['elapsed']}s elapsed)"
+            for job in running
+        )
+        return (
+            f"{marker}\nBackground commands are still running - cancelling does not "
+            f"stop them. Use bash(bash_id=..., kill=true) to stop one.\n{lines}"
+        )
 
     def _emit_event(self, event_type: str, data: dict = None):
         """Emit event"""
@@ -715,147 +389,38 @@ class AgentStreamExecutor:
                     "data": data or {}
                 })
             except Exception as e:
-                logger.error(f"Event callback error: {_public_agent_exception_message('Event callback failed.', e)}")
+                logger.error(f"Event callback error: {e}")
 
-    def _image_artifact_naming_context(self) -> Dict[str, Any]:
-        """Build a small, user-visible naming context for generated image files."""
-        session_id = str(getattr(self.agent, "_current_session_id", "") or "").strip()
-        request_id = str(getattr(self.agent, "_current_request_id", "") or "").strip()
-        summary = ""
-        if session_id:
-            try:
-                from agent.memory.conversation_store import get_conversation_store
+    # Tools whose successful execution may have produced a user-facing file.
+    _ARTIFACT_TOOLS = ("write", "edit")
 
-                store = get_conversation_store()
-                title_state = store.get_session_title_state(session_id)
-                if isinstance(title_state, dict):
-                    summary = str(title_state.get("title") or "").strip()
-                if not summary:
-                    latest_user = store.get_visible_user_message(session_id)
-                    summary = str(latest_user.get("text") or "").strip()
-            except Exception as exc:
-                logger.debug("[Agent] image artifact naming context unavailable: %s", exc.__class__.__name__)
-        return {
-            "sessionId": session_id,
-            "requestId": request_id,
-            "summary": summary or "图片产物",
-            "source": "conversation-summary",
-        }
+    def _maybe_emit_artifact(self, tool_call: dict, result: dict) -> None:
+        """Report a file written by `write`/`edit` so clients can preview it."""
+        if not self.on_event:
+            return
+        if tool_call.get("name") not in self._ARTIFACT_TOOLS:
+            return
+        if result.get("status") != "success":
+            return
 
-    def _authorize_tool_execution(self, tool_name: str, tool_id: str, arguments: dict) -> dict:
-        """Ask the desktop permission broker before high-risk local tools run."""
-        def normalize_decision(decision: Any) -> dict:
-            if isinstance(decision, dict) and decision.get("allowed") in {True, False}:
-                return decision
-            return {"allowed": False, "reason": "Permission broker returned an invalid authorization decision."}
+        data = result.get("result")
+        path = data.get("path") if isinstance(data, dict) else None
+        if not path:
+            path = (tool_call.get("arguments") or {}).get("path")
+        if not path:
+            return
 
-        try:
-            from common.ecorex_tool_permissions import get_tool_permission_broker
+        from agent.protocol.artifact import safe_build_artifact
 
-            action = ""
-            if isinstance(arguments, dict):
-                action = str(arguments.get("action") or "")
-            normalized_tool = str(tool_name or "").strip().lower()
-            if normalized_tool in {"bash", "shell", "terminal"}:
-                action = "system_shell"
-            broker = get_tool_permission_broker()
-            capability_authorize = getattr(broker, "authorize_capability", None)
-            if callable(capability_authorize):
-                decision = capability_authorize(
-                    capability=tool_name,
-                    action=action,
-                    tool_call_id=tool_id,
-                    arguments=arguments if isinstance(arguments, dict) else {},
-                    emit_event=self._emit_event,
-                    cancel_event=self.cancel_event,
-                )
-                return normalize_decision(decision)
-            legacy_authorize = getattr(broker, "authorize", None)
-            if callable(legacy_authorize):
-                decision = legacy_authorize(
-                    tool_name=tool_name,
-                    tool_call_id=tool_id,
-                    arguments=arguments if isinstance(arguments, dict) else {},
-                    emit_event=self._emit_event,
-                    cancel_event=self.cancel_event,
-                )
-                if isinstance(decision, dict):
-                    return normalize_decision(decision)
-            return {"allowed": False, "reason": "Permission broker returned an invalid authorization decision."}
-        except AgentCancelledError:
-            raise
-        except Exception as e:
-            logger.warning(f"[Agent] desktop tool permission check skipped: {_public_agent_exception_message('Permission check failed.', e)}")
-            try:
-                from common.ecorex_tool_permissions import verified_runtime_full_access
+        artifact = safe_build_artifact(path)
+        if not artifact:
+            return
+        if artifact["path"] in self._emitted_artifacts:
+            return
+        self._emitted_artifacts.add(artifact["path"])
+        logger.info(f"🗂  Artifact: {artifact['rel_path']} ({artifact['kind']})")
+        self._emit_event("artifact", artifact)
 
-                if verified_runtime_full_access():
-                    return {"allowed": True, "reason": "verified-runtime-full-access"}
-            except Exception:
-                pass
-            risky = (tool_name or "").strip().lower() in {
-                "bash", "shell", "terminal", "browser", "feishu_cli", "optional_abilities",
-                "tongxin_cli", "agent_capability", "mcp", "mcp_server", "write", "edit", "fs_write", "skill_write",
-                "env_config", "send", "scheduler", "evolution_undo",
-                "web_fetch", "web_search", "vision", "ocr", "imagegen", "image_jobs",
-            }
-            if (tool_name or "").strip().lower() == "optional_abilities" and str((arguments or {}).get("action") or "").strip().lower() in {"list", "status"}:
-                risky = False
-            if risky:
-                return {"allowed": False, "reason": "Permission broker failed; local external tool execution was blocked."}
-            return {"allowed": True, "reason": "permission-check-error"}
-
-    @staticmethod
-    def _permission_proxy_for_tool(tool, tool_name: str, arguments: dict) -> Tuple[str, dict]:
-        """Map MCP tools onto the same permission categories as first-party tools."""
-        server_name = str(getattr(tool, "server_name", "") or "")
-        if server_name:
-            proxy_name = "browser" if server_name == "chrome-devtools" else "mcp"
-            proxy_args = {
-                "server": server_name,
-                "tool": tool_name,
-                "arguments": arguments if isinstance(arguments, dict) else {},
-            }
-            return proxy_name, proxy_args
-        if tool_name == "agent_capability":
-            args = arguments if isinstance(arguments, dict) else {}
-            action = str(args.get("action") or "").strip().lower()
-            if action == "install_pack":
-                ability = args.get("pack_id") or args.get("ability") or ""
-                normalized_ability = str(ability or "").strip().lower().replace("_", "-")
-                if normalized_ability in {"tongxin", "tongxin-cli", "xin-agent", "xin-agent-cli", "tx-assistant"}:
-                    script_path = args.get("script_path") or args.get("scriptPath") or args.get("path")
-                    proxy_args = {
-                        "action": "configure" if script_path else "auto_configure",
-                        "scope": "agent_capability_install_pack_preflight",
-                    }
-                    if script_path:
-                        proxy_args["script_path"] = script_path
-                    return "tongxin_cli", proxy_args
-                if normalized_ability in {"feishu", "lark", "feishu-lark", "lark-feishu"}:
-                    ability = "feishu-cli"
-                elif normalized_ability in {"feishu-cli", "lark-cli"}:
-                    ability = "feishu-cli"
-                return "optional_abilities", {
-                    "action": "install",
-                    "ability": ability,
-                }
-            if action in {"install_skill", "enable_skill", "disable_skill"}:
-                return "skill_write", {
-                    "action": action,
-                    "name": args.get("skill") or args.get("name") or "",
-                    "type": args.get("type") or "",
-                }
-            if action in {"configure_mcp", "reload_mcp"}:
-                server = args.get("server") if isinstance(args.get("server"), dict) else {}
-                return "mcp_server", {
-                    "action": action,
-                    "server_name": server.get("name") or "",
-                    "command": server.get("command") or "",
-                }
-            return "agent_capability", args
-        return tool_name, arguments
-    
     def _is_thinking_enabled(self) -> bool:
         """Whether deep-thinking mode is on at the model layer.
 
@@ -906,7 +471,7 @@ class AgentStreamExecutor:
         # Sort keys for consistent hashing
         args_str = json.dumps(args, sort_keys=True, ensure_ascii=False)
         return hashlib.md5(args_str.encode()).hexdigest()[:8]
-    
+
     def _check_consecutive_failures(self, tool_name: str, args: dict) -> Tuple[bool, str, bool]:
         """
         Check if tool has failed too many times consecutively or called repeatedly with same args
@@ -956,20 +521,20 @@ class AgentStreamExecutor:
                     break  # Stop at first success
             else:
                 break  # Different tool, stop counting
-        
+
         # Hard stop at 8 failures - abort with critical message
         if same_tool_failures >= 8:
             return True, _t(
                 "抱歉，我没能完成这个任务。可能是我理解有误或者当前方法不太合适。\n\n建议你：\n• 换个方式描述需求试试\n• 把任务拆分成更小的步骤\n• 或者换个思路来解决",
                 "Sorry, I couldn't complete this task. I may have misunderstood, or my current approach isn't quite right.\n\nYou could try:\n• Rephrasing your request\n• Breaking the task into smaller steps\n• Taking a different approach",
             ), True
-        
+
         # Warning at 6 failures
         if same_tool_failures >= 6:
             return True, f"工具 '{tool_name}' 连续失败 {same_tool_failures} 次（使用不同参数），停止执行以防止无限循环", False
-        
+
         return False, "", False
-    
+
     def _record_tool_result(self, tool_name: str, args: dict, success: bool):
         """Record tool execution result for failure tracking"""
         args_hash = self._hash_args(args)
@@ -977,1366 +542,6 @@ class AgentStreamExecutor:
         # Keep only last 50 records to avoid memory bloat
         if len(self.tool_failure_history) > 50:
             self.tool_failure_history = self.tool_failure_history[-50:]
-
-        chain_key = self._tool_chain_key(tool_name, args)
-        self.tool_chain_history.append((chain_key, tool_name, success))
-        if len(self.tool_chain_history) > 50:
-            self.tool_chain_history = self.tool_chain_history[-50:]
-        if str(tool_name or "").strip().lower() == "imagegen" and success:
-            self._current_turn_imagegen_success = True
-
-    @staticmethod
-    def _cli_arg_value(cli_args: List[Any], flag: str) -> str:
-        """Return a CLI flag value from a token list without shell parsing."""
-        if not isinstance(cli_args, list) or not flag:
-            return ""
-        for index, token in enumerate(cli_args):
-            text = str(token)
-            if text == flag and index + 1 < len(cli_args):
-                return str(cli_args[index + 1]).strip()
-            prefix = f"{flag}="
-            if text.startswith(prefix):
-                return text[len(prefix):].strip()
-        return ""
-
-    @staticmethod
-    def _cli_subcommand(cli_args: List[Any]) -> str:
-        if not isinstance(cli_args, list):
-            return ""
-        for token in cli_args[1:]:
-            text = str(token).strip().lower()
-            if text.startswith("+"):
-                return text
-        return ""
-
-    def _feishu_cli_chain_key(self, args: dict) -> str:
-        cli_args = args.get("args")
-        domain = ""
-        if isinstance(cli_args, list) and cli_args:
-            domain = str(cli_args[0]).strip().lower()
-        domain = domain or str(args.get("domain") or args.get("scope") or "").strip().lower()
-        action = str(args.get("action") or "").strip().lower()
-
-        if action == "run" and domain == "im" and isinstance(cli_args, list):
-            subcommand = self._cli_subcommand(cli_args) or "command"
-            if subcommand == "+chat-messages-list":
-                target = (
-                    self._cli_arg_value(cli_args, "--chat-id")
-                    or self._cli_arg_value(cli_args, "--user-id")
-                    or "unknown-target"
-                )
-                page = self._cli_arg_value(cli_args, "--page-token") or "first-page"
-                start = self._cli_arg_value(cli_args, "--start") or "no-start"
-                end = self._cli_arg_value(cli_args, "--end") or "no-end"
-                sort = self._cli_arg_value(cli_args, "--sort") or "default-sort"
-                return f"feishu_cli:{action}:{domain}:{subcommand}:{target}:{page}:{start}:{end}:{sort}"
-            if subcommand in {"+chat-list", "+chat-search"}:
-                page = self._cli_arg_value(cli_args, "--page-token") or "first-page"
-                query = self._cli_arg_value(cli_args, "--query") or self._cli_arg_value(cli_args, "--member-ids")
-                sort = self._cli_arg_value(cli_args, "--sort-type") or self._cli_arg_value(cli_args, "--sort")
-                return f"feishu_cli:{action}:{domain}:{subcommand}:{query or 'all'}:{page}:{sort or 'default-sort'}"
-            return f"feishu_cli:{action}:{domain}:{subcommand}"
-
-        return f"feishu_cli:{action}:{domain}"
-
-    def _tool_chain_key(self, tool_name: str, args: dict) -> str:
-        """Group related tool calls so cross-argument loops can be detected."""
-        name = (tool_name or "").strip().lower()
-        args = args if isinstance(args, dict) else {}
-        if name == "feishu_cli":
-            return self._feishu_cli_chain_key(args)
-        if name == "tongxin_cli":
-            action = str(args.get("action") or "").strip().lower() or "status"
-            cli_args = args.get("args") if isinstance(args.get("args"), list) else []
-            command = ":".join(str(item).strip().lower() for item in cli_args[:2] if str(item).strip())
-            return f"tongxin_cli:{action}:{command or 'status'}"
-        if name in {"bash", "shell", "terminal"}:
-            command = str(args.get("command") or args.get("cmd") or "").strip().lower()
-            if self._looks_like_feishu_cli_command(command):
-                return "feishu_cli:bash"
-            if self._looks_like_tongxin_cli_command(command):
-                return "tongxin_cli:bash"
-            if self._looks_like_image_generation_shell_command(command):
-                return "imagegen:bash"
-            if "chrome-devtools" in command or "remote-debugging-port" in command or "cdp" in command:
-                return "browser:cdp"
-            for prefix in ("python", "powershell", "pwsh", "node", "npm", "npx", "git", "curl"):
-                if command.startswith(prefix) or f" {prefix} " in command:
-                    return f"bash:{prefix}"
-            return "bash:generic"
-        if name == "browser":
-            return f"browser:{str(args.get('action') or '').strip().lower()}"
-        if name == "ocr":
-            return f"ocr:{str(args.get('action') or '').strip().lower()}"
-        if name.startswith("mcp__chrome-devtools__") or name.startswith("mcp__chrome_devtools__"):
-            return "browser:cdp"
-        if name.startswith("mcp__"):
-            parts = name.split("__", 2)
-            server = parts[1] if len(parts) > 1 and parts[1] else "server"
-            return f"mcp:{server}"
-        if name == "host_diagnostics":
-            action = str(args.get("action") or "status").strip().lower()
-            return f"host_diagnostics:{action or 'status'}"
-        if name in {"read", "ls", "web_fetch", "web_search"}:
-            return f"{name}:read"
-        return name or "unknown"
-
-    def _count_recent_unproductive_chain(self, chain_key: str) -> int:
-        count = 0
-        for key, _name, success in reversed(self.tool_chain_history):
-            if key != chain_key or success:
-                break
-            count += 1
-        return count
-
-    def _check_tool_chain_budget(self, tool_name: str, args: dict) -> Tuple[bool, str]:
-        chain_key = self._tool_chain_key(tool_name, args)
-        recent_count = self._count_recent_unproductive_chain(chain_key)
-        if chain_key.startswith("feishu_cli") and recent_count >= 6:
-            return True, (
-                "Feishu/Lark tool chain has been used repeatedly without converging. "
-                "Stop calling Feishu commands now: summarize what is known, state the exact blocker "
-                "(auth, empty attachment output, slow page, missing field, or unsupported command), "
-                "and ask the user for the next authorization or input if needed."
-            )
-        if chain_key.startswith("tongxin_cli") and recent_count >= 6:
-            return True, (
-                "Tongxin CLI read-only query chain has been used repeatedly without converging. "
-                "Stop calling Tongxin commands now: summarize the latest account-data result or exact blocker "
-                "(missing script, empty result, permission scope, unsupported command, or timeout), then ask the user for the next input."
-            )
-        if chain_key.startswith("browser:") and recent_count >= 8:
-            return True, (
-                "Browser/CDP tool chain has been used repeatedly without converging. "
-                "Stop browser calls now, summarize the current page state and the blocker, "
-                "then ask the user to log in, authorize, or clarify the target."
-            )
-        if chain_key.startswith("bash:") and recent_count >= 10:
-            return True, (
-                "Shell tool chain has been used repeatedly without converging. "
-                "Stop running more shell commands now, summarize progress and choose a different approach "
-                "or ask the user for confirmation."
-            )
-        return False, ""
-
-    def _build_convergence_hint(self) -> str:
-        if not self.tool_chain_history:
-            return ""
-        chain_key = self.tool_chain_history[-1][0]
-        recent_count = self._count_recent_unproductive_chain(chain_key)
-        if recent_count < 4 or self._last_convergence_hint_key == f"{chain_key}:{recent_count}":
-            return ""
-        if not (
-            chain_key.startswith("feishu_cli")
-            or chain_key.startswith("browser:")
-            or chain_key.startswith("bash:")
-        ):
-            return ""
-        self._last_convergence_hint_key = f"{chain_key}:{recent_count}"
-        return (
-            f"You have used the same external capability chain '{chain_key}' {recent_count} times in a row. "
-            "If enough information has been collected, provide the final answer now. "
-            "If it is blocked, name the blocker precisely and ask the user for the required authorization/input. "
-            "Do not continue probing the same chain unless the next call is clearly new and necessary."
-        )
-
-    def _force_text_response_once(self, reason: str) -> None:
-        """Disable tool schemas for the next model turn so loops close in text."""
-        self._force_text_response_next_turn = True
-        self._force_text_response_reason = reason or "external-capability-loop"
-
-    @staticmethod
-    def _assistant_message_text(message: dict) -> str:
-        if not isinstance(message, dict) or message.get("role") != "assistant":
-            return ""
-        content = message.get("content")
-        if isinstance(content, str):
-            return content.strip()
-        if isinstance(content, list):
-            parts = []
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text = str(block.get("text") or "").strip()
-                    if text:
-                        parts.append(text)
-            return "\n".join(parts).strip()
-        return ""
-
-    def _ensure_final_response_message(self, final_response: str) -> None:
-        """Persist internally generated final text as the last assistant turn."""
-        text = sanitize_assistant_identity((final_response or "").strip())
-        if not text:
-            return
-        latest_assistant_text = ""
-        for message in reversed(self.messages):
-            if isinstance(message, dict) and message.get("role") == "assistant":
-                latest_assistant_text = sanitize_assistant_identity(
-                    self._assistant_message_text(message)
-                ).strip()
-                break
-        if latest_assistant_text == text:
-            return
-        self.messages.append({
-            "role": "assistant",
-            "content": [{
-                "type": "text",
-                "text": text,
-            }],
-        })
-
-    def _append_internal_hint(self, text: str) -> None:
-        """Add a model-only hint and remove it after the next model turn."""
-        hint = (text or "").strip()
-        if not hint:
-            return
-        self._internal_hint_texts.append(hint)
-        self.messages.append({
-            "role": "user",
-            "content": [{
-                "type": "text",
-                "text": hint,
-            }],
-        })
-
-    def _remove_internal_hints(self) -> None:
-        if not self._internal_hint_texts:
-            return
-        hints = set(self._internal_hint_texts)
-        cleaned = []
-        removed = 0
-        for message in self.messages:
-            if message.get("role") == "user":
-                content = message.get("content")
-                if (
-                    isinstance(content, list)
-                    and len(content) == 1
-                    and isinstance(content[0], dict)
-                    and content[0].get("type") == "text"
-                    and str(content[0].get("text") or "").strip() in hints
-                ):
-                    removed += 1
-                    continue
-            cleaned.append(message)
-        if removed:
-            self.messages[:] = cleaned
-            logger.debug(f"[Agent] Removed {removed} internal hint message(s) from history")
-        self._internal_hint_texts.clear()
-
-    def _latest_user_text_for_tool_schema(self) -> str:
-        """Return the latest real user text, ignoring tool_result messages."""
-        texts = self._recent_real_user_texts(limit=1)
-        return texts[0] if texts else ""
-
-    def _recent_real_user_texts(self, limit: int = 4) -> List[str]:
-        """Return recent real user texts newest-first, ignoring tool_result messages."""
-        texts: List[str] = []
-        for message in reversed(self.messages or []):
-            if not isinstance(message, dict) or message.get("role") != "user":
-                continue
-            content = message.get("content")
-            if isinstance(content, str):
-                text = content
-            elif isinstance(content, list):
-                if any(isinstance(block, dict) and block.get("type") == "tool_result" for block in content):
-                    continue
-                parts = [
-                    str(block.get("text") or "")
-                    for block in content
-                    if isinstance(block, dict) and block.get("type") == "text"
-                ]
-                text = "\n".join(parts)
-            else:
-                continue
-            text = str(text or "").strip()
-            if not text:
-                continue
-            texts.append(text)
-            if len(texts) >= limit:
-                break
-        return texts
-
-    @staticmethod
-    def _tool_schema_config_bool(name: str, default: bool) -> bool:
-        try:
-            from config import conf
-            value = conf().get(name, default)
-        except Exception:
-            return default
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.strip().lower() not in {"0", "false", "no", "off"}
-        return bool(value)
-
-    def _tool_schema_group(self, tool_name: str) -> str:
-        name = (tool_name or "").strip().lower()
-        name = TOOL_NAME_ALIASES.get(name, name)
-        if name.startswith("mcp__chrome-devtools__") or name.startswith("mcp__chrome_devtools__"):
-            return "browser"
-        if name.startswith("mcp__"):
-            return "mcp"
-        if name == "browser":
-            return "browser"
-        if name in {"web_search", "web_fetch"}:
-            return "web"
-        if name == "feishu_cli":
-            return "feishu"
-        if name == "tongxin_cli":
-            return "tongxin"
-        if name == "scheduler":
-            return "scheduler"
-        if name == "subagent":
-            return "subagent"
-        if name == "vision":
-            return "vision"
-        if name == "ocr":
-            return "ocr"
-        if name == "imagegen":
-            return "imagegen"
-        if name in {"office_documents", "office_pdf", "office_presentations", "office_spreadsheets"}:
-            return "office"
-        if name in {"memory_search", "memory_get"}:
-            return "memory"
-        if name in {"host_diagnostics", "optional_abilities", "agent_capability", "ecorex_cli", "env_config"}:
-            return "diagnostics"
-        return "core" if name in TOOL_SCHEMA_CORE_NAMES else "other"
-
-    @staticmethod
-    def _canonical_tool_name(tool_name: str) -> str:
-        name = str(tool_name or "").strip()
-        return TOOL_NAME_ALIASES.get(name.lower(), name)
-
-    def _tool_schema_intent_groups(self, user_text: str) -> set:
-        lowered = (user_text or "").lower()
-        groups = set()
-        for group, keywords in TOOL_SCHEMA_INTENT_KEYWORDS.items():
-            if any(self._intent_keyword_matches(lowered, keyword) for keyword in keywords):
-                groups.add(group)
-        if self._looks_like_imagegen_user_intent(user_text) or re.search(
-            r"(?<![\w-])@imagegen(?![\w-])", user_text or "", flags=re.IGNORECASE
-        ):
-            groups.add("imagegen")
-        if "mcp" in lowered:
-            groups.add("mcp")
-            groups.add("diagnostics")
-        return groups
-
-    @staticmethod
-    def _looks_like_imagegen_user_intent(user_text: str) -> bool:
-        return any(
-            evidence.matched and evidence.promote_to is Exposure.DIRECT
-            for evidence in _IMAGEGEN_ROUTE_POLICY.evaluate(str(user_text or ""), _IMAGEGEN_ROUTE_SPEC)
-        )
-
-    @staticmethod
-    def _looks_like_semantic_image_edit_user_intent(user_text: str) -> bool:
-        return any(
-            evidence.matched and evidence.rule_id == "media.image.edit"
-            for evidence in _IMAGEGEN_ROUTE_POLICY.evaluate(str(user_text or ""), _IMAGEGEN_ROUTE_SPEC)
-        )
-
-    def _latest_user_has_image_attachment(self) -> bool:
-        for message in reversed(self.messages or []):
-            if not isinstance(message, dict) or message.get("role") != "user":
-                continue
-            content = message.get("content")
-            if not isinstance(content, list):
-                return False
-            if any(isinstance(block, dict) and block.get("type") == "tool_result" for block in content):
-                continue
-            return any(
-                isinstance(block, dict)
-                and block.get("type") in {"image", "input_image", "image_url"}
-                for block in content
-            )
-        return False
-
-    @staticmethod
-    def _intent_keyword_matches(lowered_text: str, keyword: str) -> bool:
-        keyword = str(keyword or "").lower()
-        if not keyword:
-            return False
-        # ASCII words should not match inside larger words: "base" must not
-        # select Feishu Base tools for an unrelated "database" question.
-        if "_" in keyword:
-            return keyword in lowered_text
-        if re.fullmatch(r"[a-z0-9_]+(?:[ -][a-z0-9_]+)*", keyword):
-            return re.search(
-                rf"(?<![a-z0-9_]){re.escape(keyword)}(?![a-z0-9_])",
-                lowered_text,
-            ) is not None
-        return keyword in lowered_text
-
-    @staticmethod
-    def _is_tool_schema_followup_confirmation(user_text: str) -> bool:
-        normalized = re.sub(r"[\s。.!！?？,，]+", " ", str(user_text or "").strip().lower()).strip()
-        if not normalized:
-            return False
-        if normalized in TOOL_SCHEMA_FOLLOWUP_CONFIRMATIONS:
-            return True
-        return len(normalized) <= 12 and any(word in normalized for word in TOOL_SCHEMA_FOLLOWUP_CONFIRMATIONS)
-
-    @staticmethod
-    def _context_budget_config_int(name: str, default: int) -> int:
-        try:
-            from config import conf
-            value = conf().get(name, default)
-        except Exception:
-            return int(default)
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return int(default)
-
-    @staticmethod
-    def _model_retry_config_int(default: int) -> int:
-        try:
-            from config import conf
-            cfg = conf()
-            value = cfg.get("model_max_retries", cfg.get("max_model_retries", default))
-        except Exception:
-            return max(0, int(default))
-        try:
-            return max(0, int(value))
-        except (TypeError, ValueError):
-            return max(0, int(default))
-
-    @staticmethod
-    def _context_budget_config_float(name: str, default: float) -> float:
-        try:
-            from config import conf
-            value = conf().get(name, default)
-        except Exception:
-            return float(default)
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return float(default)
-
-    def _estimate_text_tokens_for_budget(self, text: Any) -> int:
-        value = str(text or "")
-        estimator = getattr(self.agent, "_estimate_text_tokens", None)
-        if callable(estimator):
-            try:
-                return max(0, int(estimator(value)))
-            except Exception:
-                pass
-        if not value:
-            return 0
-        non_ascii = sum(1 for char in value if ord(char) > 127)
-        ascii_count = len(value) - non_ascii
-        return int(non_ascii * 1.5 + ascii_count * 0.25) + 1
-
-    def _estimate_payload_tokens_for_budget(self, value: Any) -> int:
-        if value is None:
-            return 0
-        if isinstance(value, str):
-            return self._estimate_text_tokens_for_budget(value)
-        try:
-            serialized = json.dumps(value, ensure_ascii=False, sort_keys=True)
-        except Exception:
-            serialized = str(value)
-        return self._estimate_text_tokens_for_budget(serialized)
-
-    @staticmethod
-    def _is_context_overflow_error(
-        message: Any = "",
-        status_code: Any = "",
-        error_code: Any = "",
-        error_type: Any = "",
-        taxonomy: Any = "",
-    ) -> bool:
-        evidence = " ".join(
-            str(part or "").lower()
-            for part in (message, status_code, error_code, error_type, taxonomy)
-            if part is not None
-        )
-        if "context_overflow" in evidence:
-            return True
-        return any(keyword in evidence for keyword in CONTEXT_OVERFLOW_KEYWORDS)
-
-    @staticmethod
-    def _is_message_format_error_text(message: Any = "") -> bool:
-        text = str(message or "").lower()
-        return any(keyword in text for keyword in [
-            "tool_use", "tool_result", "tool result", "without", "immediately after",
-            "corresponding", "must have", "each",
-            "tool_call_id", "tool id", "is not found", "not found", "tool_calls",
-            "must be a response to a preceeding message",
-            "2013",
-        ]) and (
-            "400" in text
-            or "status: 400" in text
-            or "invalid_request" in text
-            or "invalidparameter" in text
-        )
-
-    def _context_budget_limits(self) -> Dict[str, Any]:
-        context_window = 128000
-        if self.agent and hasattr(self.agent, "_get_model_context_window"):
-            try:
-                context_window = max(1, int(self.agent._get_model_context_window()))
-            except Exception:
-                context_window = 128000
-
-        reserve_default = max(1000, int(context_window * 0.1))
-        reserve_getter = getattr(self.agent, "_get_context_reserve_tokens", None)
-        if callable(reserve_getter):
-            try:
-                reserve_default = int(reserve_getter())
-            except Exception:
-                pass
-        response_reserve = self._context_budget_config_int(
-            "agent_context_budget_response_reserve_tokens",
-            reserve_default,
-        )
-        if response_reserve <= 0:
-            response_reserve = reserve_default
-        max_window_reserve = max(0, context_window - 1)
-        max_ratio_reserve = max_window_reserve if context_window <= 2 else max(1, int(context_window * 0.5))
-        max_response_reserve = min(max_window_reserve, max_ratio_reserve)
-        response_reserve = min(max(0, response_reserve), max_response_reserve)
-
-        configured_limit = getattr(self.agent, "max_context_tokens", None) if self.agent else None
-        try:
-            configured_limit = int(configured_limit) if configured_limit else None
-        except (TypeError, ValueError):
-            configured_limit = None
-
-        window_input_limit = max(1, context_window - response_reserve)
-        requested_limit = configured_limit or window_input_limit
-        clamp_to_window = self._tool_schema_config_bool("agent_context_budget_clamp_to_window", True)
-        effective_limit = min(requested_limit, window_input_limit) if clamp_to_window else requested_limit
-        effective_limit = max(1, int(effective_limit))
-
-        return {
-            "model": getattr(self.model, "model", "") or "",
-            "context_window_tokens": context_window,
-            "configured_max_context_tokens": configured_limit,
-            "response_reserve_tokens": response_reserve,
-            "window_input_limit_tokens": window_input_limit,
-            "effective_context_limit_tokens": effective_limit,
-            "clamped_to_window": bool(clamp_to_window and configured_limit and configured_limit > window_input_limit),
-        }
-
-    def _estimate_message_components_for_budget(self, messages: List[Dict[str, Any]]) -> Dict[str, int]:
-        components = {
-            "message_tokens": 0,
-            "text_tokens": 0,
-            "reasoning_tokens": 0,
-            "tool_use_tokens": 0,
-            "tool_result_tokens": 0,
-            "artifact_metadata_tokens": 0,
-            "media_tokens": 0,
-        }
-
-        for message in messages or []:
-            if not isinstance(message, dict):
-                continue
-            components["message_tokens"] += 4
-            content = message.get("content", "")
-            if isinstance(content, str):
-                tokens = self._estimate_text_tokens_for_budget(content)
-                components["text_tokens"] += tokens
-                components["message_tokens"] += tokens
-                continue
-            if not isinstance(content, list):
-                tokens = self._estimate_payload_tokens_for_budget(content)
-                components["text_tokens"] += tokens
-                components["message_tokens"] += tokens
-                continue
-
-            for block in content:
-                if not isinstance(block, dict):
-                    tokens = self._estimate_payload_tokens_for_budget(block)
-                    components["text_tokens"] += tokens
-                    components["message_tokens"] += tokens
-                    continue
-                block_type = block.get("type", "")
-                if block_type == "text":
-                    tokens = self._estimate_text_tokens_for_budget(block.get("text", ""))
-                    components["text_tokens"] += tokens
-                elif block_type == "thinking":
-                    tokens = self._estimate_text_tokens_for_budget(block.get("thinking", ""))
-                    components["reasoning_tokens"] += tokens
-                elif block_type == "tool_use":
-                    tokens = 50 + self._estimate_payload_tokens_for_budget(block.get("input", {}))
-                    components["tool_use_tokens"] += tokens
-                elif block_type == "tool_result":
-                    payload = block.get("content", "")
-                    tokens = 30 + self._estimate_payload_tokens_for_budget(payload)
-                    components["tool_result_tokens"] += tokens
-                    components["artifact_metadata_tokens"] += self._estimate_artifact_metadata_tokens(payload)
-                elif block_type in {"image", "input_image", "image_url"}:
-                    tokens = 1200
-                    components["media_tokens"] += tokens
-                else:
-                    tokens = self._estimate_payload_tokens_for_budget(block)
-                    components["text_tokens"] += tokens
-                components["message_tokens"] += tokens
-
-        return components
-
-    def _estimate_artifact_metadata_tokens(self, payload: Any) -> int:
-        value = payload
-        if isinstance(payload, str):
-            stripped = payload.strip()
-            if not stripped or stripped[0] not in "[{":
-                return 0
-            try:
-                value = json.loads(stripped)
-            except Exception:
-                return 0
-
-        stack = [value]
-        tokens = 0
-        scanned = 0
-        while stack and scanned < 80:
-            item = stack.pop()
-            scanned += 1
-            if isinstance(item, dict):
-                item_type = str(item.get("type") or item.get("kind") or "").lower()
-                looks_like_artifact = (
-                    item_type == "artifact"
-                    or "artifact" in item
-                    or "artifacts" in item
-                    or ("path" in item and any(key in item for key in ("title", "name", "kind", "mime")))
-                )
-                if looks_like_artifact:
-                    metadata = {
-                        key: item.get(key)
-                        for key in ("id", "type", "kind", "title", "name", "path", "url", "mime", "metadata")
-                        if key in item
-                    }
-                    tokens += self._estimate_payload_tokens_for_budget(metadata)
-                stack.extend(item.values())
-            elif isinstance(item, list):
-                stack.extend(item)
-        return tokens
-
-    def _build_context_budget(
-        self,
-        messages: List[Dict[str, Any]],
-        tools_schema: Optional[List[Dict[str, Any]]],
-        schema_budget: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        limits = self._context_budget_limits()
-        system_tokens = self._estimate_text_tokens_for_budget(self.system_prompt)
-        message_components = self._estimate_message_components_for_budget(messages)
-        tool_schema_tokens = self._estimate_payload_tokens_for_budget(tools_schema or [])
-        runtime_artifact_tokens = self._estimate_payload_tokens_for_budget(self.files_to_send or [])
-        artifact_metadata_tokens = message_components.get("artifact_metadata_tokens", 0) + runtime_artifact_tokens
-        estimated_input_tokens = (
-            system_tokens
-            + message_components.get("message_tokens", 0)
-            + tool_schema_tokens
-            + runtime_artifact_tokens
-        )
-        effective_limit = max(1, int(limits["effective_context_limit_tokens"]))
-        warn_ratio = self._context_budget_config_float(
-            "agent_context_budget_warn_ratio",
-            CONTEXT_BUDGET_WARN_RATIO_DEFAULT,
-        )
-        warn_ratio = min(max(0.1, warn_ratio), 0.99)
-        usage_ratio = estimated_input_tokens / float(effective_limit)
-        severity = "over_budget" if estimated_input_tokens > effective_limit else (
-            "near_limit" if usage_ratio >= warn_ratio else "ok"
-        )
-        turns = self._identify_complete_turns()
-        current_turn_tokens = self._estimate_message_components_for_budget(
-            turns[-1]["messages"] if turns else []
-        ).get("message_tokens", 0)
-
-        return {
-            "enabled": True,
-            **limits,
-            "warning_ratio": warn_ratio,
-            "severity": severity,
-            "over_budget": severity == "over_budget",
-            "near_limit": severity in {"near_limit", "over_budget"},
-            "estimated_input_tokens": estimated_input_tokens,
-            "remaining_input_tokens": effective_limit - estimated_input_tokens,
-            "usage_ratio": round(usage_ratio, 4),
-            "system_prompt_tokens": system_tokens,
-            "message_tokens": message_components.get("message_tokens", 0),
-            "text_tokens": message_components.get("text_tokens", 0),
-            "reasoning_tokens": message_components.get("reasoning_tokens", 0),
-            "tool_use_tokens": message_components.get("tool_use_tokens", 0),
-            "tool_result_tokens": message_components.get("tool_result_tokens", 0),
-            "tool_schema_tokens": tool_schema_tokens,
-            "artifact_metadata_tokens": artifact_metadata_tokens,
-            "media_tokens": message_components.get("media_tokens", 0),
-            "message_count": len(messages or []),
-            "turn_count": len(turns),
-            "current_turn_tokens": current_turn_tokens,
-            "current_turn_preserved": bool(turns),
-            "tool_schema_count": len(tools_schema or []),
-            "tool_schema_selected_count": (schema_budget or {}).get("selected_count", 0),
-            "tool_schema_deferred_count": (schema_budget or {}).get("deferred_count", 0),
-            "runtime_artifact_count": len(self.files_to_send or []),
-        }
-
-    def _select_tools_for_schema(
-        self,
-        force_text_response: bool = False,
-        force_text_reason: str = "",
-    ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
-        if force_text_response or not self.tools:
-            budget = {
-                "enabled": False,
-                "reason": "forced_text" if force_text_response else "no_tools",
-                "selected_count": 0,
-                "deferred_count": len(self.tools or {}),
-                "selected_tools": [],
-                "deferred_tools": sorted((self.tools or {}).keys()),
-            }
-            if force_text_response and force_text_reason:
-                budget["force_text_reason"] = force_text_reason
-            return None, budget
-
-        if not self._tool_schema_config_bool("agent_tool_schema_budget_enabled", TOOL_SCHEMA_BUDGET_ENABLED_DEFAULT):
-            all_tools = dict(self.tools)
-            return all_tools, {
-                "enabled": False,
-                "reason": "disabled_by_config",
-                "selected_count": len(all_tools),
-                "deferred_count": 0,
-                "selected_tools": sorted(all_tools.keys()),
-                "deferred_tools": [],
-            }
-
-        user_text = self._latest_user_text_for_tool_schema()
-        lowered = user_text.lower()
-        intent_groups = self._tool_schema_intent_groups(user_text)
-        imagegen_intent = "imagegen" in intent_groups
-        imagegen_available = "imagegen" in {str(name or "").strip().lower() for name in (self.tools or {})}
-        tool_router = ToolRouterPolicy()
-        imagegen_companion_groups = set()
-        inherited_followup_intent = False
-        image_context_followup = intent_inherits_image_context(user_text)
-        recent_imagegen_success = any(
-            str(name or "").strip().lower() == "imagegen" and success
-            for _chain, name, success in self.tool_chain_history[-8:]
-        )
-        if self._is_tool_schema_followup_confirmation(user_text) or image_context_followup:
-            for historical_text in self._recent_real_user_texts(limit=4)[1:]:
-                historical_groups = self._tool_schema_intent_groups(historical_text)
-                if historical_groups:
-                    intent_groups.update(historical_groups)
-                    imagegen_intent = imagegen_intent or "imagegen" in historical_groups
-                    inherited_followup_intent = True
-                    break
-        if (
-            not imagegen_intent
-            and image_context_followup
-            and (self._latest_user_has_image_attachment() or recent_imagegen_success)
-        ):
-            intent_groups.add("imagegen")
-            imagegen_intent = True
-            inherited_followup_intent = True
-        if imagegen_intent:
-            imagegen_companion_groups = tool_router.companion_groups_for_imagegen(intent_groups)
-        selected: Dict[str, Any] = {}
-        reasons: Dict[str, str] = {}
-        has_deferred_mcp = any(str(name or "").lower().startswith("mcp__") for name in self.tools)
-
-        for name, tool in (self.tools or {}).items():
-            lowered_name = (name or "").strip().lower()
-            group = self._tool_schema_group(lowered_name)
-            explicit_tool_name = bool(
-                lowered_name
-                and (
-                    lowered_name in lowered
-                    or lowered_name.replace("_", "-") in lowered
-                    or lowered_name.replace("_", " ") in lowered
-                )
-            )
-            if imagegen_intent:
-                if imagegen_available:
-                    if lowered_name == "imagegen":
-                        selected[name] = tool
-                        reasons[name] = "imagegen_primary_route"
-                    elif tool_router.allows_imagegen_companion_tool(lowered_name, group, imagegen_companion_groups):
-                        selected[name] = tool
-                        reasons[name] = f"imagegen_companion:{group}"
-                    continue
-                if lowered_name in IMAGEGEN_PRIORITY_TOOL_NAMES:
-                    selected[name] = tool
-                    reasons[name] = "imagegen_visibility_diagnostics"
-                elif tool_router.allows_imagegen_companion_tool(lowered_name, group, imagegen_companion_groups):
-                    selected[name] = tool
-                    reasons[name] = f"imagegen_companion:{group}"
-                continue
-            if (
-                lowered_name == "feishu_cli"
-                and has_deferred_mcp
-                and group not in intent_groups
-                and not explicit_tool_name
-            ):
-                continue
-            if lowered_name in TOOL_SCHEMA_CORE_NAMES:
-                selected[name] = tool
-                reasons[name] = "core"
-            elif group in intent_groups:
-                selected[name] = tool
-                reasons[name] = f"intent:{group}"
-            elif explicit_tool_name:
-                selected[name] = tool
-                reasons[name] = "explicit_tool_name"
-            elif lowered_name.startswith("mcp__"):
-                public_parts = lowered_name.replace("__", " ").replace("_", " ")
-                if public_parts and public_parts in lowered:
-                    selected[name] = tool
-                    reasons[name] = "explicit_mcp_name"
-
-        if imagegen_intent and not selected:
-            deferred = {name: tool for name, tool in self.tools.items()}
-            return {}, {
-                "enabled": True,
-                "reason": "imagegen_intent_no_safe_schema_tool",
-                "intent_groups": sorted(intent_groups),
-                "inherited_followup_intent": inherited_followup_intent,
-                "imagegen_intent": True,
-                "imagegen_available": False,
-                "selected_count": 0,
-                "deferred_count": len(deferred),
-                "selected_tools": [],
-                "deferred_tools": sorted(deferred.keys()),
-                "selection_reasons": reasons,
-            }
-
-        if imagegen_intent:
-            selected_groups = {self._tool_schema_group((name or "").strip().lower()) for name in selected}
-            if imagegen_companion_groups.difference(selected_groups):
-                for name, tool in (self.tools or {}).items():
-                    lowered_name = (name or "").strip().lower()
-                    if lowered_name in IMAGEGEN_PRIORITY_TOOL_NAMES and name not in selected:
-                        selected[name] = tool
-                        reasons[name] = "imagegen_companion_diagnostics"
-            deferred = {name: tool for name, tool in self.tools.items() if name not in selected}
-            selection_meta = tool_router.selection_metadata(selected, deferred, reasons)
-            return selected, {
-                "enabled": True,
-                "reason": "imagegen_intent_primary_route",
-                "intent_groups": sorted(intent_groups),
-                "companion_intent_groups": sorted(imagegen_companion_groups),
-                "inherited_followup_intent": inherited_followup_intent,
-                "imagegen_intent": True,
-                "imagegen_available": imagegen_available,
-                **selection_meta,
-            }
-
-        if not imagegen_intent:
-            recent_names = {name for _chain, name, _success in self.tool_chain_history[-4:]}
-            for name in recent_names:
-                if name in self.tools:
-                    selected[name] = self.tools[name]
-                    reasons[name] = "recent_tool_chain"
-
-        if len(self.tools) <= 8 and not has_deferred_mcp:
-            for name, tool in self.tools.items():
-                lowered_name = (name or "").strip().lower()
-                if self._tool_schema_group(lowered_name) == "other" and name not in selected:
-                    selected[name] = tool
-                    reasons[name] = "small_custom_toolset"
-
-        if not selected:
-            if len(self.tools) <= 8 and not has_deferred_mcp:
-                for name, tool in self.tools.items():
-                    selected[name] = tool
-                    reasons[name] = "small_custom_toolset"
-            else:
-                first_name = next(
-                    (name for name in self.tools if str(name or "").strip().lower() != "feishu_cli"),
-                    next(iter(self.tools)),
-                )
-                selected[first_name] = self.tools[first_name]
-                reasons[first_name] = "fallback_first_tool"
-
-        deferred = {name: tool for name, tool in self.tools.items() if name not in selected}
-        return selected, {
-            "enabled": True,
-            "reason": "budgeted",
-            "intent_groups": sorted(intent_groups),
-            "inherited_followup_intent": inherited_followup_intent,
-            "imagegen_intent": imagegen_intent,
-            "imagegen_available": imagegen_available,
-            "selected_count": len(selected),
-            "deferred_count": len(deferred),
-            "selected_tools": sorted(selected.keys()),
-            "deferred_tools": sorted(deferred.keys()),
-            "selection_reasons": reasons,
-        }
-
-    def _tool_result_user_action_blocker(self, tool_name: str, payload: Any) -> str:
-        """Return a convergence blocker that should force a text-only turn."""
-        name = (tool_name or "").strip().lower()
-        if name == "imagegen" and isinstance(payload, dict):
-            if payload.get("error") or payload.get("code") or (payload.get("failedCount") and not payload.get("successCount")):
-                next_action = str(payload.get("nextAction") or payload.get("next_action") or "configure_model_provider")
-                return (
-                    "The native imagegen route has returned a blocker. Stop calling tools now. "
-                    "Do not fall back to shell/Python/PIL/SVG/canvas, web search, or network image scraping. "
-                    "Tell the user the exact imagegen blocker and next action "
-                    f"({next_action}); image generation must be retried only through `imagegen` after that blocker is fixed."
-                )
-            return ""
-        if name != "feishu_cli" or not isinstance(payload, dict):
-            return ""
-        if payload.get("authRequired") is True:
-            return (
-                "Feishu authorization has been started and requires user action. "
-                "Stop calling tools now, show the authorization instruction/link already returned by feishu_cli, "
-                "and ask the user to continue after authorization is complete."
-            )
-        if payload.get("available") is False:
-            return (
-                "Feishu CLI is unavailable in this runtime. Stop probing through bash; explain the missing CLI/setup "
-                "state and ask the user to install, enable, or authorize the packaged Feishu CLI path."
-            )
-        return ""
-
-    @staticmethod
-    def _looks_like_image_generation_shell_command(command: str) -> bool:
-        text = str(command or "").strip().lower()
-        if not text:
-            return False
-        direct_markers = (
-            "skills/image-generation/scripts/generate.py",
-            "image-generation/scripts/generate.py",
-            "gpt-image",
-            "image-2-pro",
-            "/images/generations",
-            "/images/edits",
-            "openai.images",
-            "client.images.generate",
-            "client.images.edit",
-            "image_generation",
-            "imagegen",
-        )
-        if any(marker in text for marker in direct_markers):
-            return True
-        basename = ""
-        try:
-            first_token = shlex.split(str(command or ""), posix=False)[0]
-            basename = AgentStreamExecutor._shell_token_basename(first_token)
-        except Exception:
-            basename = ""
-        if basename in {"python", "python.exe", "python3", "py", "py.exe", "node", "node.exe"}:
-            semantic_generation_signal = (
-                AgentStreamExecutor._looks_like_imagegen_user_intent(text)
-                or any(pattern.search(text) for pattern in IMAGEGEN_SHELL_SEMANTIC_SIGNAL_REGEXES)
-            )
-            if (
-                ("from pil import" in text or "imagedraw" in text or "image.new(" in text)
-                and semantic_generation_signal
-            ):
-                return True
-            if any(marker in text for marker in ("svg", "canvas", "base64.b64decode")) and semantic_generation_signal:
-                return True
-        return False
-
-    def _current_turn_text(self) -> str:
-        candidates = [self._current_user_message_text]
-        for message in reversed(self.messages or []):
-            if not isinstance(message, dict) or message.get("role") != "user":
-                continue
-            content = message.get("content")
-            if isinstance(content, list):
-                text = "\n".join(
-                    str(part.get("text") or "")
-                    for part in content
-                    if isinstance(part, dict) and part.get("type") == "text"
-                )
-            else:
-                text = str(content or "")
-            if text.strip():
-                candidates.append(text)
-                break
-        return "\n\n".join(part for part in candidates if part)
-
-    def _current_turn_is_image_retouch(self) -> bool:
-        text = self._current_turn_text().lower()
-        if not text:
-            return False
-        retouch_markers = (
-            "精准修图",
-            "精修标注",
-            "retouch-marker",
-            "image-retouch",
-            "局部修图",
-            "标注图附件",
-            "箭头尖端",
-            "语义图片编辑",
-        )
-        if any(marker.lower() in text for marker in retouch_markers):
-            return True
-        if self._looks_like_semantic_image_edit_user_intent(text):
-            return True
-        return False
-
-    def _retouch_shell_postprocess_allowed(self, command: str) -> bool:
-        text = str(command or "").strip().lower()
-        if not text:
-            return False
-        if not self._current_turn_imagegen_success:
-            return False
-        deterministic_prefixes = (
-            "cp ", "copy ", "copy-item ", "mv ", "move ", "move-item ", "ren ", "rename ",
-            "rename-item ", "mkdir ", "new-item ", "zip ", "tar ", "7z ", "compress-archive ",
-            "sha256sum ", "shasum ", "certutil ",
-        )
-        return text.startswith(deterministic_prefixes)
-
-    @staticmethod
-    def _looks_like_semantic_image_edit_shell_command(command: str) -> bool:
-        text = str(command or "").strip().lower()
-        if not text:
-            return False
-        script_markers = (
-            "from pil import",
-            "imagedraw",
-            "image.open(",
-            "image.new(",
-            "cv2.",
-            "opencv",
-            "magick ",
-            "convert ",
-            "composite ",
-            "drawtext",
-            "fill ",
-            "annotate",
-            "inpaint",
-            "mask",
-            "crop",
-            "paste(",
-            "textbbox",
-            "truetype",
-            "canvas",
-            "svg",
-        )
-        if any(marker in text for marker in script_markers):
-            return True
-        try:
-            basename = AgentStreamExecutor._shell_token_basename(shlex.split(str(command or ""), posix=False)[0])
-        except Exception:
-            basename = ""
-        return basename in {"python", "python.exe", "python3", "py", "py.exe", "node", "node.exe"}
-
-    def _sleep_cancelable(self, seconds: float) -> None:
-        """Sleep in short slices so user cancel interrupts retry backoff."""
-        deadline = time.time() + max(0, seconds)
-        while time.time() < deadline:
-            if self.cancel_event is not None and self.cancel_event.is_set():
-                raise AgentCancelledError("Agent execution cancelled")
-            time.sleep(min(0.25, max(0, deadline - time.time())))
-
-    def _external_capability_reroute(self, tool_name: str, args: dict) -> str:
-        """Return a hard-stop message when the model is using the wrong host path."""
-        name = (tool_name or "").strip().lower()
-        if name not in {"bash", "shell", "terminal"}:
-            return ""
-        command = str((args or {}).get("command") or (args or {}).get("cmd") or "").strip().lower()
-        if not command:
-            return ""
-        if self._current_turn_is_image_retouch() and not self._retouch_shell_postprocess_allowed(command):
-            if "imagegen" in self.tools:
-                return (
-                    "This is an EcoreX 精准修图 / semantic image-editing task. "
-                    "Do not use bash, Python, PIL, OpenCV, ImageMagick, SVG/canvas, or coordinate scripts "
-                    "to edit the picture locally. Use the native `imagegen` tool for the actual image edit, "
-                    "using the annotated marker image and the original image path as inputs. "
-                    "Shell is allowed only after a successful imagegen result for deterministic post-processing "
-                    "such as copy, rename, zip, checksum, or reveal."
-                )
-            return (
-                "This is an EcoreX 精准修图 / semantic image-editing task, but `imagegen` is not visible in the current tool table. "
-                "Do not fall back to bash/Python/PIL/OpenCV/ImageMagick local editing. Inspect capability visibility with "
-                "`host_diagnostics`, `optional_abilities`, or `agent_capability`, then report the exact blocker if image editing cannot run."
-            )
-        if self._looks_like_feishu_cli_command(command):
-            if "feishu_cli" in self.tools:
-                return (
-                    "Do not call Feishu/Lark CLI through raw bash. Use the `feishu_cli` tool first "
-                    "so EcoreX can handle packaged CLI resolution, auth, timeouts, and safe output. "
-                    "For first-time CLI app configuration or user-scope authorization, call `feishu_cli` "
-                    "with action `agent_auth` so the tool can inspect official diagnostics before choosing "
-                    "the displayed Feishu authorization flow."
-                )
-            if "host_diagnostics" in self.tools:
-                return (
-                    "Do not keep probing Feishu/Lark CLI through raw bash. Call `host_diagnostics` with "
-                    "action `status` first to inspect whether Feishu CLI is packaged and authorized."
-                )
-        if self._looks_like_tongxin_cli_command(command):
-            if "tongxin_cli" in self.tools:
-                return (
-                    "Do not call Tongxin Assistant CLI through raw bash. Use the `tongxin_cli` tool first "
-                    "so EcoreX can enforce the all-user read-only command allowlist, bounded timeouts, "
-                    "and sanitized output. Write, sync, auth, submit, approve, delete, and permission-changing "
-                    "Tongxin commands are not allowed."
-                )
-            if "host_diagnostics" in self.tools:
-                return (
-                    "Do not keep probing Tongxin Assistant CLI through raw bash. Call `host_diagnostics` "
-                    "with action `status` first to inspect whether the Tongxin read-only CLI is configured."
-                )
-        if self._looks_like_image_generation_shell_command(command):
-            if "imagegen" in self.tools:
-                return (
-                    "Do not generate or edit images through raw bash, Python, PIL, SVG/canvas, or direct network API scripts. "
-                    "The native `imagegen` route is visible in the current tool table; use `imagegen` for semantic image generation. "
-                    "For batch or multi-image generation, choose one or more `imagegen` tool calls according to the visible schema "
-                    "and the user's requested ordering. Do not invent a local Python fallback or a fixed setup flow. "
-                    "The image model route remains `gpt-image-2-pro` by default and may only visibly fall back within the same GPT Image compatible route."
-                )
-            if "host_diagnostics" in self.tools:
-                return (
-                    "Image generation must use the native imagegen capability, not raw shell/Python. "
-                    "`imagegen` is not visible in the current tool table; inspect capability/tool visibility with "
-                    "`host_diagnostics`, `optional_abilities`, or `agent_capability`, then decide from that evidence "
-                    "whether the route can be enabled. If it cannot, report the exact blocker instead of trying local image scripts."
-                )
-        if (
-            "chrome-devtools-mcp" in command
-            or "remote-debugging-port" in command
-            or "http://127.0.0.1:9222" in command
-            or "localhost:9222" in command
-        ):
-            if "host_diagnostics" in self.tools:
-                if "browser" in self.tools:
-                    return (
-                        "CDP is a browser automation path, not a raw shell task. "
-                        "Use the `browser` tool directly with action `snapshot`, `navigate`, "
-                        "`click`, `fill`, or `get_text`; EcoreX will attach to the configured "
-                        "CDP endpoint and reuse the logged-in browser profile. Do not read "
-                        "Codex/Chrome plugin SKILL.md files and do not probe 9222 through bash."
-                    )
-                return (
-                    "Do not probe or launch CDP through raw bash as the first browser path. "
-                    "Call `host_diagnostics` first to inspect CDP/MCP readiness, then use "
-                    "`optional_abilities` to enable/install the needed browser or MCP ability. Use shell only after diagnostics "
-                    "show a concrete setup blocker."
-                )
-        return ""
-
-    @staticmethod
-    def _shell_token_basename(token: str) -> str:
-        text = str(token or "").strip().strip("\"'")
-        return text.replace("\\", "/").rsplit("/", 1)[-1].lower()
-
-    @staticmethod
-    def _is_lark_cli_package(token: str) -> bool:
-        text = str(token or "").strip().strip("\"'").lower()
-        return (
-            text == "@larksuite/cli"
-            or text.startswith("@larksuite/cli@")
-            or text == "lark-cli"
-            or text.startswith("lark-cli@")
-        )
-
-    @classmethod
-    def _is_lark_cli_runner(cls, token: str) -> bool:
-        text = str(token or "").strip().strip("\"'").replace("\\", "/").lower()
-        name = cls._shell_token_basename(text)
-        return (
-            name in {"lark-cli", "lark-cli.cmd", "lark-cli.exe"}
-            or (
-                text.endswith("/scripts/run.js")
-                and ("cli-main/" in text or "@larksuite/cli/" in text or "lark-cli/" in text)
-            )
-        )
-
-    @staticmethod
-    def _looks_like_feishu_cli_command(command: str) -> bool:
-        text = str(command or "").strip().lower().replace("\\", "/").replace("%2f", "/").replace("%40", "@")
-        if "lark-cli" in text or "@larksuite/cli" in text:
-            return True
-        if (
-            "github.com/larksuite/cli" in text
-            or "github.com:larksuite/cli" in text
-            or "registry.npmmirror.com/@larksuite/cli" in text
-        ):
-            return True
-        if "scripts/run.js" in text and (
-            "cli-main/" in text
-            or "/@larksuite/cli/" in text
-            or "/lark-cli/" in text
-        ):
-            return True
-        return False
-
-    @staticmethod
-    def _is_tongxin_cli_runner(token: str) -> bool:
-        text = str(token or "").strip().strip("\"'").replace("\\", "/").lower()
-        name = text.rsplit("/", 1)[-1]
-        return name in {
-            "xin_agent_cli.py",
-            "xin agent cli.py",
-            "xin-agent-cli.py",
-            "tongxin_cli.py",
-            "tongxin-cli",
-            "tongxin-cli.cmd",
-            "tongxin-cli.exe",
-            "xin-agent-cli",
-            "xin-agent-cli.cmd",
-            "xin-agent-cli.exe",
-        }
-
-    @classmethod
-    def _looks_like_tongxin_cli_command(cls, command: str) -> bool:
-        text = str(command or "").strip().lower().replace("\\", "/")
-        if "xin_agent_cli.py" in text or "xin agent cli.py" in text or "xin-agent-cli.py" in text or "tongxin_cli.py" in text:
-            return True
-        if "tongxin-cli" in text or "xin-agent-cli" in text:
-            return True
-        if "/自动报表工具/" in text and "xin_agent" in text:
-            return True
-        return False
-
-    @staticmethod
-    def _has_shell_control_operator(command: str) -> bool:
-        """Reject complex shell commands before automatic host-tool rerouting."""
-        if not command:
-            return False
-        if "\n" in command or "\r" in command:
-            return True
-        for marker in ("&&", "||", "|", ";", ">", "<"):
-            if marker in command:
-                return True
-        # Windows also treats a standalone ampersand as a command separator.
-        return " & " in command
-
-    @classmethod
-    def _extract_simple_lark_cli_args(cls, command: str) -> Optional[List[str]]:
-        """Extract args from simple raw Feishu CLI shell invocations.
-
-        Complex shell constructs deliberately return None so the normal
-        hard-stop guidance still applies instead of reinterpreting arbitrary
-        shell syntax as trusted Feishu CLI arguments.
-        """
-        raw = str(command or "").strip()
-        if not raw or cls._has_shell_control_operator(raw):
-            return None
-        try:
-            tokens = shlex.split(raw, posix=False)
-        except ValueError:
-            return None
-        tokens = [str(token).strip().strip("\"'") for token in tokens if str(token).strip()]
-        if not tokens:
-            return None
-
-        for index, token in enumerate(tokens):
-            if cls._is_lark_cli_runner(token):
-                if index == 0:
-                    return tokens[1:]
-                if index == 1 and cls._shell_token_basename(tokens[0]) in {"npx", "npx.cmd", "npx.exe", "node", "node.exe"}:
-                    return tokens[2:]
-                return None
-            if cls._shell_token_basename(token) in {"npx", "npx.cmd", "npx.exe"}:
-                for pkg_index in range(index + 1, len(tokens)):
-                    candidate = tokens[pkg_index]
-                    if str(candidate).startswith("-"):
-                        continue
-                    if cls._is_lark_cli_package(candidate):
-                        return tokens[pkg_index + 1:]
-                    return None
-            if cls._shell_token_basename(token) in {"node", "node.exe"} and index + 1 < len(tokens):
-                runner = tokens[index + 1]
-                if cls._is_lark_cli_runner(runner):
-                    return tokens[index + 2:]
-                return None
-        return None
-
-    @classmethod
-    def _extract_simple_tongxin_cli_args(cls, command: str) -> Optional[List[str]]:
-        """Extract args from simple raw Tongxin CLI shell invocations."""
-        raw = str(command or "").strip()
-        if not raw or cls._has_shell_control_operator(raw):
-            return None
-        try:
-            tokens = shlex.split(raw, posix=False)
-        except ValueError:
-            return None
-        tokens = [str(token).strip().strip("\"'") for token in tokens if str(token).strip()]
-        if not tokens:
-            return None
-
-        for index, token in enumerate(tokens):
-            if cls._is_tongxin_cli_runner(token):
-                if index == 0:
-                    return tokens[1:]
-                launcher = cls._shell_token_basename(tokens[index - 1]) if index > 0 else ""
-                if launcher in {"python", "python.exe", "python3", "py", "py.exe", "node", "node.exe"}:
-                    return tokens[index + 1:]
-                # Windows py -3 xin_agent_cli.py ...
-                if index >= 2 and cls._shell_token_basename(tokens[index - 2]) in {"py", "py.exe"} and tokens[index - 1].startswith("-"):
-                    return tokens[index + 1:]
-                return None
-        return None
-
-    @staticmethod
-    def _feishu_autoroute_args(lark_args: List[str], original_args: dict) -> dict:
-        lowered = [str(item).strip().lower() for item in lark_args]
-        routed: Dict[str, Any]
-        if lowered[:2] == ["auth", "status"]:
-            routed = {"action": "status"}
-        elif lowered[:2] == ["auth", "login"]:
-            routed = {"action": "auth_login"}
-            for idx, value in enumerate(lowered):
-                if value == "--scope" and idx + 1 < len(lark_args):
-                    routed["scope"] = str(lark_args[idx + 1])
-                if value == "--domain" and idx + 1 < len(lark_args):
-                    routed["domain"] = str(lark_args[idx + 1])
-            if not routed.get("scope") and not routed.get("domain"):
-                routed = {"action": "agent_auth"}
-        elif lowered[:2] == ["config", "init"]:
-            routed = {"action": "config_init"}
-            for idx, value in enumerate(lowered):
-                if value == "--brand" and idx + 1 < len(lark_args):
-                    routed["brand"] = str(lark_args[idx + 1])
-                if value == "--app-id" and idx + 1 < len(lark_args):
-                    routed["app_id"] = str(lark_args[idx + 1])
-        else:
-            routed = {"action": "run", "args": lark_args}
-        if isinstance(original_args, dict) and original_args.get("timeout") is not None:
-            routed["timeout"] = original_args.get("timeout")
-        return routed
-
-    @staticmethod
-    def _tongxin_autoroute_args(cli_args: List[str], original_args: dict) -> dict:
-        lowered = [str(item).strip().lower() for item in cli_args]
-        if lowered[:1] == ["schema"]:
-            routed: Dict[str, Any] = {"action": "schema"}
-        else:
-            routed = {"action": "run", "args": cli_args}
-        if isinstance(original_args, dict) and original_args.get("timeout") is not None:
-            routed["timeout"] = original_args.get("timeout")
-        return routed
-
-    def _external_capability_autoroute(self, tool_name: str, args: dict) -> Tuple[str, dict, str]:
-        """Map a simple wrong host path to the safer first-party host tool."""
-        name = (tool_name or "").strip().lower()
-        if name not in {"bash", "shell", "terminal"}:
-            return "", {}, ""
-        command = str((args or {}).get("command") or (args or {}).get("cmd") or "").strip()
-        if "tongxin_cli" in self.tools:
-            tongxin_args = self._extract_simple_tongxin_cli_args(command)
-            if tongxin_args is not None:
-                return (
-                    "tongxin_cli",
-                    self._tongxin_autoroute_args(tongxin_args, args or {}),
-                    "raw bash tongxin-cli",
-                )
-        if "feishu_cli" in self.tools:
-            lark_args = self._extract_simple_lark_cli_args(command)
-            if lark_args is not None:
-                return (
-                    "feishu_cli",
-                    self._feishu_autoroute_args(lark_args, args or {}),
-                    "raw bash lark-cli",
-                )
-        return "", {}, ""
 
     def run_stream(self, user_message: str) -> str:
         """
@@ -2356,8 +561,6 @@ class AgentStreamExecutor:
             user_message[:500] + f" …(+{len(user_message) - 500} chars)"
         )
         logger.info(f"🤖 {self.model.model}{thinking_label} | 👤 {_log_msg}")        
-        self._current_user_message_text = str(user_message or "")
-        resume_from_tool_history = self._continues_previous_tool_work(user_message)
         
         # Add user message (Claude format - use content blocks for consistency)
         self.messages.append({
@@ -2382,12 +585,14 @@ class AgentStreamExecutor:
 
         self._emit_event("agent_start")
 
+        # Reset the run-scoped MCP tool-retrieval accumulator. On-demand tool
+        # retrieval only grows this set within a run, so a tool that already
+        # produced a tool_use never disappears from the schema mid-run (which
+        # would make Claude/MiniMax raise a message-format error).
+        self._retrieved_mcp_names = set()
+
         final_response = ""
         turn = 0
-        exhausted = True
-        outcome = "completed"
-        self.last_outcome = outcome
-        self.final_response_persistable = True
 
         cancelled = False
         try:
@@ -2396,14 +601,35 @@ class AgentStreamExecutor:
                 # between turns short-circuits cleanly.
                 self._check_cancelled()
 
+                steering_updates = self._drain_steering()
+                if steering_updates:
+                    self._append_steering(steering_updates)
+
                 turn += 1
                 logger.info(f"[Agent] Turn {turn}")
                 self._emit_event("turn_start", {"turn": turn})
 
                 # Call LLM (enable retry_on_empty for better reliability)
                 assistant_msg, tool_calls = self._call_llm_stream(retry_on_empty=True)
-                self._remove_internal_hints()
                 final_response = assistant_msg
+
+                # A steer that arrived while the model was streaming takes
+                # precedence over its proposed continuation. Tool calls have
+                # already been written to history, so close every one with a
+                # synthetic result before asking the model to reconsider.
+                steering_updates = self._drain_steering()
+                if steering_updates:
+                    self._append_steering(
+                        steering_updates,
+                        pending_tool_calls=tool_calls,
+                    )
+                    self._emit_event("turn_end", {
+                        "turn": turn,
+                        "has_tool_calls": bool(tool_calls),
+                        "tool_count": len(tool_calls),
+                        "steered": True,
+                    })
+                    continue
 
                 # No tool calls, end loop
                 if not tool_calls:
@@ -2413,7 +639,7 @@ class AgentStreamExecutor:
                         logger.info("[Agent] This usually happens when LLM thinks the task is complete after tool execution")
                         
                         # 如果之前有工具调用，强制要求 LLM 生成文本回复
-                        if turn > 1 or resume_from_tool_history:
+                        if turn > 1:
                             logger.info("[Agent] Requesting explicit response from LLM...")
                             
                             # Remember position so we can remove the injected prompt later
@@ -2429,9 +655,7 @@ class AgentStreamExecutor:
                             })
                             
                             # 再调用一次 LLM
-                            self._force_text_response_once("empty-after-tools")
                             assistant_msg, tool_calls = self._call_llm_stream(retry_on_empty=False)
-                            self._remove_internal_hints()
                             final_response = assistant_msg
                             
                             # Remove the injected prompt from history so it doesn't
@@ -2451,14 +675,12 @@ class AgentStreamExecutor:
                                     "continuing to execute tools instead of breaking"
                                 )
                             elif not assistant_msg:
-                                # Preserve completed tool facts without claiming the task succeeded.
+                                # Still empty (no text and no tool_calls): use fallback
                                 logger.warning("[Agent] Still empty after explicit request")
                                 final_response = _t(
-                                    "工具步骤已经执行，现有产物也已保留，但模型没有返回最终说明；本轮未标记为完成。你可以直接回复“继续”，我会基于现有结果收口。",
-                                    "The tool steps ran and existing artifacts were preserved, but the model returned no final explanation, so this run was not marked complete. Reply “continue” to finish from the existing results.",
+                                    "抱歉，我暂时无法生成回复。请尝试换一种方式描述你的需求，或稍后再试。",
+                                    "Sorry, I can't generate a reply right now. Please try rephrasing your request, or try again later.",
                                 )
-                                outcome = "partial"
-                                self.final_response_persistable = False
                                 logger.info("Generated fallback response for empty LLM output")
                         else:
                             # First-turn empty reply, fall back directly
@@ -2466,16 +688,29 @@ class AgentStreamExecutor:
                                 "抱歉，我暂时无法生成回复。请尝试换一种方式描述你的需求，或稍后再试。",
                                 "Sorry, I can't generate a reply right now. Please try rephrasing your request, or try again later.",
                             )
-                            outcome = "failed"
-                            self.final_response_persistable = False
                             logger.info("Generated fallback response for empty LLM output")
                     else:
                         logger.info(f"💭 {assistant_msg[:150]}{'...' if len(assistant_msg) > 150 else ''}")
-                    
+
                     # If the explicit-response retry produced tool_calls, skip the break
                     # and continue down to the tool execution branch in this same iteration.
                     if not tool_calls:
-                        exhausted = False
+                        steering_updates = self._drain_steering()
+                        if steering_updates:
+                            self._append_steering(steering_updates)
+                            self._emit_event("turn_end", {
+                                "turn": turn,
+                                "has_tool_calls": False,
+                                "steered": True,
+                            })
+                            continue
+                        if not self._close_or_apply_final_steering():
+                            self._emit_event("turn_end", {
+                                "turn": turn,
+                                "has_tool_calls": False,
+                                "steered": True,
+                            })
+                            continue
                         logger.debug("✅ Done (no tool calls)")
                         self._emit_event("turn_end", {
                             "turn": turn,
@@ -2490,7 +725,10 @@ class AgentStreamExecutor:
                     if isinstance(args, dict):
                         parts = []
                         for k, v in args.items():
-                            parts.append(f"{k}={_safe_tool_arg_log_value(k, v)}")
+                            v_str = str(v)
+                            if len(v_str) > 200:
+                                v_str = v_str[:200] + f"...({len(v_str)} chars)"
+                            parts.append(f"{k}={v_str}")
                         args_str = ', '.join(parts)
                         if args_str:
                             tool_calls_str.append(f"{tc['name']}({args_str})")
@@ -2505,9 +743,17 @@ class AgentStreamExecutor:
                 tool_result_blocks = []
 
                 try:
-                    for tool_call in tool_calls:
+                    for tool_index, tool_call in enumerate(tool_calls):
                         # Honour cancel between tool invocations within the same turn
                         self._check_cancelled()
+                        steering_updates = self._drain_steering()
+                        if steering_updates:
+                            self._append_steering(
+                                steering_updates,
+                                pending_tool_calls=tool_calls[tool_index:],
+                                content_blocks=tool_result_blocks,
+                            )
+                            break
                         result = self._execute_tool(tool_call)
                         tool_results.append(result)
                         
@@ -2531,6 +777,9 @@ class AgentStreamExecutor:
                                 self.files_to_send.append(result_data)
                                 logger.info(f"📎 File queued for sending: {result_data.get('file_name', result_data.get('path'))}")
                                 self._emit_event("file_to_send", result_data)
+
+                        # Surface user-facing files written by the agent
+                        self._maybe_emit_artifact(tool_call, result)
                         
                         # Check for critical error - abort entire conversation
                         if result.get("status") == "critical_error":
@@ -2541,8 +790,12 @@ class AgentStreamExecutor:
                         # Log tool result in compact format
                         status_emoji = "✅" if result.get("status") == "success" else "❌"
                         result_data = result.get('result', '')
-                        result_log_preview = _safe_tool_result_log_preview(result_data)
-                        logger.info(f"  {status_emoji} {tool_call['name']} ({result.get('execution_time', 0):.2f}s): {result_log_preview}")
+                        # Format result string with proper Chinese character support
+                        if isinstance(result_data, (dict, list)):
+                            result_str = json.dumps(result_data, ensure_ascii=False)
+                        else:
+                            result_str = str(result_data)
+                        logger.info(f"  {status_emoji} {tool_call['name']} ({result.get('execution_time', 0):.2f}s): {result_str[:200]}{'...' if len(result_str) > 200 else ''}")
 
                         # Build tool result block (Claude format)
                         # Format content in a way that's easy for LLM to understand
@@ -2610,14 +863,14 @@ class AgentStreamExecutor:
                                     f"⚠️  Detected potential loop: '{tool_name}' called {recent_success_count} times "
                                     f"with same args. Adding hint to LLM to provide final response."
                                 )
-                                self._force_text_response_once("repeated-successful-tool-call")
-                                self._append_internal_hint(
-                                    "工具已经成功执行并返回结果。请基于这些信息向用户做出回复，不要重复调用相同的工具。"
-                                )
-                        convergence_hint = self._build_convergence_hint()
-                        if convergence_hint:
-                            logger.warning(f"[Agent] Adding convergence hint: {convergence_hint}")
-                            self._append_internal_hint(convergence_hint)
+                                # Add a gentle hint message to guide LLM to respond
+                                self.messages.append({
+                                    "role": "user",
+                                    "content": [{
+                                        "type": "text",
+                                        "text": "工具已成功执行并返回结果。请基于这些信息向用户做出回复，不要重复调用相同的工具。"
+                                    }]
+                                })
                     elif tool_calls:
                         # If we have tool_calls but no tool_result_blocks (unexpected error),
                         # create error results for all tool calls to maintain message integrity
@@ -2641,9 +894,9 @@ class AgentStreamExecutor:
                     "tool_count": len(tool_calls)
                 })
 
-            if exhausted:
-                outcome = "partial"
+            if turn >= self.max_turns:
                 logger.warning(f"⚠️  Reached max decision step limit: {self.max_turns}")
+                self._drain_and_close_steering()
                 
                 # Force model to summarize without tool calls
                 logger.info("[Agent] Requesting summary from LLM after reaching max steps...")
@@ -2662,9 +915,7 @@ class AgentStreamExecutor:
                 
                 # Call LLM one more time to get summary (without retry to avoid loops)
                 try:
-                    self._force_text_response_once("max-turn-summary")
                     summary_response, summary_tools = self._call_llm_stream(retry_on_empty=False)
-                    self._remove_internal_hints()
                     if summary_response:
                         final_response = summary_response
                         logger.info(f"💭 Summary: {summary_response[:150]}{'...' if len(summary_response) > 150 else ''}")
@@ -2675,7 +926,7 @@ class AgentStreamExecutor:
                             f"I've taken {turn} decision steps and reached the per-run limit. The task may not be fully complete — try breaking it into smaller steps, or describe your request differently.",
                         )
                 except Exception as e:
-                    logger.warning(f"Failed to get summary from LLM: {_public_agent_exception_message('Summary generation failed.', e)}")
+                    logger.warning(f"Failed to get summary from LLM: {e}")
                     final_response = _t(
                         f"我已经执行了{turn}个决策步骤，达到了单次运行的步数上限。任务可能还未完全完成，建议你将任务拆分成更小的步骤，或者换一种方式描述需求。",
                         f"I've taken {turn} decision steps and reached the per-run limit. The task may not be fully complete — try breaking it into smaller steps, or describe your request differently.",
@@ -2699,57 +950,88 @@ class AgentStreamExecutor:
                 final_response = "_(Cancelled)_"
 
         except Exception as e:
-            public_error = _public_agent_exception_message("Agent execution failed.", e)
-            logger.error(f"❌ Agent execution error: {public_error}")
-            error_payload = {"error": public_error, "message": public_error}
-            error_payload.update(_public_agent_exception_summary(e))
-            retry_evidence = getattr(self, "_last_model_retry_evidence", {}) or {}
-            if isinstance(retry_evidence, dict):
-                error_payload.update(retry_evidence)
-            self._emit_event("error", error_payload)
+            logger.error(f"❌ Agent execution error: {e}")
+            self._emit_event("error", {"error": str(e)})
             raise
 
         finally:
+            if self.steer_inbox is not None:
+                self.steer_inbox.close()
             final_response = final_response.strip() if final_response else final_response
-            final_response = sanitize_assistant_identity(final_response)
-            self.last_outcome = "cancelled" if cancelled else outcome
-            if final_response and not cancelled and self.final_response_persistable:
-                self._ensure_final_response_message(final_response)
             if cancelled:
                 # Emit before agent_end so channels can mark UI as cancelled
                 self._emit_event("agent_cancelled", {"final_response": final_response})
             logger.info(f"[Agent] 🏁 Done ({turn} turns)" + (" [cancelled]" if cancelled else ""))
-            self._emit_event("agent_end", {
-                "final_response": final_response,
-                "cancelled": cancelled,
-                "outcome": "cancelled" if cancelled else outcome,
-                "usage": self.agent.last_usage,
-            })
+            self._emit_event("agent_end", {"final_response": final_response, "cancelled": cancelled})
 
         return final_response
 
-    def _continues_previous_tool_work(self, user_message: str) -> bool:
-        """Recognize a continuation only when the preceding turn has tool facts."""
-        text = re.sub(r"\s+", " ", str(user_message or "").strip().lower())
-        if not (
-            text.startswith(("继续", "接着", "往下", "完成剩余", "请继续"))
-            or re.match(r"^(continue|proceed|resume|finish)\b", text)
-        ):
-            return False
-        turns = self._identify_complete_turns()
-        if not turns:
-            return False
-        return any(
-            isinstance(block, dict) and block.get("type") == "tool_result"
-            for message in turns[-1]["messages"]
-            for block in (message.get("content") or [])
-            if isinstance(message.get("content"), list)
-        )
+    def _select_tools_for_injection(self) -> list:
+        """Decide which tools to inject into the current LLM turn.
+
+        Built-in tools are ALWAYS injected in full (skills and core flows hard
+        depend on them). MCP tools are also injected in full UNLESS on-demand
+        retrieval is enabled AND the MCP tool count exceeds the configured
+        threshold — then only the most relevant MCP tools are injected, unioned
+        with those already selected earlier in this run (only-grows, so a tool
+        that already produced a tool_use never vanishes from the schema).
+
+        Degrades safely: disabled feature, no embedding provider, embedding
+        failure, count below threshold, or any error → inject all tools. Tools
+        are never silently dropped.
+        """
+        all_tools = list(self.tools.values())
+        try:
+            from config import conf
+            if not conf().get("mcp_tool_retrieval_enabled", False):
+                return all_tools
+
+            from agent.tools.mcp.mcp_tool import McpTool
+            mcp_tools = [t for t in all_tools if isinstance(t, McpTool)]
+            builtin_tools = [t for t in all_tools if not isinstance(t, McpTool)]
+
+            threshold = int(conf().get("mcp_tool_retrieval_threshold", 20) or 20)
+            if len(mcp_tools) <= threshold:
+                return all_tools
+
+            top_k = int(conf().get("mcp_tool_retrieval_top_k", 10) or 10)
+
+            from agent.tools import ToolManager
+            from agent.tools.mcp.tool_retrieval import (
+                build_retrieval_query,
+                select_mcp_tools,
+            )
+
+            tm = ToolManager()
+            tool_vectors = tm.get_mcp_tool_vectors()
+            query = build_retrieval_query(self.messages)
+            query_vector = tm.embed_query(query)
+
+            selected = select_mcp_tools(
+                query_vector,
+                tool_vectors,
+                top_k,
+                getattr(self, "_retrieved_mcp_names", set()),
+            )
+            if selected is None:
+                # No provider / empty index / error → full injection.
+                return all_tools
+
+            # Persist the accumulated selection for subsequent turns.
+            self._retrieved_mcp_names = selected
+
+            selected_mcp = [t for t in mcp_tools if t.name in selected]
+            logger.info(
+                f"[ToolRetrieval] Injecting {len(builtin_tools)} built-in + "
+                f"{len(selected_mcp)}/{len(mcp_tools)} MCP tool(s) (top_k={top_k})"
+            )
+            return builtin_tools + selected_mcp
+        except Exception as e:
+            logger.debug(f"[ToolRetrieval] full injection (retrieval skipped): {e}")
+            return all_tools
 
     def _call_llm_stream(self, retry_on_empty=True, retry_count=0, max_retries=3,
-                         _overflow_retry: bool = False,
-                         _force_text_turn: Optional[bool] = None,
-                         _force_text_reason: str = "") -> Tuple[str, List[Dict]]:
+                         _overflow_retry: bool = False) -> Tuple[str, List[Dict]]:
         """
         Call LLM with streaming and automatic retry on errors
         
@@ -2762,7 +1044,6 @@ class AgentStreamExecutor:
         Returns:
             (response_text, tool_calls)
         """
-        self._last_model_retry_evidence = {}
         # Validate and fix message history (e.g. orphaned tool_result blocks).
         # Context trimming is done once in run_stream() before the loop starts,
         # NOT here — trimming mid-execution would strip the current run's
@@ -2779,47 +1060,17 @@ class AgentStreamExecutor:
         # newly available MCP tools mid-conversation without a session restart.
         try:
             from agent.tools import ToolManager
-            manager = ToolManager()
-            ensure_mcp = getattr(manager, "ensure_mcp_configured_loaded", None)
-            if callable(ensure_mcp):
-                ensure_mcp(wait_seconds=0.2)
-            manager.sync_mcp_into_agent(self)
+            ToolManager().sync_mcp_into_agent(self)
         except Exception as e:
-            logger.debug(f"[Agent] MCP sync skipped: {_public_agent_exception_message('MCP sync failed.', e)}")
-
-        if _force_text_turn is None:
-            force_text_response = self._force_text_response_next_turn
-            force_text_reason = self._force_text_response_reason
-            if force_text_response:
-                self._force_text_response_next_turn = False
-                self._force_text_response_reason = ""
-                logger.warning(
-                    f"[Agent] Tool schemas disabled for one turn to force convergence: {force_text_reason}"
-                )
-        else:
-            force_text_response = bool(_force_text_turn)
-            force_text_reason = _force_text_reason
-
-        schema_tools, schema_budget = self._select_tools_for_schema(
-            force_text_response=force_text_response,
-            force_text_reason=force_text_reason,
-        )
-        if schema_budget.get("enabled") or schema_budget.get("deferred_count"):
-            logger.info(
-                "[Agent] Tool schema budget: "
-                f"selected={schema_budget.get('selected_count')} "
-                f"deferred={schema_budget.get('deferred_count')} "
-                f"groups={schema_budget.get('intent_groups', [])}"
-            )
-            self._emit_event("tool_schema_budget", schema_budget)
+            logger.debug(f"[Agent] MCP sync skipped: {e}")
 
         # Prepare tool definitions. Prefer get_json_schema() when it yields
         # real properties (lets tools augment schema at runtime), otherwise
         # fall back to the static `tool.params` (MCP tools rely on this).
         tools_schema = None
-        if schema_tools:
+        if self.tools:
             tools_schema = []
-            for tool in schema_tools.values():
+            for tool in self._select_tools_for_injection():
                 input_schema = tool.params
                 try:
                     dynamic = (tool.get_json_schema() or {}).get("parameters") or {}
@@ -2832,17 +1083,6 @@ class AgentStreamExecutor:
                     "description": tool.description,
                     "input_schema": input_schema,
                 })
-
-        context_budget = self._build_context_budget(messages, tools_schema, schema_budget)
-        if context_budget.get("near_limit"):
-            logger.warning(
-                "[Agent] Context budget %s: estimated=%s limit=%s remaining=%s",
-                context_budget.get("severity"),
-                context_budget.get("estimated_input_tokens"),
-                context_budget.get("effective_context_limit_tokens"),
-                context_budget.get("remaining_input_tokens"),
-            )
-        self._emit_event("context_budget", context_budget)
 
         # Debug: dump the full system prompt and messages sent to the LLM.
         # Gated behind `debug` config to avoid flooding normal logs.
@@ -2861,19 +1101,12 @@ class AgentStreamExecutor:
         #     pass
 
         # Create request
-        configured_model_max_retries = self._model_retry_config_int(max_retries)
         request = LLMRequest(
             messages=messages,
             temperature=0,
             stream=True,
             tools=tools_schema,
-            system=self.system_prompt,  # Pass system prompt separately for Claude API
-            retry_count=retry_count,
-            max_model_retries=configured_model_max_retries,
-            model_max_retries=configured_model_max_retries,
-            model_retry_sleep=self._sleep_cancelable,
-            tool_schema_budget=schema_budget,
-            context_budget=context_budget,
+            system=self.system_prompt  # Pass system prompt separately for Claude API
         )
 
         self._emit_event("message_start", {"role": "assistant"})
@@ -2884,7 +1117,6 @@ class AgentStreamExecutor:
         tool_calls_buffer = {}  # {index: {id, name, arguments}}
         gemini_raw_parts = None  # Preserve Gemini thoughtSignature for round-trip
         stop_reason = None  # Track why the stream stopped
-        self.agent.last_usage = None
 
         try:
             stream = self.model.call_stream(request)
@@ -2912,14 +1144,8 @@ class AgentStreamExecutor:
                             "content": full_content,
                             "tool_calls": [],
                             "cancelled": True,
-                            "usage": self.agent.last_usage,
                         })
                         raise AgentCancelledError("cancelled during LLM streaming")
-
-                if isinstance(chunk, dict):
-                    usage = _normalize_usage(chunk.get("usage"), getattr(self.model, "model", ""))
-                    if usage:
-                        self.agent.last_usage = usage
 
                 # Check for errors
                 if isinstance(chunk, dict) and chunk.get("error"):
@@ -2929,144 +1155,65 @@ class AgentStreamExecutor:
                         error_msg = error_data.get("message", chunk.get("message", "Unknown error"))
                         error_code = error_data.get("code", "")
                         error_type = error_data.get("type", "")
-                        error_taxonomy = (
-                            error_data.get("taxonomy")
-                            or error_data.get("error_taxonomy")
-                            or chunk.get("error_taxonomy", "")
-                        )
                     else:
                         error_msg = chunk.get("message", str(error_data))
                         error_code = ""
                         error_type = ""
-                        error_taxonomy = chunk.get("error_taxonomy", "")
-                    
+
                     status_code = chunk.get("status_code", "N/A")
-                    retry_stopped = bool(chunk.get("retry_exhausted") or chunk.get("retry_suppressed"))
-                    nested_error = error_data if isinstance(error_data, dict) else {}
-                    retry_suppressed = bool(chunk.get("retry_suppressed") or nested_error.get("retry_suppressed"))
-                    retry_suppressed_reason = (
-                        chunk.get("retry_suppressed_reason")
-                        or nested_error.get("retry_suppressed_reason")
-                        or ""
-                    )
-                    retry_exhausted = bool(chunk.get("retry_exhausted") or nested_error.get("retry_exhausted"))
-                    retryable = bool(chunk.get("retryable") or nested_error.get("retryable"))
-                    retry_attempt = chunk.get("retry_attempt", nested_error.get("retry_attempt"))
-                    max_model_retry_attempts = chunk.get("max_retries", nested_error.get("max_retries"))
-                    terminal_reason = (
-                        "model_retry_suppressed_stream_output_started"
-                        if retry_suppressed
-                        else "model_retry_exhausted"
-                        if retry_exhausted
-                        else "model_stream_error"
-                    )
-                    self._last_model_retry_evidence = {
-                        "error_code": "MODEL_RETRY_SUPPRESSED" if retry_suppressed else ("MODEL_RETRY_EXHAUSTED" if retry_exhausted else "MODEL_STREAM_ERROR"),
-                        "error_type": error_type or error_taxonomy or ("network_error" if retryable else ""),
-                        "error_taxonomy": error_taxonomy,
-                        "terminal_reason": terminal_reason,
-                        "retryable": retryable,
-                        "recoverable": True,
-                        "retry_exhausted": retry_exhausted,
-                        "retry_suppressed": retry_suppressed,
-                        "retry_suppressed_reason": retry_suppressed_reason,
-                        "retry_attempt": retry_attempt,
-                        "max_retries": max_model_retry_attempts,
-                        "status_code": status_code,
-                        "retry_mode": "manual_retry_prepare" if retryable else "unavailable",
-                    }
 
                     # Log error with all available information
                     logger.error("🔴 Stream API Error:")
-                    logger.error(f"   Message: {_public_agent_exception_message('Stream API message redacted.', error_msg)}")
+                    logger.error(f"   Message: {error_msg}")
                     logger.error(f"   Status Code: {status_code}")
                     logger.error(f"   Error Code: {error_code}")
                     logger.error(f"   Error Type: {error_type}")
-                    logger.error(f"   Full chunk: {_public_agent_exception_summary(chunk)}")
+                    logger.error(f"   Full chunk: {chunk}")
                     
-                    # Check if this is a context overflow error. Prefer the
-                    # shared model taxonomy when present; keep keyword fallback
-                    # for providers that only expose free-form text.
-                    is_overflow = self._is_context_overflow_error(
-                        message=error_msg,
-                        status_code=status_code,
-                        error_code=error_code,
-                        error_type=error_type,
-                        taxonomy=error_taxonomy,
-                    )
-                    explicit_overflow = self._is_context_overflow_error(
-                        message="",
-                        status_code=status_code,
-                        error_code=error_code,
-                        error_type=error_type,
-                        taxonomy=error_taxonomy,
-                    ) or self._is_context_overflow_error(
-                        message=error_msg,
-                        status_code="",
-                        error_code="",
-                        error_type="",
-                        taxonomy="",
-                    )
-                    message_format_error = self._is_message_format_error_text(
-                        f"{error_msg} {status_code} {error_code} {error_type}"
-                    )
-                    if is_overflow and message_format_error and not explicit_overflow:
-                        is_overflow = False
+                    # Check if this is a context overflow error (keyword-based, works for all models)
+                    # Don't rely on specific status codes as different providers use different codes
+                    error_msg_lower = error_msg.lower()
+                    is_overflow = any(keyword in error_msg_lower for keyword in [
+                        'context length exceeded', 'maximum context length', 'prompt is too long',
+                        'context overflow', 'context window', 'too large', 'exceeds model context',
+                        'request_too_large', 'request exceeds the maximum size', 'tokens exceed'
+                    ])
                     
                     if is_overflow:
                         # Mark as context overflow for special handling
                         raise Exception(f"[CONTEXT_OVERFLOW] {error_msg} (Status: {status_code})")
                     else:
-                        # Raise a user-safe message while keeping raw details in logs above.
-                        visible_error = _user_visible_llm_error(error_msg, status_code, error_code, error_type)
-                        if retry_stopped:
-                            raise Exception(f"[MODEL_RETRY_EXHAUSTED] {visible_error}")
-                        raise Exception(visible_error)
+                        # Raise exception with full error message for retry logic
+                        raise Exception(f"{error_msg} (Status: {status_code}, Code: {error_code}, Type: {error_type})")
 
                 # Parse chunk
                 if isinstance(chunk, dict) and chunk.get("choices"):
                     choice = chunk["choices"][0]
                     delta = choice.get("delta", {})
-                    if not isinstance(delta, dict):
-                        delta = {}
-                    message_payload = choice.get("message") or {}
-                    if not isinstance(message_payload, dict):
-                        message_payload = {}
                     
                     # Capture finish_reason if present
                     finish_reason = choice.get("finish_reason")
                     if finish_reason:
                         stop_reason = finish_reason
 
-                    reasoning_delta = (
-                        _model_content_to_text(delta.get("reasoning_content"))
-                        or _model_content_to_text(message_payload.get("reasoning_content"))
-                    )
+                    reasoning_delta = delta.get("reasoning_content") or ""
                     if reasoning_delta:
                         full_reasoning += reasoning_delta
                         if self._is_thinking_enabled():
                             self._emit_event("reasoning_update", {"delta": reasoning_delta})
 
                     # Handle text content
-                    content_delta = (
-                        _model_content_to_text(delta.get("content"))
-                        or _model_content_to_text(delta.get("text"))
-                        or _model_content_to_text(delta.get("refusal"))
-                        or _model_content_to_text(message_payload.get("content"))
-                        or _model_content_to_text(message_payload.get("refusal"))
-                        or _model_content_to_text(choice.get("text"))
-                    )
+                    content_delta = delta.get("content") or ""
                     if content_delta:
                         # Filter out <think> tags from content
                         filtered_delta = self._filter_think_tags(content_delta)
                         full_content += filtered_delta
                         if filtered_delta:  # Only emit if there's content after filtering
-                            self._emit_event("message_update", {"delta": sanitize_assistant_identity(filtered_delta)})
+                            self._emit_event("message_update", {"delta": filtered_delta})
 
                     # Handle tool calls
-                    tool_call_deltas = delta.get("tool_calls") or message_payload.get("tool_calls")
-                    if tool_call_deltas:
-                        for tc_delta in tool_call_deltas:
+                    if "tool_calls" in delta and delta["tool_calls"]:
+                        for tc_delta in delta["tool_calls"]:
                             index = tc_delta.get("index", 0)
 
                             if index not in tool_calls_buffer:
@@ -3086,21 +1233,6 @@ class AgentStreamExecutor:
                                 if func.get("arguments"):
                                     tool_calls_buffer[index]["arguments"] += func["arguments"]
 
-                    function_call_delta = delta.get("function_call") or message_payload.get("function_call")
-                    if function_call_delta:
-                        func = function_call_delta or {}
-                        index = 0
-                        if index not in tool_calls_buffer:
-                            tool_calls_buffer[index] = {
-                                "id": "",
-                                "name": "",
-                                "arguments": ""
-                            }
-                        if func.get("name"):
-                            tool_calls_buffer[index]["name"] = func["name"]
-                        if func.get("arguments"):
-                            tool_calls_buffer[index]["arguments"] += func["arguments"]
-
                     # Preserve _gemini_raw_parts for Gemini thoughtSignature round-trip
                     # (direct Gemini: list of parts; LinkAI proxy: base64 string of JSON parts)
                     if "_gemini_raw_parts" in delta:
@@ -3113,60 +1245,20 @@ class AgentStreamExecutor:
             raise
 
         except Exception as e:
-            error_str = _private_agent_exception_text_for_classification(e)
+            error_str = str(e)
             error_str_lower = error_str.lower()
-            model_retry_exhausted = '[model_retry_exhausted]' in error_str_lower
-            if model_retry_exhausted:
-                error_str = error_str.replace("[MODEL_RETRY_EXHAUSTED]", "").strip()
-                error_str_lower = error_str.lower()
             
-            # Check if error is context overflow (non-retryable, needs session reset)
-            # Method 1: Check for special marker (set in stream error handling above)
-            is_context_overflow = '[context_overflow]' in error_str_lower
-            
-            # Method 2: Fallback to keyword matching for non-stream errors
-            if not is_context_overflow:
-                is_context_overflow = self._is_context_overflow_error(message=error_str)
-            context_overflow_is_explicit = (
-                ("context_overflow" in error_str_lower and "[context_overflow]" not in error_str_lower)
-                or "context_length" in error_str_lower
-                or "context length" in error_str_lower
-                or "maximum context" in error_str_lower
-                or "exceeds model context" in error_str_lower
-                or "request_too_large" in error_str_lower
-            )
-            
-            # Check if error is message format error (incomplete tool_use/tool_result pairs)
-            # This happens when previous conversation had tool failures or context trimming
-            # broke tool_use/tool_result pairs.
-            # Note: MiniMax returns error 2013 "tool result's tool id(...) not found" for
-            # tool_call_id mismatches — the keywords below are intentionally broad to catch
-            # both standard (Claude/OpenAI) and provider-specific (MiniMax) variants.
-            is_message_format_error = self._is_message_format_error_text(error_str)
-            if is_message_format_error and is_context_overflow and not context_overflow_is_explicit:
-                is_context_overflow = False
+            # Context overflow is non-retryable and needs the working context reset.
+            is_context_overflow = _is_context_overflow(error_str_lower)
+
+            # Incomplete tool_use/tool_result pairs rejected by the provider.
+            # MiniMax's "tool result's tool id(...) not found" (code 2013) is
+            # covered by the "tool result" / "tool id" markers.
+            is_message_format_error = _is_message_format_error(error_str_lower)
             
             if is_context_overflow or is_message_format_error:
                 error_type = "context overflow" if is_context_overflow else "message format error"
-                logger.error(f"💥 {error_type} detected: {_public_agent_exception_message('LLM error redacted.', e)}")
-
-                stream_output_started = bool(full_content or full_reasoning or tool_calls_buffer)
-                if is_context_overflow and stream_output_started:
-                    logger.warning(
-                        "[Agent] Context overflow arrived after model output started; "
-                        "suppressing recovery retry to avoid duplicate stream output"
-                    )
-                    self._emit_event("message_end", {
-                        "content": sanitize_assistant_identity(self._filter_think_tags(full_content)),
-                        "tool_calls": [],
-                        "error": True,
-                        "context_overflow_after_output": True,
-                        "usage": self.agent.last_usage,
-                    })
-                    raise Exception(_t(
-                        "The model stream reported context overflow after output had started. I stopped instead of retrying to avoid duplicating partial output.",
-                        "The model stream reported context overflow after output had started. I stopped instead of retrying to avoid duplicating partial output.",
-                    ))
+                logger.error(f"💥 {error_type} detected: {e}")
 
                 # Flush memory before trimming to preserve context that will be lost
                 if is_context_overflow and self.agent.memory_manager:
@@ -3178,127 +1270,38 @@ class AgentStreamExecutor:
 
                 # Strategy: try aggressive trimming first, only clear as last resort
                 if is_context_overflow and not _overflow_retry:
-                    recovery = self._aggressive_trim_for_overflow()
-                    trim_applied = bool(recovery.get("applied"))
-                    imagegen_schema_recovery = (
-                        bool(tools_schema)
-                        and not trim_applied
-                        and "imagegen" in self._tool_schema_intent_groups(self._latest_user_text_for_tool_schema())
-                        and "imagegen" in {str(name or "").strip().lower() for name in (self.tools or {})}
-                    )
-                    schema_only_recovery = bool(tools_schema) and not trim_applied and not imagegen_schema_recovery
-                    if trim_applied or schema_only_recovery or imagegen_schema_recovery:
-                        force_text_retry = not imagegen_schema_recovery
-                        recovery_for_retry = {
-                            **recovery,
-                            "applied": True,
-                            "reason": (
-                                "schema_only_imagegen_tool_schema_minimized"
-                                if imagegen_schema_recovery else
-                                "schema_only_tool_schema_disabled"
-                                if schema_only_recovery else recovery.get("reason")
-                            ),
-                            "trim_applied": trim_applied,
-                            "schema_only_recovery": schema_only_recovery,
-                            "imagegen_schema_recovery": imagegen_schema_recovery,
-                            "tool_schema_disabled": force_text_retry,
-                        }
-                        retry_schema_budget = {
-                            "enabled": not force_text_retry,
-                            "reason": "imagegen_context_overflow_recovery" if imagegen_schema_recovery else "forced_text",
-                            "force_text_reason": "context_overflow_recovery" if force_text_retry else "",
-                            "selected_count": 1 if imagegen_schema_recovery else 0,
-                            "deferred_count": max(0, len(self.tools or {}) - (1 if imagegen_schema_recovery else 0)),
-                            "selected_tools": ["imagegen"] if imagegen_schema_recovery else [],
-                            "deferred_tools": [
-                                name
-                                for name in sorted((self.tools or {}).keys())
-                                if not (imagegen_schema_recovery and str(name or "").strip().lower() == "imagegen")
-                            ],
-                            "imagegen_intent": imagegen_schema_recovery,
-                            "imagegen_available": imagegen_schema_recovery,
-                        }
-                        retry_budget = self._build_context_budget(
-                            self._prepare_messages(),
-                            None,
-                            retry_schema_budget,
-                        )
-                        self._emit_event("context_overflow_recovery", {
-                            **recovery_for_retry,
-                            "retry": True,
-                            "force_text_response": force_text_retry,
-                            "before_estimated_input_tokens": context_budget.get("estimated_input_tokens"),
-                            "before_effective_context_limit_tokens": context_budget.get("effective_context_limit_tokens"),
-                            "after_estimated_input_tokens": retry_budget.get("estimated_input_tokens"),
-                            "after_effective_context_limit_tokens": retry_budget.get("effective_context_limit_tokens"),
-                            "after_remaining_input_tokens": retry_budget.get("remaining_input_tokens"),
-                            "after_severity": retry_budget.get("severity"),
-                        })
+                    trimmed = self._aggressive_trim_for_overflow()
+                    if trimmed:
                         logger.warning("🔄 Aggressively trimmed context, retrying...")
-                        self._emit_event("message_end", {
-                            "content": "",
-                            "tool_calls": [],
-                            "context_overflow_retry": True,
-                            "retrying": True,
-                            "usage": self.agent.last_usage,
-                        })
                         return self._call_llm_stream(
                             retry_on_empty=retry_on_empty,
                             retry_count=retry_count,
                             max_retries=max_retries,
-                            _overflow_retry=True,
-                            _force_text_turn=force_text_retry,
-                            _force_text_reason="context_overflow_recovery" if force_text_retry else "",
-                        )
-                    self._emit_event("context_overflow_recovery", {
-                        **recovery,
-                        "retry": False,
-                        "force_text_response": False,
-                        "before_estimated_input_tokens": context_budget.get("estimated_input_tokens"),
-                        "before_effective_context_limit_tokens": context_budget.get("effective_context_limit_tokens"),
-                    })
-
-                if is_message_format_error and not _overflow_retry:
-                    recovery = self._compress_history_for_format_recovery()
-                    if recovery["applied"]:
-                        self._emit_event("message_format_recovery", {
-                            **recovery,
-                            "retry": True,
-                            "force_text_response": True,
-                        })
-                        self._emit_event("message_end", {
-                            "content": "",
-                            "tool_calls": [],
-                            "message_format_retry": True,
-                            "retrying": True,
-                            "usage": self.agent.last_usage,
-                        })
-                        return self._call_llm_stream(
-                            retry_on_empty=retry_on_empty,
-                            retry_count=retry_count,
-                            max_retries=max_retries,
-                            _overflow_retry=True,
-                            _force_text_turn=True,
-                            _force_text_reason="message_format_recovery",
+                            _overflow_retry=True
                         )
 
-                # Recovery failed closed without deleting the user's durable history.
+                # Aggressive trim didn't help, or this is a message format error.
+                # Reset the working context only: the persisted history is
+                # irreplaceable, and it can never reintroduce broken tool pairs
+                # because every load path strips tool_use/tool_result blocks.
+                logger.warning("🔄 Resetting in-memory context to recover (stored history kept)")
+                self.messages.clear()
                 if is_context_overflow:
                     raise Exception(_t(
-                        "对话上下文仍然过长，本轮已停止，但历史记录和已有产物均已保留。请继续时缩小任务范围。",
-                        "The conversation context is still too long. This run stopped, but the history and existing artifacts were preserved. Continue with a narrower scope.",
+                        "抱歉，对话历史过长导致上下文溢出。我已重置当前上下文（历史记录仍然保留），请重新描述你的需求。",
+                        "Sorry, the conversation history got too long and overflowed the context. I've reset the current context (your history is kept) — please describe your request again.",
                     ))
                 else:
                     raise Exception(_t(
-                        "模型仍未接受修复后的消息链，本轮已停止，但历史记录和工具结果均已保留。请直接回复“继续”重试。",
-                        "The model still rejected the repaired message chain. This run stopped, but the history and tool results were preserved. Reply “continue” to retry.",
+                        "抱歉，之前的对话出现了问题。我已重置当前上下文（历史记录仍然保留），请重新发送你的消息。",
+                        "Sorry, something went wrong with the earlier conversation. I've reset the current context (your history is kept) — please send your message again.",
                     ))
             
             # Check if error is rate limit (429)
             is_rate_limit = '429' in error_str_lower or 'rate limit' in error_str_lower
             
             # Check if error is retryable (timeout, connection, server busy, etc.)
-            is_retryable = (not model_retry_exhausted) and any(keyword in error_str_lower for keyword in [
+            is_retryable = any(keyword in error_str_lower for keyword in [
                 'timeout', 'timed out', 'connection', 'network', 
                 'rate limit', 'overloaded', 'unavailable', 'busy', 'retry',
                 '429', '500', '502', '503', '504', '512'
@@ -3311,24 +1314,19 @@ class AgentStreamExecutor:
                 else:
                     wait_time = (retry_count + 1) * 2  # 2s, 4s, 6s for other errors
                 
-                logger.warning(f"⚠️ LLM API error (attempt {retry_count + 1}/{max_retries}): {_public_agent_exception_message('LLM retryable error redacted.', e)}")
+                logger.warning(f"⚠️ LLM API error (attempt {retry_count + 1}/{max_retries}): {e}")
                 logger.info(f"Retrying in {wait_time}s...")
-                self._sleep_cancelable(wait_time)
+                time.sleep(wait_time)
                 return self._call_llm_stream(
                     retry_on_empty=retry_on_empty, 
                     retry_count=retry_count + 1,
-                    max_retries=max_retries,
-                    _overflow_retry=_overflow_retry,
-                    _force_text_turn=force_text_response,
-                    _force_text_reason=force_text_reason,
+                    max_retries=max_retries
                 )
             else:
                 if retry_count >= max_retries:
-                    logger.error(f"❌ LLM API error after {max_retries} retries: {_public_agent_exception_message('LLM error redacted.', e)}")
+                    logger.error(f"❌ LLM API error after {max_retries} retries: {e}", exc_info=True)
                 else:
-                    logger.error(f"❌ LLM call error (non-retryable): {_public_agent_exception_message('LLM error redacted.', e)}")
-                if model_retry_exhausted:
-                    raise Exception(error_str)
+                    logger.error(f"❌ LLM call error (non-retryable): {e}", exc_info=True)
                 raise
 
         # Parse tool calls
@@ -3343,14 +1341,14 @@ class AgentStreamExecutor:
                 tool_id = f"call_{uuid.uuid4().hex[:24]}"
 
             args_str = tc.get("arguments") or ""
-            arguments, parse_err = _parse_tool_args(args_str, stop_reason)
+            arguments, parse_err = _parse_tool_args(args_str, stop_reason, tc["name"])
             if parse_err:
                 logger.error(
                     f"Tool args parse failed for {tc['name']} ({len(args_str)} chars): {parse_err}"
                 )
                 tool_calls.append({
                     "id": tool_id,
-                    "name": self._canonical_tool_name(tc["name"]),
+                    "name": tc["name"],
                     "arguments": {},
                     "_parse_error": parse_err,
                 })
@@ -3358,7 +1356,7 @@ class AgentStreamExecutor:
 
             tool_calls.append({
                 "id": tool_id,
-                "name": self._canonical_tool_name(tc["name"]),
+                "name": tc["name"],
                 "arguments": arguments
             })
 
@@ -3369,21 +1367,17 @@ class AgentStreamExecutor:
                 "content": "",
                 "tool_calls": [],
                 "empty_retry": True,
-                "stop_reason": stop_reason,
-                "usage": self.agent.last_usage,
+                "stop_reason": stop_reason
             })
             # Retry without retry flag to avoid infinite loop
             return self._call_llm_stream(
                 retry_on_empty=False, 
                 retry_count=retry_count,
-                max_retries=max_retries,
-                _overflow_retry=_overflow_retry,
-                _force_text_turn=force_text_response,
-                _force_text_reason=force_text_reason,
+                max_retries=max_retries
             )
 
         # Filter full_content one more time (in case tags were split across chunks)
-        full_content = sanitize_assistant_identity(self._filter_think_tags(full_content))
+        full_content = self._filter_think_tags(full_content)
         
         # Add assistant message to history (Claude format uses content blocks)
         assistant_msg = {"role": "assistant", "content": []}
@@ -3421,15 +1415,21 @@ class AgentStreamExecutor:
 
         # Only append if content is not empty
         if assistant_msg["content"]:
-            self.messages.append(sanitize_message_identity(assistant_msg))
+            self.messages.append(assistant_msg)
 
         self._emit_event("message_end", {
             "content": full_content,
-            "tool_calls": tool_calls,
-            "usage": self.agent.last_usage,
+            "tool_calls": tool_calls
         })
 
         return full_content, tool_calls
+
+    def _required_params(self, tool_name: str) -> list:
+        """Parameter names a tool's schema declares as required."""
+        tool = self.tools.get(tool_name)
+        params = getattr(tool, "params", None)
+        required = params.get("required") if isinstance(params, dict) else None
+        return list(required) if isinstance(required, list) else []
 
     def _execute_tool(self, tool_call: Dict) -> Dict[str, Any]:
         """
@@ -3441,180 +1441,9 @@ class AgentStreamExecutor:
         Returns:
             Tool execution result
         """
-        tool_name = self._canonical_tool_name(tool_call["name"])
+        tool_name = tool_call["name"]
         tool_id = tool_call["id"]
         arguments = tool_call["arguments"]
-        rerouted_from = ""
-        tool_start_emitted = False
-        tool_heartbeat_stop: Optional[threading.Event] = None
-        tool_heartbeat_thread: Optional[threading.Thread] = None
-        task_observer: Optional[TaskObserver] = None
-
-        def emit_tool_start() -> None:
-            nonlocal tool_start_emitted
-            if tool_start_emitted:
-                return
-            tool_start_emitted = True
-            self._emit_event("tool_execution_start", {
-                "tool_call_id": tool_id,
-                "tool_name": tool_name,
-                "arguments": arguments
-            })
-
-        def emit_tool_end(result_payload: Dict[str, Any]) -> None:
-            emit_tool_start()
-            self._emit_event("tool_execution_end", {
-                "tool_call_id": tool_id,
-                "tool_name": tool_name,
-                **result_payload
-            })
-            if task_observer is not None:
-                task_observer.end(
-                    str(result_payload.get("status") or ""),
-                    execution_time=result_payload.get("execution_time", 0),
-                )
-
-        def start_tool_heartbeat() -> None:
-            nonlocal tool_heartbeat_stop, tool_heartbeat_thread, task_observer
-            emit_tool_start()
-            if tool_heartbeat_thread is not None:
-                return
-            started_at = time.time()
-            policy = _tool_timeout_policy(tool_name, arguments)
-            deadline_seconds = float(policy["lease_seconds"])
-            max_seconds = float(policy["max_seconds"])
-            extension_seconds = float(policy["extension_seconds"])
-            extension_count = 0
-            task_observer = TaskObserver(
-                self._emit_event,
-                task_id=f"tool-{tool_id}",
-                kind="tool",
-                title=tool_name,
-                parent_id=tool_id,
-                soft_deadline_seconds=int(deadline_seconds),
-                hard_deadline_seconds=int(max_seconds),
-                metadata={"tool_call_id": tool_id, "tool_name": tool_name, "timeout_reason": policy["reason"]},
-                started_at=started_at,
-            )
-            task_observer.start()
-            stop_event = threading.Event()
-            tool_heartbeat_stop = stop_event
-
-            def heartbeat_loop() -> None:
-                nonlocal deadline_seconds, extension_count
-                while not stop_event.wait(TOOL_EXECUTION_HEARTBEAT_SECONDS):
-                    elapsed_seconds = round(time.time() - started_at, 2)
-                    if elapsed_seconds >= deadline_seconds:
-                        if policy["adaptive"] and deadline_seconds < max_seconds:
-                            previous_deadline = deadline_seconds
-                            deadline_seconds = min(max_seconds, deadline_seconds + extension_seconds)
-                            extension_count += 1
-                            self._emit_event("tool_execution_deadline_extended", {
-                                "tool_call_id": tool_id,
-                                "tool_name": tool_name,
-                                "elapsed_seconds": elapsed_seconds,
-                                "previous_deadline_seconds": int(previous_deadline),
-                                "deadline_seconds": int(deadline_seconds),
-                                "max_seconds": int(max_seconds),
-                                "extension_count": extension_count,
-                                "reason": policy["reason"],
-                                "status": "running",
-                            })
-                            if task_observer is not None:
-                                task_observer.extended(
-                                    elapsed_seconds=elapsed_seconds,
-                                    previous_deadline_seconds=int(previous_deadline),
-                                    deadline_seconds=int(deadline_seconds),
-                                    max_seconds=int(max_seconds),
-                                    reason=policy["reason"],
-                                )
-                            self._emit_event("tool_execution_heartbeat", {
-                                "tool_call_id": tool_id,
-                                "tool_name": tool_name,
-                                "elapsed_seconds": elapsed_seconds,
-                                "deadline_seconds": int(deadline_seconds),
-                                "max_seconds": int(max_seconds),
-                                "extension_count": extension_count,
-                                "status": "running",
-                            })
-                            if task_observer is not None:
-                                task_observer.heartbeat(
-                                    elapsed_seconds=elapsed_seconds,
-                                    deadline_seconds=int(deadline_seconds),
-                                    max_seconds=int(max_seconds),
-                                    extension_count=extension_count,
-                                )
-                            continue
-                        logger.warning(
-                            "[Agent] tool execution timeout: tool=%s id=%s elapsed=%ss deadline=%ss max=%ss adaptive=%s",
-                            tool_name,
-                            tool_id,
-                            elapsed_seconds,
-                            deadline_seconds,
-                            max_seconds,
-                            policy["adaptive"],
-                        )
-                        self._emit_event("tool_execution_timeout", {
-                            "tool_call_id": tool_id,
-                            "tool_name": tool_name,
-                            "elapsed_seconds": elapsed_seconds,
-                            "timeout_seconds": int(deadline_seconds),
-                            "max_seconds": int(max_seconds),
-                            "extension_count": extension_count,
-                            "status": "timeout",
-                            "error_code": "TOOL_TIMEOUT",
-                            "message": (
-                                f"Tool '{tool_name}' exceeded the {int(deadline_seconds)}s execution deadline. "
-                                "The run was marked timed out to avoid an indefinitely active session. "
-                                "For legitimately longer work, retry with a larger tool timeout or split the task."
-                            ),
-                        })
-                        if task_observer is not None:
-                            task_observer.intervention_requested(
-                                elapsed_seconds=elapsed_seconds,
-                                timeout_seconds=int(deadline_seconds),
-                                max_seconds=int(max_seconds),
-                                extension_count=extension_count,
-                                reason="tool_timeout",
-                                next_actions=["continue", "stop", "background"],
-                            )
-                            task_observer.timeout(
-                                elapsed_seconds=elapsed_seconds,
-                                timeout_seconds=int(deadline_seconds),
-                                max_seconds=int(max_seconds),
-                                extension_count=extension_count,
-                                reason="tool_timeout",
-                            )
-                        if self.cancel_event is not None:
-                            self.cancel_event.set()
-                        break
-                    self._emit_event("tool_execution_heartbeat", {
-                        "tool_call_id": tool_id,
-                        "tool_name": tool_name,
-                        "elapsed_seconds": elapsed_seconds,
-                        "deadline_seconds": int(deadline_seconds),
-                        "max_seconds": int(max_seconds),
-                        "extension_count": extension_count,
-                        "status": "running",
-                    })
-                    if task_observer is not None:
-                        task_observer.heartbeat(
-                            elapsed_seconds=elapsed_seconds,
-                            deadline_seconds=int(deadline_seconds),
-                            max_seconds=int(max_seconds),
-                            extension_count=extension_count,
-                        )
-
-            tool_heartbeat_thread = threading.Thread(
-                target=heartbeat_loop,
-                name=f"ecorex-tool-heartbeat-{str(tool_id)[:8]}",
-                daemon=True,
-            )
-            tool_heartbeat_thread.start()
-
-        def stop_tool_heartbeat() -> None:
-            if tool_heartbeat_stop is not None:
-                tool_heartbeat_stop.set()
 
         if "_parse_error" in tool_call:
             result = {
@@ -3623,7 +1452,25 @@ class AgentStreamExecutor:
                 "execution_time": 0,
             }
             self._record_tool_result(tool_name, arguments, False)
-            emit_tool_end(result)
+            return result
+
+        # A call whose arguments never arrived parses into an empty dict, which
+        # would otherwise reach the tool and be reported as one missing field -
+        # sending the model off to fix a parameter it never got to send.
+        missing = self._required_params(tool_name) if not arguments else []
+        if missing:
+            result = {
+                "status": "error",
+                "result": (
+                    f"Your {tool_name} call arrived with no arguments at all, so it did not "
+                    f"run and nothing was written. It requires: {', '.join(missing)}. "
+                    "The arguments were most likely cut off before they were sent."
+                    + (" " + _SPLIT_WRITE_ADVICE if tool_name in ("write", "edit") else "")
+                ),
+                "execution_time": 0,
+            }
+            logger.error(f"Tool {tool_name} called with no arguments (required: {missing})")
+            self._record_tool_result(tool_name, arguments, False)
             return result
 
         # Check for consecutive failures (retry protection)
@@ -3641,127 +1488,51 @@ class AgentStreamExecutor:
                 }
             else:
                 # Normal failure - let LLM try different approach
-                self._force_text_response_once("consecutive-tool-failure-budget")
                 result = {
                     "status": "error",
                     "result": f"{stop_reason}\n\n当前方法行不通，请尝试完全不同的方法或向用户询问更多信息。",
                     "execution_time": 0
                 }
-            emit_tool_end(result)
             return result
 
-        autoroute_name, autoroute_args, autoroute_reason = self._external_capability_autoroute(tool_name, arguments)
-        if autoroute_name:
-            logger.info(
-                f"[Agent] Auto-routing external capability from {tool_name} "
-                f"to {autoroute_name}: {autoroute_reason}"
-            )
-            rerouted_from = f"{tool_name}:{autoroute_reason}"
-            tool_name = autoroute_name
-            arguments = autoroute_args
-
-        reroute_reason = self._external_capability_reroute(tool_name, arguments)
-        if reroute_reason:
-            logger.warning(f"[Agent] External capability rerouted for {tool_name}: {reroute_reason}")
-            self._record_tool_result(tool_name, arguments, False)
-            result = {
-                "status": "error",
-                "result": reroute_reason,
-                "execution_time": 0,
-            }
-            emit_tool_end(result)
-            return result
-
-        chain_stop, chain_reason = self._check_tool_chain_budget(tool_name, arguments)
-        if chain_stop:
-            logger.warning(f"[Agent] Tool-chain budget stop for {tool_name}: {chain_reason}")
-            self._record_tool_result(tool_name, arguments, False)
-            self._force_text_response_once("external-capability-chain-budget")
-            result = {
-                "status": "error",
-                "result": "已停止重复调用同一能力，正在整理已获得的信息。",
-                "execution_time": 0,
-            }
-            emit_tool_end(result)
-            return result
+        self._emit_event("tool_execution_start", {
+            "tool_call_id": tool_id,
+            "tool_name": tool_name,
+            "arguments": arguments
+        })
 
         try:
             tool = self.tools.get(tool_name)
             if not tool:
                 raise ValueError(self._build_tool_not_found_message(tool_name))
-        except Exception as e:
-            logger.error(f"Tool lookup error: {_public_agent_exception_message('Tool lookup failed.', e)}")
-            error_result = _public_agent_tool_error_result("Tool lookup failed.", e)
-            self._record_tool_result(tool_name, arguments, False)
-            emit_tool_end(error_result)
-            return error_result
 
-        permission_tool_name, permission_arguments = self._permission_proxy_for_tool(tool, tool_name, arguments)
-        permission = self._authorize_tool_execution(permission_tool_name, tool_id, permission_arguments)
-        if permission.get("allowed") is not True:
-            if permission.get("cancelled"):
-                raise AgentCancelledError(
-                    permission.get("reason") or "agent cancelled while waiting for tool permission"
-                )
-            reason = permission.get("reason") or "User denied local tool execution."
-            self._force_text_response_once("permission-denied")
-            result = {
-                "status": "error",
-                "result": (
-                    f"{reason}\n\n"
-                    "Permission blocked this external capability. Do not retry the same tool now; "
-                    "summarize the blocker and ask the user to change the access mode, approve the request, "
-                    "or provide the missing authorization."
-                ),
-                "execution_time": 0
-            }
-            self._record_tool_result(tool_name, arguments, False)
-            emit_tool_end(result)
-            return result
-
-        start_tool_heartbeat()
-
-        try:
             # Set tool context
             tool.model = self.model
             tool.context = self.agent
             tool.cancel_event = self.cancel_event
-            tool.emit_event = self._emit_event
-            tool.tool_call_id = tool_id
-            if tool_name == "imagegen":
-                tool.artifact_naming_context = self._image_artifact_naming_context()
+            tool.progress_callback = lambda message: self._emit_event(
+                "tool_execution_progress",
+                {
+                    "tool_call_id": tool_id,
+                    "tool_name": tool_name,
+                    "message": message,
+                }
+            )
 
             # Execute tool
             start_time = time.time()
-            result: ToolResult = tool.execute_tool(arguments)
+            try:
+                result: ToolResult = tool.execute_tool(arguments)
+            finally:
+                tool.progress_callback = None
+                tool.cancel_event = None
             execution_time = time.time() - start_time
-            result_payload = result.result
-            if rerouted_from:
-                if isinstance(result_payload, dict):
-                    result_payload = {
-                        **result_payload,
-                        "reroutedFrom": rerouted_from,
-                    }
-                else:
-                    result_payload = {
-                        "output": result_payload,
-                        "reroutedFrom": rerouted_from,
-                    }
 
             result_dict = {
                 "status": result.status,
-                "result": result_payload,
+                "result": result.result,
                 "execution_time": execution_time
             }
-
-            blocker = self._tool_result_user_action_blocker(tool_name, result_payload)
-            if blocker:
-                self._force_text_response_once(blocker)
-
-            if tool_name == "host_diagnostics":
-                action = str(arguments.get("action") or "status").strip().lower()
-                if result.status == "success" and action in {"logs", "all"}:
-                    self._force_text_response_once("host-diagnostics-logs-ready")
 
             # Record tool result for failure tracking
             success = result.status == "success"
@@ -3775,25 +1546,71 @@ class AgentStreamExecutor:
                     self.agent.refresh_skills()
                     logger.info(f"Skills refreshed! Now have {len(self.agent.skill_manager.skills)} skills")
 
-            emit_tool_end(result_dict)
+            self._emit_event("tool_execution_end", {
+                "tool_call_id": tool_id,
+                "tool_name": tool_name,
+                **result_dict
+            })
 
             return result_dict
 
         except Exception as e:
-            logger.error(f"Tool execution error: {_public_agent_exception_message('Tool execution failed.', e)}")
-            error_result = _public_agent_tool_error_result("Tool execution failed.", e)
+            logger.error(f"Tool execution error: {e}")
+            error_result = {
+                "status": "error",
+                "result": str(e),
+                "execution_time": 0
+            }
             # Record failure
             self._record_tool_result(tool_name, arguments, False)
             
-            emit_tool_end(error_result)
+            self._emit_event("tool_execution_end", {
+                "tool_call_id": tool_id,
+                "tool_name": tool_name,
+                **error_result
+            })
             return error_result
-        finally:
-            stop_tool_heartbeat()
 
     def _build_tool_not_found_message(self, tool_name: str) -> str:
-        """Report the authoritative callable tool set without Skill bypasses."""
+        """Build a helpful error message when a tool is not found.
+
+        If a skill with the same name exists in skill_manager, read its
+        SKILL.md and include the content so the LLM knows how to use it.
+        """
         available_tools = list(self.tools.keys())
-        return f"Tool '{tool_name}' not found. Available tools: {available_tools}"
+        base_msg = f"Tool '{tool_name}' not found. Available tools: {available_tools}"
+
+        skill_manager = getattr(self.agent, 'skill_manager', None)
+        if not skill_manager:
+            return base_msg
+
+        skill_entry = skill_manager.get_skill(tool_name)
+        if not skill_entry:
+            return base_msg
+
+        skill = skill_entry.skill
+        skill_md_path = skill.file_path
+        skill_content = ""
+        try:
+            with open(skill_md_path, 'r', encoding='utf-8') as f:
+                skill_content = f.read()
+        except Exception:
+            skill_content = skill.description
+
+        logger.info(
+            f"[Agent] Tool '{tool_name}' not found, but matched skill '{skill.name}'. "
+            f"Guiding LLM to use the skill instead."
+        )
+
+        return (
+            f"Tool '{tool_name}' is not a built-in tool, but a matching skill "
+            f"'{skill.name}' is available. You should use existing tools (e.g. bash with curl) "
+            f"to accomplish this task following the skill instructions below:\n\n"
+            f"--- SKILL: {skill.name} (path: {skill_md_path}) ---\n"
+            f"{skill_content}\n"
+            f"--- END SKILL ---\n\n"
+            f"Available tools: {available_tools}"
+        )
 
     def _validate_and_fix_messages(self):
         """Delegate to the shared sanitizer (see message_sanitizer.py)."""
@@ -3812,48 +1629,7 @@ class AgentStreamExecutor:
         Returns:
             List of turns, each turn is a dict with 'messages' list
         """
-        turns = []
-        current_turn = {'messages': []}
-        
-        for msg in self.messages:
-            role = msg.get('role')
-            content = msg.get('content', [])
-            
-            if role == 'user':
-                # Determine if this is a real user query (not a tool_result injection
-                # or an internal hint message injected by the agent loop).
-                is_user_query = False
-                has_tool_result = False
-                if isinstance(content, list):
-                    has_text = any(
-                        isinstance(block, dict) and block.get('type') == 'text'
-                        for block in content
-                    )
-                    has_tool_result = any(
-                        isinstance(block, dict) and block.get('type') == 'tool_result'
-                        for block in content
-                    )
-                    # A message with tool_result is always internal, even if it
-                    # also contains text blocks (shouldn't happen, but be safe).
-                    is_user_query = has_text and not has_tool_result
-                elif isinstance(content, str):
-                    is_user_query = True
-                
-                if is_user_query:
-                    if current_turn['messages']:
-                        turns.append(current_turn)
-                    current_turn = {'messages': [msg]}
-                else:
-                    current_turn['messages'].append(msg)
-            else:
-                # AI 回复，属于当前轮次
-                current_turn['messages'].append(msg)
-        
-        # 添加最后一个轮次
-        if current_turn['messages']:
-            turns.append(current_turn)
-        
-        return turns
+        return identify_complete_turns(self.messages)
     
     def _estimate_turn_tokens(self, turn: Dict) -> int:
         """估算一个轮次的 tokens"""
@@ -3914,44 +1690,7 @@ class AgentStreamExecutor:
         if truncated_count > 0:
             logger.info(f"📎 Truncated {truncated_count} historical tool result(s) to {MAX_HISTORY_RESULT_CHARS} chars")
 
-    def _context_overflow_recovery_payload(
-        self,
-        *,
-        original_count: int,
-        turns_before: List[Dict[str, Any]],
-        removed_turns: int,
-        truncated_blocks: int,
-        truncated_current_run_blocks: int,
-        truncated_historical_blocks: int,
-        truncated_historical_user_messages: int,
-        current_user_marker: str,
-    ) -> Dict[str, Any]:
-        turns_after = self._identify_complete_turns()
-        serialized_after = json.dumps(self.messages, ensure_ascii=False)
-        current_turn_preserved = bool(
-            turns_after
-            and (
-                not current_user_marker
-                or current_user_marker in serialized_after
-            )
-        )
-        applied = bool(removed_turns or truncated_blocks)
-        return {
-            "applied": applied,
-            "reason": "trimmed" if applied else "nothing_to_trim",
-            "messages_before": original_count,
-            "messages_after": len(self.messages),
-            "turns_before": len(turns_before),
-            "turns_after": len(turns_after),
-            "removed_turns": removed_turns,
-            "truncated_blocks": truncated_blocks,
-            "truncated_current_run_blocks": truncated_current_run_blocks,
-            "truncated_historical_blocks": truncated_historical_blocks,
-            "truncated_historical_user_messages": truncated_historical_user_messages,
-            "current_turn_preserved": current_turn_preserved,
-        }
-
-    def _aggressive_trim_for_overflow(self) -> Dict[str, Any]:
+    def _aggressive_trim_for_overflow(self) -> bool:
         """
         Aggressively trim context when a real overflow error is returned by the API.
 
@@ -3961,45 +1700,16 @@ class AgentStreamExecutor:
         3. Truncating overly long user messages
 
         Returns:
-            Structured recovery metadata. ``applied`` indicates whether a retry
-            is worth attempting.
+            True if messages were trimmed (worth retrying), False if nothing left to trim
         """
         if not self.messages:
-            return {
-                "applied": False,
-                "reason": "no_messages",
-                "messages_before": 0,
-                "messages_after": 0,
-                "turns_before": 0,
-                "turns_after": 0,
-                "removed_turns": 0,
-                "truncated_blocks": 0,
-                "current_turn_preserved": False,
-            }
+            return False
 
         original_count = len(self.messages)
-        turns_before = self._identify_complete_turns()
-        current_turn_message_ids = (
-            {id(msg) for msg in turns_before[-1]["messages"]}
-            if turns_before else set()
-        )
-        current_user_marker = self._latest_user_text_for_tool_schema()[:200]
 
-        # Step 1: Aggressively truncate ALL tool results to 10K chars
+        # Step 1: Aggressively truncate ALL tool results to 5K chars
         AGGRESSIVE_LIMIT = 10000
         truncated = 0
-        truncated_current_blocks = 0
-        truncated_historical_blocks = 0
-        truncated_historical_user_messages = 0
-
-        def _mark_truncated(msg: Dict[str, Any]) -> None:
-            nonlocal truncated, truncated_current_blocks, truncated_historical_blocks
-            truncated += 1
-            if id(msg) in current_turn_message_ids:
-                truncated_current_blocks += 1
-            else:
-                truncated_historical_blocks += 1
-
         for msg in self.messages:
             content = msg.get("content", [])
             if not isinstance(content, list):
@@ -4016,27 +1726,24 @@ class AgentStreamExecutor:
                             + f"\n\n[Truncated for context recovery: "
                             f"{len(result_str)} -> {AGGRESSIVE_LIMIT} chars]"
                         )
-                        _mark_truncated(msg)
+                        truncated += 1
                 # Truncate tool_use input blocks (e.g. large write content)
                 if block.get("type") == "tool_use" and isinstance(block.get("input"), dict):
                     input_str = json.dumps(block["input"], ensure_ascii=False)
                     if len(input_str) > AGGRESSIVE_LIMIT:
                         # Keep only a summary of the input
-                        input_truncated = False
                         for key, val in block["input"].items():
                             if isinstance(val, str) and len(val) > 1000:
                                 block["input"][key] = (
                                     val[:1000]
                                     + f"... [truncated {len(val)} chars]"
                                 )
-                                input_truncated = True
-                        if input_truncated:
-                            _mark_truncated(msg)
+                        truncated += 1
 
         # Step 2: Truncate overly long user text messages (e.g. pasted content)
         USER_MSG_LIMIT = 10000
         for msg in self.messages:
-            if msg.get("role") != "user" or id(msg) in current_turn_message_ids:
+            if msg.get("role") != "user":
                 continue
             content = msg.get("content", [])
             if isinstance(content, list):
@@ -4049,84 +1756,41 @@ class AgentStreamExecutor:
                                 + f"\n\n[Message truncated for context recovery: "
                                 f"{len(text)} -> {USER_MSG_LIMIT} chars]"
                             )
-                            truncated_historical_user_messages += 1
-                            _mark_truncated(msg)
+                            truncated += 1
             elif isinstance(content, str) and len(content) > USER_MSG_LIMIT:
                 msg["content"] = (
                     content[:USER_MSG_LIMIT]
                     + f"\n\n[Message truncated for context recovery: "
                     f"{len(content)} -> {USER_MSG_LIMIT} chars]"
                 )
-                truncated_historical_user_messages += 1
-                _mark_truncated(msg)
+                truncated += 1
 
         # Step 3: Keep only the last 5 complete turns
         turns = self._identify_complete_turns()
-        removed = 0
         if len(turns) > 5:
-            kept_turns = turns[-5:-1] + turns[-1:]
+            kept_turns = turns[-5:]
             new_messages = []
             for turn in kept_turns:
                 new_messages.extend(turn["messages"])
-            removed = len(turns) - len(kept_turns)
+            removed = len(turns) - 5
             self.messages[:] = new_messages
             logger.info(
                 f"🔧 Aggressive trim: removed {removed} old turns, "
                 f"truncated {truncated} large blocks, "
                 f"{original_count} -> {len(self.messages)} messages"
             )
-            return self._context_overflow_recovery_payload(
-                original_count=original_count,
-                turns_before=turns_before,
-                removed_turns=removed,
-                truncated_blocks=truncated,
-                truncated_current_run_blocks=truncated_current_blocks,
-                truncated_historical_blocks=truncated_historical_blocks,
-                truncated_historical_user_messages=truncated_historical_user_messages,
-                current_user_marker=current_user_marker,
-            )
+            return True
 
         if truncated > 0:
             logger.info(
                 f"🔧 Aggressive trim: truncated {truncated} large blocks "
                 f"(no turns removed, only {len(turns)} turn(s) left)"
             )
-            return self._context_overflow_recovery_payload(
-                original_count=original_count,
-                turns_before=turns_before,
-                removed_turns=removed,
-                truncated_blocks=truncated,
-                truncated_current_run_blocks=truncated_current_blocks,
-                truncated_historical_blocks=truncated_historical_blocks,
-                truncated_historical_user_messages=truncated_historical_user_messages,
-                current_user_marker=current_user_marker,
-            )
+            return True
 
         # Nothing left to trim
         logger.warning("🔧 Aggressive trim: nothing to trim, will clear history")
-        return self._context_overflow_recovery_payload(
-            original_count=original_count,
-            turns_before=turns_before,
-            removed_turns=removed,
-            truncated_blocks=truncated,
-            truncated_current_run_blocks=truncated_current_blocks,
-            truncated_historical_blocks=truncated_historical_blocks,
-            truncated_historical_user_messages=truncated_historical_user_messages,
-            current_user_marker=current_user_marker,
-        )
-
-    def _compress_history_for_format_recovery(self) -> Dict[str, Any]:
-        """Strip provider-sensitive tool protocol while retaining its facts."""
-        before = len(self.messages)
-        repaired: List[Dict[str, Any]] = []
-        for turn in self._identify_complete_turns():
-            repaired.extend(
-                compress_turn_to_text_only(turn, preserve_tool_facts=True)["messages"]
-            )
-        if not repaired or repaired == self.messages:
-            return {"applied": False, "messages_before": before, "messages_after": before}
-        self.messages[:] = repaired
-        return {"applied": True, "messages_before": before, "messages_after": len(repaired)}
+        return False
 
     def _build_context_summary_callback(self, discarded_turns: list, kept_turns: list):
         """
@@ -4140,21 +1804,7 @@ class AgentStreamExecutor:
             return None
 
         # Find the first user text block in kept_turns as injection target
-        target_block = None
-        for turn in kept_turns:
-            for msg in turn["messages"]:
-                if msg.get("role") == "user":
-                    content = msg.get("content", [])
-                    if isinstance(content, list):
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                target_block = block
-                                break
-                    if target_block:
-                        break
-            if target_block:
-                break
-
+        target_block = find_first_user_text_block(kept_turns)
         if not target_block:
             return None
 
@@ -4164,12 +1814,8 @@ class AgentStreamExecutor:
         def _on_summary_ready(summary: str):
             if not summary or not summary.strip():
                 return
-            target_block["text"] = (
-                f"[System: Previous conversation summary — "
-                f"{turn_count} turns were compacted]\n\n"
-                f"{summary.strip()}\n\n"
-                f"The recent conversation continues below.\n\n---\n\n"
-                f"{original_text}"
+            target_block["text"] = build_compaction_summary_text(
+                summary, turn_count, original_text
             )
             logger.info(
                 f"📝 Context summary injected "
@@ -4227,16 +1873,20 @@ class AgentStreamExecutor:
                     )
 
         # Step 3: Token 限制 - 保留完整轮次
+        # Get context window from agent (based on model)
         context_window = self.agent._get_model_context_window()
 
+        # Use configured max_context_tokens if available
         if hasattr(self.agent, 'max_context_tokens') and self.agent.max_context_tokens:
             max_tokens = self.agent.max_context_tokens
         else:
+            # Reserve 10% for response generation
             reserve_tokens = int(context_window * 0.1)
             max_tokens = context_window - reserve_tokens
 
         # Estimate system prompt tokens
         system_tokens = self.agent._estimate_message_tokens({"role": "system", "content": self.system_prompt})
+        available_tokens = max_tokens - system_tokens
 
         # Calculate current tokens
         current_tokens = sum(self._estimate_turn_tokens(turn) for turn in turns)

@@ -52,6 +52,7 @@ from ecorex.gateway import (
     ModelGatewayRequest,
     canonical_tool_descriptor_bytes,
     canonical_tool_schema_batch_bytes,
+    ecorex_chat_gateway_policy,
 )
 from ecorex.input_attachments import InputAttachmentService
 from ecorex.connectors import ConnectorReconciliationPending
@@ -454,7 +455,7 @@ class _CheckpointLeasePulse:
         await self.stage(self._latest, force=True)
 
 
-class AgentTurnWorker:
+class LegacyAgentTurnWorker:
     _MAX_THREAD_CONTEXT_ITEMS = 96
     _MAX_THREAD_CONTEXT_CHARACTERS = 192_000
     _MAX_THREAD_CONTEXT_MESSAGE_CHARACTERS = 48_000
@@ -5381,3 +5382,764 @@ class AgentTurnWorker:
         if isinstance(error, ModelGatewayError):
             return error.__class__.__name__.casefold()
         return error.__class__.__name__.casefold()
+
+
+class _CowGatewayModel:
+    """Expose e-Mate's authenticated Gateway as Cow's native LLMModel."""
+
+    def __init__(
+        self,
+        gateway: ModelGateway,
+        loop: asyncio.AbstractEventLoop,
+        *,
+        thread_id: str,
+        turn_id: str,
+        model_id: str,
+    ) -> None:
+        self.gateway = gateway
+        self.loop = loop
+        self.thread_id = thread_id
+        self.turn_id = turn_id
+        self.model = model_id
+        self.previous_response_id: str | None = None
+        self.last_usage: dict[str, int] | None = None
+        self.usage_events: list[tuple[str, dict[str, int]]] = []
+        self._round = 0
+
+    @staticmethod
+    def _text(content: Any) -> str:
+        if isinstance(content, str):
+            return content.strip()
+        if not isinstance(content, list):
+            return ""
+        return "\n".join(
+            str(block.get("text") or "").strip()
+            for block in content
+            if isinstance(block, dict)
+            and block.get("type") == "text"
+            and str(block.get("text") or "").strip()
+        )
+
+    def _inputs(self, messages: list[dict[str, Any]]) -> list[Any]:
+        if self.previous_response_id:
+            continuation: list[Any] = []
+            for message_index, message in enumerate(messages[-1:]):
+                content = message.get("content")
+                if not isinstance(content, list):
+                    content = [{"type": "text", "text": content}]
+                for block_index, block in enumerate(content):
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") == "tool_result":
+                        call_id = str(block.get("tool_use_id") or "").strip()
+                        if call_id:
+                            continuation.append(
+                                GatewayFunctionCallOutputInput(
+                                    tool_call_id=call_id,
+                                    output=block.get("content", ""),
+                                )
+                            )
+                    elif block.get("type") == "text":
+                        text = str(block.get("text") or "").strip()
+                        if text:
+                            continuation.append(
+                                GatewayUserMessageInput(
+                                    message_id=(
+                                        f"{self.turn_id}:cow:{self._round}:"
+                                        f"{message_index}:{block_index}"
+                                    ),
+                                    content=text,
+                                )
+                            )
+            return continuation
+
+        inputs: list[Any] = []
+        for index, message in enumerate(messages[-96:]):
+            text = self._text(message.get("content"))
+            if not text:
+                continue
+            identity = f"{self.turn_id}:cow:{self._round}:{index}"
+            if message.get("role") == "assistant":
+                inputs.append(
+                    GatewayAssistantMessageInput(message_id=identity, content=text)
+                )
+            elif message.get("role") == "user":
+                inputs.append(GatewayUserMessageInput(message_id=identity, content=text))
+        return inputs
+
+    @staticmethod
+    def _tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        descriptors: list[dict[str, Any]] = []
+        for tool in tools or []:
+            name = str(tool.get("name") or "").strip()
+            description = str(tool.get("description") or name).strip()
+            schema = tool.get("input_schema")
+            if not name or not isinstance(schema, dict):
+                continue
+            descriptors.append(
+                {
+                    "spec": {
+                        "tool_id": name,
+                        "version": "2.1.5",
+                        "description": description or name,
+                        "input_schema": schema,
+                    },
+                    "decision": {
+                        "tool_id": name,
+                        "tool_version": "2.1.5",
+                        "exposure": "direct",
+                        "eligible": True,
+                    },
+                }
+            )
+        return descriptors
+
+    def _request(self, request: Any) -> ModelGatewayRequest:
+        self._round += 1
+        inputs = self._inputs(list(request.messages or []))
+        if not inputs:
+            inputs = [
+                GatewayUserMessageInput(
+                    message_id=f"{self.turn_id}:cow:{self._round}:empty",
+                    content="请继续当前任务。",
+                )
+            ]
+        instructions = "\n\n".join(
+            part
+            for part in (
+                _EMATE_MODEL_INSTRUCTIONS,
+                str(getattr(request, "system", "") or "").strip(),
+            )
+            if part
+        )[:_GATEWAY_INSTRUCTION_LIMIT]
+        return ModelGatewayRequest(
+            request_id=f"cow_{self.turn_id}_{self._round}",
+            thread_id=self.thread_id,
+            turn_id=self.turn_id,
+            trace_id=f"trace_{self.turn_id}",
+            model_id=self.model,
+            model_policy=GatewayModelPolicy.model_validate(
+                ecorex_chat_gateway_policy(self.model).model_dump(mode="json")
+            ),
+            instructions=instructions,
+            input_items=inputs,
+            config_snapshot_id="cow_config_2.1.5",
+            capability_snapshot_id="cow_tools_2.1.5",
+            permission_snapshot_id="cow_local_2.1.5",
+            direct_tools=self._tools(getattr(request, "tools", None)),
+            previous_response_id=self.previous_response_id,
+        )
+
+    async def _produce(self, request: ModelGatewayRequest, output: Any, end: object) -> None:
+        try:
+            async for event in self.gateway.stream(request):
+                output.put(event)
+        except BaseException as error:
+            output.put(error)
+        finally:
+            output.put(end)
+
+    def call_stream(self, request: Any):
+        from queue import Queue
+
+        output: Queue[Any] = Queue()
+        end = object()
+        gateway_request = self._request(request)
+        future = asyncio.run_coroutine_threadsafe(
+            self._produce(gateway_request, output, end), self.loop
+        )
+        tool_index = 0
+        saw_tool = False
+        while True:
+            event = output.get()
+            if event is end:
+                break
+            if isinstance(event, BaseException):
+                raise event
+            if event.event_type is GatewayEventType.OUTPUT_TEXT_DELTA:
+                yield {"choices": [{"delta": {"content": event.delta}}]}
+            elif event.event_type is GatewayEventType.REASONING_SUMMARY_DELTA:
+                yield {
+                    "choices": [
+                        {"delta": {"reasoning_content": event.delta}}
+                    ]
+                }
+            elif event.event_type is GatewayEventType.TOOL_CALL_REQUESTED:
+                saw_tool = True
+                yield {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": tool_index,
+                                        "id": event.tool_call_id,
+                                        "function": {
+                                            "name": event.tool_name,
+                                            "arguments": json.dumps(
+                                                event.arguments,
+                                                ensure_ascii=False,
+                                                separators=(",", ":"),
+                                            ),
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+                tool_index += 1
+            elif event.event_type is GatewayEventType.RESPONSE_FAILED:
+                yield {
+                    "error": {
+                        "message": event.error_message,
+                        "code": event.error_code,
+                    }
+                }
+            elif event.event_type is GatewayEventType.RESPONSE_COMPLETED:
+                self.previous_response_id = event.response_id
+                self.last_usage = event.usage
+                if event.usage is not None:
+                    self.usage_events.append((event.response_id, event.usage))
+                yield {
+                    "choices": [
+                        {
+                            "delta": {},
+                            "finish_reason": "tool_calls" if saw_tool else "stop",
+                        }
+                    ]
+                }
+        future.result()
+
+    def call(self, request: Any) -> dict[str, Any]:
+        text = ""
+        for chunk in self.call_stream(request):
+            choices = chunk.get("choices") if isinstance(chunk, dict) else None
+            if choices:
+                text += str(choices[0].get("delta", {}).get("content") or "")
+        return {"choices": [{"message": {"content": text}}]}
+
+
+class _CowAgentBridge:
+    def __init__(self) -> None:
+        self.scheduler_initialized = False
+        self.default_agent: Any | None = None
+        self.agents: dict[str, Any] = {}
+        self._model: ContextVar[_CowGatewayModel] = ContextVar("cow_gateway_model")
+
+    def bind_model(self, model: _CowGatewayModel):
+        return self._model.set(model)
+
+    def reset_model(self, token: Any) -> None:
+        self._model.reset(token)
+
+    def create_agent(self, system_prompt: str, tools: list[Any] | None = None, **kwargs: Any):
+        from agent.protocol.agent import Agent
+
+        return Agent(
+            system_prompt=system_prompt,
+            model=self._model.get(),
+            tools=tools,
+            max_steps=kwargs.get("max_steps", 20),
+            output_mode=kwargs.get("output_mode", "logger"),
+            workspace_dir=kwargs.get("workspace_dir"),
+            skill_manager=kwargs.get("skill_manager"),
+            enable_skills=kwargs.get("enable_skills", True),
+            memory_manager=kwargs.get("memory_manager"),
+            max_context_tokens=kwargs.get("max_context_tokens"),
+            runtime_info=kwargs.get("runtime_info"),
+        )
+
+
+class AgentTurnWorker:
+    """Thin e-Mate durability adapter around CowAgent's real executor."""
+
+    def __init__(
+        self,
+        kernel: RuntimeKernel,
+        *,
+        gateway: ModelGateway,
+        lease_seconds: int = 60,
+        retry_delay_seconds: int = 5,
+        workspace_root: str | Path | None = None,
+        workspace_root_resolver: Callable[[ToolExecutionScope | None], tuple[Path, ...]]
+        | None = None,
+        **_ignored: Any,
+    ) -> None:
+        self.kernel = kernel
+        self.gateway = gateway
+        self.lease_seconds = lease_seconds
+        self.retry_delay_seconds = retry_delay_seconds
+        self.workspace_root = (
+            Path(workspace_root).expanduser().resolve()
+            if workspace_root is not None
+            else kernel.database.path.parent / "workspace"
+        )
+        self.workspace_root_resolver = workspace_root_resolver
+        self._cancel_events: dict[str, threading.Event] = {}
+        self._cow_bridge = _CowAgentBridge()
+
+    def bind_visual_evidence_resolver(self, _resolver: Any) -> None:
+        return None
+
+    async def close(self) -> None:
+        for event in self._cancel_events.values():
+            event.set()
+        self._cancel_events.clear()
+        self._cow_bridge.agents.clear()
+
+    def _workspace(self, job_id: str, thread_id: str, turn_id: str) -> Path:
+        if self.workspace_root_resolver is not None:
+            roots = self.workspace_root_resolver(
+                ToolExecutionScope(
+                    job_id=job_id,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    execution_batch_id=f"cow_{turn_id}",
+                )
+            )
+            if roots:
+                return Path(roots[0]).expanduser().resolve()
+        return self.workspace_root
+
+    def _history(self, thread_id: str, current_turn_id: str) -> list[dict[str, Any]]:
+        with self.kernel.database.reader() as connection:
+            rows = connection.execute(
+                "SELECT content_json FROM items WHERE thread_id = ? AND turn_id != ? "
+                "AND kind = 'message' AND status = 'completed' "
+                "ORDER BY created_at DESC, item_id DESC LIMIT 96",
+                (thread_id, current_turn_id),
+            ).fetchall()
+        history: list[dict[str, Any]] = []
+        for row in reversed(rows):
+            content = json_loads(row["content_json"], {})
+            role = content.get("role")
+            text = str(content.get("text") or "").strip()
+            if role in {"user", "assistant"} and text:
+                history.append(
+                    {"role": role, "content": [{"type": "text", "text": text}]}
+                )
+        return history
+
+    def _revisions(self, turn_id: str) -> tuple[TurnInputRevision, ...]:
+        return self.kernel.turn_inputs.list_for_turn(turn_id)
+
+    @staticmethod
+    def _digest(value: Any) -> str:
+        try:
+            encoded = json_dumps(value).encode("utf-8")
+        except (TypeError, ValueError):
+            encoded = str(value).encode("utf-8", errors="replace")
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _tool_effects(name: str) -> tuple[list[str], str]:
+        if name in {"write", "edit", "send", "env_config", "scheduler"}:
+            return ["write"], "high"
+        if name in {"bash", "terminal"}:
+            return ["execute"], "high"
+        if name == "browser":
+            return ["network", "ui_automation"], "high"
+        if name in {"web_fetch", "web_search", "vision"}:
+            return ["network", "read"], "medium"
+        return ["read"], "low"
+
+    def _project_event(
+        self,
+        event: dict[str, Any],
+        *,
+        state: dict[str, Any],
+        job_id: str,
+        lease_token: str,
+        turn_id: str,
+    ) -> None:
+        event_type = str(event.get("type") or "")
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        state["seq"] += 1
+        seq = state["seq"]
+        if event_type == "message_start":
+            item = self.kernel.create_item(
+                turn_id=turn_id,
+                kind=ItemKind.MESSAGE,
+                status=ItemStatus.IN_PROGRESS,
+                content={"role": "assistant", "text": "", "executor": "cow-2.1.5"},
+                job_id=job_id,
+                lease_token=lease_token,
+            )
+            state["message_item"] = item.item_id
+        elif event_type == "message_update":
+            if state.get("message_item") is None:
+                self._project_event(
+                    {"type": "message_start", "data": {}},
+                    state=state,
+                    job_id=job_id,
+                    lease_token=lease_token,
+                    turn_id=turn_id,
+                )
+            delta = str(data.get("delta") or "")
+            if delta:
+                self.kernel.append_message_delta(
+                    state["message_item"],
+                    delta,
+                    idempotency_key=f"{turn_id}:cow:delta:{seq}",
+                    job_id=job_id,
+                    lease_token=lease_token,
+                )
+        elif event_type == "message_end":
+            if state.get("message_item") is not None:
+                self.kernel.transition_item(
+                    state["message_item"],
+                    ItemStatus.COMPLETED,
+                    job_id=job_id,
+                    lease_token=lease_token,
+                )
+                state["message_item"] = None
+        elif event_type == "tool_execution_start":
+            call_id = str(data.get("tool_call_id") or "")
+            name = str(data.get("tool_name") or "tool")
+            arguments = data.get("arguments", {})
+            effects, risk = self._tool_effects(name)
+            activity = PublicToolActivity(
+                tool_call_id=call_id,
+                tool_id=name,
+                tool_name=name,
+                display_label=name[:80],
+                phase="requested",
+                status="in_progress",
+                effects=effects,
+                risk=risk,
+                argument_summary=f"正在执行 {name}"[:160],
+                argument_sha256=self._digest(arguments),
+            )
+            item = self.kernel.create_item(
+                turn_id=turn_id,
+                kind=ItemKind.TOOL_CALL,
+                status=ItemStatus.IN_PROGRESS,
+                content=activity.model_dump(mode="json"),
+                job_id=job_id,
+                lease_token=lease_token,
+            )
+            state["tools"][call_id] = (item.item_id, activity, arguments)
+        elif event_type == "tool_execution_end":
+            call_id = str(data.get("tool_call_id") or "")
+            stored = state["tools"].get(call_id)
+            if stored is not None:
+                item_id, activity, _arguments = stored
+                if data.get("status") == "success":
+                    completed = activity.model_copy(
+                        update={
+                            "phase": "completed",
+                            "status": "completed",
+                            "result_summary": f"已完成 {activity.tool_id}"[:160],
+                            "result_sha256": self._digest(data.get("result")),
+                        }
+                    )
+                    self.kernel.complete_tool_item(
+                        item_id,
+                        completed,
+                        idempotency_key=f"{turn_id}:{call_id}:completed",
+                        job_id=job_id,
+                        lease_token=lease_token,
+                    )
+                else:
+                    self.kernel.transition_item(
+                        item_id,
+                        ItemStatus.FAILED,
+                        job_id=job_id,
+                        lease_token=lease_token,
+                    )
+        elif event_type in {"artifact", "file_to_send"} and data:
+            self.kernel.create_item(
+                turn_id=turn_id,
+                kind=ItemKind.ARTIFACT,
+                status=ItemStatus.COMPLETED,
+                content={"source": "cow-2.1.5", **data},
+                job_id=job_id,
+                lease_token=lease_token,
+            )
+        elif event_type in {"reasoning_update", "tool_execution_progress", "error"}:
+            turn = self.kernel.get_turn(turn_id)
+            self.kernel.append_execution_event(
+                job_id=job_id,
+                lease_token=lease_token,
+                thread_id=turn.thread_id,
+                turn_id=turn_id,
+                event_type=f"cow.{event_type}",
+                payload=data,
+                idempotency_key=f"{turn_id}:cow:{event_type}:{seq}",
+            )
+
+    async def _heartbeat_loop(
+        self,
+        job_id: str,
+        worker_id: str,
+        lease_token: str,
+        cancel_event: threading.Event,
+    ) -> None:
+        while not cancel_event.is_set():
+            await asyncio.sleep(max(1.0, self.lease_seconds / 3))
+            try:
+                await _run_blocking(
+                    self.kernel.jobs.heartbeat,
+                    job_id,
+                    worker_id,
+                    lease_token,
+                    lease_seconds=self.lease_seconds,
+                    checkpoint={"schema_version": 1, "executor": "cow-2.1.5"},
+                )
+            except Exception:
+                cancel_event.set()
+                return
+
+    async def _watch_revisions(
+        self,
+        turn_id: str,
+        inbox: Any,
+        cancel_event: threading.Event,
+        stop: asyncio.Event,
+    ) -> int:
+        applied = 0
+        while not stop.is_set() and not cancel_event.is_set():
+            revisions = await _run_blocking(self._revisions, turn_id)
+            for revision in revisions:
+                if revision.ordinal <= applied:
+                    continue
+                result = inbox.submit(revision.input)
+                if not result.accepted:
+                    return applied
+                applied = revision.ordinal
+            turn = await _run_blocking(self.kernel.get_turn, turn_id)
+            if turn.status in {
+                TurnStatus.CANCELLED,
+                TurnStatus.INTERRUPTED,
+                TurnStatus.SUPERSEDED,
+            }:
+                cancel_event.set()
+                return applied
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=0.1)
+            except TimeoutError:
+                pass
+        return applied
+
+    def _run_agent(
+        self,
+        *,
+        model: _CowGatewayModel,
+        workspace: Path,
+        thread_id: str,
+        turn_id: str,
+        input_text: str,
+        history: list[dict[str, Any]],
+        callback: Callable[[dict[str, Any]], None],
+        cancel_event: threading.Event,
+        inbox: Any,
+    ) -> str:
+        from bridge.agent_initializer import AgentInitializer
+
+        bridge = self._cow_bridge
+        token = bridge.bind_model(model)
+        try:
+            agent = AgentInitializer(object(), bridge).initialize_agent(
+                session_id=f"emate-{thread_id}", workspace_root=workspace
+            )
+            bridge.agents[thread_id] = agent
+            agent.messages = history
+            agent._current_session_id = thread_id
+            agent._current_request_id = turn_id
+            return agent.run_stream(
+                input_text,
+                on_event=callback,
+                cancel_event=cancel_event,
+                steer_inbox=inbox,
+            )
+        finally:
+            bridge.reset_model(token)
+
+    async def run_once(self, worker_id: str) -> WorkerRunResult:
+        job = await _run_blocking(
+            self.kernel.jobs.lease_next,
+            worker_id,
+            lease_seconds=self.lease_seconds,
+            kinds=["agent_turn"],
+        )
+        if job is None:
+            return WorkerRunResult(WorkerOutcome.IDLE)
+        assert job.lease_token and job.turn_id and job.thread_id
+        lease_token = job.lease_token
+        cancel_event = threading.Event()
+        self._cancel_events[job.turn_id] = cancel_event
+        heartbeat: asyncio.Task[None] | None = None
+        watcher: asyncio.Task[int] | None = None
+        watch_stop = asyncio.Event()
+        state: dict[str, Any] = {
+            "seq": 0,
+            "message_item": None,
+            "tools": {},
+            "errors": [],
+        }
+        try:
+            job = await _run_blocking(
+                self.kernel.jobs.start, job.job_id, worker_id, lease_token
+            )
+            turn = await _run_blocking(self.kernel.get_turn, job.turn_id)
+            if turn.status in {TurnStatus.QUEUED, TurnStatus.RETRY_WAIT}:
+                turn = await _run_blocking(
+                    self.kernel.transition_turn,
+                    turn.turn_id,
+                    TurnStatus.PREPARING,
+                    job_id=job.job_id,
+                    lease_token=lease_token,
+                )
+            turn = await _run_blocking(
+                self.kernel.transition_turn,
+                turn.turn_id,
+                TurnStatus.MODEL_REQUESTED,
+                job_id=job.job_id,
+                lease_token=lease_token,
+            )
+            await _run_blocking(
+                self.kernel.transition_turn,
+                turn.turn_id,
+                TurnStatus.STREAMING,
+                job_id=job.job_id,
+                lease_token=lease_token,
+            )
+            loop = asyncio.get_running_loop()
+            model = _CowGatewayModel(
+                self.gateway,
+                loop,
+                thread_id=job.thread_id,
+                turn_id=job.turn_id,
+                model_id=turn.agent_model_id,
+            )
+            workspace = await _run_blocking(
+                self._workspace, job.job_id, job.thread_id, job.turn_id
+            )
+            history = await _run_blocking(
+                self._history, job.thread_id, job.turn_id
+            )
+
+            def callback(event: dict[str, Any]) -> None:
+                try:
+                    self._project_event(
+                        event,
+                        state=state,
+                        job_id=job.job_id,
+                        lease_token=lease_token,
+                        turn_id=job.turn_id,
+                    )
+                except Exception as error:
+                    state["errors"].append(error)
+
+            from agent.protocol.steer import SteerInbox
+
+            inbox = SteerInbox()
+            heartbeat = asyncio.create_task(
+                self._heartbeat_loop(
+                    job.job_id, worker_id, lease_token, cancel_event
+                )
+            )
+            watcher = asyncio.create_task(
+                self._watch_revisions(job.turn_id, inbox, cancel_event, watch_stop)
+            )
+            await asyncio.to_thread(
+                self._run_agent,
+                model=model,
+                workspace=workspace,
+                thread_id=job.thread_id,
+                turn_id=job.turn_id,
+                input_text=turn.input,
+                history=history,
+                callback=callback,
+                cancel_event=cancel_event,
+                inbox=inbox,
+            )
+            watch_stop.set()
+            applied = await watcher
+            watcher = None
+            if state["errors"]:
+                raise state["errors"][0]
+            revisions = await _run_blocking(self._revisions, job.turn_id)
+            for revision in revisions:
+                if revision.ordinal <= applied:
+                    continue
+                next_inbox = SteerInbox()
+                await asyncio.to_thread(
+                    self._run_agent,
+                    model=model,
+                    workspace=workspace,
+                    thread_id=job.thread_id,
+                    turn_id=job.turn_id,
+                    input_text=revision.input,
+                    history=history,
+                    callback=callback,
+                    cancel_event=cancel_event,
+                    inbox=next_inbox,
+                )
+                applied = revision.ordinal
+            for usage_index, (response_id, usage) in enumerate(model.usage_events, 1):
+                await _run_blocking(
+                    self.kernel.append_execution_event,
+                    job_id=job.job_id,
+                    lease_token=lease_token,
+                    thread_id=job.thread_id,
+                    turn_id=job.turn_id,
+                    event_type="model.response_completed",
+                    payload={
+                        "executor": "cow-2.1.5",
+                        "response_id": response_id,
+                        "usage": usage,
+                    },
+                    idempotency_key=f"{job.turn_id}:cow:usage:{usage_index}",
+                )
+            ready = await _run_blocking(
+                self.kernel.begin_finalizing_if_inputs_applied,
+                job.turn_id,
+                applied_through_ordinal=applied,
+                job_id=job.job_id,
+                lease_token=lease_token,
+            )
+            if not ready:
+                raise ConflictError("steering input arrived during Cow finalization")
+            await _run_blocking(
+                self.kernel.finish_turn_job,
+                job_id=job.job_id,
+                worker_id=worker_id,
+                lease_token=lease_token,
+                target=TurnStatus.COMPLETED,
+            )
+            return WorkerRunResult(
+                WorkerOutcome.COMPLETED,
+                job_id=job.job_id,
+                turn_id=job.turn_id,
+            )
+        except Exception as error:
+            cancel_event.set()
+            try:
+                await _run_blocking(
+                    self.kernel.fail_turn_job,
+                    job_id=job.job_id,
+                    worker_id=worker_id,
+                    lease_token=lease_token,
+                    error=error.__class__.__name__.casefold(),
+                    retryable=False,
+                )
+            except Exception:
+                pass
+            return WorkerRunResult(
+                WorkerOutcome.FAILED,
+                job_id=job.job_id,
+                turn_id=job.turn_id,
+                reason=error.__class__.__name__.casefold(),
+            )
+        finally:
+            cancel_event.set()
+            watch_stop.set()
+            if watcher is not None:
+                watcher.cancel()
+                await asyncio.gather(watcher, return_exceptions=True)
+            if heartbeat is not None:
+                heartbeat.cancel()
+                await asyncio.gather(heartbeat, return_exceptions=True)
+            self._cancel_events.pop(job.turn_id, None)

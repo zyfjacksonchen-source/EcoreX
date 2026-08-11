@@ -35,13 +35,15 @@ from ecorex.protocol import (
     TurnStatus,
 )
 from ecorex.runtime import (
-    AgentTurnWorker,
     RuntimeSettings,
     ToolExecutionRepository,
     WorkerOutcome,
     create_app,
 )
-from ecorex.runtime.worker import _CheckpointLeasePulse
+from ecorex.runtime.worker import (
+    LegacyAgentTurnWorker as AgentTurnWorker,
+    _CheckpointLeasePulse,
+)
 
 
 class ScriptedGateway:
