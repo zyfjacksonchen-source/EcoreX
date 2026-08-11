@@ -851,7 +851,7 @@ def test_typed_gateway_input_bounds_item_count_and_validates_ids() -> None:
         ModelGatewayRequest.model_validate(values)
 
 
-def test_tool_handoff_is_a_replayable_terminal_and_releases_concurrency(
+def test_responses_tool_handoff_is_replayable_without_chat_reconstruction(
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "tool-handoff.sqlite3"
@@ -867,6 +867,15 @@ def test_tool_handoff_is_a_replayable_terminal_and_releases_concurrency(
     )
     body = _request("tool-round")
     reservation = store.reserve(body, principal, lease_seconds=30)
+    store.bind_model_attempt(
+        body,
+        config_id="model-luna",
+        config_revision=4,
+        upstream_model_id="gpt-5.6-luna",
+        provider_protocol="responses",
+        provider_origin_preset="ecorex_chat",
+        ttl_seconds=300,
+    )
     handoff = GatewayEvent(
         seq=1,
         event_type=GatewayEventType.TOOL_CALL_REQUESTED,
@@ -878,6 +887,10 @@ def test_tool_handoff_is_a_replayable_terminal_and_releases_concurrency(
         usage={"input_tokens": 7, "output_tokens": 2, "total_tokens": 9},
     )
     store.append_terminal(body.request_id, reservation.lease_token, handoff)
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM gateway_chat_handoffs"
+        ).fetchone() == (0,)
     replay = store.reserve(body, principal, lease_seconds=30)
     assert replay.mode == "replay"
     assert replay.events == (handoff,)
