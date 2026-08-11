@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialize content-addressed public JS/CSS and atomically rebind HTML."""
+"""Materialize content-addressed public JS/CSS and atomically rebind HTML pages."""
 
 from __future__ import annotations
 
@@ -146,13 +146,19 @@ def build(site_root: Path) -> dict[str, object]:
 
 def _build_locked(root: Path) -> dict[str, object]:
     html_path = root / "index.html"
-    html_payload = _read_regular(
-        html_path, maximum=_MAX_HTML_BYTES, label="public index.html"
-    )
-    try:
-        html = html_payload.decode("utf-8")
-    except UnicodeDecodeError:
-        raise ValueError("public index.html must be UTF-8") from None
+    documents: dict[Path, tuple[bytes, str]] = {}
+    for path in sorted(root.glob("*.html")):
+        payload = _read_regular(path, maximum=_MAX_HTML_BYTES, label=f"public {path.name}")
+        try:
+            document = payload.decode("utf-8")
+        except UnicodeDecodeError:
+            raise ValueError(f"public {path.name} must be UTF-8") from None
+        if len(_SCRIPT_REFERENCE.findall(document)) != 1 or len(_STYLE_REFERENCE.findall(document)) != 1:
+            raise ValueError(f"public {path.name} must reference exactly one JS and one CSS")
+        documents[path] = payload, document
+    if html_path not in documents:
+        raise ValueError("public index.html is missing")
+    html_payload, html = documents[html_path]
     script_references = _SCRIPT_REFERENCE.findall(html)
     style_references = _STYLE_REFERENCE.findall(html)
     if len(script_references) != 1 or len(style_references) != 1:
@@ -180,13 +186,15 @@ def _build_locked(root: Path) -> dict[str, object]:
     _write_new_asset(root, script_name, script_payload)
     _write_new_asset(root, style_name, style_payload)
 
-    html, script_count = _SCRIPT_REFERENCE.subn(f"./{script_name}", html)
-    html, style_count = _STYLE_REFERENCE.subn(f"./{style_name}", html)
-    if script_count != 1 or style_count != 1:
-        raise ValueError("public index.html must reference exactly one JS and one CSS")
-    next_html = html.encode("utf-8")
-    if next_html != html_payload:
-        _atomic_write(html_path, next_html)
+    next_html = html_payload
+    for path, (payload, document) in documents.items():
+        document = _SCRIPT_REFERENCE.sub(f"./{script_name}", document)
+        document = _STYLE_REFERENCE.sub(f"./{style_name}", document)
+        next_document = document.encode("utf-8")
+        if path == html_path:
+            next_html = next_document
+        if next_document != payload:
+            _atomic_write(path, next_document)
 
     for candidates, current in (
         (script_candidates, root / script_name),

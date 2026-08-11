@@ -74,6 +74,11 @@ export function targetFromPlatformSignals({ source = "", architecture = "", rend
   return /win/.test(source) ? "windows-x64" : null;
 }
 
+export function isMacDesktop({ source = "" } = {}) {
+  source = String(source).toLowerCase();
+  return /mac/.test(source) && !/iphone|ipad|ipod/.test(source);
+}
+
 async function detectTarget() {
   const source = `${navigator.platform || ""} ${navigator.userAgent || ""}`;
   let architecture = "";
@@ -196,7 +201,17 @@ function renderIndex(index, target) {
     link.download = download.file_name;
     link.textContent = "下载安装包";
     link.setAttribute("aria-label", `下载 ${download.label}`);
-    card.append(title, meta, body, link);
+    card.append(title, meta, body);
+    if (download.platform === "macos") {
+      const digest = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "核对 SHA-256";
+      const value = document.createElement("code");
+      value.textContent = download.sha256;
+      digest.append(summary, value);
+      card.append(digest);
+    }
+    card.append(link);
     grid.append(card);
   }
   const platform = preferredPlatform(target);
@@ -224,5 +239,20 @@ function renderFailure() {
 }
 
 if (typeof document !== "undefined") {
-  Promise.all([loadIndex(), detectTarget()]).then(([index, target]) => renderIndex(index, target)).catch(renderFailure);
+  const source = `${navigator.userAgentData?.platform || ""} ${navigator.platform || ""} ${navigator.userAgent || ""}`;
+  document.querySelectorAll("[data-mac-install-guide]").forEach((link) => { link.hidden = !isMacDesktop({ source }); });
+  const copy = document.querySelector("[data-copy-macos-command]");
+  copy?.addEventListener("click", async () => {
+    const status = document.querySelector("[data-copy-status]");
+    const command = [...document.querySelectorAll("[data-macos-command-line]")].map((line) => line.textContent).join("\n");
+    try {
+      await navigator.clipboard.writeText(command);
+      if (status) status.textContent = "已复制，请粘贴到终端运行。";
+    } catch {
+      if (status) status.textContent = "复制失败，请手动选择上方两行命令。";
+    }
+  });
+  if (document.querySelector("[data-downloads]")) {
+    Promise.all([loadIndex(), detectTarget()]).then(([index, target]) => renderIndex(index, target)).catch(renderFailure);
+  }
 }
