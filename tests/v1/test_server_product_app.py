@@ -516,7 +516,7 @@ def test_installed_payload_builtin_skill_search_read_run_chain(tmp_path: Path) -
             replace(context, tool_id="skill_read"),
         )
     )
-    assert "PowerPoint" in read["instructions"]
+    assert "Office Presentations" in read["instructions"]
     read_digest = hashlib.sha256(
         json.dumps(
             read,
