@@ -23,6 +23,7 @@ from ecorex.release import (
     candidate_receipt_signing_payload,
 )
 from ecorex.integration.pack_python import build_pack_python_manifest
+from ecorex.pack_catalog import required_capability_pack_projection
 from ecorex.control_plane.repository import (
     REQUIRED_RELEASE_GATES,
     required_release_gates,
@@ -702,6 +703,32 @@ def test_candidate_builds_three_bootstraps_runtime_archives_and_fifteen_real_pac
         "bootstrap-macos-x64",
     }.issubset(artifact_ids)
     assert sum(item.startswith("capability-pack-") for item in artifact_ids) == 30
+    for platform, architecture in (
+        ("windows", "x64"),
+        ("macos", "arm64"),
+        ("macos", "x64"),
+    ):
+        target = f"{platform}-{architecture}"
+        with zipfile.ZipFile(built.artifact_paths[f"core-{target}"]) as archive:
+            runtime_config = json.loads(archive.read("runtime-config.json"))
+        projection = required_capability_pack_projection(
+            platform=platform,
+            architecture=architecture,
+            version=PRODUCT_VERSION,
+        )
+        assert runtime_config["capability_packs"] == list(projection)
+        for pack in projection:
+            pack_id = pack["pack_id"]
+            archive_id = f"capability-pack-{pack_id}-{target}"
+            manifest_id = f"{archive_id}-manifest"
+            assert built.manifest.artifact(archive_id).file_name == Path(
+                pack["artifact"]
+            ).name
+            assert built.manifest.artifact(manifest_id).file_name == Path(
+                pack["manifest"]
+            ).name
+            assert built.artifact_paths[archive_id].is_file()
+            assert built.artifact_paths[manifest_id].is_file()
     assert "web-manifest" in artifact_ids
     assert built.manifest.sources[0].base_url.endswith(
         f"/canary/{built.manifest.release_id}"

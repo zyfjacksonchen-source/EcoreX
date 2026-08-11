@@ -17,6 +17,7 @@ from ecorex._version import __version__
 from ecorex.pack_catalog import (
     CAPABILITY_PACK_SERVICE_IDS,
     CAPABILITY_PACK_TOOL_IDS,
+    required_capability_pack_projection,
 )
 from ecorex.integration.pack_python import (
     PACK_PYTHON_MANIFEST,
@@ -960,18 +961,12 @@ def _validate_stage_payload(
         except Exception:
             raise CandidateBuildError("stage_runtime_config_invalid") from None
         expected_pack_paths = tuple(
-            (
-                pack,
-                (
-                    f"capability-packs/{pack}/ecorex-capability-pack-{pack}-"
-                    f"{platform}-{architecture}-{__version__}.json"
-                ),
-                (
-                    f"capability-packs/{pack}/ecorex-capability-pack-{pack}-"
-                    f"{platform}-{architecture}-{__version__}.zip"
-                ),
+            (pack["pack_id"], pack["manifest"], pack["artifact"])
+            for pack in required_capability_pack_projection(
+                platform=platform,
+                architecture=architecture,
+                version=__version__,
             )
-            for pack in PACK_TOOLS
         )
         if (
             runtime_config.identity.version != __version__

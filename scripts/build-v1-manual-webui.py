@@ -45,7 +45,10 @@ from ecorex.product_version import (  # noqa: E402
     is_stable_release_version,
     stable_release_sequence,
 )
-from ecorex.pack_catalog import COW_RUNTIME_SOURCE_ROOTS  # noqa: E402
+from ecorex.pack_catalog import (  # noqa: E402
+    COW_RUNTIME_SOURCE_ROOTS,
+    required_capability_pack_projection,
+)
 from ecorex.release import (  # noqa: E402
     ArtifactBuildInput,
     ArtifactKind,
@@ -687,10 +690,13 @@ def _runtime_config(
             if connector_enabled == "true"
             else None
         )
-        packs = value["capability_packs"]
-        for pack in packs:
-            pack["artifact"] = str(pack["artifact"]).replace(BASE_VERSION, __version__)
-            pack["manifest"] = str(pack["manifest"]).replace(BASE_VERSION, __version__)
+        value["capability_packs"] = list(
+            required_capability_pack_projection(
+                platform=platform,
+                architecture=architecture,
+                version=__version__,
+            )
+        )
         path.write_text(
             json.dumps(
                 value,

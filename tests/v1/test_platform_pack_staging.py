@@ -126,6 +126,14 @@ def test_platform_stage_records_required_product_service_configuration(
     assert all(item["configured"] is True for item in services.values())
     assert all(len(item["host_sha256"]) == 64 for item in services.values())
     assert "localhost" not in json.dumps(services)
+    config = json.loads((core / "runtime-config.json").read_text(encoding="utf-8"))
+    assert config["capability_packs"] == list(
+        stager["required_capability_pack_projection"](
+            platform="windows",
+            architecture="x64",
+            version=stager["__version__"],
+        )
+    )
 
 
 def test_platform_stage_rejects_missing_image_or_share_service(

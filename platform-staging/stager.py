@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build one real platform Core and the six signed Capability Pack trees.
+"""Build one real platform Core and the five signed Capability Pack trees.
 
 The protected workflow invokes this file as the digest-pinned adapter behind
 ``invoke-v1-platform-stager.py``. It consumes one strict request on stdin and
@@ -56,6 +56,7 @@ from ecorex.pack_catalog import (  # noqa: E402
     CAPABILITY_PACK_SERVICE_IDS as PACK_SERVICES,
     CAPABILITY_PACK_TOOL_IDS as PACK_TOOLS,
     COW_RUNTIME_SOURCE_ROOTS,
+    required_capability_pack_projection,
 )
 from ecorex.release.process_boundary import (  # noqa: E402
     BoundedProcessError,
@@ -2974,20 +2975,13 @@ def _write_runtime_config(
             "platform": platform,
             "architecture": architecture,
         }
-        raw["capability_packs"] = [
-            {
-                "pack_id": pack_id,
-                "manifest": (
-                    f"capability-packs/{pack_id}/ecorex-capability-pack-{pack_id}-"
-                    f"{platform}-{architecture}-{__version__}.json"
-                ),
-                "artifact": (
-                    f"capability-packs/{pack_id}/ecorex-capability-pack-{pack_id}-"
-                    f"{platform}-{architecture}-{__version__}.zip"
-                ),
-            }
-            for pack_id in PACK_TOOLS
-        ]
+        raw["capability_packs"] = list(
+            required_capability_pack_projection(
+                platform=platform,
+                architecture=architecture,
+                version=__version__,
+            )
+        )
         canonical = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode(
             "utf-8"
         )

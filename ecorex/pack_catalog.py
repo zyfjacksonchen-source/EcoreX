@@ -76,6 +76,27 @@ def capability_pack_profile(pack_ids: tuple[str, ...]) -> str | None:
     )
 
 
+def required_capability_pack_projection(
+    *, platform: str, architecture: str, version: str
+) -> tuple[dict[str, str], ...]:
+    """Return the exact Runtime paths for the product's required Packs."""
+
+    return tuple(
+        {
+            "pack_id": pack_id,
+            "manifest": (
+                f"capability-packs/{pack_id}/ecorex-capability-pack-{pack_id}-"
+                f"{platform}-{architecture}-{version}.json"
+            ),
+            "artifact": (
+                f"capability-packs/{pack_id}/ecorex-capability-pack-{pack_id}-"
+                f"{platform}-{architecture}-{version}.zip"
+            ),
+        }
+        for pack_id in REQUIRED_CAPABILITY_PACK_IDS
+    )
+
+
 __all__ = [
     "CAPABILITY_PACK_SERVICE_IDS",
     "CAPABILITY_PACK_TOOL_IDS",
@@ -83,4 +104,5 @@ __all__ = [
     "COW_RUNTIME_SOURCE_ROOTS",
     "REQUIRED_CAPABILITY_PACK_IDS",
     "capability_pack_profile",
+    "required_capability_pack_projection",
 ]

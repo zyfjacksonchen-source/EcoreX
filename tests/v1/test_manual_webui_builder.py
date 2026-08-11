@@ -108,7 +108,7 @@ def test_checked_in_predecessor_trust_covers_supported_v2_release_identities() -
     }
 
 
-def test_manual_webui_runtime_config_is_canonical_and_rebound(
+def test_manual_webui_runtime_config_rebuilds_exact_cow_pack_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -128,9 +128,24 @@ def test_manual_webui_runtime_config_is_canonical_and_rebound(
                 "release_public_keys": {"old": "key"},
                 "capability_packs": [
                     {
-                        "artifact": "ecorex-capability-pack-0.3.2.zip",
-                        "manifest": "ecorex-capability-pack-0.3.2.json",
+                        "pack_id": pack_id,
+                        "artifact": (
+                            f"capability-packs/{pack_id}/ecorex-capability-pack-"
+                            f"{pack_id}-macos-arm64-0.3.2.zip"
+                        ),
+                        "manifest": (
+                            f"capability-packs/{pack_id}/ecorex-capability-pack-"
+                            f"{pack_id}-macos-arm64-0.3.2.json"
+                        ),
                     }
+                    for pack_id in (
+                        "browser",
+                        "channels",
+                        "image",
+                        "ocr",
+                        "office",
+                        "sandbox",
+                    )
                 ],
             },
             indent=2,
@@ -170,9 +185,17 @@ def test_manual_webui_runtime_config_is_canonical_and_rebound(
     assert value["connectors"] is None
     assert value["capability_packs"] == [
         {
-            "artifact": f"ecorex-capability-pack-{__version__}.zip",
-            "manifest": f"ecorex-capability-pack-{__version__}.json",
+            "pack_id": pack_id,
+            "artifact": (
+                f"capability-packs/{pack_id}/ecorex-capability-pack-{pack_id}-"
+                f"macos-arm64-{__version__}.zip"
+            ),
+            "manifest": (
+                f"capability-packs/{pack_id}/ecorex-capability-pack-{pack_id}-"
+                f"macos-arm64-{__version__}.json"
+            ),
         }
+        for pack_id in ("browser", "channels", "image", "ocr", "office")
     ]
 
 
