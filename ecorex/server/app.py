@@ -620,16 +620,17 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
         raise ServerConfigurationError("runtime bearer and CSRF secrets must differ")
 
     capability_registry = builtin_capability_registry()
+    project_workspace_authority = (
+        (lambda _scope: ())
+        if settings.acceptance_preview
+        else ProjectWorkspaceAuthority(settings.database_path)
+    )
     capability_runtime = build_capability_handler_set(
         capability_registry,
         workspace_roots=settings.workspace_roots,
         trusted_core_handlers=settings.capability_handlers,
         pack_runtime=settings.capability_pack_runtime,
-        workspace_root_resolver=(
-            (lambda _scope: ())
-            if settings.acceptance_preview
-            else ProjectWorkspaceAuthority(settings.database_path)
-        ),
+        workspace_root_resolver=project_workspace_authority,
     )
     expected_pack_services = (
         settings.capability_pack_runtime.installed_service_ids
@@ -749,6 +750,7 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
             capability_runtime.sandbox_profile_availability
         ),
         workspace_root=settings.workspace_roots[0],
+        workspace_root_resolver=project_workspace_authority,
         output_roots=(settings.output_roots or None),
         output_default_location=settings.output_default_location,
         model_worker_concurrency=settings.model_worker_concurrency,

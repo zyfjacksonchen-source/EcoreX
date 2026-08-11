@@ -102,10 +102,12 @@ class ProjectService:
                 if candidate and _path_identity(Path(candidate)) == identity:
                     if isinstance(metadata, dict) and metadata.get("status") == "archived":
                         metadata = {**metadata, "status": "active", "updated_at": now}
-                        connection.execute(
-                            "UPDATE projects SET metadata_json = ?, active = 1 WHERE project_id = ?",
-                            (json_dumps(metadata), row["project_id"]),
-                        )
+                    connection.execute(
+                        "UPDATE projects SET memory_path='MEMORY.md', "
+                        "dreams_path='memory/dreams', metadata_json=?, active=1 "
+                        "WHERE project_id=?",
+                        (json_dumps(metadata), row["project_id"]),
+                    )
                     project_id = str(row["project_id"])
                     break
             else:
@@ -130,8 +132,8 @@ class ProjectService:
                         f"v1:{project_id}",
                         root.name or str(root),
                         str(root),
-                        ".ecorex/project-memory.md",
-                        ".ecorex/project-dreams.md",
+                        "MEMORY.md",
+                        "memory/dreams",
                         json_dumps(metadata),
                     ),
                 )
