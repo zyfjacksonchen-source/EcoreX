@@ -95,6 +95,20 @@ def test_tool_manager_and_mcp_registry_are_isolated_by_workspace(
     assert reloaded == ["a:shared-name"]
 
 
+def test_empty_mcp_wrapper_does_not_become_a_server(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "mcp.json").write_text(
+        json.dumps({"mcpServers": {}}),
+        encoding="utf-8",
+    )
+    manager = ToolManager(workspace_root=workspace)
+
+    assert manager._load_workspace_mcp_configs() == []
+    manager.refresh_mcp_if_changed()
+    assert manager.list_mcp_status() == {}
+
+
 def test_settings_reads_do_not_rebind_another_workspace_runtime(
     tmp_path: Path, monkeypatch,
 ) -> None:

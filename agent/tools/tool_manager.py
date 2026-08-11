@@ -385,7 +385,12 @@ class ToolManager:
         try:
             with open(mcp_json_path, "r", encoding="utf-8") as f:
                 data = _json.load(f)
-            raw = data.get("mcpServers") or data.get("mcp_servers") or data
+            if "mcpServers" in data:
+                raw = data["mcpServers"]
+            elif "mcp_servers" in data:
+                raw = data["mcp_servers"]
+            else:
+                raw = data
             logger.info(f"[ToolManager] Loading MCP config from {mcp_json_path}")
             return _normalize_mcp_configs(raw)
         except Exception as e:

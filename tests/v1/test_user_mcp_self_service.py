@@ -513,4 +513,4 @@ def test_runtime_product_mount_enforces_existing_auth_origin_and_csrf(tmp_path) 
         assert client.delete(
             f"/api/v1/mcp/servers/{server_id}", headers=headers
         ).status_code == 204
-    assert len(reloads) == 2
+    assert reloads == []
