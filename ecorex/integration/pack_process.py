@@ -762,6 +762,10 @@ class _ProcessPackToolHandler:
     ) -> Any:
         return await self._adapter.invoke(self._tool_id, arguments, context)
 
+    async def aclose(self) -> None:
+        if self._tool_id == "browser":
+            await self._adapter._stop_browser_session()
+
 
 def _create_pack_invocation_temp(workspace_root: Path) -> Path:
     root = Path(

@@ -135,6 +135,57 @@ def test_actual_initializer_and_tool_manager_are_the_default_tool_contract(
             assert Path(tool.config["cwd"]) == tmp_path
 
 
+def test_cow_browser_tool_uses_the_stateful_verified_pack_handler() -> None:
+    from agent.tools.browser.browser_tool import BrowserTool
+    from ecorex.runtime.worker import AgentTurnWorker
+
+    observed = []
+
+    async def exercise() -> None:
+        async def browser_pack(arguments, context):  # noqa: ANN001
+            observed.append((dict(arguments), context))
+            return {
+                "url": "about:blank",
+                "title": "Pack Browser",
+                "text": f"call-{len(observed)}",
+                "interactive": [],
+            }
+
+        worker = object.__new__(AgentTurnWorker)
+        worker.browser_handler = browser_pack
+        browser = BrowserTool()
+        agent = SimpleNamespace(tools=[browser])
+        worker._bind_browser_pack(
+            agent,
+            loop=asyncio.get_running_loop(),
+            job_id="job-browser",
+            thread_id="thread-browser",
+            turn_id="turn-browser",
+        )
+
+        navigate = await asyncio.to_thread(
+            browser.execute,
+            {"action": "navigate", "url": "about:blank"},
+        )
+        snapshot = await asyncio.to_thread(browser.execute, {"action": "snapshot"})
+
+        assert navigate.status == snapshot.status == "success"
+        assert navigate.result["text"] == "call-1"
+        assert snapshot.result["text"] == "call-2"
+
+    asyncio.run(exercise())
+
+    assert [arguments["action"] for arguments, _context in observed] == [
+        "navigate",
+        "snapshot",
+    ]
+    assert len({context.invocation_id for _arguments, context in observed}) == 2
+    assert all(
+        context.execution_scope.thread_id == "thread-browser"
+        for _arguments, context in observed
+    )
+
+
 def test_cow_direct_tools_do_not_reenter_the_settings_permission_broker(
     tmp_path: Path, monkeypatch,
 ) -> None:

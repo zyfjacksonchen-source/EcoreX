@@ -33,6 +33,8 @@ from ecorex.capabilities import (
     ToolProviderKind,
     ToolArgumentsValidationError,
     ToolExecutionScope,
+    ToolInvocationContext,
+    SandboxLevel,
     UnknownCapabilityError,
 )
 from ecorex.gateway import (
@@ -5669,6 +5671,7 @@ class AgentTurnWorker:
         workspace_root: str | Path | None = None,
         workspace_root_resolver: Callable[[ToolExecutionScope | None], tuple[Path, ...]]
         | None = None,
+        browser_handler: Callable[..., Any] | None = None,
         **_ignored: Any,
     ) -> None:
         self.kernel = kernel
@@ -5684,6 +5687,7 @@ class AgentTurnWorker:
             else kernel.database.path.parent / "workspace"
         )
         self.workspace_root_resolver = workspace_root_resolver
+        self.browser_handler = browser_handler
         self._cancel_events: dict[str, threading.Event] = {}
         self._cow_bridge = _CowAgentBridge()
 
@@ -5698,6 +5702,59 @@ class AgentTurnWorker:
             event.set()
         self._cancel_events.clear()
         self._cow_bridge.agents.clear()
+        close_browser = getattr(self.browser_handler, "aclose", None)
+        if callable(close_browser):
+            await close_browser()
+
+    def _bind_browser_pack(
+        self,
+        agent: Any,
+        *,
+        loop: asyncio.AbstractEventLoop,
+        job_id: str,
+        thread_id: str,
+        turn_id: str,
+    ) -> None:
+        """Route Cow's browser schema through the verified stateful Browser Pack."""
+
+        if self.browser_handler is None:
+            return
+        browser = next(
+            (tool for tool in agent.tools if getattr(tool, "name", None) == "browser"),
+            None,
+        )
+        if browser is None:
+            raise RuntimeError("verified browser pack has no Cow browser tool")
+
+        from agent.tools.base_tool import ToolResult
+
+        def execute(arguments: dict[str, Any]) -> ToolResult:
+            context = ToolInvocationContext(
+                invocation_id=f"{turn_id}:cow:browser:{time.monotonic_ns()}",
+                capability_snapshot_id="cow-direct-browser",
+                policy_snapshot_id="cow-direct-tools",
+                tool_id="browser",
+                idempotency_key=None,
+                approved=True,
+                effective_sandbox=SandboxLevel.DANGER_FULL_ACCESS,
+                execution_scope=ToolExecutionScope(
+                    job_id=job_id,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    execution_batch_id=f"cow_{turn_id}",
+                ),
+            )
+            try:
+                future = asyncio.run_coroutine_threadsafe(
+                    self.browser_handler(arguments, context), loop
+                )
+                return ToolResult.success(future.result())
+            except Exception as error:
+                return ToolResult.fail(
+                    getattr(error, "code", None) or error.__class__.__name__.casefold()
+                )
+
+        browser.execute = execute
 
     def _workspace(self, job_id: str, thread_id: str, turn_id: str) -> Path:
         if self.workspace_root_resolver is not None:
@@ -5938,6 +5995,7 @@ class AgentTurnWorker:
         *,
         model: _CowGatewayModel,
         workspace: Path,
+        job_id: str,
         thread_id: str,
         turn_id: str,
         input_text: str,
@@ -5968,6 +6026,13 @@ class AgentTurnWorker:
         try:
             agent = AgentInitializer(object(), bridge).initialize_agent(
                 session_id=f"emate-{thread_id}", workspace_root=workspace
+            )
+            self._bind_browser_pack(
+                agent,
+                loop=model.loop,
+                job_id=job_id,
+                thread_id=thread_id,
+                turn_id=turn_id,
             )
             bridge.agents[thread_id] = agent
             agent.messages = history
@@ -6127,6 +6192,7 @@ class AgentTurnWorker:
                 self._run_agent,
                 model=model,
                 workspace=workspace,
+                job_id=job.job_id,
                 thread_id=job.thread_id,
                 turn_id=job.turn_id,
                 input_text=turn.input,
@@ -6150,6 +6216,7 @@ class AgentTurnWorker:
                     self._run_agent,
                     model=model,
                     workspace=workspace,
+                    job_id=job.job_id,
                     thread_id=job.thread_id,
                     turn_id=job.turn_id,
                     input_text=revision.input,

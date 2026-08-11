@@ -3734,11 +3734,11 @@ def _browser_gates(
         )
         request = _pack_request(
             "browser",
-            "cdp",
+            "browser",
             {
-                "operation": "snapshot",
-                "target": "data:text/html,<title>EcoreX Stage</title><body>ecorex-stage-ready</body>",
-                "parameters": {"timeout_ms": 20_000},
+                "action": "navigate",
+                "url": "data:text/html,<title>ECoreX Stage</title><body>ecorex-stage-ready</body>",
+                "timeout": 20_000,
             },
         )
         response = _invoke_zipapp(interpreter, zipapp, request, timeout=60)

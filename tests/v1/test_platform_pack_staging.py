@@ -553,6 +553,54 @@ def test_browser_navigate_returns_a_snapshot_without_a_second_tool_call(
     }
 
 
+def test_browser_stage_gate_probes_the_packaged_cow_navigate_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    gate = stager["_browser_gates"]
+    globals_ = gate.__globals__
+    assert "playwright" not in globals_["_RUNTIME_DISTRIBUTIONS"]
+    pack = tmp_path / "browser-pack"
+    pack.mkdir()
+    zipapp = tmp_path / "browser.pyz"
+    zipapp.write_bytes(b"packaged-browser")
+    captured = {}
+
+    monkeypatch.setitem(globals_, "_temporary_zipapp", lambda _pack: zipapp)
+    monkeypatch.setitem(
+        globals_,
+        "_read_canonical_process_pack_descriptor",
+        lambda *_args, **_kwargs: {"pack_id": "browser"},
+    )
+    monkeypatch.setitem(globals_, "_gate", lambda *_args, **_kwargs: None)
+    monkeypatch.setitem(globals_, "_supply_chain", lambda *_args, **_kwargs: {})
+
+    def invoke(_interpreter, _zipapp, request, *, timeout):  # noqa: ANN001
+        captured.update({"request": request, "timeout": timeout})
+        return {
+            "status": "completed",
+            "result": {"text": "ecorex-stage-ready"},
+        }
+
+    monkeypatch.setitem(globals_, "_invoke_zipapp", invoke)
+
+    gate(
+        pack,
+        interpreter=Path(sys.executable),
+        inventory=(),
+        evidence=tmp_path / "evidence",
+    )
+
+    assert captured["timeout"] == 60
+    assert captured["request"]["tool_id"] == "browser"
+    assert captured["request"]["arguments"] == {
+        "action": "navigate",
+        "url": "data:text/html,<title>ECoreX Stage</title><body>ecorex-stage-ready</body>",
+        "timeout": 20_000,
+    }
+
+
 def test_browser_pack_reuses_one_cowagent_session_across_tool_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

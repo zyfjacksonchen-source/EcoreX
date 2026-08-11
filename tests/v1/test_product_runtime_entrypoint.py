@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -914,7 +915,8 @@ def test_product_healthy_entry_converges_external_authorities_once(
         assert first_app.state.runtime_execution_gate.snapshot().healthy
         assert first.managed_session.startup_converged is True
         assert first.device_authorization.startup_converged is True
-        assert first.update.service.startup_converged is True
+        assert first.server_settings.update_service is None
+        assert first.update.service.startup_converged is False
         assert first_app.state.extension_service.startup_converged is True
         converged_database = _startup_convergence_snapshot(product["database"])
         converged_filesystem = _startup_filesystem_snapshot(product["install_root"])
@@ -927,7 +929,8 @@ def test_product_healthy_entry_converges_external_authorities_once(
         assert second_app.state.runtime_execution_gate.snapshot().healthy
         assert second.managed_session.startup_converged is True
         assert second.device_authorization.startup_converged is True
-        assert second.update.service.startup_converged is True
+        assert second.server_settings.update_service is None
+        assert second.update.service.startup_converged is False
         assert second_app.state.extension_service.startup_converged is True
         assert _startup_convergence_snapshot(product["database"]) == converged_database
         assert (
@@ -1042,9 +1045,10 @@ def test_real_signed_slot_builds_product_app_and_uvicorn_config(tmp_path: Path) 
     assert server.composition.server_settings.model_gateway.credentials is (
         server.composition.managed_session
     )
-    assert server.composition.server_settings.update_service is (
-        server.composition.update.service
-    )
+    assert server.composition.server_settings.update_service is None
+    assert server.composition.update.feed.client.is_closed is True
+    assert server.composition.update.fetcher.client.is_closed is True
+    assert server.composition.update.signal_source._closed is True
     assert server.composition.server_settings.device_authorization_service is (
         server.composition.device_authorization
     )
@@ -1063,6 +1067,15 @@ def test_real_signed_slot_builds_product_app_and_uvicorn_config(tmp_path: Path) 
     assert server.composition.slot.slot_id == "slot-product-entrypoint"
     assert server.app.state.product_runtime_composition is server.composition
     assert "ignored" not in repr(server.composition)
+
+    async def assert_no_legacy_update_tasks() -> None:
+        async with server.app.router.lifespan_context(server.app):
+            assert not any(
+                task.get_name().startswith("ecorex-update")
+                for task in asyncio.all_tasks()
+            )
+
+    asyncio.run(assert_no_legacy_update_tasks())
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer path contract")

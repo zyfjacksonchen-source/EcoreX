@@ -1219,7 +1219,13 @@ def load_product_runtime(
             initialize=False,
             create_storage=False,
         )
-        cleanup.extend((update.signal_source, update.feed, update.fetcher))
+        # Desktop updates are owned by Electron. The legacy graph remains
+        # constructible for release tooling and supplies first-install receipt
+        # methods here, but its network transports must not survive Product
+        # composition or become a second feed/downloader.
+        _close_unstarted_resources(
+            (update.signal_source, update.feed, update.fetcher)
+        )
         composition_stage = "model_gateway"
         gateway = ManagedModelGatewayClient(
             config.gateway.endpoint,
@@ -1326,7 +1332,10 @@ def load_product_runtime(
             workspace_roots=workspace_roots,
             output_roots=standard_output_roots(workspace_roots),
             output_default_location="documents",
-            update_service=None if acceptance_preview else update.service,
+            # Electron owns the only desktop update path. Keep the update
+            # composition for release admission and first-install receipts,
+            # but never start its legacy downloader in the Product Runtime.
+            update_service=None,
             connector_vault=vault,
             connector_adapters=connector_adapters,
             share_publisher=None if acceptance_preview else share_publisher,
