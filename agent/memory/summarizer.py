@@ -11,6 +11,7 @@ Handles memory persistence when conversation context is trimmed or overflows:
 
 import re
 import threading
+from contextvars import copy_context
 from typing import Optional, Callable, Any, List, Dict
 from pathlib import Path
 from datetime import datetime
@@ -371,9 +372,17 @@ class MemoryFlushManager:
 
             import copy
             snapshot = copy.deepcopy(deduped)
+            context = copy_context()
             thread = threading.Thread(
-                target=self._flush_worker,
-                args=(snapshot, user_id, reason, max_messages, context_summary_callback),
+                target=context.run,
+                args=(
+                    self._flush_worker,
+                    snapshot,
+                    user_id,
+                    reason,
+                    max_messages,
+                    context_summary_callback,
+                ),
                 daemon=True,
             )
             thread.start()
@@ -433,6 +442,41 @@ class MemoryFlushManager:
 
         except Exception as e:
             logger.warning(f"[MemoryFlush] Async flush failed (reason={reason}): {e}")
+
+    def write_daily_summary(
+        self,
+        summary: str,
+        user_id: Optional[str] = None,
+        reason: str = "trim",
+    ) -> bool:
+        """Append an already-produced summary to today's daily memory file."""
+        summary = (summary or "").strip()
+        if not summary:
+            return False
+        try:
+            daily_file = ensure_daily_memory_file(self.workspace_dir, user_id)
+            if not _authorize_memory_write(
+                daily_file, self.workspace_dir, "daily-memory-append"
+            ):
+                return False
+            headers = {
+                "overflow": f"## Context Overflow Recovery ({datetime.now().strftime('%H:%M')})",
+                "trim": f"## Trimmed Context ({datetime.now().strftime('%H:%M')})",
+                "daily_summary": f"## Daily Summary ({datetime.now().strftime('%H:%M')})",
+            }
+            header = headers.get(
+                reason, f"## Session Notes ({datetime.now().strftime('%H:%M')})"
+            )
+            with open(daily_file, "a", encoding="utf-8") as file:
+                file.write(f"\n{header}\n\n{summary}\n")
+            self.last_flush_timestamp = datetime.now()
+            return True
+        except Exception as error:
+            logger.warning(
+                f"[MemoryFlush] Failed to write daily summary "
+                f"(reason={reason}): {error}"
+            )
+            return False
 
     @staticmethod
     def _clean_summary_output(raw: str) -> str:
