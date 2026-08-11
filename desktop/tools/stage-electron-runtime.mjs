@@ -1,4 +1,4 @@
-import { chmod, copyFile, lstat, mkdir, readFile, rm } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -53,6 +53,9 @@ await requireFile(releaseManifestPath, "Release manifest");
 JSON.parse(await readFile(path.join(bootstrapRoot, "bootstrap-config.json"), "utf8"));
 const manifest = JSON.parse(await readFile(releaseManifestPath, "utf8"));
 if (!Array.isArray(manifest.artifacts)) throw new Error("Release manifest artifacts are invalid.");
+if (typeof manifest.release_id !== "string" || !/^release-stable-[0-9a-f]{24}$/.test(manifest.release_id)) {
+  throw new Error("Release manifest identity is invalid.");
+}
 const selectedFiles = manifest.artifacts
   .filter((artifact) => (
     artifact?.platform === "all" && artifact?.architecture === "all"
@@ -86,7 +89,7 @@ if (windows) {
     path.join(destination, "bin", "ecorex-sandbox-host.exe"),
   );
 }
-const stagedRelease = path.join(destination, "release");
+const stagedRelease = path.join(destination, "releases", manifest.release_id);
 await mkdir(stagedRelease, { recursive: true, mode: 0o700 });
 await copyFile(releaseManifestPath, path.join(stagedRelease, "release-manifest.json"));
 const evidenceFiles = ["release-metadata.json", "sbom.cdx.json"];
@@ -105,4 +108,8 @@ if (evidencePresent.every(Boolean)) {
 for (const name of selectedFiles) {
   await copyFile(path.join(releaseRoot, name), path.join(stagedRelease, name));
 }
+await writeFile(path.join(destination, "current-release"), `${manifest.release_id}\n`, {
+  encoding: "utf8",
+  mode: 0o600,
+});
 console.log(`Staged signed e-Mate Runtime bundle at ${destination}`);

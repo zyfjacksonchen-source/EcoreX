@@ -1,17 +1,20 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import backendContract from "../electron/backend.cjs";
 import updateContract from "../electron/update-contract.cjs";
 
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const load = (relative) => readFile(path.join(desktop, relative), "utf8");
+const run = promisify(execFile);
 const productVersion = async () => (await readFile(
   path.resolve(desktop, "../ecorex/_version.py"),
   "utf8",
@@ -195,6 +198,72 @@ test("packaged desktop installs a different signed Runtime release before launch
       rm(dataDir, { recursive: true, force: true }),
       rm(releaseDir, { recursive: true, force: true }),
     ]);
+  }
+});
+
+test("Windows in-place upgrades select a clean release identity namespace", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-upgrade-"));
+  const isolatedDesktop = path.join(root, "desktop");
+  const bootstrap = path.join(root, "bootstrap");
+  const release = path.join(root, "release");
+  const resources = path.join(root, "installed", "resources");
+  const runtime = path.join(resources, "runtime");
+  const releaseId = `release-stable-${"c".repeat(24)}`;
+  try {
+    await Promise.all([
+      mkdir(path.join(isolatedDesktop, "tools"), { recursive: true }),
+      mkdir(path.join(bootstrap, "bin"), { recursive: true }),
+      mkdir(release, { recursive: true }),
+      mkdir(path.join(runtime, "release"), { recursive: true }),
+    ]);
+    await Promise.all([
+      copyFile(
+        path.join(desktop, "tools", "stage-electron-runtime.mjs"),
+        path.join(isolatedDesktop, "tools", "stage-electron-runtime.mjs"),
+      ),
+      writeFile(path.join(bootstrap, "bin", "ecorex-bootstrap.exe"), "bootstrap"),
+      writeFile(path.join(bootstrap, "bin", "ecorex-sandbox-host.exe"), "sandbox"),
+      writeFile(path.join(bootstrap, "bootstrap-config.json"), "{}"),
+      writeFile(path.join(release, "core.zip"), "current"),
+      writeFile(path.join(release, "release-manifest.json"), JSON.stringify({
+        release_id: releaseId,
+        artifacts: [{
+          platform: "windows",
+          architecture: "x64",
+          file_name: "core.zip",
+        }],
+      })),
+      writeFile(path.join(runtime, "release", "release-manifest.json"), "legacy"),
+      writeFile(path.join(runtime, "release", "stale-2.0.1.zip"), "stale"),
+    ]);
+    await run(process.execPath, [
+      path.join(isolatedDesktop, "tools", "stage-electron-runtime.mjs"),
+      "--platform", "windows",
+      "--arch", "x64",
+    ], {
+      env: {
+        ...process.env,
+        EMATE_BOOTSTRAP_DIR_WINDOWS_X64: bootstrap,
+        EMATE_RELEASE_DIR: release,
+      },
+    });
+    for (const name of await readdir(path.join(isolatedDesktop, "runtime-bundle"))) {
+      await cp(
+        path.join(isolatedDesktop, "runtime-bundle", name),
+        path.join(runtime, name),
+        { recursive: true, force: true },
+      );
+    }
+
+    const selected = backendContract.packagedReleasePath(resources);
+    assert.equal(selected, path.join(runtime, "releases", releaseId));
+    assert.deepEqual((await readdir(selected)).sort(), ["core.zip", "release-manifest.json"]);
+    assert.equal(await readFile(path.join(runtime, "release", "stale-2.0.1.zip"), "utf8"), "stale");
+
+    await writeFile(path.join(runtime, "current-release"), "../release\n");
+    assert.equal(backendContract.packagedReleasePath(resources), null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 
