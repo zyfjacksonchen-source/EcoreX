@@ -53,7 +53,6 @@ const CONTROL_BASE_CLASSES = [
   "ex-skill-card-main",
   "ex-skills-back",
   "ex-new-project-trigger",
-  "ex-disposition",
   "ex-send-button",
   "ex-artifact-primary",
   "ex-artifact-sheet-action",

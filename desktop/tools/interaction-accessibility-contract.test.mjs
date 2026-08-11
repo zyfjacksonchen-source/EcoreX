@@ -26,6 +26,10 @@ const interactionStack = await readFile(
   new URL("../src/v1/components/InteractionStack.tsx", import.meta.url),
   "utf-8",
 );
+const composer = await readFile(
+  new URL("../src/v1/components/Composer.tsx", import.meta.url),
+  "utf-8",
+);
 const runtimeClient = await readFile(
   new URL("../src/v1/api/runtimeClient.ts", import.meta.url),
   "utf-8",
@@ -115,4 +119,15 @@ test("connector login uses dedicated lifecycle routes and keeps server authority
     runtimeClient.match(/connectorLoginInteraction\([\s\S]*?\n  \}/u)?.[0] ?? "",
     /\/respond/u,
   );
+});
+
+test("the composer follows CowAgent active-turn send, stop, and steer semantics", () => {
+  assert.match(composer, /const primaryActionLabel = active \? "停止当前任务" : sendLabel/u);
+  assert.match(composer, /data-mode=\{active \? "stop" : "send"\}/u);
+  assert.match(composer, /onClick=\{\(\) => active \? onInterrupt\(\) : void submit\(\)\}/u);
+  assert.match(composer, /<IconButton[\s\S]*label="追加到当前任务"[\s\S]*onClick=\{\(\) => void submit\(\)\}/u);
+  assert.match(composer, /const sent = await onSend\(\s*draft,\s*"steer",/u);
+  assert.match(composer, /event\.key === "Enter"[\s\S]*void submit\(\)/u);
+  assert.doesNotMatch(composer, /dispositionLabel|setDisposition|ex-disposition/u);
+  assert.doesNotMatch(composer, /"queue"|"replace"/u);
 });
