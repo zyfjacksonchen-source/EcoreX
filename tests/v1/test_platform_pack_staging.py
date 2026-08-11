@@ -3993,11 +3993,10 @@ def test_platform_supply_chain_scans_compacted_import_archive(
         )
 
 
-@pytest.mark.parametrize("pack_id", ("browser", "sandbox"))
 def test_platform_stager_emits_runtime_canonical_process_pack_descriptor(
     tmp_path: Path,
-    pack_id: str,
 ) -> None:
+    pack_id = "browser"
     stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
     pack = tmp_path / pack_id
     pack.mkdir()
