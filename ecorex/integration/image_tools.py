@@ -15,7 +15,10 @@ import secrets
 import sqlite3
 from typing import Any
 
+import httpx
+
 from ecorex.artifacts import (
+    ArtifactError,
     ArtifactFamily,
     ArtifactLineage,
     ArtifactScope,
@@ -30,7 +33,7 @@ from ecorex.capabilities import (
 from ecorex.image_orchestrator import ImageOperation, ImageSubmitRequest
 from ecorex.protocol import ItemKind, ItemStatus
 from ecorex.runtime.database import SQLiteDatabase
-from ecorex.input_attachments import InputAttachmentService
+from ecorex.input_attachments import InputAttachmentError, InputAttachmentService
 from ecorex.gateway import GatewayImageInput
 
 from .managed_image import (
@@ -430,6 +433,7 @@ class RuntimeImageToolBackend:
         fault_hook: Callable[[str, str], None] | None = None,
         publication_lease_seconds: float = 30,
         batch_max_parallel: int = 2,
+        workspace_root: Path | str | None = None,
     ) -> None:
         if not 0.15 <= publication_lease_seconds <= 300:
             raise ValueError("image publication lease must be between 0.15 and 300 seconds")
@@ -449,6 +453,11 @@ class RuntimeImageToolBackend:
         self.fault_hook = fault_hook or (lambda _phase, _key: None)
         self.publication_lease_seconds = float(publication_lease_seconds)
         self.batch_max_parallel = batch_max_parallel
+        self.workspace_root = (
+            Path(workspace_root).expanduser().resolve()
+            if workspace_root is not None
+            else None
+        )
         self._image_slots = asyncio.Semaphore(batch_max_parallel)
 
     async def generate_image(
@@ -461,10 +470,9 @@ class RuntimeImageToolBackend:
             if set(arguments) != {"tasks"}:
                 raise ImageToolError("image batch cannot mix single-task fields")
             return await self._generate_batch(tasks, context)
-        if "instruction" not in arguments:
-            raise ImageToolError("imagegen requires an instruction or tasks")
+        task = self._canonical_task(arguments)
         async with self._image_slots:
-            return await self._generate_single(arguments, context)
+            return await self._generate_single(task, context)
 
     async def _generate_batch(
         self,
@@ -590,9 +598,27 @@ class RuntimeImageToolBackend:
                 "status": status,
             },
         )
+        images = [
+            image
+            for item in items
+            if item["status"] == "completed" and isinstance(item["result"], Mapping)
+            for image in self._result_images(item["result"])
+        ]
+        model = next(
+            (
+                str(item["result"]["model"])
+                for item in items
+                if item["status"] == "completed"
+                and isinstance(item["result"], Mapping)
+                and isinstance(item["result"].get("model"), str)
+            ),
+            "gpt-image-2-pro",
+        )
         return {
             "schema_version": 1,
             "result_type": "image_gallery",
+            "model": model,
+            "images": images,
             "batch_id": batch_id,
             "parent_execution_id": parent_execution_id,
             "status": status,
@@ -603,40 +629,9 @@ class RuntimeImageToolBackend:
             "items": items,
         }
 
-    @staticmethod
-    def _batch_task(raw: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
-        task = dict(raw)
-        if not set(task) <= {
-            "instruction",
-            "reference_artifact_ids",
-            "attachment_ids",
-            "size",
-            "quality",
-        }:
-            raise ImageToolError("image batch task contract is invalid")
-        instruction = task.get("instruction")
-        if not isinstance(instruction, str) or not 1 <= len(instruction) <= 20_000:
-            raise ImageToolError("image batch task contract is invalid")
-        for field, maximum in (
-            ("reference_artifact_ids", 20),
-            ("attachment_ids", 4),
-        ):
-            values = task.get(field, [])
-            if (
-                not isinstance(values, list)
-                or len(values) > maximum
-                or any(
-                    not isinstance(value, str) or not 1 <= len(value) <= 128
-                    for value in values
-                )
-            ):
-                raise ImageToolError("image batch task contract is invalid")
-        for field in ("size", "quality"):
-            value = task.get(field)
-            if value is not None and (
-                not isinstance(value, str) or len(value) > 64
-            ):
-                raise ImageToolError("image batch task contract is invalid")
+    @classmethod
+    def _batch_task(cls, raw: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
+        task = cls._canonical_task(raw)
         canonical = json.dumps(
             task,
             ensure_ascii=False,
@@ -645,8 +640,101 @@ class RuntimeImageToolBackend:
             allow_nan=False,
         ).encode("utf-8")
         return task, hashlib.sha256(
-            b"emate-image-batch-task-v1\0" + canonical
+            b"emate-image-batch-task-v2\0" + canonical
         ).hexdigest()
+
+    @staticmethod
+    def _canonical_task(raw: Mapping[str, Any]) -> dict[str, Any]:
+        """Use CowAgent names internally; legacy names only resume old calls."""
+
+        task = dict(raw)
+        if not set(task) <= {
+            "prompt",
+            "image_url",
+            "size",
+            "quality",
+            "aspect_ratio",
+            # These three are accepted only for durable calls created by an
+            # older e-Mate ToolSpec. The current model-visible schema does not
+            # advertise them.
+            "instruction",
+            "reference_artifact_ids",
+            "attachment_ids",
+        }:
+            raise ImageToolError("image task contract is invalid")
+        prompt = task.get("prompt", task.get("instruction"))
+        if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 20_000:
+            raise ImageToolError("imagegen requires a prompt or tasks")
+        if (
+            isinstance(task.get("prompt"), str)
+            and isinstance(task.get("instruction"), str)
+            and task["prompt"].strip() != task["instruction"].strip()
+        ):
+            raise ImageToolError("image prompt aliases disagree")
+
+        sources: list[str] = []
+        image_url = task.get("image_url")
+        if image_url is not None:
+            values = image_url if isinstance(image_url, list) else [image_url]
+            if (
+                not isinstance(values, list)
+                or not 1 <= len(values) <= 16
+                or any(
+                    not isinstance(value, str) or not 1 <= len(value.strip()) <= 4096
+                    for value in values
+                )
+            ):
+                raise ImageToolError("image_url is invalid")
+            sources.extend(value.strip() for value in values)
+        for field, maximum in (
+            ("reference_artifact_ids", 16),
+            ("attachment_ids", 4),
+        ):
+            values = task.get(field, [])
+            if (
+                not isinstance(values, list)
+                or len(values) > maximum
+                or any(
+                    not isinstance(value, str) or not 1 <= len(value.strip()) <= 128
+                    for value in values
+                )
+            ):
+                raise ImageToolError("image reference contract is invalid")
+            sources.extend(value.strip() for value in values)
+        sources = list(dict.fromkeys(sources))
+        if len(sources) > 16:
+            raise ImageToolError("image_url contains too many references")
+
+        canonical: dict[str, Any] = {"prompt": prompt.strip()}
+        if sources:
+            canonical["image_url"] = sources[0] if len(sources) == 1 else sources
+        for field in ("size", "quality", "aspect_ratio"):
+            value = task.get(field)
+            if value is None:
+                continue
+            if not isinstance(value, str) or not 1 <= len(value.strip()) <= 64:
+                raise ImageToolError("image task contract is invalid")
+            canonical[field] = value.strip()
+        if canonical.get("quality") not in {None, "low", "medium", "high", "auto"}:
+            raise ImageToolError("image quality is unsupported")
+        ratio = canonical.get("aspect_ratio")
+        if ratio is not None and re.fullmatch(r"[1-9]\d{0,2}:[1-9]\d{0,2}", ratio) is None:
+            raise ImageToolError("image aspect ratio is invalid")
+        return canonical
+
+    @staticmethod
+    def _result_images(result: Mapping[str, Any]) -> list[dict[str, str]]:
+        images = result.get("images")
+        if isinstance(images, list):
+            return [dict(image) for image in images if isinstance(image, Mapping)]
+        preview = result.get("preview_url")
+        if not isinstance(preview, str) or not preview:
+            return []
+        image = {"url": preview}
+        for field in ("artifact_id", "revision_id"):
+            if isinstance(result.get(field), str):
+                image[field] = str(result[field])
+        return [image]
 
     def _emit_batch_failure(
         self,
@@ -740,7 +828,7 @@ class RuntimeImageToolBackend:
                 request_sha,
                 recovered,
             )
-            return await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 self._emit_artifact_item,
                 recovered,
                 context,
@@ -748,6 +836,7 @@ class RuntimeImageToolBackend:
                 cloud_job_id,
                 image_batch=image_batch,
             )
+            return self._cow_result(result, turn.image_model_id)
         row = await asyncio.to_thread(self.publications.row, publication_key)
         if row is not None and row["status"] == "completed":
             if (
@@ -773,7 +862,7 @@ class RuntimeImageToolBackend:
                 request_sha,
                 recovered,
             )
-            return await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 self._emit_artifact_item,
                 recovered,
                 context,
@@ -781,64 +870,29 @@ class RuntimeImageToolBackend:
                 cloud_job_id,
                 image_batch=image_batch,
             )
-        references = tuple(str(value) for value in arguments.get("reference_artifact_ids", ()))
-        attachment_ids = tuple(str(value) for value in arguments.get("attachment_ids", ()))
-        if len(attachment_ids) > 4:
-            raise ImageToolError("imagegen attachment selection exceeds the product limit")
-        assets = []
-        source_ids = []
-        for artifact_id in references:
-            projection = self.artifacts.get_user_artifact(
-                artifact_id, account_id=self.account_id
-            )
-            if projection.family is not ArtifactFamily.IMAGE:
-                raise ImageToolError("imagegen references must be image artifacts")
-            content = self.artifacts.read_user_content(
-                artifact_id,
-                projection.revision_id,
-                account_id=self.account_id,
-            )
-            assets.append(
-                ManagedImageInputAsset(
-                    sha256=projection.sha256,
-                    mime_type=projection.mime_type,
-                    content=content,
-                )
-            )
-            source_ids.append(artifact_id)
-        if attachment_ids:
-            if self.input_attachments is None:
-                raise ImageToolUnavailable("input attachment image runtime is unavailable")
-            for attachment_id in attachment_ids:
-                projection, rendition = self.input_attachments.read_bound_visual(
-                    attachment_id,
-                    thread_id=scope.thread_id,
-                    turn_id=scope.turn_id,
-                    max_bytes=8 * 1024 * 1024,
-                )
-                assets.append(
-                    ManagedImageInputAsset(
-                        sha256=rendition.sha256,
-                        mime_type=rendition.mime_type,
-                        content=rendition.content,
-                    )
-                )
-                source_ids.append(projection.attachment_id)
-        width, height = self._size(str(arguments.get("size") or "1024x1024"))
+            return self._cow_result(result, turn.image_model_id)
+        assets, source_ids = await self._image_sources(
+            arguments.get("image_url"),
+            scope=context.execution_scope,
+        )
+        width, height = self._size(
+            str(arguments.get("size") or "auto"),
+            str(arguments.get("aspect_ratio") or "") or None,
+        )
         client_request_id = self._client_request_id(context.idempotency_key)
         operation = ImageOperation.RETOUCH if assets else ImageOperation.GENERATE
         request = ImageSubmitRequest(
             operation=operation,
             model_id=turn.image_model_id,
             client_request_id=client_request_id,
-            prompt=str(arguments["instruction"]),
+            prompt=str(arguments["prompt"]),
             width=width,
             height=height,
             input_sha256=tuple(dict.fromkeys(asset.sha256 for asset in assets)),
-            instruction=(str(arguments["instruction"]) if assets else None),
+            instruction=(str(arguments["prompt"]) if assets else None),
             metadata={
                 "request_kind": "imagegen_tool",
-                "quality": str(arguments.get("quality") or "standard")[:64],
+                "quality": str(arguments.get("quality") or "auto")[:64],
             },
         )
         _marker, token = await asyncio.to_thread(
@@ -867,7 +921,7 @@ class RuntimeImageToolBackend:
                 artifact.artifact_id,
                 revision_id=artifact.revision_id,
             )
-            return await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 self._emit_artifact_item,
                 artifact,
                 context,
@@ -875,6 +929,7 @@ class RuntimeImageToolBackend:
                 row["cloud_job_id"],
                 image_batch=image_batch,
             )
+            return self._cow_result(result, turn.image_model_id)
         lease_stop, lease_heartbeat = self._start_publication_lease(
             publication_key, token
         )
@@ -954,7 +1009,7 @@ class RuntimeImageToolBackend:
                 asyncio.to_thread(self.publications.release, publication_key, token)
             )
             raise
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             self._emit_artifact_item,
             artifact,
             context,
@@ -962,6 +1017,157 @@ class RuntimeImageToolBackend:
             downloaded.job.job_id,
             image_batch=image_batch,
         )
+        return self._cow_result(result, downloaded.job.model_id)
+
+    async def _image_sources(
+        self,
+        raw: Any,
+        *,
+        scope: Any,
+    ) -> tuple[list[ManagedImageInputAsset], list[str]]:
+        sources = [] if raw is None else raw if isinstance(raw, list) else [raw]
+        assets: list[ManagedImageInputAsset] = []
+        source_ids: list[str] = []
+        seen: set[str] = set()
+        for source in sources:
+            asset, source_id = await self._image_source(str(source), scope=scope)
+            if asset.sha256 in seen:
+                continue
+            seen.add(asset.sha256)
+            assets.append(asset)
+            if source_id is not None:
+                source_ids.append(source_id)
+        return assets, source_ids
+
+    async def _image_source(
+        self,
+        source: str,
+        *,
+        scope: Any,
+    ) -> tuple[ManagedImageInputAsset, str | None]:
+        source = source.strip()
+        path = Path(source).expanduser()
+        workspace_root = getattr(self, "workspace_root", None)
+        if not path.is_absolute() and workspace_root is not None:
+            path = workspace_root / path
+        if path.is_file():
+            if path.stat().st_size > 64 * 1024 * 1024:
+                raise ImageToolError("image_url file is oversized")
+            content = await asyncio.to_thread(path.read_bytes)
+            return self._input_asset(content), None
+
+        artifact_id = self._artifact_id_from_image_url(source)
+        if artifact_id is not None:
+            try:
+                projection = self.artifacts.get_user_artifact(
+                    artifact_id, account_id=self.account_id
+                )
+                if projection.family is not ArtifactFamily.IMAGE:
+                    raise ImageToolError("image_url artifact is not an image")
+                content = self.artifacts.read_user_content(
+                    artifact_id,
+                    projection.revision_id,
+                    account_id=self.account_id,
+                )
+                return (
+                    ManagedImageInputAsset(
+                        sha256=projection.sha256,
+                        mime_type=projection.mime_type,
+                        content=content,
+                    ),
+                    artifact_id,
+                )
+            except ArtifactError:
+                pass
+            if self.input_attachments is not None:
+                try:
+                    projection, rendition = self.input_attachments.read_bound_visual(
+                        artifact_id,
+                        thread_id=scope.thread_id,
+                        turn_id=scope.turn_id,
+                        max_bytes=8 * 1024 * 1024,
+                    )
+                    return (
+                        ManagedImageInputAsset(
+                            sha256=rendition.sha256,
+                            mime_type=rendition.mime_type,
+                            content=rendition.content,
+                        ),
+                        projection.attachment_id,
+                    )
+                except (ArtifactError, InputAttachmentError):
+                    pass
+            raise ImageToolError("image_url artifact or attachment is unavailable")
+
+        if not source.startswith(("http://", "https://")):
+            raise ImageToolError("image_url is not a readable path, URL, or image identity")
+        try:
+            timeout = httpx.Timeout(60, connect=15)
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                follow_redirects=True,
+                trust_env=True,
+            ) as client:
+                async with client.stream("GET", source) as response:
+                    response.raise_for_status()
+                    chunks: list[bytes] = []
+                    size = 0
+                    async for chunk in response.aiter_bytes():
+                        size += len(chunk)
+                        if size > 64 * 1024 * 1024:
+                            raise ImageToolError("image_url response is oversized")
+                        chunks.append(chunk)
+        except ImageToolError:
+            raise
+        except (httpx.HTTPError, ValueError) as error:
+            raise ImageToolError("image_url could not be downloaded") from error
+        return self._input_asset(b"".join(chunks)), None
+
+    @staticmethod
+    def _artifact_id_from_image_url(source: str) -> str | None:
+        if source.startswith("art_") and "/" not in source:
+            return source
+        matched = re.search(r"/api/v1/artifacts/(art_[A-Za-z0-9_-]+)/preview(?:[?#].*)?$", source)
+        return matched.group(1) if matched is not None else None
+
+    @staticmethod
+    def _input_asset(content: bytes) -> ManagedImageInputAsset:
+        if not 1 <= len(content) <= 64 * 1024 * 1024:
+            raise ImageToolError("image_url content is empty or oversized")
+        avif = False
+        if len(content) >= 16 and content[4:8] == b"ftyp":
+            box_size = int.from_bytes(content[:4], "big")
+            if 16 <= box_size <= len(content):
+                brands = {content[8:12]}
+                brands.update(
+                    content[offset : offset + 4]
+                    for offset in range(16, box_size - 3, 4)
+                )
+                avif = bool(brands & {b"avif", b"avis"})
+        mime_type = (
+            "image/png"
+            if content.startswith(b"\x89PNG\r\n\x1a\n")
+            else "image/jpeg"
+            if content.startswith(b"\xff\xd8\xff")
+            else "image/webp"
+            if len(content) >= 12
+            and content.startswith(b"RIFF")
+            and content[8:12] == b"WEBP"
+            else "image/avif"
+            if avif
+            else None
+        )
+        if mime_type is None:
+            raise ImageToolError("image_url content is not a supported image")
+        return ManagedImageInputAsset(
+            sha256=hashlib.sha256(content).hexdigest(),
+            mime_type=mime_type,
+            content=content,
+        )
+
+    @classmethod
+    def _cow_result(cls, result: Mapping[str, Any], model: str) -> dict[str, Any]:
+        return {**dict(result), "model": model, "images": cls._result_images(result)}
 
     async def _execute_with_publication_lease(
         self,
@@ -1365,19 +1571,67 @@ class RuntimeImageToolBackend:
         return result
 
     @staticmethod
-    def _size(value: str) -> tuple[int, int]:
+    def _size(value: str, aspect_ratio: str | None = None) -> tuple[int, int]:
         aliases = {
             "square": (1024, 1024),
             "landscape": (1536, 1024),
             "portrait": (1024, 1536),
+            "auto": (1024, 1024),
+            "512": (1024, 1024),
             "1024x1024": (1024, 1024),
             "1536x1024": (1536, 1024),
             "1024x1536": (1024, 1536),
         }
-        try:
+        normalized = value.strip().upper()
+        if re.fullmatch(r"\d{2,4}x\d{2,4}", value.casefold()):
+            width, height = (int(part) for part in value.casefold().split("x", 1))
+            if (
+                not 64 <= width <= 3840
+                or not 64 <= height <= 3840
+                or width % 16
+                or height % 16
+            ):
+                raise ImageToolError("unsupported image size")
+            return width, height
+        if aspect_ratio is None and value.casefold() in aliases:
             return aliases[value.casefold()]
-        except KeyError:
-            raise ImageToolError("unsupported image size") from None
+
+        table = {
+            ("1K", "1:1"): (1024, 1024),
+            ("1K", "3:2"): (1536, 1024),
+            ("1K", "2:3"): (1024, 1536),
+            ("2K", "1:1"): (2048, 2048),
+            ("2K", "16:9"): (2048, 1152),
+            ("2K", "9:16"): (1152, 2048),
+            ("2K", "21:9"): (2240, 960),
+            ("3K", "1:1"): (2880, 2880),
+            ("3K", "3:2"): (2880, 1920),
+            ("3K", "2:3"): (1920, 2880),
+            ("3K", "16:9"): (3072, 1728),
+            ("3K", "9:16"): (1728, 3072),
+            ("3K", "21:9"): (3136, 1344),
+            ("4K", "1:1"): (2880, 2880),
+            ("4K", "16:9"): (3840, 2160),
+            ("4K", "9:16"): (2160, 3840),
+            ("4K", "21:9"): (3808, 1632),
+        }
+        defaults = {
+            "1K": "1:1",
+            "2K": "1:1",
+            "3K": "1:1",
+            "4K": "16:9",
+            "AUTO": "1:1",
+            "512": "1:1",
+        }
+        tier = "1K" if normalized in {"AUTO", "512"} else normalized
+        ratio = aspect_ratio or defaults.get(normalized)
+        if ratio is not None and (tier, ratio) in table:
+            return table[(tier, ratio)]
+        if aspect_ratio is not None:
+            for fallback_tier in ("1K", "2K", "3K", "4K"):
+                if (fallback_tier, aspect_ratio) in table:
+                    return table[(fallback_tier, aspect_ratio)]
+        raise ImageToolError("unsupported image size or aspect ratio")
 
     @staticmethod
     def _client_request_id(value: str) -> str:

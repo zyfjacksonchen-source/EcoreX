@@ -2213,6 +2213,7 @@ class AgentTurnWorker:
                 "attachment_id to inspect a text attachment when needed. Image attachments "
                 "are supplied separately as authenticated multimodal input; use OCR for exact "
                 "text extraction and vision for visual inspection instead of guessing from a filename. "
+                "When editing with imagegen, pass the exact attachment_id as image_url. "
                 f"attachments={json.dumps(safe, ensure_ascii=False, sort_keys=True, separators=(',', ':'))}]"
             )
 
@@ -2587,7 +2588,7 @@ class AgentTurnWorker:
             if images:
                 lines = [
                     "e-Mate Runtime 已验证本任务中可继续编辑的图片产物。"
-                    "调用 imagegen 修改图片时，只能从下列 artifact_id 中选择："
+                    "调用 imagegen 修改图片时，把下列 artifact_id 作为 image_url："
                 ]
                 for image in images:
                     line = (

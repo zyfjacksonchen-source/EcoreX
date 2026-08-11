@@ -2321,6 +2321,10 @@ def create_app(
         client=settings.image_orchestration_client,
         input_attachments=input_attachment_service,
         batch_max_parallel=settings.image_execution_concurrency,
+        workspace_root=(
+            settings.workspace_root
+            or (Path(settings.database_path).expanduser().resolve().parent / "workspace")
+        ),
     )
     composition.capability_service.bind_invocation_backend(image_tool_backend)
     if worker_supervisor is not None:
