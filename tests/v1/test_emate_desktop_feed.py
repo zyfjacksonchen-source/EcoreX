@@ -34,6 +34,7 @@ from ecorex.update import (
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "prepare-emate-desktop-feed.py"
 NGINX = ROOT / "deploy" / "e-mate" / "nginx" / "update-feed.conf"
+MANUAL_NGINX = ROOT / "deploy" / "e-mate" / "nginx" / "update-feed-unsigned-manual.conf"
 COMMIT = "a" * 40
 VERSION = __version__
 
@@ -299,6 +300,8 @@ def _command(
     output: str,
     nginx: Path = NGINX,
     public_index: Path | None = None,
+    *,
+    unsigned_manual: bool = False,
 ) -> list[str]:
     command = [
         sys.executable,
@@ -322,6 +325,8 @@ def _command(
     ]
     if public_index is not None:
         command.extend(("--public-bootstrap-index", str(public_index)))
+    if unsigned_manual:
+        command.append("--unsigned-manual")
     return command
 
 
@@ -367,6 +372,44 @@ def test_feed_gate_merges_mac_metadata_and_rejects_tampering(tmp_path: Path) -> 
     )
     assert rejected.returncode == 1
     assert "checksum receipt digest mismatch" in rejected.stderr
+
+
+def test_feed_gate_prepares_explicit_unsigned_manual_activation(tmp_path: Path) -> None:
+    _inputs(tmp_path)
+
+    completed = subprocess.run(
+        _command(
+            tmp_path, "manual", MANUAL_NGINX, unsigned_manual=True
+        ),
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    receipt = json.loads((tmp_path / "manual/feed-stage-receipt.json").read_text())
+    assert receipt["schema_version"] == 2
+    assert receipt["status"] == "activation-ready-unsigned-manual"
+    assert receipt["distribution_mode"] == "unsigned-manual"
+    assert receipt["activation"]["pointer_files"] == ["download-index.json"]
+    assert json.loads((tmp_path / "manual/download-index.json").read_text())[
+        "distribution_mode"
+    ] == "unsigned-manual"
+    assert not (tmp_path / "manual/public-bootstrap-index.json").exists()
+    assert not (tmp_path / "manual/latest.yml").exists()
+    assert not (tmp_path / "manual/latest-mac.yml").exists()
+    nginx = MANUAL_NGINX.read_text(encoding="utf-8")
+    for path in ("latest.yml", "latest-mac.yml", "public-bootstrap-index.json"):
+        assert f"location = /e-mate/update/{path}" in nginx
+    assert nginx.count("return 404;") >= 3
+    assert "location = /e-mate/update/" in nginx and "return 302 /e-mate/;" in nginx
+
+    rejected = subprocess.run(
+        _command(tmp_path, "wrong-config", unsigned_manual=True),
+        capture_output=True,
+        text=True,
+    )
+    assert rejected.returncode == 1
+    assert "unsigned-manual routes are incomplete" in rejected.stderr
 
 
 def test_feed_gate_accepts_pointer_signed_by_both_runtime_trust_roles(

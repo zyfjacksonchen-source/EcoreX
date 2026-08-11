@@ -29,12 +29,13 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$")
 _TARGET = re.compile(
     r"^releases/v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-[0-9a-f]{16}$"
 )
-_POINTER_FILES = [
+_SIGNED_POINTER_FILES = [
     "latest.yml",
     "latest-mac.yml",
     "download-index.json",
     "public-bootstrap-index.json",
 ]
+_MANUAL_POINTER_FILES = ["download-index.json"]
 _RECEIPT_FIELDS = [
     "operation",
     "feed_build_id",
@@ -57,6 +58,15 @@ class ReadbackError(FeedDeployError):
     def __init__(self, observed: bytes = b"") -> None:
         super().__init__("readback_failed")
         self.observed = observed
+
+
+def _unique_json(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate key")
+        result[key] = value
+    return result
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -142,15 +152,7 @@ def _strict_json(path: Path) -> dict[str, Any]:
         ):
             raise FeedDeployError("stage_receipt_changed")
 
-        def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-            result: dict[str, Any] = {}
-            for key, value in pairs:
-                if key in result:
-                    raise ValueError("duplicate key")
-                result[key] = value
-            return result
-
-        value = json.loads(payload.decode("utf-8"), object_pairs_hook=unique)
+        value = json.loads(payload.decode("utf-8"), object_pairs_hook=_unique_json)
     except FeedDeployError:
         raise
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
@@ -290,9 +292,26 @@ def _validate_inventory(candidate: Path, receipt: dict[str, Any], device: int) -
         or manifests[0]["sha256"] != receipt["runtime_manifest_sha256"]
     ):
         raise FeedDeployError("runtime_manifest_inventory_mismatch")
+    manual = receipt["schema_version"] == 2
+    readback_path = "download-index.json" if manual else "public-bootstrap-index.json"
+    readback_records = [item for item in records if item["path"] == readback_path]
     public_records = [item for item in records if item["path"] == "public-bootstrap-index.json"]
-    if len(public_records) != 1 or public_records[0]["role"] != "pointer":
-        raise FeedDeployError("public_index_inventory_missing")
+    if (
+        len(readback_records) != 1
+        or readback_records[0]["role"] != "pointer"
+        or (
+            manual
+            and any(
+                item["path"] in {
+                    "latest.yml",
+                    "latest-mac.yml",
+                    "public-bootstrap-index.json",
+                }
+                for item in records
+            )
+        )
+    ):
+        raise FeedDeployError("public_pointer_inventory_invalid")
 
     actual: set[str] = set()
     directory_count = 0
@@ -321,11 +340,23 @@ def _validate_inventory(candidate: Path, receipt: dict[str, Any], device: int) -
 
     for item in records:
         _hash_file(candidate / PurePosixPath(item["path"]), item["size_bytes"], item["sha256"])
-    return _verified_bytes(
-        candidate / "public-bootstrap-index.json",
-        public_records[0]["size_bytes"],
-        public_records[0]["sha256"],
+    payload = _verified_bytes(
+        candidate / readback_path,
+        readback_records[0]["size_bytes"],
+        readback_records[0]["sha256"],
     )
+    if manual:
+        try:
+            index = json.loads(payload.decode("utf-8"), object_pairs_hook=_unique_json)
+        except (UnicodeError, ValueError, json.JSONDecodeError):
+            raise FeedDeployError("download_index_invalid") from None
+        if (
+            not isinstance(index, dict)
+            or index.get("schema_version") != 2
+            or index.get("distribution_mode") != "unsigned-manual"
+        ):
+            raise FeedDeployError("download_index_distribution_mode_invalid")
+    return payload
 
 
 def _validate_stage(args: argparse.Namespace) -> tuple[Path, Path, dict[str, Any], bytes]:
@@ -340,17 +371,24 @@ def _validate_stage(args: argparse.Namespace) -> tuple[Path, Path, dict[str, Any
         raise FeedDeployError("candidate_boundary_invalid")
 
     receipt = _strict_json(candidate / "feed-stage-receipt.json")
-    expected_keys = {
+    base_keys = {
         "schema_version", "document_type", "status", "version", "source_commit",
         "release_id", "build_digest", "runtime_manifest_sha256", "feed_build_id",
         "candidate_target", "nginx_config_sha256", "files", "activation",
     }
-    if set(receipt) != expected_keys:
+    schema = receipt.get("schema_version")
+    expected_keys = base_keys | ({"distribution_mode"} if schema == 2 else set())
+    if schema not in {1, 2} or set(receipt) != expected_keys:
         raise FeedDeployError("stage_receipt_fields_invalid")
-    if receipt.get("schema_version") != 1 or receipt.get("document_type") != "emate.desktop-feed-stage":
+    if receipt.get("document_type") != "emate.desktop-feed-stage":
         raise FeedDeployError("stage_receipt_contract_invalid")
-    if receipt.get("status") != "activation-ready":
+    expected_status = (
+        "activation-ready-unsigned-manual" if schema == 2 else "activation-ready"
+    )
+    if receipt.get("status") != expected_status:
         raise FeedDeployError("stage_not_activation_ready")
+    if schema == 2 and receipt.get("distribution_mode") != "unsigned-manual":
+        raise FeedDeployError("distribution_mode_invalid")
     identities = (
         ("version", args.expected_version, _SEMVER),
         ("source_commit", args.expected_source_sha, _COMMIT),
@@ -370,11 +408,16 @@ def _validate_stage(args: argparse.Namespace) -> tuple[Path, Path, dict[str, Any
     if candidate != root / PurePosixPath(target):
         raise FeedDeployError("candidate_identity_mismatch")
     activation = receipt.get("activation")
+    pointer_files = (
+        _MANUAL_POINTER_FILES
+        if schema == 2
+        else _SIGNED_POINTER_FILES
+    )
     if not isinstance(activation, dict) or activation != {
         "strategy": "same-filesystem-current-symlink-rename",
         "allowed_operations": ["activate", "rollback"],
         "link": "/srv/e-mate-update/current",
-        "pointer_files": _POINTER_FILES,
+        "pointer_files": pointer_files,
         "missing_files_must_return": 404,
         "receipt_required_fields": _RECEIPT_FIELDS,
     }:
@@ -589,6 +632,68 @@ def _write_receipt(path: Path, value: dict[str, Any]) -> None:
     _fsync_directory(path.parent)
 
 
+def _stable_readback_file(path: Path) -> bytes:
+    try:
+        before = path.lstat()
+        if (
+            _is_link_or_reparse(before)
+            or not stat.S_ISREG(before.st_mode)
+            or not 1 <= before.st_size <= _MAX_JSON_BYTES
+        ):
+            raise FeedDeployError("previous_readback_invalid")
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            opened = os.fstat(descriptor)
+            payload = b""
+            while len(payload) <= _MAX_JSON_BYTES:
+                chunk = os.read(
+                    descriptor,
+                    min(1024 * 1024, _MAX_JSON_BYTES + 1 - len(payload)),
+                )
+                if not chunk:
+                    break
+                payload += chunk
+            after = os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
+        current = path.lstat()
+    except FeedDeployError:
+        raise
+    except OSError:
+        raise FeedDeployError("previous_readback_unavailable") from None
+    if (
+        len(payload) != before.st_size
+        or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+        != (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+        or (opened.st_size, opened.st_mtime_ns)
+        != (after.st_size, after.st_mtime_ns)
+        or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+        != (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns)
+    ):
+        raise FeedDeployError("previous_readback_changed")
+    return payload
+
+
+def _verify_rollback(
+    args: argparse.Namespace,
+    root: Path,
+    previous: str | None,
+    previous_bytes: bytes | None,
+    readback_name: str,
+) -> None:
+    device = root.lstat().st_dev
+    if _current_target(root, device) != previous:
+        raise FeedDeployError("rollback_readback_target_mismatch")
+    if previous is not None:
+        if (
+            previous_bytes is None
+            or _stable_readback_file(root / "current" / readback_name)
+            != previous_bytes
+        ):
+            raise FeedDeployError("rollback_readback_mismatch")
+        _readback(args, previous_bytes)
+
+
 def _completed_at() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -599,41 +704,69 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
     lock = ProductFileLock(root / ".e-mate-feed-activation.lock", timeout=0)
     try:
         with lock:
-            root, _candidate, stage, public_bytes = _validate_stage(args)
+            root, candidate, stage, _public_bytes = _validate_stage(args)
             output = _receipt_path(root, args.activation_receipt)
             device = root.lstat().st_dev
             previous = _current_target(root, device)
+            readback_name = (
+                "download-index.json"
+                if stage["schema_version"] == 2
+                else "public-bootstrap-index.json"
+            )
+            previous_bytes = (
+                _stable_readback_file(root / "current" / readback_name)
+                if previous is not None
+                else None
+            )
             candidate_target = stage["candidate_target"]
             _replace_current(root, candidate_target)
+            observed = b""
+            phase = "post_switch_verification"
             try:
+                public_bytes = _validate_inventory(candidate, stage, device)
                 observed = _readback(args, public_bytes)
-            except ReadbackError as error:
+                receipt = {
+                    "operation": "activate",
+                    "feed_build_id": stage["feed_build_id"],
+                    "previous_target": previous,
+                    "new_target": candidate_target,
+                    "manifest_sha256": stage["runtime_manifest_sha256"],
+                    "public_readback_sha256": hashlib.sha256(observed).hexdigest(),
+                    "completed_at": _completed_at(),
+                }
+                phase = "activation_receipt"
+                _write_receipt(output, receipt)
+                return receipt
+            except (FeedDeployError, OSError) as error:
+                if isinstance(error, ReadbackError):
+                    observed = error.observed
+                    phase = "readback"
                 try:
                     _rollback(root, candidate_target, previous)
+                    _verify_rollback(
+                        args, root, previous, previous_bytes, readback_name
+                    )
                 except FeedDeployError:
-                    raise FeedDeployError("readback_failed_rollback_failed") from None
-                receipt = {
+                    raise FeedDeployError(f"{phase}_failed_rollback_failed") from None
+                rollback_receipt = {
                     "operation": "rollback",
                     "feed_build_id": stage["feed_build_id"],
                     "previous_target": candidate_target,
                     "new_target": previous,
                     "manifest_sha256": stage["runtime_manifest_sha256"],
-                    "public_readback_sha256": hashlib.sha256(error.observed).hexdigest(),
+                    "public_readback_sha256": hashlib.sha256(observed).hexdigest(),
                     "completed_at": _completed_at(),
                 }
-                _write_receipt(output, receipt)
-                raise FeedDeployError("readback_failed_rolled_back") from None
-            receipt = {
-                "operation": "activate",
-                "feed_build_id": stage["feed_build_id"],
-                "previous_target": previous,
-                "new_target": candidate_target,
-                "manifest_sha256": stage["runtime_manifest_sha256"],
-                "public_readback_sha256": hashlib.sha256(observed).hexdigest(),
-                "completed_at": _completed_at(),
-            }
-            _write_receipt(output, receipt)
-            return receipt
+                try:
+                    if os.path.lexists(output):
+                        os.unlink(output)
+                        _fsync_directory(output.parent)
+                    _write_receipt(output, rollback_receipt)
+                except (FeedDeployError, OSError):
+                    raise FeedDeployError(
+                        f"{phase}_failed_rolled_back_receipt_failed"
+                    ) from None
+                raise FeedDeployError(f"{phase}_failed_rolled_back") from None
     except LockUnavailable:
         raise FeedDeployError("activation_lock_unavailable") from None
 

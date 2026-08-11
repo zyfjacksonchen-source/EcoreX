@@ -55,6 +55,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-version", required=True)
     parser.add_argument("--expected-source-sha", required=True)
     parser.add_argument("--public-bootstrap-index", type=Path)
+    parser.add_argument("--unsigned-manual", action="store_true")
     return parser
 
 
@@ -450,6 +451,8 @@ def _download_index(
     version: str,
     metadata: Mapping[str, Mapping[str, Any]],
     desktop: Mapping[str, Mapping[str, Path]],
+    *,
+    unsigned_manual: bool,
 ) -> bytes:
     released_at = max(str(value["releaseDate"]) for value in metadata.values())
     if not _RELEASE_DATE.fullmatch(released_at):
@@ -481,9 +484,10 @@ def _download_index(
     return (
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2 if unsigned_manual else 1,
                 "product": "e-Mate",
                 "version": version,
+                **({"distribution_mode": "unsigned-manual"} if unsigned_manual else {}),
                 "released_at": released_at,
                 "downloads": downloads,
             },
@@ -495,7 +499,7 @@ def _download_index(
     )
 
 
-def _validate_nginx(path: Path) -> str:
+def _validate_nginx(path: Path, *, unsigned_manual: bool) -> str:
     try:
         source = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
@@ -514,6 +518,25 @@ def _validate_nginx(path: Path) -> str:
         or "@spa" in source
     ):
         raise FeedError("Nginx update-feed configuration can fall through to the SPA")
+    manual_required = (
+        "location = /e-mate/update/latest.yml {\n    return 404;",
+        "location = /e-mate/update/latest-mac.yml {\n    return 404;",
+        "location = /e-mate/update/public-bootstrap-index.json {\n    return 404;",
+        "location = /e-mate/update/ {\n    return 302 /e-mate/;",
+        "application/vnd.microsoft.portable-executable exe;",
+        "application/x-apple-diskimage dmg;",
+        "application/zip zip;",
+        "max_ranges 1;",
+    )
+    if unsigned_manual and any(value not in source for value in manual_required):
+        raise FeedError("Nginx unsigned-manual routes are incomplete")
+    signed_required = (
+        "alias /srv/e-mate-update/current/latest.yml;",
+        "alias /srv/e-mate-update/current/latest-mac.yml;",
+        "alias /srv/e-mate-update/current/public-bootstrap-index.json;",
+    )
+    if not unsigned_manual and any(value not in source for value in signed_required):
+        raise FeedError("Nginx signed feed routes are incomplete")
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
@@ -648,6 +671,8 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         args.expected_source_sha
     ):
         raise FeedError("expected release identity is invalid")
+    if args.unsigned_manual and args.public_bootstrap_index is not None:
+        raise FeedError("unsigned manual feed cannot carry a public Bootstrap index")
     source_roots = {
         "runtime": args.runtime_root.resolve(strict=True),
         "windows-x64": args.windows_root.resolve(strict=True),
@@ -724,7 +749,9 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
                 expected_version=version,
                 expected_names=names,
             )
-        nginx_sha256 = _validate_nginx(nginx_config)
+        nginx_sha256 = _validate_nginx(
+            nginx_config, unsigned_manual=args.unsigned_manual
+        )
         if public_index is not None:
             value = _json(public_index, 256 * 1024)
             validate_public_bootstrap_index(
@@ -735,23 +762,32 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             _bind_public_index(value, manifest, str(runtime_receipt["manifest_sha256"]))
 
         records: list[dict[str, Any]] = []
-        windows_metadata = _one(inventories["windows-x64"], "latest.yml")
-        _publish_snapshot(windows_metadata, staging / "latest.yml")
-        records.append(
-            _record(
-                staging / "latest.yml",
-                role="pointer",
-                source_artifact="windows-x64",
-                root=staging,
+        if not args.unsigned_manual:
+            windows_metadata = _one(inventories["windows-x64"], "latest.yml")
+            _publish_snapshot(windows_metadata, staging / "latest.yml")
+            records.append(
+                _record(
+                    staging / "latest.yml",
+                    role="pointer",
+                    source_artifact="windows-x64",
+                    root=staging,
+                )
+            )
+            merged = staging / "latest-mac.yml"
+            merged.write_bytes(
+                _merge_mac(metadata["macos-arm64"], metadata["macos-x64"])
+            )
+            records.append(
+                _record(
+                    merged, role="pointer", source_artifact="feed-gate", root=staging
+                )
+            )
+        download_index = staging / "download-index.json"
+        download_index.write_bytes(
+            _download_index(
+                version, metadata, desktop, unsigned_manual=args.unsigned_manual
             )
         )
-        merged = staging / "latest-mac.yml"
-        merged.write_bytes(_merge_mac(metadata["macos-arm64"], metadata["macos-x64"]))
-        records.append(
-            _record(merged, role="pointer", source_artifact="feed-gate", root=staging)
-        )
-        download_index = staging / "download-index.json"
-        download_index.write_bytes(_download_index(version, metadata, desktop))
         records.append(
             _record(
                 download_index,
@@ -801,11 +837,16 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             json.dumps(records, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         receipt = {
-            "schema_version": 1,
+            "schema_version": 2 if args.unsigned_manual else 1,
             "document_type": "emate.desktop-feed-stage",
-            "status": "activation-ready"
-            if public_index is not None
-            else "awaiting-public-bootstrap-index",
+            **({"distribution_mode": "unsigned-manual"} if args.unsigned_manual else {}),
+            "status": (
+                "activation-ready"
+                if public_index is not None
+                else "activation-ready-unsigned-manual"
+                if args.unsigned_manual
+                else "awaiting-public-bootstrap-index"
+            ),
             "version": version,
             "source_commit": args.expected_source_sha,
             "release_id": manifest.release_id,
@@ -819,12 +860,16 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
                 "strategy": "same-filesystem-current-symlink-rename",
                 "allowed_operations": ["activate", "rollback"],
                 "link": "/srv/e-mate-update/current",
-                "pointer_files": [
-                    "latest.yml",
-                    "latest-mac.yml",
-                    "download-index.json",
-                    "public-bootstrap-index.json",
-                ],
+                "pointer_files": (
+                    ["download-index.json"]
+                    if args.unsigned_manual
+                    else [
+                        "latest.yml",
+                        "latest-mac.yml",
+                        "download-index.json",
+                        "public-bootstrap-index.json",
+                    ]
+                ),
                 "missing_files_must_return": 404,
                 "receipt_required_fields": [
                     "operation",

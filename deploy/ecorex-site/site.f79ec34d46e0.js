@@ -28,8 +28,12 @@ function safeText(value, label, pattern) {
 
 export function normalizeDownloadIndex(raw) {
   const index = object(raw, "下载索引");
-  exactKeys(index, ["schema_version", "product", "version", "released_at", "downloads"], "下载索引");
-  if (index.schema_version !== 1 || index.product !== "e-Mate") throw new Error("下载索引身份无效");
+  const manual = index.schema_version === 2;
+  exactKeys(index, manual
+    ? ["schema_version", "product", "version", "distribution_mode", "released_at", "downloads"]
+    : ["schema_version", "product", "version", "released_at", "downloads"], "下载索引");
+  if (![1, 2].includes(index.schema_version) || index.product !== "e-Mate") throw new Error("下载索引身份无效");
+  if (manual && index.distribution_mode !== "unsigned-manual") throw new Error("发布模式无效");
   safeText(index.version, "版本", VERSION);
   if (typeof index.released_at !== "string" || Number.isNaN(Date.parse(index.released_at))) {
     throw new Error("发布时间无效");
@@ -53,7 +57,7 @@ export function normalizeDownloadIndex(raw) {
     return Object.freeze({ ...download, label: target.label });
   });
   if (seen.size !== Object.keys(TARGETS).length) throw new Error("下载目标不完整");
-  return Object.freeze({ ...index, downloads: Object.freeze(downloads) });
+  return Object.freeze({ ...index, distribution_mode: manual ? "unsigned-manual" : "signed-automatic", downloads: Object.freeze(downloads) });
 }
 
 export function targetFromPlatformSignals({ source = "", architecture = "", renderer = "" }) {
@@ -171,7 +175,7 @@ function renderIndex(index, target) {
   const featureNav = document.querySelector("[data-feature-nav]");
   if (featureNav) featureNav.textContent = `${major}.${minor} 新功能`;
   const releaseLabel = document.querySelector("[data-release-label]");
-  if (releaseLabel) releaseLabel.textContent = `当前版本 ${index.version} · ${index.released_at.slice(0, 10)}`;
+  if (releaseLabel) releaseLabel.textContent = `当前版本 ${index.version} · ${index.released_at.slice(0, 10)}${index.distribution_mode === "unsigned-manual" ? " · 手动安装（未签名）" : ""}`;
   const grid = document.querySelector("[data-downloads]");
   if (!grid) return;
   grid.replaceChildren();
