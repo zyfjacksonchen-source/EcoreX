@@ -310,9 +310,8 @@ available_setting = {
     "agent": True,  # whether to enable Agent mode
     "agent_workspace": "~/EcoreX",  # agent workspace path, used to store skills, memory, etc.
     "model_context_window": 1000000,  # active chat model context window, synced by the Web model selector
-    "model_auto_compact_token_limit": 800000,  # active chat model soft auto-compact threshold
-    "agent_max_context_tokens": 800000,  # legacy Agent context budget; synced from model_auto_compact_token_limit
-    "agent_max_context_turns": 20,  # max context memory turns in Agent mode
+    "agent_max_context_tokens": 64000,  # max context tokens in Agent mode
+    "agent_max_context_turns": 30,  # max context memory turns in Agent mode
     "agent_max_steps": 20,  # max decision steps per run in Agent mode
     "agent_context_budget_warn_ratio": 0.85,  # emit near-limit context-budget evidence above this fraction of the effective input limit
     "agent_context_budget_clamp_to_window": True,  # clamp configured context budget to the model window minus response reserve

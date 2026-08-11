@@ -4227,10 +4227,13 @@ class AgentStreamExecutor:
                     )
 
         # Step 3: Token 限制 - 保留完整轮次
-        # Use the same effective limit reported by context_budget. This clamps
-        # oversized configured limits to the model window minus response reserve.
-        budget_limits = self._context_budget_limits()
-        max_tokens = budget_limits["effective_context_limit_tokens"]
+        context_window = self.agent._get_model_context_window()
+
+        if hasattr(self.agent, 'max_context_tokens') and self.agent.max_context_tokens:
+            max_tokens = self.agent.max_context_tokens
+        else:
+            reserve_tokens = int(context_window * 0.1)
+            max_tokens = context_window - reserve_tokens
 
         # Estimate system prompt tokens
         system_tokens = self.agent._estimate_message_tokens({"role": "system", "content": self.system_prompt})
