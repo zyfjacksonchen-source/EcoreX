@@ -3,8 +3,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
   BootstrapResponse,
-  ExtensionCatalogSnapshot,
-  MemorySnapshot,
   MigrationCredentialKind,
   MigrationCredentialOrigin,
   MigrationQuarantineProjection,
@@ -17,10 +15,6 @@ import {
   createClientRequestId,
   type RuntimeClient,
 } from "../api/runtimeClient.ts";
-import {
-  extensionCatalogSummary,
-  type ExtensionLoadState,
-} from "../state/extensions.ts";
 import { userFacingError } from "../state/userLanguage.ts";
 import {
   isRuntimeUpdateInstalling,
@@ -33,19 +27,9 @@ interface SettingsDialogProps {
   open: boolean;
   bootstrap: BootstrapResponse | null;
   onOpenChange: (open: boolean) => void;
-  extensions: ExtensionCatalogSnapshot | null;
-  extensionLoadState: ExtensionLoadState;
   onManageExtensions: () => void;
   profileAvatar: string | null;
   onProfileAvatarChange: (value: string | null) => void;
-  memory: MemorySnapshot | null;
-  memoryLoadState: "loading" | "ready" | "error";
-  memoryBusy: boolean;
-  memoryError: string | null;
-  onClearMemoryError: () => void;
-  onRefreshMemory: () => void;
-  onResetMemory: () => Promise<boolean>;
-  onUndoMemoryReset: (resetId: string) => Promise<boolean>;
   client: RuntimeClient;
   outputLocations: OutputLocationOption[];
   outputPreference: OutputPreference | null;
@@ -75,19 +59,9 @@ export function SettingsDialog({
   open,
   bootstrap,
   onOpenChange,
-  extensions,
-  extensionLoadState,
   onManageExtensions,
   profileAvatar,
   onProfileAvatarChange,
-  memory,
-  memoryLoadState,
-  memoryBusy,
-  memoryError,
-  onClearMemoryError,
-  onRefreshMemory,
-  onResetMemory,
-  onUndoMemoryReset,
   client,
   outputLocations,
   outputPreference,
@@ -128,7 +102,6 @@ export function SettingsDialog({
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const [activePage, setActivePage] = useState<SettingsPage>("profile");
   const passwordRequestId = useRef<string | null>(null);
-  const extensionSummary = extensionCatalogSummary(extensions);
   const updateReady = isVerifiedRuntimeUpdateReady(bootstrap?.update);
   const updateAvailable = bootstrap?.update.state === "available";
   const updateInstalling = isRuntimeUpdateInstalling(bootstrap?.update, updateBusy);
@@ -494,12 +467,8 @@ export function SettingsDialog({
             <div className="ex-settings-row">
               <span className="ex-settings-icon"><Blocks aria-hidden="true" /></span>
               <div>
-                <strong>技能与扩展能力</strong>
-                <p aria-live="polite">
-                  {extensionLoadState === "loading"
-                    ? "正在同步扩展目录"
-                    : `${extensionSummary.total} 个扩展，${extensionSummary.enabled} 个已启用`}
-                </p>
+                <strong>技能、MCP 与消息通道</strong>
+                <p>从本地 Skill 目录、MCP 配置和通道配置读取 Agent 能力</p>
               </div>
               <button
                 className="ex-button ex-permission-change"
@@ -507,32 +476,15 @@ export function SettingsDialog({
                 disabled={!bootstrap}
                 onClick={onManageExtensions}
               >
-                管理扩展
+                管理能力
               </button>
             </div>
-            <p className="ex-settings-note">
-              {extensionSummary.quarantined
-                ? `${extensionSummary.quarantined} 个扩展已被隔离。打开管理页查看原因和可用操作。`
-                : extensionLoadState === "error"
-                  ? "扩展目录尚未同步。打开管理页即可刷新。"
-                  : "e-Mate 会在启用前检查来源、依赖、健康状态和权限影响。"}
-            </p>
+            <p className="ex-settings-note">合法的本地 Skill 和 MCP 工具直接可用；修改从下一次任务开始生效。</p>
           </section>
 
           <KnowledgeSettings active={activePage === "knowledge"} client={client} />
 
-          <MemorySettings
-            active={activePage === "memory"}
-            client={client}
-            memory={memory}
-            memoryLoadState={memoryLoadState}
-            memoryBusy={memoryBusy}
-            memoryError={memoryError}
-            onClearMemoryError={onClearMemoryError}
-            onRefreshMemory={onRefreshMemory}
-            onResetMemory={onResetMemory}
-            onUndoMemoryReset={onUndoMemoryReset}
-          />
+          <MemorySettings active={activePage === "memory"} client={client} />
 
           <section className="ex-settings-section" hidden={activePage !== "general"}>
             <h2>旧版凭证</h2>
@@ -553,7 +505,7 @@ export function SettingsDialog({
                     ? "这些内容未被激活，也没有上传到云端。"
                     : migrationQuarantine?.status === "deleted" && migrationQuarantine.deleted_at
                       ? `删除于 ${new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(migrationQuarantine.deleted_at))}`
-                      : "当前连接器和托管模型不使用旧版密钥。"}
+                      : "旧版凭证不会自动写入当前 Agent 配置。"}
                 </p>
               </div>
               {migrationQuarantine?.can_delete ? (
@@ -591,7 +543,7 @@ export function SettingsDialog({
               <div className="ex-permission-confirm" role="group" aria-label="确认删除旧版凭证备份">
                 <div>
                   <strong>确认永久删除旧版凭证备份？</strong>
-                  <p>删除后无法从 e-Mate 恢复。当前托管模型和连接器不会受到影响。</p>
+                  <p>删除后无法从 e-Mate 恢复。当前本地 Skill、MCP 和消息通道配置不会改变。</p>
                 </div>
                 <div className="ex-permission-confirm-actions">
                   <button

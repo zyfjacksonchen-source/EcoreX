@@ -1028,8 +1028,6 @@ export function AppV1() {
               if (open) setSettingsOpen(true);
               else closeSettings();
             }}
-            extensions={runtime.extensionSnapshot}
-            extensionLoadState={runtime.extensionCatalogState}
             onManageExtensions={() => {
               warmFeature(loadSkillsWorkspace);
               setSettingsOpen(false);
@@ -1038,14 +1036,6 @@ export function AppV1() {
             }}
             profileAvatar={profileAvatar}
             onProfileAvatarChange={updateProfileAvatar}
-            memory={runtime.memory}
-            memoryLoadState={runtime.memoryLoadState}
-            memoryBusy={runtime.memoryBusy}
-            memoryError={runtime.memoryError}
-            onClearMemoryError={runtime.clearMemoryError}
-            onRefreshMemory={runtime.refreshMemory}
-            onResetMemory={runtime.resetLearnedMemory}
-            onUndoMemoryReset={runtime.undoLearnedMemoryReset}
             client={runtime.client}
             outputLocations={runtime.outputLocations}
             outputPreference={runtime.outputPreference}

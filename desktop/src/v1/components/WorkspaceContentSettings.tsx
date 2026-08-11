@@ -23,7 +23,6 @@ import type {
   MemoryContentDocument,
   MemoryContentPage,
   MemoryContentView,
-  MemorySnapshot,
 } from "../api/contracts.ts";
 import type { RuntimeClient } from "../api/runtimeClient.ts";
 import { userFacingError } from "../state/userLanguage.ts";
@@ -346,22 +345,11 @@ export function KnowledgeSettings({ active, client }: { active: boolean; client:
 interface MemorySettingsProps {
   active: boolean;
   client: RuntimeClient;
-  memory: MemorySnapshot | null;
-  memoryLoadState: "loading" | "ready" | "error";
-  memoryBusy: boolean;
-  memoryError: string | null;
-  onClearMemoryError: () => void;
-  onRefreshMemory: () => void;
-  onResetMemory: () => Promise<boolean>;
-  onUndoMemoryReset: (resetId: string) => Promise<boolean>;
 }
 
 export function MemorySettings({
   active,
   client,
-  memory,
-  memoryLoadState,
-  onRefreshMemory,
 }: MemorySettingsProps) {
   const [view, setView] = useState<MemoryContentView>("files");
   const [page, setPage] = useState(1);
@@ -408,7 +396,7 @@ export function MemorySettings({
     const controller = new AbortController();
     void loadPage(controller.signal);
     return () => controller.abort();
-  }, [active, loadPage, memory?.revision]);
+  }, [active, loadPage]);
 
   const totalPages = Math.max(1, Math.ceil((contentPage?.total ?? 0) / 10));
 
@@ -416,13 +404,12 @@ export function MemorySettings({
     <section className="ex-settings-section ex-content-settings" id="settings-memory" hidden={!active}>
       <h2>记忆</h2>
       <div className="ex-content-heading">
-        <p>{memoryLoadState === "loading" ? "正在读取 CowAgent 记忆文件" : `${contentPage?.total ?? 0} 个记忆文件`}</p>
+        <p>{loading && !contentPage ? "正在读取记忆文件" : `${contentPage?.total ?? 0} 个记忆文件`}</p>
         <div className="ex-content-actions">
           <button className="ex-button" type="button" disabled={loading} onClick={() => void loadPage()}><RefreshCw aria-hidden="true" />刷新</button>
         </div>
       </div>
       <p className="ex-settings-note">直接读取工作区中的 MEMORY.md、每日记忆和进化记录；Agent 与此页面使用同一份文件。</p>
-      {memoryLoadState === "error" ? <button className="ex-button ex-settings-retry" type="button" onClick={onRefreshMemory}>重新读取记忆文件</button> : null}
       {contentError ? <div className="ex-settings-error" role="alert"><span>{contentError}</span><button className="ex-button" type="button" onClick={() => setContentError(null)}>关闭</button></div> : null}
       <div className="ex-content-tabs" role="tablist" aria-label="记忆视图">
         <button className="ex-button" type="button" role="tab" aria-selected={view === "files"} onClick={() => { setView("files"); setPage(1); }}>记忆文件</button>

@@ -36,8 +36,6 @@ import type {
   MemoryContentPage,
   MemoryContentView,
   PasswordSessionChangeResponse,
-  MemoryMutationResponse,
-  MemorySnapshot,
   MCPOAuthChallengeProjection,
   MCPOAuthStatusResponse,
   MigrationQuarantineProjection,
@@ -609,15 +607,6 @@ export class RuntimeClient {
     return response.blob();
   }
 
-  memory(signal?: AbortSignal): Promise<MemorySnapshot> {
-    return this.json(
-      "/api/v1/memory",
-      { signal },
-      false,
-      0, // memory snapshot
-    );
-  }
-
   knowledgeTree(query = "", signal?: AbortSignal): Promise<KnowledgeTree> {
     const suffix = query
       ? `?query=${encodeURIComponent(query)}`
@@ -831,35 +820,6 @@ export class RuntimeClient {
       { signal },
       false,
       8, // system metric history
-    );
-  }
-
-  resetLearnedMemory(
-    clientRequestId = createClientRequestId("reset_memory"),
-  ): Promise<MemoryMutationResponse> {
-    return this.json(
-      "/api/v1/memory/reset",
-      {
-        method: "POST",
-        body: JSON.stringify({ confirmed: true, client_request_id: clientRequestId }),
-      },
-      true,
-      1, // memory mutation
-    );
-  }
-
-  undoLearnedMemoryReset(
-    resetId: string,
-    clientRequestId = createClientRequestId("undo_memory_reset"),
-  ): Promise<MemoryMutationResponse> {
-    return this.json(
-      `/api/v1/memory/resets/${encodeURIComponent(resetId)}/undo`,
-      {
-        method: "POST",
-        body: JSON.stringify({ confirmed: true, client_request_id: clientRequestId }),
-      },
-      true,
-      1, // memory mutation
     );
   }
 

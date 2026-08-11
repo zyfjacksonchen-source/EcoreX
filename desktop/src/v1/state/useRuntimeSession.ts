@@ -18,7 +18,6 @@ import type {
   InputAttachmentProjection,
   ItemProjection,
   LiveReplayResponse,
-  MemorySnapshot,
   ModelDescriptor,
   MockReplayResponse,
   OutputLocationAlias,
@@ -89,12 +88,6 @@ interface PendingUpdateActivation {
 
 interface PendingThreadMutation {
   fingerprint: string;
-  clientRequestId: string;
-}
-
-interface PendingMemoryMutation {
-  operation: "reset" | "undo";
-  target: string;
   clientRequestId: string;
 }
 
@@ -193,11 +186,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const [sessionBusy, setSessionBusy] = useState(false);
   const sessionBusyRef = useRef(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
-  const [memory, setMemory] = useState<MemorySnapshot | null>(null);
-  const [memoryLoadState, setMemoryLoadState] = useState<LoadState>("loading");
-  const [memoryBusy, setMemoryBusy] = useState(false);
-  const [memoryError, setMemoryError] = useState<string | null>(null);
-  const pendingMemoryMutation = useRef<PendingMemoryMutation | null>(null);
   const [outputLocations, setOutputLocations] = useState<OutputLocationOption[]>([]);
   const [outputPreference, setOutputPreference] = useState<OutputPreference | null>(null);
   const [outputLoadState, setOutputLoadState] = useState<LoadState>("loading");
@@ -350,23 +338,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return false;
       setCapabilityMentionState("error");
-      return false;
-    }
-  }, [client]);
-
-  const refreshMemory = useCallback(async (signal?: AbortSignal) => {
-    setMemoryLoadState("loading");
-    setMemoryError(null);
-    try {
-      const snapshot = await client.memory(signal);
-      if (signal?.aborted) return false;
-      setMemory(snapshot);
-      setMemoryLoadState("ready");
-      return true;
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return false;
-      setMemoryLoadState("error");
-      setMemoryError(errorMessage(error));
       return false;
     }
   }, [client]);
@@ -580,13 +551,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     void refreshProjects(controller.signal);
     return () => controller.abort();
   }, [bootstrapped, refreshProjects]);
-
-  useEffect(() => {
-    if (!bootstrapped) return;
-    const controller = new AbortController();
-    void refreshMemory(controller.signal);
-    return () => controller.abort();
-  }, [bootstrapped, refreshMemory]);
 
   useEffect(() => {
     if (!bootstrapped) return;
@@ -1480,69 +1444,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     }
   }, [applyUpdateSnapshot, client, updateBusy]);
 
-  const resetLearnedMemory = useCallback(async () => {
-    if (memoryBusy) return false;
-    const existing = pendingMemoryMutation.current;
-    const mutation: PendingMemoryMutation = existing?.operation === "reset"
-      ? existing
-      : {
-          operation: "reset",
-          target: "learned",
-          clientRequestId: createClientRequestId("reset_memory"),
-        };
-    pendingMemoryMutation.current = mutation;
-    setMemoryBusy(true);
-    setMemoryError(null);
-    try {
-      const response = await client.resetLearnedMemory(mutation.clientRequestId);
-      pendingMemoryMutation.current = null;
-      setMemory(response.memory);
-      setMemoryLoadState("ready");
-      return true;
-    } catch (error) {
-      setMemoryError(errorMessage(error));
-      return false;
-    } finally {
-      setMemoryBusy(false);
-    }
-  }, [client, memoryBusy]);
-
-  const undoLearnedMemoryReset = useCallback(async (resetId: string) => {
-    if (memoryBusy) return false;
-    const existing = pendingMemoryMutation.current;
-    const mutation: PendingMemoryMutation = (
-      existing?.operation === "undo" && existing.target === resetId
-    )
-      ? existing
-      : {
-          operation: "undo",
-          target: resetId,
-          clientRequestId: createClientRequestId("undo_memory_reset"),
-        };
-    pendingMemoryMutation.current = mutation;
-    setMemoryBusy(true);
-    setMemoryError(null);
-    try {
-      const response = await client.undoLearnedMemoryReset(
-        resetId,
-        mutation.clientRequestId,
-      );
-      pendingMemoryMutation.current = null;
-      setMemory(response.memory);
-      setMemoryLoadState("ready");
-      return true;
-    } catch (error) {
-      if (error instanceof RuntimeApiError && error.status === 410) {
-        pendingMemoryMutation.current = null;
-        await refreshMemory();
-      }
-      setMemoryError(errorMessage(error));
-      return false;
-    } finally {
-      setMemoryBusy(false);
-    }
-  }, [client, memoryBusy, refreshMemory]);
-
   const updateOutputLocation = useCallback(async (locationAlias: OutputLocationAlias) => {
     if (outputBusy || !outputPreference) return false;
     const existing = pendingOutputPreference.current;
@@ -1844,12 +1745,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     clearSessionError: () => setSessionError(null),
     loginSession,
     logoutSession,
-    memory,
-    memoryLoadState,
-    memoryBusy,
-    memoryError,
-    clearMemoryError: () => setMemoryError(null),
-    refreshMemory: () => void refreshMemory(),
     outputLocations,
     outputPreference,
     outputLoadState,
@@ -1928,8 +1823,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     respondInteraction,
     checkUpdate,
     activateUpdate,
-    resetLearnedMemory,
-    undoLearnedMemoryReset,
     feedbackArtifact,
     downloadArtifact,
     performArtifactExternalAction,
