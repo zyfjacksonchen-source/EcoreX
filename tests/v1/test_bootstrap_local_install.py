@@ -17,6 +17,9 @@ from ecorex.bootstrap import install_local
 from ecorex.bootstrap.companion import BootstrapCompanionInstaller
 from ecorex.product_version import stable_release_sequence
 from ecorex.integration.pack_verification import verify_product_capability_pack
+from ecorex.integration.windows_sandbox_security import (
+    WindowsSandboxSecurityError,
+)
 from ecorex.pack_catalog import (
     CAPABILITY_PACK_SERVICE_IDS,
     CAPABILITY_PACK_TOOL_IDS,
@@ -30,9 +33,12 @@ from ecorex.release import (
     ReleaseBuilder,
 )
 from ecorex.update import (
+    DownloadFailed,
     Ed25519SignatureVerifier,
     InstallCoordinator,
+    InstallState,
     LocalSourceFetcher,
+    PinnedTargetError,
     ProvisionalActivationController,
     ReleaseChannel,
     ReleaseManifest,
@@ -567,6 +573,170 @@ def test_signed_bootstrap_handoff_upgrades_an_existing_install(
         / "version-marker.txt"
     )
     assert upgraded_marker.read_text(encoding="utf-8") == "1.0.8"
+    assert user_data.read_text(encoding="utf-8") == '{"conversation":"preserved"}'
+
+
+def test_signed_bootstrap_supersedes_a_verified_failed_first_install_pin(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import sys
+
+    test_module = sys.modules[__name__]
+    release_private = Ed25519PrivateKey.generate()
+    publication_private = Ed25519PrivateKey.generate()
+    monkeypatch.setattr(release_builder_module, "__version__", "1.0.7")
+    monkeypatch.setattr(test_module, "__version__", "1.0.7")
+    failed_release, failed_trust = _release(
+        tmp_path / "failed",
+        private=release_private,
+        publication_private=publication_private,
+    )
+    failed_manifest = ReleaseManifest.from_json(
+        failed_release.manifest_path.read_bytes()
+    )
+    platform, architecture = _target()
+    install_root = tmp_path / "install"
+    user_data = install_root / "data" / "user-state.json"
+    user_data.parent.mkdir(parents=True)
+    user_data.write_text('{"conversation":"preserved"}', encoding="utf-8")
+
+    def fail_security(*_args: Any, **_kwargs: Any) -> dict[str, object]:
+        raise WindowsSandboxSecurityError("simulated Windows ACL failure")
+
+    failed = InstallCoordinator(
+        install_root,
+        fetcher=LocalSourceFetcher(
+            {
+                source.source_id: failed_release.output_dir
+                for source in failed_manifest.sources
+            }
+        ),
+        health_checker=lambda _slot: False,
+        verifier=Ed25519SignatureVerifier(
+            install_local._read_public_keys((failed_trust,))
+        ),
+        host_platform=platform,
+        host_architecture=architecture,
+        release_channel=failed_manifest.channel,
+        pack_content_verifier=verify_product_capability_pack,
+        payload_security_preparer=fail_security,
+        payload_security_attester=lambda *_args, **_kwargs: {
+            "status": "unreachable"
+        },
+    )
+    with pytest.raises(WindowsSandboxSecurityError):
+        failed.prepare_update(
+            failed_manifest,
+            f"core-{platform}-{architecture}",
+            first_install=True,
+        )
+
+    failed_pin = failed.pinned_target
+    assert failed_pin is not None
+    assert failed_pin.version == "1.0.7"
+    assert failed.journal.latest().state is InstallState.FAILED
+    assert failed.slots.pointers().current is None
+
+    monkeypatch.setattr(release_builder_module, "__version__", "1.0.8")
+    monkeypatch.setattr(test_module, "__version__", "1.0.8")
+    replacement, replacement_trust = _release(
+        tmp_path / "replacement",
+        private=release_private,
+        publication_private=publication_private,
+    )
+    replacement_manifest = ReleaseManifest.from_json(
+        replacement.manifest_path.read_bytes()
+    )
+    replacement_artifact = replacement_manifest.artifact(
+        f"core-{platform}-{architecture}"
+    )
+    pointer_path = install_root / "slot-pointers.json"
+    pointer_path.write_text(
+        '{"current":null,"previous":"stale","known_good":[]}', encoding="utf-8"
+    )
+    with pytest.raises(PinnedTargetError, match="cannot be superseded"):
+        failed._admit_failed_first_install_pin_supersession(
+            replacement_manifest, replacement_artifact
+        )
+    assert failed.pinned_target == failed_pin
+    pointer_path.unlink()
+    replacement_package = replacement.output_dir / replacement_artifact.file_name
+    replacement_bytes = replacement_package.read_bytes()
+    replacement_package.unlink()
+    with pytest.raises(DownloadFailed):
+        install_local.install(
+            manifest_path=str(replacement.manifest_path),
+            artifacts_path=str(replacement.output_dir),
+            install_root=str(install_root),
+            trusted_public_keys=(replacement_trust,),
+            desktop_directory=str(tmp_path / "Desktop"),
+            **_sandbox_test_boundary(tmp_path / "replacement", monkeypatch),
+        )
+    assert failed.pinned_target == failed_pin
+    replacement_package.write_bytes(replacement_bytes)
+    original_transition = InstallCoordinator._transition
+    crashed = False
+
+    def crash_after_pin_swap(self: InstallCoordinator, *args: Any, **kwargs: Any):
+        nonlocal crashed
+        event = args[2] if len(args) > 2 else kwargs.get("event")
+        if not crashed and event == "first_install_pin_superseded":
+            crashed = True
+            raise KeyboardInterrupt("simulated crash after first-install pin swap")
+        return original_transition(self, *args, **kwargs)
+
+    monkeypatch.setattr(InstallCoordinator, "_transition", crash_after_pin_swap)
+    with pytest.raises(KeyboardInterrupt, match="after first-install pin swap"):
+        install_local.install(
+            manifest_path=str(replacement.manifest_path),
+            artifacts_path=str(replacement.output_dir),
+            install_root=str(install_root),
+            trusted_public_keys=(replacement_trust,),
+            desktop_directory=str(tmp_path / "Desktop"),
+            **_sandbox_test_boundary(tmp_path / "replacement", monkeypatch),
+        )
+    assert failed.pinned_target is not None
+    assert failed.pinned_target.version == "1.0.8"
+    monkeypatch.setattr(InstallCoordinator, "_transition", original_transition)
+    replacement_fetcher = LocalSourceFetcher(
+        {source.source_id: replacement.output_dir for source in replacement_manifest.sources}
+    )
+    failed.fetcher = replacement_fetcher
+    failed.pack_downloader.fetcher = replacement_fetcher
+    with pytest.raises(WindowsSandboxSecurityError):
+        failed.recover()
+    assert failed.journal.latest().state is InstallState.FAILED
+    assert failed.pinned_target is not None
+    assert failed.pinned_target.version == "1.0.8"
+
+    monkeypatch.setattr(release_builder_module, "__version__", "1.0.9")
+    monkeypatch.setattr(test_module, "__version__", "1.0.9")
+    final, final_trust = _release(
+        tmp_path / "final",
+        private=release_private,
+        publication_private=publication_private,
+    )
+    result = install_local.install(
+        manifest_path=str(final.manifest_path),
+        artifacts_path=str(final.output_dir),
+        install_root=str(install_root),
+        trusted_public_keys=(final_trust,),
+        desktop_directory=str(tmp_path / "Desktop"),
+        **_sandbox_test_boundary(tmp_path / "final", monkeypatch),
+    )
+
+    pointers = json.loads(
+        (install_root / "slot-pointers.json").read_text(encoding="utf-8")
+    )
+    pin = json.loads(
+        (install_root / "first-install-pin.json").read_text(encoding="utf-8")
+    )
+    events = [entry.event for entry in failed.journal.entries()]
+    assert result["state"] == "healthchecking"
+    assert pointers["current"] == result["slot_id"]
+    assert pin["version"] == "1.0.9"
+    assert "first_install_pin_superseded" in events
     assert user_data.read_text(encoding="utf-8") == '{"conversation":"preserved"}'
 
 

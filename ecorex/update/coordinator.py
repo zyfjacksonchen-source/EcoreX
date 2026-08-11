@@ -1129,6 +1129,11 @@ class InstallCoordinator:
                 rollback_authorization=rollback_authorization,
             )
             admission_current_slot = self.slots.pointers().current
+            superseded_pin = (
+                self._admit_failed_first_install_pin_supersession(manifest, artifact)
+                if first_install
+                else None
+            )
             if not first_install and not self.accepts_manifest(manifest, artifact.artifact_id):
                 raise PinnedTargetError(
                     "a different update is ignored until first-install registration completes"
@@ -1139,6 +1144,7 @@ class InstallCoordinator:
                 first_install=first_install,
                 rollback_authorized=rollback_authorized,
                 admission_current_slot=admission_current_slot,
+                superseded_pin=superseded_pin,
             )
             latest = self.journal.latest()
 
@@ -1149,7 +1155,7 @@ class InstallCoordinator:
         if latest.state is InstallState.RESOLVING:
             try:
                 if first_install:
-                    self._ensure_first_install_pin(manifest, artifact)
+                    self._ensure_first_install_pin(manifest, artifact, active)
                 elif not self.accepts_manifest(manifest, artifact.artifact_id):
                     raise PinnedTargetError(
                         "a different update is ignored until first-install registration completes"
@@ -1213,6 +1219,12 @@ class InstallCoordinator:
                 # bytes again before consuming them.
                 verify_manifest_signature(manifest, self.verifier)
                 verify_artifact_file(package_path, manifest, artifact, self.verifier)
+                if first_install:
+                    self._supersede_failed_first_install_pin(
+                        manifest,
+                        artifact,
+                        active,
+                    )
                 self._ensure_stage_space(package_path)
                 target_security: PayloadSecurityLifecycle | None = None
                 if self.bootstrap_companion is not None:
@@ -2063,6 +2075,7 @@ class InstallCoordinator:
         first_install: bool,
         rollback_authorized: bool,
         admission_current_slot: str | None,
+        superseded_pin: TargetPin | None,
     ) -> dict[str, Any]:
         transaction_id = uuid.uuid4().hex
         slot_id = _slot_id(manifest, artifact)
@@ -2084,6 +2097,9 @@ class InstallCoordinator:
             "first_install": first_install,
             "rollback_authorized": rollback_authorized,
             "admission_current_slot": admission_current_slot,
+            "superseded_first_install_pin": (
+                superseded_pin.to_dict() if superseded_pin is not None else None
+            ),
             "source_index": 0,
         }
         self._save_active(active)
@@ -2100,6 +2116,11 @@ class InstallCoordinator:
                     "first_install": first_install,
                     "rollback_authorized": rollback_authorized,
                     "admission_current_slot": admission_current_slot,
+                    "superseded_first_install_pin": (
+                        superseded_pin.to_dict()
+                        if superseded_pin is not None
+                        else None
+                    ),
                 },
             )
         except Exception:
@@ -2111,6 +2132,7 @@ class InstallCoordinator:
         self,
         manifest: ReleaseManifest,
         artifact: ReleaseArtifact,
+        active: Mapping[str, Any],
     ) -> None:
         requested = TargetPin(
             release_id=manifest.release_id,
@@ -2120,12 +2142,180 @@ class InstallCoordinator:
             artifact_sha256=artifact.sha256,
         )
         existing = self.pinned_target
-        if existing is not None and existing != requested:
+        superseded_raw = active.get("superseded_first_install_pin")
+        superseded = (
+            TargetPin.from_dict(superseded_raw)
+            if isinstance(superseded_raw, Mapping)
+            else None
+        )
+        if superseded is not None:
+            self._validate_active_against_journal(active)
+        if existing is not None and existing not in {requested, superseded}:
             raise PinnedTargetError(
                 "first install is already pinned to a different signed release identity"
             )
+        if existing is None and superseded is not None:
+            raise PinnedTargetError("failed first-install target pin disappeared")
         if existing is None:
             atomic_write_json(self._bootstrap_pin_path, requested.to_dict())
+        return
+
+    def _supersede_failed_first_install_pin(
+        self,
+        manifest: ReleaseManifest,
+        artifact: ReleaseArtifact,
+        active: Mapping[str, Any],
+    ) -> None:
+        superseded_raw = active.get("superseded_first_install_pin")
+        if not isinstance(superseded_raw, Mapping):
+            return
+        superseded = TargetPin.from_dict(superseded_raw)
+        requested = TargetPin(
+            release_id=manifest.release_id,
+            version=manifest.version,
+            build_digest=manifest.build_digest,
+            artifact_id=artifact.artifact_id,
+            artifact_sha256=artifact.sha256,
+        )
+        existing = self.pinned_target
+        if existing not in {requested, superseded}:
+            raise PinnedTargetError("failed first-install target pin changed")
+        self._validate_active_against_journal(active)
+        transaction_id = str(active["transaction_id"])
+        events = {
+            entry.event
+            for entry in self.journal.entries()
+            if entry.transaction_id == transaction_id
+        }
+        details = {
+            "previous_release_id": superseded.release_id,
+            "previous_version": superseded.version,
+            "replacement_release_id": requested.release_id,
+            "replacement_version": requested.version,
+            "artifact_id": requested.artifact_id,
+        }
+        if "first_install_pin_supersession_authorized" not in events:
+            self._transition(
+                transaction_id,
+                InstallState.STAGING,
+                "first_install_pin_supersession_authorized",
+                details,
+            )
+        if existing == superseded:
+            atomic_write_json(self._bootstrap_pin_path, requested.to_dict())
+        if "first_install_pin_superseded" not in events:
+            self._transition(
+                transaction_id,
+                InstallState.STAGING,
+                "first_install_pin_superseded",
+                details,
+            )
+
+    def _admit_failed_first_install_pin_supersession(
+        self,
+        manifest: ReleaseManifest,
+        artifact: ReleaseArtifact,
+    ) -> TargetPin | None:
+        requested = TargetPin(
+            release_id=manifest.release_id,
+            version=manifest.version,
+            build_digest=manifest.build_digest,
+            artifact_id=artifact.artifact_id,
+            artifact_sha256=artifact.sha256,
+        )
+        existing = self.pinned_target
+        if existing is None or existing == requested:
+            return None
+        pointers = self.slots.pointers()
+        if (
+            manifest.channel is not ReleaseChannel.STABLE
+            or pointers != SlotPointers()
+            or artifact.artifact_id != existing.artifact_id
+            or self._load_registration_authority(required=False) is not None
+        ):
+            raise PinnedTargetError(
+                "failed first-install target pin cannot be superseded"
+            )
+        try:
+            is_newer = _compare_semver(manifest.version, existing.version) > 0
+        except (TypeError, ValueError):
+            is_newer = False
+        if not is_newer:
+            raise PinnedTargetError(
+                "failed first-install target pin requires a strictly newer stable release"
+            )
+        started: set[str] = set()
+        superseded_from: dict[str, TargetPin] = {}
+        superseded: set[str] = set()
+        verified: set[str] = set()
+        start_identity = {
+            "release_id": existing.release_id,
+            "version": existing.version,
+            "build_digest": existing.build_digest,
+            "artifact_id": existing.artifact_id,
+            "first_install": True,
+            "rollback_authorized": False,
+            "admission_current_slot": None,
+        }
+        for entry in self.journal.entries():
+            start_keys = set(start_identity)
+            if (
+                entry.event == "transaction_started"
+                and frozenset(entry.details) in {
+                    frozenset(start_keys),
+                    frozenset(start_keys | {"superseded_first_install_pin"}),
+                }
+                and all(
+                    entry.details.get(key) == value
+                    for key, value in start_identity.items()
+                )
+            ):
+                previous_raw = entry.details.get("superseded_first_install_pin")
+                if previous_raw is None:
+                    started.add(entry.transaction_id)
+                elif isinstance(previous_raw, Mapping):
+                    try:
+                        previous = TargetPin.from_dict(previous_raw)
+                    except RecoveryError:
+                        continue
+                    started.add(entry.transaction_id)
+                    superseded_from[entry.transaction_id] = previous
+            if entry.transaction_id not in started:
+                continue
+            previous = superseded_from.get(entry.transaction_id)
+            if previous is not None and entry.event == "first_install_pin_superseded":
+                expected = {
+                    "previous_release_id": previous.release_id,
+                    "previous_version": previous.version,
+                    "replacement_release_id": existing.release_id,
+                    "replacement_version": existing.version,
+                    "artifact_id": existing.artifact_id,
+                }
+                if entry.details == expected:
+                    superseded.add(entry.transaction_id)
+            digest = None
+            if entry.event in {
+                "artifact_verified",
+                "artifact_verified_after_recovery",
+                "artifact_restored_from_download_cache",
+            }:
+                digest = entry.details.get("sha256")
+            elif entry.event == "delta_applied":
+                digest = entry.details.get("target_sha256")
+            if entry.state is InstallState.STAGING and digest == existing.artifact_sha256:
+                verified.add(entry.transaction_id)
+            if (
+                entry.transaction_id in verified
+                and (
+                    entry.transaction_id not in superseded_from
+                    or entry.transaction_id in superseded
+                )
+                and entry.state in {InstallState.FAILED, InstallState.ROLLBACK}
+            ):
+                return existing
+        raise PinnedTargetError(
+            "failed first-install target pin has no durable verified terminal transaction"
+        )
 
     def _admit_target(
         self,
@@ -2228,6 +2418,9 @@ class InstallCoordinator:
             "first_install": active.get("first_install"),
             "rollback_authorized": active.get("rollback_authorized", False),
             "admission_current_slot": active.get("admission_current_slot"),
+            "superseded_first_install_pin": active.get(
+                "superseded_first_install_pin"
+            ),
         }
         if any(started.details.get(key) != value for key, value in expected.items()):
             raise RecoveryError("active metadata does not match the install journal identity")
@@ -2566,6 +2759,12 @@ class InstallCoordinator:
                 self.slots.slot_path(admission_current_slot)
             except StorageError as exc:
                 raise RecoveryError("active admission slot is unsafe") from exc
+        raw.setdefault("superseded_first_install_pin", None)
+        superseded_pin = raw["superseded_first_install_pin"]
+        if superseded_pin is not None:
+            if not raw["first_install"] or not isinstance(superseded_pin, Mapping):
+                raise RecoveryError("active first-install pin supersession is invalid")
+            TargetPin.from_dict(superseded_pin)
         try:
             self.slots.slot_path(str(raw.get("slot_id", "")))
         except StorageError as exc:
