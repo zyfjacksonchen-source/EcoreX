@@ -1,0 +1,308 @@
+from __future__ import annotations
+
+import ast
+import inspect
+from pathlib import Path
+import runpy
+import subprocess
+import sys
+import threading
+from types import SimpleNamespace
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_platform_python_closure_imports_the_real_cow_spine(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The signed Python closure, not the source checkout, owns Cow imports."""
+
+    stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
+    runtime_globals = stager["_build_python_closure"].__globals__
+    source = tmp_path / "python-source"
+    stdlib = source / "stdlib"
+    executable = source / "python3"
+    (stdlib / "encodings").mkdir(parents=True)
+    (stdlib / "encodings" / "__init__.py").write_text("", encoding="utf-8")
+    executable.write_bytes(b"python")
+    executable.chmod(0o755)
+
+    monkeypatch.setitem(
+        runtime_globals,
+        "_base_python_runtime_source",
+        lambda _platform: (source, executable, stdlib),
+    )
+    monkeypatch.setitem(runtime_globals, "_copy_distribution_closure", lambda *_args: ())
+    for name in (
+        "_prune_macos_cpython_build_support",
+        "_reject_macos_build_objects",
+        "_prune_runtime_tree",
+        "_relocate_macos_python_closure",
+    ):
+        monkeypatch.setitem(runtime_globals, name, lambda *_args, **_kwargs: None)
+    monkeypatch.setitem(
+        runtime_globals,
+        "_compact_python_import_closure",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setitem(
+        runtime_globals,
+        "build_pack_python_manifest",
+        lambda *_args, **_kwargs: b"{}",
+    )
+    monkeypatch.setitem(
+        runtime_globals,
+        "resolve_pack_python",
+        lambda core, **_kwargs: (core / "bin" / "pack-python" / "bin" / "python3", None),
+    )
+    monkeypatch.setitem(runtime_globals, "_tree_binding_sha256", lambda _root: "stable")
+    monkeypatch.setitem(
+        runtime_globals,
+        "_run_macos_isolated_pack_probe",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            stdout=runtime_globals["__version__"].encode("ascii")
+        ),
+    )
+
+    core = tmp_path / "core"
+    stager["_build_python_closure"](core, "macos", "arm64")
+    site_packages = (
+        core
+        / "bin"
+        / "pack-python"
+        / "lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages"
+    )
+    probe = subprocess.run(
+        (
+            sys.executable,
+            "-I",
+            "-B",
+            "-c",
+            "import sys; "
+            f"sys.path.insert(0, {str(site_packages)!r}); "
+            "import agent, bridge; "
+            "from bridge.agent_initializer import AgentInitializer; "
+            "from agent.tools.tool_manager import ToolManager; "
+            "assert AgentInitializer.__module__ == 'bridge.agent_initializer'; "
+            "assert ToolManager.__module__ == 'agent.tools.tool_manager'",
+        ),
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert probe.returncode == 0, probe.stderr
+    production_probe = stager["_pack_python_probe_command"](Path("pack-python"))[-1]
+    assert "from bridge.agent_initializer import AgentInitializer" in production_probe
+    assert "from agent.tools.tool_manager import ToolManager" in production_probe
+
+
+def test_actual_initializer_and_tool_manager_are_the_default_tool_contract(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Exercise Cow's real tool source; a hand-maintained builtin catalog is irrelevant."""
+
+    from agent.tools.tool_manager import ToolManager
+    from bridge.agent_initializer import AgentInitializer
+
+    monkeypatch.setattr(ToolManager, "_instance", None)
+    manager = ToolManager()
+    manager.load_tools(start_mcp=False)
+    manager_contract = manager.list_tools()
+    initializer = AgentInitializer(SimpleNamespace(), SimpleNamespace())
+    tools = initializer._load_tools(str(tmp_path), None, [], "contract-session")
+    actual_contract = {
+        tool.name: {
+            "description": tool.description,
+            "parameters": tool.get_json_schema(),
+        }
+        for tool in tools
+    }
+
+    assert {"read", "write", "edit", "bash", "ls", "web_fetch", "browser"} <= set(
+        actual_contract
+    )
+    assert actual_contract == {
+        name: manager_contract[name] for name in actual_contract
+    }
+    for tool in tools:
+        if tool.name in {"read", "write", "edit", "bash", "ls", "web_fetch", "browser"}:
+            assert Path(tool.config["cwd"]) == tmp_path
+
+
+def test_project_root_drives_cow_initializer_trim_and_durable_memory(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from agent.memory import manager as memory_module
+    from agent.memory import summarizer as summarizer_module
+    from agent.memory.config import MemoryConfig
+    from agent.memory.manager import MemoryManager
+    from agent.protocol.agent_stream import AgentStreamExecutor
+    import agent.prompt as prompt_module
+    import config as config_module
+    from bridge.agent_initializer import AgentInitializer
+
+    signature = inspect.signature(AgentInitializer.initialize_agent)
+    assert "workspace_root" in signature.parameters
+
+    global_workspace = tmp_path / "global-must-not-be-used"
+    settings = {
+        "agent_workspace": str(global_workspace),
+        "agent_max_steps": 20,
+        "agent_max_context_tokens": 64_000,
+        "agent_max_context_turns": 30,
+    }
+    monkeypatch.setattr(config_module, "conf", lambda: settings)
+    monkeypatch.setattr(prompt_module, "ensure_workspace", lambda root, **_kwargs: {})
+    monkeypatch.setattr(prompt_module, "load_context_files", lambda _root: {})
+
+    class PromptBuilder:
+        def __init__(self, *, workspace_dir, language):
+            self.workspace_dir = workspace_dir
+
+        def build(self, **_kwargs):
+            return "cow"
+
+    monkeypatch.setattr(prompt_module, "PromptBuilder", PromptBuilder)
+
+    created: list[dict] = []
+
+    class AgentBridge:
+        scheduler_initialized = False
+
+        def create_agent(self, **kwargs):
+            created.append(kwargs)
+            return SimpleNamespace(model=None, messages=[], messages_lock=threading.Lock())
+
+    initializer = AgentInitializer(SimpleNamespace(), AgentBridge())
+    initialized_roots: list[Path] = []
+    monkeypatch.setattr(initializer, "_migrate_config_to_env", lambda _root: None)
+    monkeypatch.setattr(initializer, "_load_env_file", lambda: None)
+    monkeypatch.setattr(
+        initializer,
+        "_setup_memory_system",
+        lambda root, _session: (initialized_roots.append(Path(root)) or None, []),
+    )
+    monkeypatch.setattr(initializer, "_load_tools", lambda *_args: [])
+    monkeypatch.setattr(initializer, "_initialize_scheduler", lambda *_args: None)
+    monkeypatch.setattr(initializer, "_initialize_skill_manager", lambda *_args: None)
+    monkeypatch.setattr(initializer, "_get_runtime_info", lambda _root: {})
+    monkeypatch.setattr(initializer, "_restore_conversation_history", lambda *_args: None)
+    monkeypatch.setattr(initializer, "_start_daily_flush_timer", lambda: None)
+
+    projects = (tmp_path / "project-a", tmp_path / "project-b")
+    for index, project in enumerate(projects):
+        initializer.initialize_agent(
+            session_id=f"session-{index}", workspace_root=project
+        )
+    assert initialized_roots == list(projects)
+    assert [Path(call["workspace_dir"]) for call in created] == list(projects)
+    assert all(call["max_context_tokens"] == 64_000 for call in created)
+
+    monkeypatch.setattr(memory_module, "_authorize_memory_index_read", lambda *_args: True)
+    monkeypatch.setattr(summarizer_module, "_authorize_memory_read", lambda *_args: True)
+    monkeypatch.setattr(summarizer_module, "_authorize_memory_write", lambda *_args: True)
+    memory = MemoryManager(MemoryConfig(workspace_root=str(projects[0])))
+    monkeypatch.setattr(
+        memory.flush_manager,
+        "_summarize_messages",
+        lambda _messages, _max_messages: "- durable project context",
+    )
+    fake_agent = SimpleNamespace(
+        memory_manager=memory,
+        max_context_tokens=64_000,
+        _current_user_id=None,
+        _get_model_context_window=lambda: 128_000,
+        _estimate_message_tokens=lambda _message: 1,
+    )
+    messages = [
+        message
+        for turn in range(31)
+        for message in (
+            {"role": "user", "content": [{"type": "text", "text": f"u{turn}"}]},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": f"a{turn}"}],
+            },
+        )
+    ]
+    executor = AgentStreamExecutor(
+        agent=fake_agent,
+        model=SimpleNamespace(),
+        system_prompt="cow",
+        tools=[],
+        messages=messages,
+        max_context_turns=30,
+    )
+    executor._trim_messages()
+    thread = memory.flush_manager._last_flush_thread
+    assert thread is not None
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+
+    daily = memory.flush_manager.get_today_memory_file()
+    assert daily.parent == projects[0] / "memory"
+    assert "durable project context" in daily.read_text(encoding="utf-8")
+    assert "durable project context" in executor.messages[0]["content"][0]["text"]
+    restarted = MemoryManager(MemoryConfig(workspace_root=str(projects[0])))
+    other = MemoryManager(MemoryConfig(workspace_root=str(projects[1])))
+    assert restarted.flush_manager.get_today_memory_file() == daily
+    assert "durable project context" in daily.read_text(encoding="utf-8")
+    assert not other.flush_manager.get_today_memory_file().exists()
+
+
+def _attribute_path(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _attribute_path(node.value)
+        return f"{parent}.{node.attr}" if parent else node.attr
+    return ""
+
+
+def test_turn_executor_cannot_reach_legacy_planner_or_permission_admission() -> None:
+    tree = ast.parse((ROOT / "ecorex" / "runtime" / "worker.py").read_text("utf-8"))
+    worker = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "AgentTurnWorker"
+    )
+    methods = {
+        node.name: node
+        for node in worker.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    reachable = {"run_once"}
+    pending = ["run_once"]
+    while pending:
+        method_name = pending.pop()
+        for node in ast.walk(methods[method_name]):
+            if not isinstance(node, ast.Call):
+                continue
+            path = _attribute_path(node.func)
+            if path.startswith("self."):
+                callee = path.removeprefix("self.")
+                if callee in methods and callee not in reachable:
+                    reachable.add(callee)
+                    pending.append(callee)
+
+    forbidden: list[str] = []
+    forbidden_calls = {
+        "capture_execution_permit",
+        "assert_execution_permit",
+        "execution_admission",
+        "prepare_turn",
+    }
+    for method_name in sorted(reachable):
+        for node in ast.walk(methods[method_name]):
+            path = _attribute_path(node.func) if isinstance(node, ast.Call) else ""
+            if path.startswith("self.capabilities.") or path.rpartition(".")[2] in forbidden_calls:
+                forbidden.append(f"{method_name}: {path}")
+            if path == "self.turn_preparer":
+                forbidden.append(f"{method_name}: {path}")
+
+    assert forbidden == []
