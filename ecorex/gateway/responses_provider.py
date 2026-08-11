@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import suppress
+from datetime import datetime, timezone
 import hashlib
 import ipaddress
 import json
@@ -39,6 +41,9 @@ from .models import (
     GatewayFunctionCallOutputInput,
     GatewayModelPolicy,
     GatewayUserMessageInput,
+    GatewayWebSearchRequest,
+    GatewayWebSearchResponse,
+    GatewayWebSearchResult,
     ModelGatewayRequest,
     ecorex_chat_gateway_policy,
 )
@@ -340,6 +345,202 @@ class ManagedHTTPSResponsesProvider:
                         await response.aclose()
                     except Exception:
                         pass
+
+    async def search(
+        self,
+        request: GatewayWebSearchRequest,
+        principal: GatewayPrincipal,
+    ) -> GatewayWebSearchResponse:
+        """Run provider-native Web Search without disclosing its credential."""
+
+        if (
+            request.model_id not in self.model_mapping
+            or request.model_id not in principal.allowed_model_ids
+            or not principal.account_id
+        ):
+            raise ResponsesProviderRejected("managed model is not allowed")
+        freshness = (
+            "no time restriction"
+            if request.freshness == "noLimit"
+            else f"freshness constraint {request.freshness}"
+        )
+        payload = {
+            "model": self.model_mapping[request.model_id],
+            "input": request.query,
+            "instructions": (
+                "Search the public web for the user's query. Use Web Search, "
+                f"apply {freshness}, cite every factual result, and return at most "
+                f"{request.count} distinct sources."
+            ),
+            "tools": [{"type": "web_search"}],
+            "tool_choice": "required",
+            "parallel_tool_calls": False,
+            "include": ["web_search_call.action.sources"],
+            "store": False,
+            "metadata": {
+                "ecorex_account_id": principal.account_id,
+                "ecorex_request_id": request.request_id,
+                "ecorex_operation": "web_search",
+            },
+        }
+        encoded = _canonical(payload)
+        if len(encoded) > _MAX_PROVIDER_REQUEST_BYTES:
+            raise ResponsesProviderRejected("managed web search request is oversized")
+        headers = self._headers()
+        headers.update(
+            {
+                "Accept": "application/json",
+                "Accept-Encoding": "identity",
+                "Content-Type": "application/json",
+                "Idempotency-Key": request.request_id,
+                "User-Agent": "EcoreX-Model-Gateway/1.0",
+            }
+        )
+        outbound = self._client.build_request(
+            "POST",
+            self.origin + "/v1/responses",
+            headers=headers,
+            content=encoded,
+        )
+        outbound.extensions["timeout"] = self._timeout_extension()
+        async with self._slots:
+            response: httpx.Response | None = None
+            try:
+                async with asyncio.timeout(self.total_timeout_seconds):
+                    response = await self._client.send(
+                        outbound, stream=True, follow_redirects=False
+                    )
+                    if response.status_code == 429 or response.status_code >= 500:
+                        raise ResponsesProviderUnavailable(
+                            "managed Responses provider is unavailable"
+                        )
+                    if response.status_code < 200 or response.status_code >= 300:
+                        raise ResponsesProviderRejected(
+                            "managed Responses provider rejected the request"
+                        )
+                    self._validate_identity_encoding(response)
+                    media_type = (
+                        response.headers.get("content-type", "")
+                        .split(";", 1)[0]
+                        .strip()
+                        .casefold()
+                    )
+                    if media_type != "application/json":
+                        raise ResponsesProviderProtocolError(
+                            "managed web search response type is invalid"
+                        )
+                    raw = _decode_object(
+                        await _bounded_body(response, _MAX_PROVIDER_STREAM_BYTES)
+                    )
+                    return self._web_search_response(request, raw)
+            except (
+                ResponsesProviderRejected,
+                ResponsesProviderProtocolError,
+                ResponsesProviderUnavailable,
+            ):
+                raise
+            except asyncio.CancelledError:
+                raise
+            except (TimeoutError, httpx.TimeoutException, httpx.TransportError):
+                raise ResponsesProviderUnavailable(
+                    "managed Responses provider is unavailable"
+                ) from None
+            finally:
+                if response is not None:
+                    with suppress(Exception):
+                        await response.aclose()
+
+    @staticmethod
+    def _web_search_response(
+        request: GatewayWebSearchRequest,
+        raw: dict[str, Any],
+    ) -> GatewayWebSearchResponse:
+        if raw.get("status") != "completed":
+            raise ResponsesProviderProtocolError(
+                "managed web search did not complete"
+            )
+        output = raw.get("output")
+        usage = raw.get("usage")
+        if not isinstance(output, list) or not isinstance(usage, dict):
+            raise ResponsesProviderProtocolError(
+                "managed web search response is invalid"
+            )
+        texts: list[str] = []
+        source_rows: list[dict[str, Any]] = []
+        citation_rows: list[dict[str, Any]] = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            action = item.get("action")
+            if isinstance(action, dict) and isinstance(action.get("sources"), list):
+                source_rows.extend(
+                    row for row in action["sources"] if isinstance(row, dict)
+                )
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if not isinstance(part, dict) or part.get("type") != "output_text":
+                    continue
+                text = part.get("text")
+                if isinstance(text, str):
+                    texts.append(text)
+                annotations = part.get("annotations")
+                if isinstance(annotations, list):
+                    citation_rows.extend(
+                        row for row in annotations if isinstance(row, dict)
+                    )
+        answer = "\n".join(texts).strip()
+        merged = citation_rows + source_rows
+        results: list[GatewayWebSearchResult] = []
+        seen: set[str] = set()
+        for row in merged:
+            url = row.get("url")
+            if not isinstance(url, str) or url in seen:
+                continue
+            seen.add(url)
+            results.append(
+                GatewayWebSearchResult(
+                    title=str(row.get("title") or row.get("name") or url)[:4096],
+                    url=url,
+                    snippet=answer[:32_768],
+                    siteName=str(row.get("site_name") or "")[:1024],
+                    datePublished=str(row.get("published_at") or "")[:128],
+                )
+            )
+            if len(results) >= request.count:
+                break
+        if not results:
+            raise ResponsesProviderProtocolError(
+                "managed web search returned no citations"
+            )
+        created_at = raw.get("created_at")
+        try:
+            created = datetime.fromtimestamp(float(created_at), tz=timezone.utc)
+        except (TypeError, ValueError, OverflowError):
+            raise ResponsesProviderProtocolError(
+                "managed web search timestamp is invalid"
+            ) from None
+        try:
+            input_tokens = int(usage.get("input_tokens"))
+            output_tokens = int(usage.get("output_tokens"))
+            total_tokens = int(usage.get("total_tokens"))
+            return GatewayWebSearchResponse(
+                query=request.query,
+                total=len(results),
+                count=len(results),
+                results=results,
+                usage={
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": total_tokens,
+                },
+                provider_created_at=created,
+            )
+        except (TypeError, ValueError):
+            raise ResponsesProviderProtocolError(
+                "managed web search usage is invalid"
+            ) from None
 
     async def health(self) -> None:
         """Perform one authenticated, bounded, fixed-origin dependency probe."""

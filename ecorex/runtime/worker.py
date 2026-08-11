@@ -6331,6 +6331,8 @@ class AgentTurnWorker:
         cancel_event: threading.Event,
         inbox: Any,
         managed_image_executor: Callable[[dict[str, Any], str | None], Any] | None,
+        managed_web_search_executor: Callable[[dict[str, Any], str | None], Any]
+        | None,
         channel_context: Mapping[str, Any] | None = None,
         channel_type: str,
         receiver: str,
@@ -6350,6 +6352,10 @@ class AgentTurnWorker:
             bind_managed_image_executor,
             reset_managed_image_executor,
         )
+        from agent.tools.web_search.web_search import (
+            bind_managed_web_search_executor,
+            reset_managed_web_search_executor,
+        )
 
         bridge = self._cow_bridge
         model_token = bridge.bind_model(model)
@@ -6357,6 +6363,11 @@ class AgentTurnWorker:
         image_token = (
             bind_managed_image_executor(managed_image_executor)
             if managed_image_executor is not None
+            else None
+        )
+        web_search_token = (
+            bind_managed_web_search_executor(managed_web_search_executor)
+            if managed_web_search_executor is not None
             else None
         )
         subagent_token = bind_managed_subagent_reply(
@@ -6371,6 +6382,7 @@ class AgentTurnWorker:
                 cancel_event=child_cancel or threading.Event(),
                 inbox=None,
                 managed_image_executor=managed_image_executor,
+                managed_web_search_executor=managed_web_search_executor,
                 channel_context=channel_context,
                 channel_type=channel_type,
                 receiver=receiver,
@@ -6446,6 +6458,8 @@ class AgentTurnWorker:
         finally:
             if image_token is not None:
                 reset_managed_image_executor(image_token)
+            if web_search_token is not None:
+                reset_managed_web_search_executor(web_search_token)
             reset_managed_subagent_reply(subagent_token)
             reset_cow_direct_tools(tool_token)
             bridge.reset_model(model_token)
@@ -6574,6 +6588,57 @@ class AgentTurnWorker:
                     )
                 return ToolResult.success(result)
 
+            def managed_web_search_executor(
+                arguments: dict[str, Any], tool_call_id: str | None
+            ):
+                from agent.tools.base_tool import ToolResult
+                from ecorex.gateway.models import GatewayWebSearchRequest
+
+                search = getattr(self.gateway, "search", None)
+                if not callable(search):
+                    return ToolResult.fail(
+                        {
+                            "error": "managed web search is unavailable",
+                            "code": "managed_web_search_not_configured",
+                            "retryable": True,
+                            "redacted": True,
+                        }
+                    )
+                call_id = tool_call_id or "web_search_" + self._digest(arguments)[:24]
+                request_id = "search_" + self._digest(
+                    f"{job.turn_id}:{call_id}"
+                )[:40]
+                try:
+                    response = asyncio.run_coroutine_threadsafe(
+                        search(
+                            GatewayWebSearchRequest(
+                                request_id=request_id,
+                                model_id=turn.agent_model_id,
+                                query=str(arguments.get("query") or "").strip(),
+                                count=int(arguments.get("count") or 10),
+                                freshness=str(
+                                    arguments.get("freshness") or "noLimit"
+                                ),
+                                summary=bool(arguments.get("summary", False)),
+                            )
+                        ),
+                        loop,
+                    ).result()
+                    payload = response.model_dump(
+                        mode="json",
+                        exclude={"schema_version", "usage", "provider_created_at"},
+                    )
+                except Exception:
+                    return ToolResult.fail(
+                        {
+                            "error": "managed web search is unavailable",
+                            "code": "managed_web_search_failed",
+                            "retryable": False,
+                            "redacted": True,
+                        }
+                    )
+                return ToolResult.success(payload)
+
             def callback(event: dict[str, Any]) -> None:
                 try:
                     self._project_event(
@@ -6632,6 +6697,7 @@ class AgentTurnWorker:
                 cancel_event=cancel_event,
                 inbox=inbox,
                 managed_image_executor=managed_image_executor,
+                managed_web_search_executor=managed_web_search_executor,
                 channel_context=channel_context,
                 channel_type=channel_type,
                 receiver=receiver,
@@ -6675,6 +6741,7 @@ class AgentTurnWorker:
                     cancel_event=cancel_event,
                     inbox=next_inbox,
                     managed_image_executor=managed_image_executor,
+                    managed_web_search_executor=managed_web_search_executor,
                     channel_context=channel_context,
                     channel_type=channel_type,
                     receiver=receiver,

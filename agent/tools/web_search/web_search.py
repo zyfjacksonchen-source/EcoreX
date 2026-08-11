@@ -21,7 +21,8 @@ Credentials
 
 import json
 import os
-from typing import Any, Dict, List, Optional
+from contextvars import ContextVar
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 
@@ -31,6 +32,19 @@ from config import conf
 
 
 DEFAULT_TIMEOUT = 30
+
+ManagedWebSearchExecutor = Callable[[Dict[str, Any], Optional[str]], ToolResult]
+_MANAGED_WEB_SEARCH_EXECUTOR: ContextVar[Optional[ManagedWebSearchExecutor]] = (
+    ContextVar("managed_web_search_executor", default=None)
+)
+
+
+def bind_managed_web_search_executor(executor: ManagedWebSearchExecutor):
+    return _MANAGED_WEB_SEARCH_EXECUTOR.set(executor)
+
+
+def reset_managed_web_search_executor(token: Any) -> None:
+    _MANAGED_WEB_SEARCH_EXECUTOR.reset(token)
 
 # Canonical fallback order. Empirically ordered by Chinese real-time
 # quality + relevance: bocha (best overall), qianfan (best for hot news),
@@ -123,8 +137,8 @@ class WebSearch(BaseTool):
 
     @staticmethod
     def is_available() -> bool:
-        """Tool is offered to the agent when at least one provider has a key."""
-        return bool(configured_providers())
+        """Return whether managed search or a user provider is available."""
+        return _MANAGED_WEB_SEARCH_EXECUTOR.get() is not None or bool(configured_providers())
 
     @classmethod
     def get_json_schema(cls) -> dict:
@@ -214,7 +228,20 @@ class WebSearch(BaseTool):
             count = 10
 
         requested = args.get("provider")
-        provider = self._resolve_provider(requested)
+        managed_executor = _MANAGED_WEB_SEARCH_EXECUTOR.get()
+        provider = None
+        if requested or managed_executor is None or _configured_strategy() == "fixed":
+            provider = self._resolve_provider(requested)
+        if managed_executor is not None and provider is None:
+            return managed_executor(
+                {
+                    "query": query,
+                    "count": count,
+                    "freshness": freshness,
+                    "summary": bool(summary),
+                },
+                str(getattr(self, "tool_call_id", "") or "") or None,
+            )
         if not provider:
             return ToolResult.fail(
                 "Error: No search provider configured. "
