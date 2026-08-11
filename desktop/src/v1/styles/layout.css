@@ -432,6 +432,7 @@ textarea {
 .ex-sidebar-action {
   width: 100%;
   justify-content: flex-start;
+  text-align: left;
   border-color: transparent;
   background: transparent;
 }
