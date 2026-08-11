@@ -110,28 +110,33 @@ def test_public_cow_worker_sends_initial_and_steer_images_to_gateway(
     result = asyncio.run(worker.run_once("cow-hotpath-attachment-worker"))
 
     assert result.outcome is WorkerOutcome.COMPLETED
-    assert len(gateway.requests) == 1
-    user_messages = [
+    assert len(gateway.requests) == 2
+    initial_messages = [
         item
         for item in gateway.requests[0].ordered_input_items()
         if isinstance(item, GatewayUserMessageInput)
     ]
-    assert len(user_messages) == 2
-    assert [image.attachment_id for image in user_messages[0].images] == [
+    steer_messages = [
+        item
+        for item in gateway.requests[1].ordered_input_items()
+        if isinstance(item, GatewayUserMessageInput)
+    ]
+    assert len(initial_messages) == len(steer_messages) == 1
+    assert [image.attachment_id for image in initial_messages[0].images] == [
         initial_image.attachment_id
     ]
-    assert [image.source_sha256 for image in user_messages[0].images] == [
+    assert [image.source_sha256 for image in initial_messages[0].images] == [
         initial_image.sha256
     ]
-    assert [image.attachment_id for image in user_messages[1].images] == [
+    assert [image.attachment_id for image in steer_messages[0].images] == [
         steer_image.attachment_id
     ]
-    assert [image.source_sha256 for image in user_messages[1].images] == [
+    assert [image.source_sha256 for image in steer_messages[0].images] == [
         steer_image.sha256
     ]
 
 
-def test_public_cow_worker_materializes_initial_and_steer_files_for_real_read(
+def test_public_cow_worker_materializes_steer_file_and_redirects_pending_read(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -188,11 +193,10 @@ def test_public_cow_worker_materializes_initial_and_steer_files_for_real_read(
                     if isinstance(item, GatewayUserMessageInput)
                 )
                 self.paths = re.findall(r"\[File: ([^\]]+)\]", text)
-                assert len(self.paths) == 2
-                for path in self.paths:
-                    materialized = Path(path)
-                    assert materialized.is_relative_to(workspace)
-                    assert materialized.stat().st_mode & 0o222 == 0
+                assert len(self.paths) == 1
+                materialized = Path(self.paths[0])
+                assert materialized.is_relative_to(workspace)
+                assert materialized.stat().st_mode & 0o222 == 0
                 yield GatewayEvent(
                     seq=1,
                     event_type="tool_call.requested",
@@ -214,9 +218,20 @@ def test_public_cow_worker_materializes_initial_and_steer_files_for_real_read(
                 if isinstance(item, GatewayFunctionCallOutputInput)
             ]
             if self.round == 2:
-                assert "initial attachment proof" in json.dumps(
+                assert "Skipped because the user redirected" in json.dumps(
                     outputs[-1].output, ensure_ascii=False
                 )
+                text = "\n".join(
+                    item.content
+                    for item in request.ordered_input_items()
+                    if isinstance(item, GatewayUserMessageInput)
+                )
+                steer_paths = re.findall(r"\[File: ([^\]]+)\]", text)
+                assert len(steer_paths) == 1
+                materialized = Path(steer_paths[0])
+                assert materialized.is_relative_to(workspace)
+                assert materialized.stat().st_mode & 0o222 == 0
+                self.paths.extend(steer_paths)
                 yield GatewayEvent(
                     seq=1,
                     event_type="tool_call.requested",
