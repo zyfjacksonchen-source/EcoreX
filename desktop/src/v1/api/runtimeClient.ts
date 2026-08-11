@@ -36,8 +36,6 @@ import type {
   MemoryContentPage,
   MemoryContentView,
   PasswordSessionChangeResponse,
-  MemoryMutationResponse,
-  MemorySnapshot,
   MCPOAuthChallengeProjection,
   MCPOAuthStatusResponse,
   MigrationQuarantineProjection,
@@ -46,7 +44,6 @@ import type {
   OutputLocationCatalog,
   OutputMaterialization,
   OutputPreference,
-  PermissionMutationResponse,
   ProjectListResponse,
   ProjectProjection,
   ReplaceTurnResponse,
@@ -610,15 +607,6 @@ export class RuntimeClient {
     return response.blob();
   }
 
-  memory(signal?: AbortSignal): Promise<MemorySnapshot> {
-    return this.json(
-      "/api/v1/memory",
-      { signal },
-      false,
-      0, // memory snapshot
-    );
-  }
-
   knowledgeTree(query = "", signal?: AbortSignal): Promise<KnowledgeTree> {
     const suffix = query
       ? `?query=${encodeURIComponent(query)}`
@@ -832,35 +820,6 @@ export class RuntimeClient {
       { signal },
       false,
       8, // system metric history
-    );
-  }
-
-  resetLearnedMemory(
-    clientRequestId = createClientRequestId("reset_memory"),
-  ): Promise<MemoryMutationResponse> {
-    return this.json(
-      "/api/v1/memory/reset",
-      {
-        method: "POST",
-        body: JSON.stringify({ confirmed: true, client_request_id: clientRequestId }),
-      },
-      true,
-      1, // memory mutation
-    );
-  }
-
-  undoLearnedMemoryReset(
-    resetId: string,
-    clientRequestId = createClientRequestId("undo_memory_reset"),
-  ): Promise<MemoryMutationResponse> {
-    return this.json(
-      `/api/v1/memory/resets/${encodeURIComponent(resetId)}/undo`,
-      {
-        method: "POST",
-        body: JSON.stringify({ confirmed: true, client_request_id: clientRequestId }),
-      },
-      true,
-      1, // memory mutation
     );
   }
 
@@ -1293,25 +1252,6 @@ export class RuntimeClient {
       {
         method: "DELETE",
         headers: { "X-EcoreX-Client-Request-ID": clientRequestId },
-      },
-      true,
-    );
-  }
-
-  updatePermission(
-    profile: "default" | "full_access",
-    expectedRevision: number,
-    clientRequestId = createClientRequestId("permission"),
-  ): Promise<PermissionMutationResponse> {
-    return this.json(
-      "/api/v1/settings/permissions",
-      {
-        method: "PUT",
-        body: JSON.stringify({
-          profile,
-          expected_revision: expectedRevision,
-          client_request_id: clientRequestId,
-        }),
       },
       true,
     );

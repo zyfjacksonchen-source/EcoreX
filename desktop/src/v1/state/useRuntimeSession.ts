@@ -18,7 +18,6 @@ import type {
   InputAttachmentProjection,
   ItemProjection,
   LiveReplayResponse,
-  MemorySnapshot,
   ModelDescriptor,
   MockReplayResponse,
   OutputLocationAlias,
@@ -82,12 +81,6 @@ type ClientOperationOutboxInstance = InstanceType<
 export type SendDisposition = Exclude<ClientOperationDisposition, "create">;
 export type LoadState = "loading" | "ready" | "error";
 
-interface PendingPermissionMutation {
-  profile: "default" | "full_access";
-  expectedRevision: number;
-  clientRequestId: string;
-}
-
 interface PendingUpdateActivation {
   transactionId: string;
   clientRequestId: string;
@@ -95,12 +88,6 @@ interface PendingUpdateActivation {
 
 interface PendingThreadMutation {
   fingerprint: string;
-  clientRequestId: string;
-}
-
-interface PendingMemoryMutation {
-  operation: "reset" | "undo";
-  target: string;
   clientRequestId: string;
 }
 
@@ -193,21 +180,12 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const recoveringOperationsRef = useRef(false);
   const recoverPendingOperationsRef = useRef<() => Promise<void>>(async () => undefined);
   const pendingSendOperation = useRef<ClientOperation | null>(null);
-  const [permissionUpdating, setPermissionUpdating] = useState(false);
-  const [permissionError, setPermissionError] = useState<string | null>(null);
-  const permissionUpdatingRef = useRef(false);
-  const pendingPermissionMutation = useRef<PendingPermissionMutation | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const pendingUpdateActivation = useRef<PendingUpdateActivation | null>(null);
   const [sessionBusy, setSessionBusy] = useState(false);
   const sessionBusyRef = useRef(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
-  const [memory, setMemory] = useState<MemorySnapshot | null>(null);
-  const [memoryLoadState, setMemoryLoadState] = useState<LoadState>("loading");
-  const [memoryBusy, setMemoryBusy] = useState(false);
-  const [memoryError, setMemoryError] = useState<string | null>(null);
-  const pendingMemoryMutation = useRef<PendingMemoryMutation | null>(null);
   const [outputLocations, setOutputLocations] = useState<OutputLocationOption[]>([]);
   const [outputPreference, setOutputPreference] = useState<OutputPreference | null>(null);
   const [outputLoadState, setOutputLoadState] = useState<LoadState>("loading");
@@ -360,23 +338,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return false;
       setCapabilityMentionState("error");
-      return false;
-    }
-  }, [client]);
-
-  const refreshMemory = useCallback(async (signal?: AbortSignal) => {
-    setMemoryLoadState("loading");
-    setMemoryError(null);
-    try {
-      const snapshot = await client.memory(signal);
-      if (signal?.aborted) return false;
-      setMemory(snapshot);
-      setMemoryLoadState("ready");
-      return true;
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return false;
-      setMemoryLoadState("error");
-      setMemoryError(errorMessage(error));
       return false;
     }
   }, [client]);
@@ -590,13 +551,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     void refreshProjects(controller.signal);
     return () => controller.abort();
   }, [bootstrapped, refreshProjects]);
-
-  useEffect(() => {
-    if (!bootstrapped) return;
-    const controller = new AbortController();
-    void refreshMemory(controller.signal);
-    return () => controller.abort();
-  }, [bootstrapped, refreshMemory]);
 
   useEffect(() => {
     if (!bootstrapped) return;
@@ -1398,79 +1352,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     }
   }, [client, refreshProjection]);
 
-  const updatePermission = useCallback(async (
-    profile: "default" | "full_access",
-  ) => {
-    if (permissionUpdatingRef.current) return false;
-    const currentBootstrap = stateRef.current.bootstrap;
-    if (!currentBootstrap) {
-      setPermissionError("权限尚未加载，请重新连接后再试。");
-      return false;
-    }
-    if (currentBootstrap.permissions.profile === profile) {
-      pendingPermissionMutation.current = null;
-      setPermissionError(null);
-      return true;
-    }
-    const existing = pendingPermissionMutation.current;
-    const mutation = existing
-      && existing.profile === profile
-      && existing.expectedRevision === currentBootstrap.permissions.revision
-      ? existing
-      : {
-          profile,
-          expectedRevision: currentBootstrap.permissions.revision,
-          clientRequestId: `permission_${crypto.randomUUID().replaceAll("-", "")}`,
-        };
-    pendingPermissionMutation.current = mutation;
-    permissionUpdatingRef.current = true;
-    setPermissionUpdating(true);
-    setPermissionError(null);
-    try {
-      const response = await client.updatePermission(
-        mutation.profile,
-        mutation.expectedRevision,
-        mutation.clientRequestId,
-      );
-      const bootstrap = stateRef.current.bootstrap;
-      if (bootstrap) {
-        const nextBootstrap = { ...bootstrap, permissions: response.permissions };
-        stateRef.current = { ...stateRef.current, bootstrap: nextBootstrap };
-        dispatch({
-          type: "bootstrap.received",
-          bootstrap: nextBootstrap,
-        });
-      }
-      pendingPermissionMutation.current = null;
-      if (response.permissions.profile !== profile) {
-        setPermissionError("权限已在其他位置变更，已同步当前设置。");
-        return false;
-      }
-      return true;
-    } catch (error) {
-      if (error instanceof RuntimeApiError && error.status === 409) {
-        pendingPermissionMutation.current = null;
-        try {
-          const fresh = await client.bootstrap();
-          client.acceptBootstrap(fresh);
-          stateRef.current = { ...stateRef.current, bootstrap: fresh };
-          dispatch({ type: "bootstrap.received", bootstrap: fresh });
-          setPermissionError("权限已变更，已刷新设置，请确认后重试。");
-        } catch (refreshError) {
-          setPermissionError(
-            `权限已发生并发变更，且刷新失败：${errorMessage(refreshError)}`,
-          );
-        }
-      } else {
-        setPermissionError(errorMessage(error));
-      }
-      return false;
-    } finally {
-      permissionUpdatingRef.current = false;
-      setPermissionUpdating(false);
-    }
-  }, [chatModel, client, imageModel]);
-
   const checkUpdate = useCallback(async () => {
     if (updateBusy) return false;
     setUpdateBusy(true);
@@ -1562,69 +1443,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
       setUpdateBusy(false);
     }
   }, [applyUpdateSnapshot, client, updateBusy]);
-
-  const resetLearnedMemory = useCallback(async () => {
-    if (memoryBusy) return false;
-    const existing = pendingMemoryMutation.current;
-    const mutation: PendingMemoryMutation = existing?.operation === "reset"
-      ? existing
-      : {
-          operation: "reset",
-          target: "learned",
-          clientRequestId: createClientRequestId("reset_memory"),
-        };
-    pendingMemoryMutation.current = mutation;
-    setMemoryBusy(true);
-    setMemoryError(null);
-    try {
-      const response = await client.resetLearnedMemory(mutation.clientRequestId);
-      pendingMemoryMutation.current = null;
-      setMemory(response.memory);
-      setMemoryLoadState("ready");
-      return true;
-    } catch (error) {
-      setMemoryError(errorMessage(error));
-      return false;
-    } finally {
-      setMemoryBusy(false);
-    }
-  }, [client, memoryBusy]);
-
-  const undoLearnedMemoryReset = useCallback(async (resetId: string) => {
-    if (memoryBusy) return false;
-    const existing = pendingMemoryMutation.current;
-    const mutation: PendingMemoryMutation = (
-      existing?.operation === "undo" && existing.target === resetId
-    )
-      ? existing
-      : {
-          operation: "undo",
-          target: resetId,
-          clientRequestId: createClientRequestId("undo_memory_reset"),
-        };
-    pendingMemoryMutation.current = mutation;
-    setMemoryBusy(true);
-    setMemoryError(null);
-    try {
-      const response = await client.undoLearnedMemoryReset(
-        resetId,
-        mutation.clientRequestId,
-      );
-      pendingMemoryMutation.current = null;
-      setMemory(response.memory);
-      setMemoryLoadState("ready");
-      return true;
-    } catch (error) {
-      if (error instanceof RuntimeApiError && error.status === 410) {
-        pendingMemoryMutation.current = null;
-        await refreshMemory();
-      }
-      setMemoryError(errorMessage(error));
-      return false;
-    } finally {
-      setMemoryBusy(false);
-    }
-  }, [client, memoryBusy, refreshMemory]);
 
   const updateOutputLocation = useCallback(async (locationAlias: OutputLocationAlias) => {
     if (outputBusy || !outputPreference) return false;
@@ -1919,9 +1737,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     clearTransportError: () => setTransportError(null),
     retryBootstrap: () => void loadBootstrap(),
     submitting,
-    permissionUpdating,
-    permissionError,
-    clearPermissionError: () => setPermissionError(null),
     updateBusy,
     updateError,
     clearUpdateError: () => setUpdateError(null),
@@ -1930,12 +1745,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     clearSessionError: () => setSessionError(null),
     loginSession,
     logoutSession,
-    memory,
-    memoryLoadState,
-    memoryBusy,
-    memoryError,
-    clearMemoryError: () => setMemoryError(null),
-    refreshMemory: () => void refreshMemory(),
     outputLocations,
     outputPreference,
     outputLoadState,
@@ -2012,11 +1821,8 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     loadInputAttachmentThumbnail,
     interrupt,
     respondInteraction,
-    updatePermission,
     checkUpdate,
     activateUpdate,
-    resetLearnedMemory,
-    undoLearnedMemoryReset,
     feedbackArtifact,
     downloadArtifact,
     performArtifactExternalAction,
