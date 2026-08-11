@@ -3020,17 +3020,24 @@
   height: var(--icon-size-sm);
 }
 
-.ex-composer-tool,
-.ex-disposition {
+.ex-composer-tool {
   color: var(--color-ink-muted);
-}
-
-.ex-disposition {
-  max-width: 180px;
 }
 
 .ex-send-button {
   min-width: 64px;
+}
+
+.ex-send-button[data-mode="stop"] {
+  border-color: var(--control-hover-border);
+  color: var(--color-ink);
+  background: var(--control-hover-surface);
+}
+
+.ex-send-button[data-mode="stop"]:hover:not(:disabled) {
+  border-color: var(--control-hover-border);
+  color: var(--color-ink);
+  background: var(--color-hover);
 }
 
 .ex-composer-note {
@@ -5151,21 +5158,6 @@ button.ex-artifact-primary {
   .ex-composer-model-trigger {
     margin-left: auto;
     max-width: 120px;
-  }
-
-  .ex-send-tools[data-active="true"] {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) var(--target-touch) var(--target-touch);
-    align-items: center;
-  }
-
-  .ex-send-tools[data-active="true"] .ex-disposition {
-    width: 100%;
-    min-width: 0;
-    max-width: none;
-    justify-content: flex-start;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .ex-send-tools[data-active="true"] .ex-send-button {

@@ -32,7 +32,6 @@
 .ex-new-project-trigger,
 .ex-new-conversation-options button,
 .ex-composer-attachment button,
-.ex-disposition,
 .ex-send-button,
 .ex-artifact-primary,
 .ex-retouch-review-tabs button,
@@ -57,7 +56,6 @@
 .ex-new-project-trigger,
 .ex-new-conversation-options button,
 .ex-composer-attachment button,
-.ex-disposition,
 .ex-send-button {
   min-height: var(--target-desktop);
   border-radius: var(--radius-control);
@@ -78,7 +76,6 @@
 .ex-composer-tool svg,
 .ex-composer-model-trigger svg,
 .ex-new-project-trigger svg,
-.ex-disposition svg,
 .ex-send-button svg {
   width: var(--icon-size);
   height: var(--icon-size);
@@ -133,7 +130,6 @@
 .ex-composer-tool:active,
 .ex-composer-model-trigger:active,
 .ex-new-project-trigger:active,
-.ex-disposition:active,
 .ex-send-button:active,
 .ex-artifact-primary:active,
 .ex-retouch-review-tabs button:active,
@@ -150,7 +146,6 @@
 .ex-composer-tool:not(:disabled):active,
 .ex-composer-model-trigger:not(:disabled):active,
 .ex-new-project-trigger:not(.is-selected):not(:disabled):active,
-.ex-disposition:not(:disabled):active,
 .ex-artifact-primary:active,
 .ex-retouch-review-tabs button:not(.is-active):not(:disabled):active,
 .ex-retouch-region-list > button:not(.is-selected):not(:disabled):active,
@@ -203,7 +198,6 @@
 .ex-composer-tool:focus-visible,
 .ex-composer-model-trigger:focus-visible,
 .ex-new-project-trigger:not(.is-selected):focus-visible,
-.ex-disposition:focus-visible,
 .ex-artifact-primary:focus-visible,
 .ex-retouch-review-tabs button:not(.is-active):focus-visible,
 .ex-retouch-region-list > button:not(.is-selected):focus-visible,
@@ -227,7 +221,6 @@
   .ex-composer-tool:not(:disabled):hover,
   .ex-composer-model-trigger:not(:disabled):hover,
   .ex-new-project-trigger:not(.is-selected):not(:disabled):hover,
-  .ex-disposition:not(:disabled):hover,
   .ex-retouch-review-tabs button:not(.is-active):not(:disabled):hover,
   .ex-retouch-region-list > button:not(.is-selected):not(:disabled):hover,
   .ex-artifact-sheet-action:not(:disabled):hover {
@@ -386,7 +379,6 @@
   .ex-composer-tool,
   .ex-composer-model-trigger,
   .ex-new-project-trigger,
-  .ex-disposition,
   .ex-send-button,
   .ex-retouch-review-tabs button,
   .ex-retouch-region-list > button,
