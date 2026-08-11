@@ -217,10 +217,7 @@ class ChannelSelfService:
                 if oauth
                 else channel_id in self.adapters
             )
-            if channel_id == "wechatmp":
-                adapter_available = False
-                unavailable_reason = "passive_runtime_unavailable"
-            elif not adapter_available:
+            if not adapter_available:
                 unavailable_reason = "adapter_not_packaged"
             else:
                 unavailable_reason = None

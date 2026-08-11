@@ -565,7 +565,7 @@ def _managed_wechat_adapters(
     connector_endpoint = "https://dl.ecoremedia.net/api/v1/connectors"
     database = Path(settings.database_path).expanduser().resolve()
     result: dict[str, ManagedWechatCallbackAdapter] = {}
-    for channel_id in ("wechatcom_app", "wechat_kf", "wechatmp_service"):
+    for channel_id in ("wechatcom_app", "wechat_kf", "wechatmp", "wechatmp_service"):
         client = ManagedWechatCallbackClient(
             connector_endpoint=connector_endpoint,
             allowed_hosts=frozenset({"dl.ecoremedia.net"}),

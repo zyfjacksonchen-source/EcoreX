@@ -43,6 +43,10 @@ _IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _MAX_CALLBACK_BYTES = 1024 * 1024
 _MAX_TEXT_BYTES = 128 * 1024
 _MAX_PROVIDER_BYTES = 8 * 1024 * 1024
+_MAX_PASSIVE_ATTEMPTS = 3
+_PASSIVE_RETRIEVAL_HINT = "回复任意文字以获取稍后完成的回复"
+_MAX_PASSIVE_TEXT_BYTES = 2048
+_PASSIVE_CONTINUATION = "\n【未完待续，回复任意文字以继续】"
 
 
 def _now() -> datetime:
@@ -78,8 +82,34 @@ def _bounded(value: Any, name: str, maximum: int) -> str:
     return value
 
 
+def _bounded_text(value: Any, name: str, maximum: int) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value.encode("utf-8")) > maximum
+        or any(ord(character) < 32 and character not in "\r\n\t" for character in value)
+    ):
+        raise WechatCallbackError(f"invalid_{name}", status_code=422)
+    return value
+
+
 def _sha(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _passive_text_part(text: str) -> tuple[str, str | None]:
+    encoded = text.encode("utf-8")
+    if len(encoded) <= _MAX_PASSIVE_TEXT_BYTES:
+        return text, None
+    marker = _PASSIVE_CONTINUATION.encode("utf-8")
+    cut = _MAX_PASSIVE_TEXT_BYTES - len(marker)
+    while True:
+        try:
+            head = encoded[:cut].decode("utf-8")
+            break
+        except UnicodeDecodeError:
+            cut -= 1
+    return head + _PASSIVE_CONTINUATION, encoded[cut:].decode("utf-8")
 
 
 class _StrictModel(BaseModel):
@@ -439,6 +469,7 @@ class WechatCallbackGateway:
         provider: WechatProviderClient | None = None,
         clock: Callable[[], datetime] = _now,
         passive_wait_seconds: float = 4.5,
+        provider_callback_timeout_seconds: float = 5.0,
     ) -> None:
         self.database_path = Path(database_path).expanduser().resolve()
         self.cipher = AuditPayloadCipher(encryption_key)
@@ -456,13 +487,19 @@ class WechatCallbackGateway:
             or parsed.path.rstrip("/") != "/api/v1/channels/wechat/callback"
         ):
             raise ValueError("WeChat public callback base URL is invalid")
-        if not 0.1 <= passive_wait_seconds <= 4.5:
+        if (
+            not 0.1 <= passive_wait_seconds <= 4.5
+            or not passive_wait_seconds < provider_callback_timeout_seconds <= 10
+        ):
             raise ValueError("WeChat passive reply wait is invalid")
         self.audit_repository = audit_repository
         self.public_callback_base_url = public_callback_base_url.rstrip("/")
         self.provider = provider or WechatProviderClient()
         self.clock = clock
         self.passive_wait_seconds = float(passive_wait_seconds)
+        self.provider_callback_timeout_seconds = float(
+            provider_callback_timeout_seconds
+        )
 
     async def aclose(self) -> None:
         await self.provider.aclose()
@@ -562,6 +599,7 @@ class WechatCallbackGateway:
             timestamp: str = Query(...),
             nonce: str = Query(...),
         ) -> Response:
+            request_started = asyncio.get_running_loop().time()
             try:
                 content_length = request.headers.get("content-length")
                 if (
@@ -593,9 +631,27 @@ class WechatCallbackGateway:
                 self._drain_audit()
                 if event is None:
                     return Response(b"success", media_type="text/plain")
-                text = await self._wait_passive(binding_id, event["event_id"])
+                text = event.get("reply_text")
                 if text is None:
-                    return Response(b"success", media_type="text/plain")
+                    text = await self._wait_passive(binding_id, event["event_id"])
+                if text is None:
+                    text = self._take_passive_reply(
+                        binding_id, event["event_id"], allow_hint=True
+                    )
+                    if text is None:
+                        if self._passive_retry_pending(binding_id, event["event_id"]):
+                            await asyncio.sleep(
+                                max(
+                                    0.0,
+                                    self.provider_callback_timeout_seconds
+                                    + 0.1
+                                    - (
+                                        asyncio.get_running_loop().time()
+                                        - request_started
+                                    ),
+                                )
+                            )
+                        return Response(b"success", media_type="text/plain")
                 reply = self._passive_xml(event, text)
                 encrypted = self._crypto(
                     self._public_credentials(binding_id)
@@ -612,10 +668,6 @@ class WechatCallbackGateway:
         channel_id = request.channel_id
         if channel_id not in _CHANNELS:
             raise WechatCallbackError("channel_not_supported", status_code=404)
-        if channel_id == "wechatmp":
-            raise WechatCallbackError(
-                "passive_runtime_unavailable", status_code=409
-            )
         app_id = _bounded(request.app_id, "app_id", 512)
         agent_id = request.agent_id
         if channel_id == "wechatcom_app":
@@ -880,7 +932,7 @@ class WechatCallbackGateway:
         self._validate_binding_id(request.binding_id)
         if _IDEMPOTENCY_KEY.fullmatch(idempotency_key) is None:
             raise WechatCallbackError("idempotency_key_invalid", status_code=422)
-        text = _bounded(request.text, "outbound_text", _MAX_TEXT_BYTES)
+        text = _bounded_text(request.text, "outbound_text", _MAX_TEXT_BYTES)
         request_sha = _sha(
             _canonical(
                 {
@@ -894,14 +946,6 @@ class WechatCallbackGateway:
         try:
             connection.execute("BEGIN IMMEDIATE")
             binding = self._owned_binding(connection, principal, request.binding_id)
-            inbox = connection.execute(
-                "SELECT reply_envelope_json,passive_deadline_at FROM "
-                "wechat_callback_inbox WHERE binding_id=? AND event_id=? "
-                "AND state='acknowledged'",
-                (request.binding_id, request.event_id),
-            ).fetchone()
-            if inbox is None or not isinstance(inbox["reply_envelope_json"], str):
-                raise WechatCallbackError("reply_context_unavailable", status_code=409)
             existing = connection.execute(
                 "SELECT request_sha256,state,error_code FROM "
                 "wechat_callback_deliveries WHERE binding_id=? AND idempotency_key=?",
@@ -928,6 +972,14 @@ class WechatCallbackGateway:
                 raise WechatCallbackError(
                     str(existing["error_code"] or "delivery_failed"), status_code=409
                 )
+            inbox = connection.execute(
+                "SELECT reply_envelope_json,passive_deadline_at FROM "
+                "wechat_callback_inbox WHERE binding_id=? AND event_id=? "
+                "AND state='acknowledged'",
+                (request.binding_id, request.event_id),
+            ).fetchone()
+            if inbox is None or not isinstance(inbox["reply_envelope_json"], str):
+                raise WechatCallbackError("reply_context_unavailable", status_code=409)
             envelope = self.cipher.encrypt(
                 text,
                 associated_data=f"wechat-delivery:{request.binding_id}:{idempotency_key}",
@@ -949,25 +1001,15 @@ class WechatCallbackGateway:
                 ),
             )
             if str(binding["channel_id"]) == "wechatmp":
-                deadline = inbox["passive_deadline_at"]
-                if (
-                    not isinstance(deadline, str)
-                    or datetime.fromisoformat(deadline) <= self.clock()
-                ):
-                    connection.execute(
-                        "UPDATE wechat_callback_deliveries SET state='failed',"
-                        "payload_envelope_json=NULL,error_code='passive_reply_expired',"
-                        "updated_at=? WHERE binding_id=? AND idempotency_key=?",
-                        (now, request.binding_id, idempotency_key),
-                    )
-                    connection.commit()
-                    raise WechatCallbackError(
-                        "passive_reply_expired", status_code=409
-                    )
                 connection.execute(
                     "UPDATE wechat_callback_deliveries SET state='ready',updated_at=? "
                     "WHERE binding_id=? AND idempotency_key=?",
                     (now, request.binding_id, idempotency_key),
+                )
+                connection.execute(
+                    "UPDATE wechat_callback_inbox SET reply_envelope_json=NULL "
+                    "WHERE binding_id=? AND event_id=?",
+                    (request.binding_id, request.event_id),
                 )
                 connection.commit()
                 return {"state": "ready", "error_code": None}
@@ -1055,6 +1097,27 @@ class WechatCallbackGateway:
         provider_message_id = fields.get("MsgId") or _sha(
             plaintext.decode("utf-8", "strict")
         )
+        conversation_sha256 = _sha(from_user)
+        if channel_id == "wechatmp":
+            claimed = self._claim_deferred_reply(
+                binding_id,
+                credentials,
+                provider_message_id=provider_message_id,
+                conversation_sha256=conversation_sha256,
+            )
+            if claimed is not None:
+                pending_event, reply_text = claimed
+                credentials.clear()
+                if not pending_event or reply_text is None:
+                    return None
+                return {
+                    "event_id": pending_event,
+                    "to_user": from_user,
+                    "from_user": to_user,
+                    "created_at": fields.get("CreateTime")
+                    or str(int(self.clock().timestamp())),
+                    "reply_text": reply_text,
+                }
         passive_deadline = (
             self.clock() + timedelta(seconds=self.passive_wait_seconds)
             if channel_id == "wechatmp"
@@ -1222,7 +1285,7 @@ class WechatCallbackGateway:
     ) -> str:
         message_id = _bounded(inbound.provider_message_id, "message_id", 1024)
         conversation_id = _bounded(inbound.conversation_id, "conversation_id", 1024)
-        text = _bounded(inbound.text, "message_text", _MAX_TEXT_BYTES)
+        text = _bounded_text(inbound.text, "message_text", _MAX_TEXT_BYTES)
         provider_sha = _sha(message_id)
         event_id = "wxevt_" + hashlib.sha256(
             f"{binding_id}\0{message_id}".encode()
@@ -1241,11 +1304,22 @@ class WechatCallbackGateway:
             associated_data="wechat-reply:" + event_id,
         )
         created_at = _iso(self.clock())
-        connection.execute(
+        hard_deadline = (
+            self.clock()
+            + timedelta(
+                seconds=(
+                    self.provider_callback_timeout_seconds * _MAX_PASSIVE_ATTEMPTS
+                )
+            )
+            if channel_id == "wechatmp"
+            else None
+        )
+        inserted = connection.execute(
             "INSERT OR IGNORE INTO wechat_callback_inbox("
             "event_id,binding_id,provider_message_sha256,payload_envelope_json,"
-            "reply_envelope_json,state,passive_deadline_at,created_at) "
-            "VALUES(?,?,?,?,?,'ready',?,?)",
+            "reply_envelope_json,state,passive_deadline_at,created_at,"
+            "conversation_sha256,passive_attempts,passive_hard_deadline_at) "
+            "VALUES(?,?,?,?,?,'ready',?,?,?,?,?)",
             (
                 event_id,
                 binding_id,
@@ -1254,21 +1328,161 @@ class WechatCallbackGateway:
                 reply_envelope,
                 _iso(passive_deadline) if passive_deadline is not None else None,
                 created_at,
+                _sha(conversation_id),
+                1 if channel_id == "wechatmp" else 0,
+                _iso(hard_deadline) if hard_deadline is not None else None,
             ),
-        )
-        self._enqueue_audit(
-            connection,
-            event_type="wechat_callback.inbox.received",
-            account_id=account_id,
-            organization_id=organization_id,
-            binding_id=binding_id,
-            payload={
-                "channel_id": channel_id,
-                "event_id_sha256": _sha(event_id),
-                "provider_message_sha256": provider_sha,
-            },
-        )
+        ).rowcount
+        if inserted == 0 and channel_id == "wechatmp":
+            row = connection.execute(
+                "SELECT passive_attempts,passive_deadline_at,"
+                "passive_hard_deadline_at FROM wechat_callback_inbox "
+                "WHERE binding_id=? AND event_id=?",
+                (binding_id, event_id),
+            ).fetchone()
+            if row is not None:
+                now = self.clock()
+                deadline = (
+                    datetime.fromisoformat(str(row["passive_deadline_at"]))
+                    if isinstance(row["passive_deadline_at"], str)
+                    else now
+                )
+                hard = (
+                    datetime.fromisoformat(str(row["passive_hard_deadline_at"]))
+                    if isinstance(row["passive_hard_deadline_at"], str)
+                    else now
+                )
+                if int(row["passive_attempts"]) < _MAX_PASSIVE_ATTEMPTS and deadline <= now < hard:
+                    refreshed = min(
+                        now + timedelta(seconds=self.passive_wait_seconds), hard
+                    )
+                    connection.execute(
+                        "UPDATE wechat_callback_inbox SET passive_attempts="
+                        "passive_attempts+1,passive_deadline_at=? WHERE "
+                        "binding_id=? AND event_id=?",
+                        (_iso(refreshed), binding_id, event_id),
+                    )
+        if inserted == 1:
+            self._enqueue_audit(
+                connection,
+                event_type="wechat_callback.inbox.received",
+                account_id=account_id,
+                organization_id=organization_id,
+                binding_id=binding_id,
+                payload={
+                    "channel_id": channel_id,
+                    "event_id_sha256": _sha(event_id),
+                    "provider_message_sha256": provider_sha,
+                },
+            )
         return event_id
+
+    def _claim_deferred_reply(
+        self,
+        binding_id: str,
+        credentials: Mapping[str, str],
+        *,
+        provider_message_id: str,
+        conversation_sha256: str,
+    ) -> tuple[str, str | None] | None:
+        message_id = _bounded(provider_message_id, "message_id", 1024)
+        provider_sha = _sha(message_id)
+        trigger_event_id = "wxevt_" + hashlib.sha256(
+            f"{binding_id}\0{message_id}".encode()
+        ).hexdigest()
+        now = _iso(self.clock())
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            binding = connection.execute(
+                "SELECT account_id,organization_id,channel_id FROM "
+                "wechat_callback_bindings WHERE binding_id=? AND status='enabled'",
+                (binding_id,),
+            ).fetchone()
+            if binding is None or str(binding["channel_id"]) != credentials["channel_id"]:
+                raise WechatCallbackError("binding_unavailable", status_code=404)
+            pending = connection.execute(
+                "SELECT delivery.event_id,inbox.provider_message_sha256,"
+                "inbox.passive_hard_deadline_at,inbox.passive_hint_sent,"
+                "inbox.passive_original_replied FROM "
+                "wechat_callback_deliveries delivery JOIN wechat_callback_inbox "
+                "inbox ON inbox.binding_id=delivery.binding_id AND "
+                "inbox.event_id=delivery.event_id WHERE delivery.binding_id=? "
+                "AND inbox.conversation_sha256=? AND inbox.state='acknowledged' "
+                "AND delivery.state='ready' ORDER BY delivery.created_at,"
+                "delivery.idempotency_key LIMIT 1",
+                (binding_id, conversation_sha256),
+            ).fetchone()
+            if pending is None:
+                connection.commit()
+                return None
+            pending_event = str(pending["event_id"])
+            hard = pending["passive_hard_deadline_at"]
+            seen = connection.execute(
+                "SELECT event_id FROM wechat_callback_inbox WHERE binding_id=? "
+                "AND provider_message_sha256=? LIMIT 1",
+                (binding_id, provider_sha),
+            ).fetchone()
+            valid_original_retry = (
+                seen is not None
+                and str(seen["event_id"]) == pending_event
+                and hmac.compare_digest(
+                    str(pending["provider_message_sha256"]), provider_sha
+                )
+                and not bool(pending["passive_hint_sent"])
+                and not bool(pending["passive_original_replied"])
+                and isinstance(hard, str)
+                and self.clock() < datetime.fromisoformat(hard)
+            )
+            if seen is not None and not valid_original_retry:
+                connection.commit()
+                return ("", None)
+            if seen is None:
+                connection.execute(
+                    "INSERT INTO wechat_callback_inbox("
+                    "event_id,binding_id,provider_message_sha256,"
+                    "payload_envelope_json,reply_envelope_json,state,"
+                    "passive_deadline_at,created_at,acknowledged_at,"
+                    "conversation_sha256,passive_attempts,"
+                    "passive_hard_deadline_at) VALUES(?,?,?,NULL,NULL,"
+                    "'acknowledged',NULL,?,?,?,0,NULL)",
+                    (
+                        trigger_event_id,
+                        binding_id,
+                        provider_sha,
+                        now,
+                        now,
+                        conversation_sha256,
+                    ),
+                )
+                self._enqueue_audit(
+                    connection,
+                    event_type="wechat_callback.inbox.retrieval_triggered",
+                    account_id=str(binding["account_id"]),
+                    organization_id=str(binding["organization_id"]),
+                    binding_id=binding_id,
+                    payload={
+                        "channel_id": "wechatmp",
+                        "event_id_sha256": _sha(trigger_event_id),
+                        "provider_message_sha256": provider_sha,
+                    },
+                )
+            reply = self._consume_ready_passive_tx(
+                connection,
+                binding_id,
+                pending_event,
+                reply_message_sha256=provider_sha,
+            )
+            if reply is None:
+                raise WechatCallbackError("passive_reply_unavailable")
+            connection.commit()
+            return pending_event, reply
+        except BaseException:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def _mark_kf_dirty(self, binding_id: str, sync_token: str) -> None:
         sync_token = _bounded(sync_token, "kf_sync_token", 64 * 1024)
@@ -1309,46 +1523,157 @@ class WechatCallbackGateway:
     async def _wait_passive(self, binding_id: str, event_id: str) -> str | None:
         deadline = asyncio.get_running_loop().time() + self.passive_wait_seconds
         while asyncio.get_running_loop().time() < deadline:
+            if self._passive_ready(binding_id, event_id):
+                text = self._take_passive_reply(
+                    binding_id, event_id, allow_hint=False
+                )
+                if text is not None:
+                    return text
             connection = self._connect()
             try:
-                row = connection.execute(
-                    "SELECT idempotency_key,payload_envelope_json FROM "
-                    "wechat_callback_deliveries WHERE binding_id=? AND event_id=? "
-                    "AND state='ready' ORDER BY created_at LIMIT 1",
+                inbox = connection.execute(
+                    "SELECT passive_deadline_at FROM wechat_callback_inbox "
+                    "WHERE binding_id=? AND event_id=?",
                     (binding_id, event_id),
                 ).fetchone()
-                if row is not None:
-                    key = str(row["idempotency_key"])
-                    envelope = row["payload_envelope_json"]
-                    if not isinstance(envelope, str):
-                        raise WechatCallbackError("passive_reply_unavailable")
-                    try:
-                        text = self.cipher.decrypt(
-                            envelope,
-                            associated_data=f"wechat-delivery:{binding_id}:{key}",
-                        )
-                    except Exception:
-                        raise WechatCallbackError("passive_reply_unavailable") from None
-                    connection.execute("BEGIN IMMEDIATE")
-                    changed = connection.execute(
-                        "UPDATE wechat_callback_deliveries SET state='sent',"
-                        "payload_envelope_json=NULL,updated_at=? WHERE binding_id=? "
-                        "AND idempotency_key=? AND state='ready'",
-                        (_iso(self.clock()), binding_id, key),
-                    ).rowcount
-                    if changed == 1:
-                        connection.execute(
-                            "UPDATE wechat_callback_inbox SET reply_envelope_json=NULL "
-                            "WHERE binding_id=? AND event_id=?",
-                            (binding_id, event_id),
-                        )
-                        connection.commit()
-                        return text
-                    connection.rollback()
+                if (
+                    inbox is None
+                    or not isinstance(inbox["passive_deadline_at"], str)
+                    or datetime.fromisoformat(inbox["passive_deadline_at"])
+                    <= self.clock()
+                ):
+                    return None
             finally:
                 connection.close()
             await asyncio.sleep(0.05)
         return None
+
+    def _take_passive_reply(
+        self, binding_id: str, event_id: str, *, allow_hint: bool
+    ) -> str | None:
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            text = self._consume_ready_passive_tx(connection, binding_id, event_id)
+            if text is not None:
+                connection.commit()
+                return text
+            changed = 0
+            if allow_hint:
+                changed = connection.execute(
+                    "UPDATE wechat_callback_inbox SET passive_hint_sent=1 WHERE "
+                    "binding_id=? AND event_id=? AND passive_attempts=? "
+                    "AND passive_hint_sent=0",
+                    (binding_id, event_id, _MAX_PASSIVE_ATTEMPTS),
+                ).rowcount
+            connection.commit()
+            return _PASSIVE_RETRIEVAL_HINT if changed == 1 else None
+        except BaseException:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def _passive_ready(self, binding_id: str, event_id: str) -> bool:
+        connection = self._connect()
+        try:
+            return connection.execute(
+                "SELECT 1 FROM wechat_callback_deliveries WHERE binding_id=? "
+                "AND event_id=? AND state='ready' LIMIT 1",
+                (binding_id, event_id),
+            ).fetchone() is not None
+        finally:
+            connection.close()
+
+    def _consume_ready_passive_tx(
+        self,
+        connection: sqlite3.Connection,
+        binding_id: str,
+        event_id: str,
+        *,
+        reply_message_sha256: str | None = None,
+    ) -> str | None:
+        inbox = connection.execute(
+            "SELECT provider_message_sha256,passive_original_replied "
+            "FROM wechat_callback_inbox WHERE binding_id=? AND event_id=?",
+            (binding_id, event_id),
+        ).fetchone()
+        if inbox is None:
+            return None
+        reply_message_sha256 = reply_message_sha256 or str(
+            inbox["provider_message_sha256"]
+        )
+        original_reply = hmac.compare_digest(
+            str(inbox["provider_message_sha256"]), reply_message_sha256
+        )
+        if original_reply and bool(inbox["passive_original_replied"]):
+            return None
+        row = connection.execute(
+            "SELECT idempotency_key,payload_envelope_json FROM "
+            "wechat_callback_deliveries WHERE binding_id=? AND event_id=? "
+            "AND state='ready' ORDER BY created_at,idempotency_key LIMIT 1",
+            (binding_id, event_id),
+        ).fetchone()
+        if row is None:
+            return None
+        key = str(row["idempotency_key"])
+        envelope = row["payload_envelope_json"]
+        if not isinstance(envelope, str):
+            raise WechatCallbackError("passive_reply_unavailable")
+        try:
+            text = self.cipher.decrypt(
+                envelope,
+                associated_data=f"wechat-delivery:{binding_id}:{key}",
+            )
+        except Exception:
+            raise WechatCallbackError("passive_reply_unavailable") from None
+        part, remainder = _passive_text_part(text)
+        if remainder is None:
+            connection.execute(
+                "UPDATE wechat_callback_deliveries SET state='sent',"
+                "payload_envelope_json=NULL,updated_at=? WHERE binding_id=? "
+                "AND idempotency_key=? AND state='ready'",
+                (_iso(self.clock()), binding_id, key),
+            )
+        else:
+            remainder_envelope = self.cipher.encrypt(
+                remainder,
+                associated_data=f"wechat-delivery:{binding_id}:{key}",
+            )
+            connection.execute(
+                "UPDATE wechat_callback_deliveries SET payload_envelope_json=?,"
+                "updated_at=? WHERE binding_id=? AND idempotency_key=? "
+                "AND state='ready'",
+                (remainder_envelope, _iso(self.clock()), binding_id, key),
+            )
+        connection.execute(
+            "UPDATE wechat_callback_inbox SET reply_envelope_json=NULL,"
+            "passive_original_replied=CASE WHEN ? THEN 1 "
+            "ELSE passive_original_replied END "
+            "WHERE binding_id=? AND event_id=?",
+            (1 if original_reply else 0, binding_id, event_id),
+        )
+        return part
+
+    def _passive_retry_pending(self, binding_id: str, event_id: str) -> bool:
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT passive_attempts,passive_hard_deadline_at,passive_hint_sent "
+                "FROM wechat_callback_inbox WHERE binding_id=? AND event_id=?",
+                (binding_id, event_id),
+            ).fetchone()
+            if row is None or bool(row["passive_hint_sent"]):
+                return False
+            hard = row["passive_hard_deadline_at"]
+            return (
+                int(row["passive_attempts"]) < _MAX_PASSIVE_ATTEMPTS
+                and isinstance(hard, str)
+                and self.clock() < datetime.fromisoformat(hard)
+            )
+        finally:
+            connection.close()
 
     @staticmethod
     def _passive_xml(event: Mapping[str, str], text: str) -> bytes:
@@ -1601,6 +1926,7 @@ class WechatCallbackGateway:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=5000")
+        connection.execute("PRAGMA secure_delete=ON")
         return connection
 
     @staticmethod

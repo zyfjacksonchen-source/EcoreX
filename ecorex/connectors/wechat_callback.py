@@ -30,7 +30,7 @@ from .models import ConnectorHealth, ConnectorHealthResult
 
 
 _CHANNELS = frozenset(
-    {"wechatcom_app", "wechat_kf", "wechatmp_service"}
+    {"wechatcom_app", "wechat_kf", "wechatmp", "wechatmp_service"}
 )
 _ERROR_RE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
 _MAX_RESPONSE_BYTES = 1024 * 1024
@@ -105,7 +105,11 @@ class ManagedWechatCallbackClient:
         app_key = "wechatcom_corp_id" if channel_id == "wechatcom_app" else (
             "wechat_kf_corp_id" if channel_id == "wechat_kf" else "wechatmp_app_id"
         )
-        secret_key = f"{prefix}_secret"
+        secret_key = (
+            "wechatmp_app_secret"
+            if channel_id in {"wechatmp", "wechatmp_service"}
+            else f"{prefix}_secret"
+        )
         body = {
             "channel_id": channel_id,
             "app_id": material.get(app_key),

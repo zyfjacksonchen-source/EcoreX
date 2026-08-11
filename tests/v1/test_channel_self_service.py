@@ -95,7 +95,7 @@ def test_catalog_is_typed_secret_free_and_fail_closed_without_pack() -> None:
     assert telegram["unavailable_reason"] == "adapter_not_packaged"
     assert telegram["actions"]["test"] is False
     assert wechatmp["adapter_available"] is False
-    assert wechatmp["unavailable_reason"] == "passive_runtime_unavailable"
+    assert wechatmp["unavailable_reason"] == "adapter_not_packaged"
     assert telegram["fields"] == [
         {
             "key": "telegram_token",
