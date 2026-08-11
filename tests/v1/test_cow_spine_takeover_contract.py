@@ -135,6 +135,30 @@ def test_actual_initializer_and_tool_manager_are_the_default_tool_contract(
             assert Path(tool.config["cwd"]) == tmp_path
 
 
+def test_cow_direct_tools_do_not_reenter_the_settings_permission_broker(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from agent.tools.read.read import Read
+    from common import ecorex_tool_permissions as permissions
+
+    source = tmp_path / "source.txt"
+    source.write_text("cow", encoding="utf-8")
+
+    def legacy_gate(*_args, **_kwargs):
+        raise AssertionError("legacy settings permission broker was reached")
+
+    monkeypatch.setattr(permissions._BROKER, "authorize_file_access", legacy_gate)
+    token = permissions.bind_cow_direct_tools()
+    try:
+        result = Read({"cwd": str(tmp_path)}).execute({"path": "source.txt"})
+    finally:
+        permissions.reset_cow_direct_tools(token)
+
+    assert result.status == "success"
+    assert result.result["content"] == "cow"
+    assert permissions.get_tool_permission_broker() is permissions._BROKER
+
+
 def test_cow_model_request_uses_the_real_tool_manager_contract(
     tmp_path: Path, monkeypatch,
 ) -> None:

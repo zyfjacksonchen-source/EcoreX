@@ -5936,9 +5936,14 @@ class AgentTurnWorker:
         inbox: Any,
     ) -> str:
         from bridge.agent_initializer import AgentInitializer
+        from common.ecorex_tool_permissions import (
+            bind_cow_direct_tools,
+            reset_cow_direct_tools,
+        )
 
         bridge = self._cow_bridge
-        token = bridge.bind_model(model)
+        model_token = bridge.bind_model(model)
+        tool_token = bind_cow_direct_tools()
         try:
             agent = AgentInitializer(object(), bridge).initialize_agent(
                 session_id=f"emate-{thread_id}", workspace_root=workspace
@@ -5954,7 +5959,8 @@ class AgentTurnWorker:
                 steer_inbox=inbox,
             )
         finally:
-            bridge.reset_model(token)
+            reset_cow_direct_tools(tool_token)
+            bridge.reset_model(model_token)
 
     async def run_once(self, worker_id: str) -> WorkerRunResult:
         job = await _run_blocking(
