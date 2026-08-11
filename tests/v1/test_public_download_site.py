@@ -209,7 +209,7 @@ assert.equal(contract.isMacDesktop({ source: "Win32 Mozilla/5.0 (Windows NT 10.0
 assert.equal(contract.isMacDesktop({ source: "iPhone Mac OS X" }), false);
 assert.deepEqual(contract.indexSources({ hostname: "127.0.0.1", pathname: "/" }), ["./download-index.json"]);
 assert.deepEqual(contract.indexSources({ hostname: "mvdcm.ecoremedia.net", pathname: "/e-mate/" }), ["/e-mate/update/download-index.json"]);
-assert.deepEqual(contract.indexSources({ hostname: "dl.ecoremedia.net", pathname: "/ecorex-agent/" }), ["https://mvdcm.ecoremedia.net/e-mate/update/download-index.json"]);
+assert.deepEqual(contract.indexSources({ hostname: "dl.ecoremedia.net", pathname: "/ecorex-agent/" }), ["/e-mate/update/download-index.json"]);
 """
     source = next(SITE.glob("site.*.js"))
     result = subprocess.run(

@@ -118,7 +118,7 @@ async function fetchIndex(url) {
 
 export function indexSources({ hostname = location.hostname, pathname = location.pathname } = {}) {
   if (/^(?:localhost|127\.0\.0\.1|\[::1\])$/.test(hostname)) return ["./download-index.json"];
-  if (hostname === "mvdcm.ecoremedia.net" || pathname.startsWith("/e-mate/")) {
+  if (hostname === "mvdcm.ecoremedia.net" || hostname === "dl.ecoremedia.net" || pathname.startsWith("/e-mate/")) {
     return ["/e-mate/update/download-index.json"];
   }
   return ["https://mvdcm.ecoremedia.net/e-mate/update/download-index.json"];
