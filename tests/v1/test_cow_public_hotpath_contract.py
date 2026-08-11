@@ -31,11 +31,14 @@ from ecorex.runtime import AgentTurnWorker, RuntimeSettings, WorkerOutcome, crea
 class _AttachmentGateway:
     def __init__(self) -> None:
         self.requests = []
+        self.first_request_started = threading.Event()
+        self.steer_received = threading.Event()
 
     async def stream(self, request):
         self.requests.append(request)
         if len(self.requests) == 1:
-            await asyncio.sleep(0.2)
+            self.first_request_started.set()
+            assert await asyncio.to_thread(self.steer_received.wait, 2)
         response_id = f"cow-hotpath-response-{len(self.requests)}"
         yield GatewayEvent(
             seq=1,
@@ -58,8 +61,10 @@ def _png(color: tuple[int, int, int]) -> bytes:
 
 
 def test_public_cow_worker_sends_initial_and_steer_images_to_gateway(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch,
 ) -> None:
+    from agent.protocol.steer import SteerInbox
+
     app = create_app(settings=RuntimeSettings(database_path=tmp_path / "runtime.db"))
     kernel = app.state.runtime
     composition = app.state.runtime_composition
@@ -90,24 +95,39 @@ def test_public_cow_worker_sends_initial_and_steer_images_to_gateway(
         prepared.request,
         snapshot_context=prepared.snapshot_context,
     )
-    kernel.steer_turn(
-        created.turn.turn_id,
-        SteerTurnRequest(
-            input="Use this replacement image instead",
-            metadata={
-                "input_attachments": [steer_image.model_dump(mode="json")]
-            },
-            client_message_id="cow-hotpath-steer-image-turn",
-        ),
-    )
     gateway = _AttachmentGateway()
+    original_submit = SteerInbox.submit
+
+    def observe_submit(inbox, content):
+        result = original_submit(inbox, content)
+        if "Use this replacement image instead" in content:
+            gateway.steer_received.set()
+        return result
+
+    monkeypatch.setattr(SteerInbox, "submit", observe_submit)
     worker = AgentTurnWorker(
         kernel,
         gateway=gateway,
         input_attachments=app.state.input_attachment_service,
     )
 
-    result = asyncio.run(worker.run_once("cow-hotpath-attachment-worker"))
+    async def run_with_live_steer():
+        task = asyncio.create_task(worker.run_once("cow-hotpath-attachment-worker"))
+        assert await asyncio.to_thread(gateway.first_request_started.wait, 2)
+        kernel.steer_turn(
+            created.turn.turn_id,
+            SteerTurnRequest(
+                input="Use this replacement image instead",
+                metadata={
+                    "input_attachments": [steer_image.model_dump(mode="json")]
+                },
+                client_message_id="cow-hotpath-steer-image-turn",
+            ),
+        )
+        assert await asyncio.to_thread(gateway.steer_received.wait, 2)
+        return await task
+
+    result = asyncio.run(run_with_live_steer())
 
     assert result.outcome is WorkerOutcome.COMPLETED
     assert len(gateway.requests) == 2
