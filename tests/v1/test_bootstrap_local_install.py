@@ -109,11 +109,12 @@ def _release(
     *,
     private: Ed25519PrivateKey | None = None,
     publication_private: Ed25519PrivateKey | None = None,
+    key_id: str = "bootstrap-test-key",
 ):
     platform, architecture = _target()
     private = private or Ed25519PrivateKey.generate()
     publication_private = publication_private or Ed25519PrivateKey.generate()
-    signer = Ed25519MemorySigner("bootstrap-test-key", private)
+    signer = Ed25519MemorySigner(key_id, private)
     core = tmp_path / "core"
     (core / "bin").mkdir(parents=True)
     (core / "version-marker.txt").write_text(__version__, encoding="utf-8")
@@ -483,8 +484,13 @@ def test_signed_bootstrap_handoff_upgrades_an_existing_install(
     monkeypatch.setattr(test_module, "__version__", "1.0.8")
     current, current_trust = _release(
         tmp_path / "current",
-        private=release_private,
+        private=Ed25519PrivateKey.generate(),
         publication_private=publication_private,
+        key_id="bootstrap-next-key",
+    )
+    upgrade_trust = (previous_trust, current_trust)
+    upgrade_verifier = Ed25519SignatureVerifier(
+        install_local._read_public_keys(upgrade_trust)
     )
     previous_manifest = json.loads(previous.manifest_path.read_text(encoding="utf-8"))
     current_manifest = json.loads(current.manifest_path.read_text(encoding="utf-8"))
@@ -519,7 +525,7 @@ def test_signed_bootstrap_handoff_upgrades_an_existing_install(
             }
         ),
         health_checker=lambda _slot: False,
-        verifier=verifier,
+        verifier=upgrade_verifier,
         host_platform=platform,
         host_architecture=architecture,
         release_channel=current_manifest_object.channel,
@@ -540,7 +546,7 @@ def test_signed_bootstrap_handoff_upgrades_an_existing_install(
         manifest_path=str(current.manifest_path),
         artifacts_path=str(current.output_dir),
         install_root=str(tmp_path / "install"),
-        trusted_public_keys=(current_trust,),
+        trusted_public_keys=upgrade_trust,
         desktop_directory=str(tmp_path / "Desktop"),
         **current_sandbox,
     )
