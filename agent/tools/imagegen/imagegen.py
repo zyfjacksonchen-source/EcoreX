@@ -373,96 +373,80 @@ def _imagegen_route(input_route: str = "text_to_image", runner_mode: str = "in_p
     }
 
 
+_COW_IMAGE_TASK_PARAMS = {
+    "prompt": {
+        "type": "string",
+        "description": "Image generation or edit instruction.",
+        "minLength": 1,
+        "maxLength": 20000,
+    },
+    "image_url": {
+        "type": ["string", "array"],
+        "description": (
+            "One image reference or an ordered list for editing/fusion. Accepts a local "
+            "path, HTTP(S) URL, attachment_id, artifact_id, or prior imagegen result URL."
+        ),
+        "items": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "minLength": 1,
+        "maxLength": 4096,
+        "maxItems": 16,
+    },
+    "size": {
+        "type": "string",
+        "description": "Optional size, for example 1024x1024.",
+        "maxLength": 64,
+    },
+    "aspect_ratio": {
+        "type": "string",
+        "description": "Optional aspect ratio, for example 1:1, 16:9, or 9:16.",
+        "minLength": 3,
+        "maxLength": 16,
+    },
+    "quality": {
+        "type": "string",
+        "description": "Optional quality hint.",
+        "enum": ["low", "medium", "high", "auto"],
+    },
+}
+
+
 class ImageGenTool(BaseTool):
     name: str = "imagegen"
     description: str = (
-        "Generate or edit images through the native EcoreX image route. "
+        "Generate or edit images through e-Mate's fixed image-2-pro route. "
         "Use this tool for text-to-image, image edits, reference-image generation, "
         "multi-image fusion, batch/multi-image requests, and visual asset requests. "
-        "For batches, the model may call this tool multiple times or use the optional "
-        "tasks field when the visible schema fits the requested ordering. The default GPT Image route "
-        "starts with gpt-image-2-pro; do not replace image edits or reference-image "
+        "For two to eight independent outputs, use the optional tasks field. "
+        "Do not pass a provider, model, output directory, timeout, or concurrency policy; "
+        "the Runtime owns them. Do not replace image edits or reference-image "
         "generation with Python/PIL/HTML/SVG scripts."
     )
     params: dict = {
         "type": "object",
+        "description": (
+            "CowAgent-compatible image generation/edit contract. Provide one prompt "
+            "or one tasks array, never both."
+        ),
         "properties": {
-            "prompt": {
-                "type": "string",
-                "description": "Image generation or edit instruction.",
-            },
-            "image_url": {
-                "type": "string",
-                "description": (
-                    "Optional local path, file URL, data URL, or remote URL for image-to-image "
-                    "editing/reference generation. Supplying this keeps the request on the image "
-                    "edit route."
-                ),
-            },
-            "image_urls": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": (
-                    "Optional reference/input images for multi-image editing or reference-guided "
-                    "generation. These are normalized to the edit route and should not be ignored."
-                ),
-            },
+            **_COW_IMAGE_TASK_PARAMS,
             "tasks": {
                 "type": "array",
-                "items": {"type": "object"},
-                "description": (
-                    "Optional native batch generation tasks. Each task may contain prompt, image_url(s), "
-                    "size, aspect_ratio, quality, and output_format. This is optional; multiple regular "
-                    "imagegen calls are also valid for ordered one-by-one generation. Never use shell/Python loops "
-                    "as the semantic image-generation substitute."
-                ),
-            },
-            "model": {
-                "type": "string",
-                "description": "Optional image model override. When omitted, image generation stays on gpt-image-2-pro regardless of the active chat model.",
-            },
-            "provider": {
-                "type": "string",
-                "description": "Optional image provider override. Chat model switching does not change this image route.",
-            },
-            "size": {
-                "type": "string",
-                "description": "Optional size, for example 1024x1024.",
-            },
-            "aspect_ratio": {
-                "type": "string",
-                "description": "Optional aspect ratio, for example 1:1, 16:9, or 9:16.",
-            },
-            "quality": {
-                "type": "string",
-                "description": "Optional quality hint.",
-            },
-            "output_format": {
-                "type": "string",
-                "description": "Optional output format, such as png, jpeg, or webp.",
-            },
-            "output_dir": {
-                "type": "string",
-                "description": "Optional output directory.",
-            },
-            "timeout": {
-                "type": "integer",
-                "description": "Timeout in seconds. Defaults to 300.",
-            },
-            "quality_retry_max": {
-                "type": "integer",
-                "description": "Maximum post-QA image regeneration attempts. Defaults to 1 and is capped at 2.",
-            },
-            "max_parallel": {
-                "type": "integer",
-                "description": "Optional maximum parallel image tasks for native batches. Defaults to 2 for multi-image batches and 1 for single-image work.",
-            },
-            "action": {
-                "type": "string",
-                "enum": ["generate", "probe", "status"],
-                "description": "Use probe/status for lightweight readiness checks; generate is the default image action.",
+                "description": "Two to eight ordered image generation or edit tasks.",
+                "minItems": 2,
+                "maxItems": 8,
+                "items": {
+                    "type": "object",
+                    "properties": _COW_IMAGE_TASK_PARAMS,
+                    "required": ["prompt"],
+                    "additionalProperties": False,
+                },
             },
         },
+        "oneOf": [
+            {"type": "object", "required": ["prompt"]},
+            {"type": "object", "required": ["tasks"]},
+        ],
+        "additionalProperties": False,
     }
 
     def execute(self, params: Dict[str, Any]) -> ToolResult:

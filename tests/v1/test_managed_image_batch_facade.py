@@ -6,6 +6,7 @@ from types import MethodType, SimpleNamespace
 
 import pytest
 
+from agent.tools.imagegen.imagegen import ImageGenTool
 from ecorex.capabilities import (
     SandboxLevel,
     SchemaInstanceError,
@@ -218,6 +219,49 @@ def test_imagegen_toolspec_accepts_cowagent_generate_and_edit_contract() -> None
         schema,
         label="imagegen arguments",
     )
+
+
+def test_public_cow_imagegen_schema_matches_the_managed_executor() -> None:
+    schema = ImageGenTool.params
+    expected = {
+        "prompt",
+        "image_url",
+        "size",
+        "quality",
+        "aspect_ratio",
+        "tasks",
+    }
+
+    assert set(schema["properties"]) == expected
+    assert schema["additionalProperties"] is False
+    assert set(schema["properties"]["tasks"]["items"]["properties"]) == (
+        expected - {"tasks"}
+    )
+    assert schema["properties"]["tasks"]["items"]["additionalProperties"] is False
+
+    single = {
+        "prompt": "combine two references",
+        "image_url": ["first.png", "second.png"],
+        "size": "2K",
+        "quality": "high",
+        "aspect_ratio": "16:9",
+    }
+    validate_schema_instance(single, schema, label="public imagegen arguments")
+    assert RuntimeImageToolBackend._canonical_task(single) == single
+    validate_schema_instance(
+        {"tasks": [{"prompt": "first"}, {"prompt": "second"}]},
+        schema,
+        label="public imagegen arguments",
+    )
+    with pytest.raises(SchemaInstanceError):
+        validate_schema_instance(
+            {"prompt": "one image", "model": "another-model"},
+            schema,
+            label="public imagegen arguments",
+        )
+    assert RuntimeImageToolBackend._canonical_task(
+        {"prompt": "one image", "quality": "auto"}
+    ) == {"prompt": "one image", "quality": "auto"}
 
 
 def test_cowagent_image_contract_reads_local_edit_source_and_emits_image_list(
