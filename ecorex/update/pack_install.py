@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path, PurePosixPath
+import shutil
 import stat
 from typing import Any, Callable, Mapping, Protocol
 
@@ -616,10 +617,56 @@ def _transfer_stable(source: Path, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if os.path.lexists(destination):
             raise OSError
+        if os.name == "nt":
+            # A same-volume move preserves the transaction file's DACL instead
+            # of inheriting the pre-provisioned payload directory grant.
+            with source.open("rb") as source_stream:
+                opened = os.fstat(source_stream.fileno())
+                with destination.open("xb") as destination_stream:
+                    shutil.copyfileobj(
+                        source_stream,
+                        destination_stream,
+                        length=1024 * 1024,
+                    )
+                    destination_stream.flush()
+                    os.fsync(destination_stream.fileno())
+                    copied = os.fstat(destination_stream.fileno())
+                finished = os.fstat(source_stream.fileno())
+            current = source.lstat()
+            identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+            if (
+                (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+                != identity
+                or (
+                    finished.st_dev,
+                    finished.st_ino,
+                    finished.st_size,
+                    finished.st_mtime_ns,
+                )
+                != identity
+                or (
+                    current.st_dev,
+                    current.st_ino,
+                    current.st_size,
+                    current.st_mtime_ns,
+                )
+                != identity
+                or not stat.S_ISREG(copied.st_mode)
+                or copied.st_size != before.st_size
+                or copied.st_nlink != 1
+            ):
+                raise OSError
+            source.unlink()
+            return
         os.replace(source, destination)
         _reject_link(destination)
         after = destination.lstat()
     except OSError:
+        if os.name == "nt":
+            try:
+                destination.unlink()
+            except FileNotFoundError:
+                pass
         raise PackInstallError("Capability Pack file transfer failed") from None
     identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
     if (
