@@ -137,8 +137,10 @@ def test_public_cow_worker_sends_initial_and_steer_images_to_gateway(
 
 
 def test_public_cow_worker_materializes_steer_file_and_redirects_pending_read(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch,
 ) -> None:
+    from agent.protocol.steer import SteerInbox
+
     workspace = tmp_path / "workspace"
     app = create_app(settings=RuntimeSettings(database_path=tmp_path / "runtime.db"))
     kernel = app.state.runtime
@@ -169,14 +171,17 @@ def test_public_cow_worker_materializes_steer_file_and_redirects_pending_read(
         prepared.request,
         snapshot_context=prepared.snapshot_context,
     )
-    kernel.steer_turn(
-        created.turn.turn_id,
-        SteerTurnRequest(
-            input="Then read the steer file",
-            metadata={"input_attachments": [steer.model_dump(mode="json")]},
-            client_message_id="cow-hotpath-steer-file-turn",
-        ),
-    )
+    first_request_started = threading.Event()
+    steer_received = threading.Event()
+    original_submit = SteerInbox.submit
+
+    def observe_submit(inbox, content):
+        result = original_submit(inbox, content)
+        if "Then read the steer file" in content:
+            steer_received.set()
+        return result
+
+    monkeypatch.setattr(SteerInbox, "submit", observe_submit)
 
     class Gateway:
         def __init__(self) -> None:
@@ -197,6 +202,8 @@ def test_public_cow_worker_materializes_steer_file_and_redirects_pending_read(
                 materialized = Path(self.paths[0])
                 assert materialized.is_relative_to(workspace)
                 assert materialized.stat().st_mode & 0o222 == 0
+                first_request_started.set()
+                assert await asyncio.to_thread(steer_received.wait, 2)
                 yield GatewayEvent(
                     seq=1,
                     event_type="tool_call.requested",
@@ -270,7 +277,20 @@ def test_public_cow_worker_materializes_steer_file_and_redirects_pending_read(
         input_attachments=attachments,
     )
 
-    result = asyncio.run(worker.run_once("cow-hotpath-file-worker"))
+    async def run_with_live_steer():
+        task = asyncio.create_task(worker.run_once("cow-hotpath-file-worker"))
+        assert await asyncio.to_thread(first_request_started.wait, 2)
+        kernel.steer_turn(
+            created.turn.turn_id,
+            SteerTurnRequest(
+                input="Then read the steer file",
+                metadata={"input_attachments": [steer.model_dump(mode="json")]},
+                client_message_id="cow-hotpath-steer-file-turn",
+            ),
+        )
+        return await task
+
+    result = asyncio.run(run_with_live_steer())
 
     assert result.outcome is WorkerOutcome.COMPLETED
 
