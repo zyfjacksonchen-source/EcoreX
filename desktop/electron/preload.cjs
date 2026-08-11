@@ -17,6 +17,15 @@ contextBridge.exposeInMainWorld("eMateDesktop", {
   restartRuntime: () => ipcRenderer.invoke("emate:restart-runtime"),
   checkForUpdates: () => ipcRenderer.invoke("emate:check-for-updates"),
   openUpdatePage: () => ipcRenderer.invoke("emate:open-update-page"),
+  downloadDesktopUpdate: () => ipcRenderer.invoke("emate:download-update"),
+  installDesktopUpdate: () => ipcRenderer.invoke("emate:install-update"),
+  desktopUpdateStatus: () => ipcRenderer.invoke("emate:desktop-update-status"),
+  onDesktopUpdateStatus: (callback) => {
+    if (typeof callback !== "function") return () => {};
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on("emate:update-status", listener);
+    return () => ipcRenderer.removeListener("emate:update-status", listener);
+  },
   onOpenThread: (callback) => {
     if (typeof callback !== "function") return () => {};
     openThreadCallback = callback;
