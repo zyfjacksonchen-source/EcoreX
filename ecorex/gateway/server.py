@@ -1039,7 +1039,7 @@ class SQLiteGatewayStore:
             "SELECT provider_protocol FROM gateway_model_attempts WHERE request_id=?",
             (request_id,),
         ).fetchone()
-        if attempt is None:
+        if attempt is None or attempt["provider_protocol"] == "responses":
             # Responses tool handoffs use provider-side previous_response_id and
             # do not require a Chat Completions reconstruction record.
             return
