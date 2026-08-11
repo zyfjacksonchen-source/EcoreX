@@ -2394,6 +2394,7 @@ def create_app(
     )
     composition.capability_service.bind_invocation_backend(image_tool_backend)
     if worker_supervisor is not None:
+        worker_supervisor.worker.bind_image_backend(image_tool_backend)
         worker_supervisor.worker.bind_visual_evidence_resolver(
             image_tool_backend.resolve_model_visual_evidence
         )

@@ -1521,9 +1521,11 @@ class AgentStreamExecutor:
 
             # Execute tool
             start_time = time.time()
+            tool.tool_call_id = tool_id
             try:
                 result: ToolResult = tool.execute_tool(arguments)
             finally:
+                tool.tool_call_id = None
                 tool.progress_callback = None
                 tool.cancel_event = None
             execution_time = time.time() - start_time

@@ -27,6 +27,8 @@ from ecorex.capabilities import (
     CapabilityUnavailableError,
     Exposure,
     IdempotencyClass,
+    SandboxLevel,
+    ToolInvocationContext,
     ToolHandlerMissingError,
     ToolProviderKind,
     ToolArgumentsValidationError,
@@ -5662,6 +5664,8 @@ class AgentTurnWorker:
         gateway: ModelGateway,
         lease_seconds: int = 60,
         retry_delay_seconds: int = 5,
+        capabilities: CapabilityService | None = None,
+        image_backend: Any | None = None,
         workspace_root: str | Path | None = None,
         workspace_root_resolver: Callable[[ToolExecutionScope | None], tuple[Path, ...]]
         | None = None,
@@ -5671,6 +5675,9 @@ class AgentTurnWorker:
         self.gateway = gateway
         self.lease_seconds = lease_seconds
         self.retry_delay_seconds = retry_delay_seconds
+        self._image_backend = image_backend or getattr(
+            capabilities, "_invocation_backend", None
+        )
         self.workspace_root = (
             Path(workspace_root).expanduser().resolve()
             if workspace_root is not None
@@ -5682,6 +5689,9 @@ class AgentTurnWorker:
 
     def bind_visual_evidence_resolver(self, _resolver: Any) -> None:
         return None
+
+    def bind_image_backend(self, backend: Any) -> None:
+        self._image_backend = backend
 
     async def close(self) -> None:
         for event in self._cancel_events.values():
@@ -5935,16 +5945,26 @@ class AgentTurnWorker:
         callback: Callable[[dict[str, Any]], None],
         cancel_event: threading.Event,
         inbox: Any,
+        managed_image_executor: Callable[[dict[str, Any], str | None], Any] | None,
     ) -> str:
         from bridge.agent_initializer import AgentInitializer
         from common.ecorex_tool_permissions import (
             bind_cow_direct_tools,
             reset_cow_direct_tools,
         )
+        from agent.tools.imagegen.imagegen import (
+            bind_managed_image_executor,
+            reset_managed_image_executor,
+        )
 
         bridge = self._cow_bridge
         model_token = bridge.bind_model(model)
         tool_token = bind_cow_direct_tools()
+        image_token = (
+            bind_managed_image_executor(managed_image_executor)
+            if managed_image_executor is not None
+            else None
+        )
         try:
             agent = AgentInitializer(object(), bridge).initialize_agent(
                 session_id=f"emate-{thread_id}", workspace_root=workspace
@@ -5960,6 +5980,8 @@ class AgentTurnWorker:
                 steer_inbox=inbox,
             )
         finally:
+            if image_token is not None:
+                reset_managed_image_executor(image_token)
             reset_cow_direct_tools(tool_token)
             bridge.reset_model(model_token)
 
@@ -6029,6 +6051,55 @@ class AgentTurnWorker:
                 self._history, job.thread_id, job.turn_id
             )
 
+            def managed_image_executor(
+                arguments: dict[str, Any], tool_call_id: str | None
+            ):
+                from agent.tools.base_tool import ToolResult
+
+                backend = self._image_backend
+                if backend is None:
+                    return ToolResult.fail(
+                        {
+                            "error": "managed image orchestration is unavailable",
+                            "code": "managed_image_orchestration_not_configured",
+                            "retryable": True,
+                            "redacted": True,
+                        }
+                    )
+                call_id = tool_call_id or "imagegen_" + self._digest(arguments)[:24]
+                idempotency_key = f"{job.turn_id}:{call_id}"
+                context = ToolInvocationContext(
+                    invocation_id="invoke_" + self._digest(idempotency_key)[:32],
+                    capability_snapshot_id="cow_tools_2.1.5",
+                    policy_snapshot_id="cow_local_2.1.5",
+                    tool_id="imagegen",
+                    idempotency_key=idempotency_key,
+                    approved=True,
+                    effective_sandbox=SandboxLevel.DANGER_FULL_ACCESS,
+                    execution_scope=ToolExecutionScope(
+                        job_id=job.job_id,
+                        thread_id=job.thread_id,
+                        turn_id=job.turn_id,
+                        execution_batch_id=f"cow_{job.turn_id}",
+                    ),
+                    tool_call_id=call_id,
+                    backend=backend,
+                )
+                try:
+                    result = asyncio.run_coroutine_threadsafe(
+                        backend.generate_image(arguments, context), loop
+                    ).result()
+                except Exception as error:
+                    return ToolResult.fail(
+                        {
+                            "error": str(getattr(error, "code", None) or "image_tool_failed"),
+                            "code": str(getattr(error, "code", None) or "image_tool_failed"),
+                            "retryable": bool(getattr(error, "retryable", False)),
+                            "redacted": True,
+                        }
+                    )
+                return ToolResult.success(result)
+
             def callback(event: dict[str, Any]) -> None:
                 try:
                     self._project_event(
@@ -6063,6 +6134,7 @@ class AgentTurnWorker:
                 callback=callback,
                 cancel_event=cancel_event,
                 inbox=inbox,
+                managed_image_executor=managed_image_executor,
             )
             watch_stop.set()
             applied = await watcher
@@ -6085,6 +6157,7 @@ class AgentTurnWorker:
                     callback=callback,
                     cancel_event=cancel_event,
                     inbox=next_inbox,
+                    managed_image_executor=managed_image_executor,
                 )
                 applied = revision.ordinal
             for usage_index, (response_id, usage) in enumerate(model.usage_events, 1):

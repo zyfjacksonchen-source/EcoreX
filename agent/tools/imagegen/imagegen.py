@@ -8,9 +8,10 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from agent.tools.base_tool import BaseTool, ToolResult
 from agent.tools.imagegen.provider_runner import image_generation_env_with_config, run_image_generation_payload
@@ -24,6 +25,21 @@ from common.image_quality_runtime import (
 from common.log import logger
 from common.utils import expand_path
 from config import conf
+
+
+ManagedImageExecutor = Callable[[Dict[str, Any], Optional[str]], ToolResult]
+_MANAGED_IMAGE_EXECUTOR: ContextVar[Optional[ManagedImageExecutor]] = ContextVar(
+    "managed_image_executor",
+    default=None,
+)
+
+
+def bind_managed_image_executor(executor: ManagedImageExecutor):
+    return _MANAGED_IMAGE_EXECUTOR.set(executor)
+
+
+def reset_managed_image_executor(token: Any) -> None:
+    _MANAGED_IMAGE_EXECUTOR.reset(token)
 
 
 _QUALITY_RETRY_PROMPT_SUFFIX = (
@@ -462,6 +478,13 @@ class ImageGenTool(BaseTool):
                 "route": _imagegen_route(),
                 "redacted": True,
             })
+
+        managed_executor = _MANAGED_IMAGE_EXECUTOR.get()
+        if managed_executor is not None:
+            return managed_executor(
+                dict(args),
+                str(getattr(self, "tool_call_id", "") or "") or None,
+            )
 
         tasks = args.get("tasks")
         if isinstance(tasks, list) and tasks:

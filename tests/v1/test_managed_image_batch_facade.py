@@ -24,7 +24,6 @@ from ecorex.protocol import CreateThreadRequest, CreateTurnRequest, ItemKind
 from ecorex.runtime import (
     AgentTurnWorker,
     RuntimeSettings,
-    ToolExecutionRepository,
     WorkerOutcome,
     create_app,
 )
@@ -259,6 +258,7 @@ def test_real_worker_routes_one_batch_call_through_image_pool_and_public_facts(
 ) -> None:
     class Gateway:
         def __init__(self) -> None:
+            self.requests = []
             self.scripts = [
                 [
                     {
@@ -273,7 +273,12 @@ def test_real_worker_routes_one_batch_call_through_image_pool_and_public_facts(
                                 {"prompt": "fail second image"},
                             ]
                         },
-                    }
+                    },
+                    {
+                        "seq": 2,
+                        "event_type": "response.completed",
+                        "response_id": "response-image-batch",
+                    },
                 ],
                 [
                     {
@@ -291,6 +296,7 @@ def test_real_worker_routes_one_batch_call_through_image_pool_and_public_facts(
             ]
 
         async def stream(self, request):
+            self.requests.append(request)
             for event in self.scripts.pop(0):
                 yield GatewayEvent.model_validate(event)
 
@@ -306,30 +312,42 @@ def test_real_worker_routes_one_batch_call_through_image_pool_and_public_facts(
         composition = app.state.runtime_composition
         backend = app.state.image_tool_backend
 
+        active = 0
+        peak = 0
+        managed_prompts = []
+
         async def fake_single(self, arguments, context, *, image_batch=None):
-            if arguments["prompt"].startswith("fail"):
-                raise ImageToolError("managed_image_unavailable", retryable=True)
-            artifact = SimpleNamespace(
-                artifact_id="artifact-batch-first",
-                revision_id="revision-batch-first",
-                mime_type="image/png",
-                size_bytes=5,
-                sha256="1" * 64,
-                to_dict=lambda: {
-                    "artifact_id": "artifact-batch-first",
-                    "revision_id": "revision-batch-first",
-                    "mime_type": "image/png",
-                    "size_bytes": 5,
-                    "sha256": "1" * 64,
-                },
-            )
-            return self._emit_artifact_item(
-                artifact,
-                context,
-                "test-publication:" + context.idempotency_key,
-                "imgjob_" + "1" * 32,
-                image_batch=image_batch,
-            )
+            nonlocal active, peak
+            managed_prompts.append(arguments["prompt"])
+            active += 1
+            peak = max(peak, active)
+            try:
+                await asyncio.sleep(0.02)
+                if arguments["prompt"].startswith("fail"):
+                    raise ImageToolError("managed_image_unavailable", retryable=True)
+                artifact = SimpleNamespace(
+                    artifact_id="artifact-batch-first",
+                    revision_id="revision-batch-first",
+                    mime_type="image/png",
+                    size_bytes=5,
+                    sha256="1" * 64,
+                    to_dict=lambda: {
+                        "artifact_id": "artifact-batch-first",
+                        "revision_id": "revision-batch-first",
+                        "mime_type": "image/png",
+                        "size_bytes": 5,
+                        "sha256": "1" * 64,
+                    },
+                )
+                return self._emit_artifact_item(
+                    artifact,
+                    context,
+                    "test-publication:" + context.idempotency_key,
+                    "imgjob_" + "1" * 32,
+                    image_batch=image_batch,
+                )
+            finally:
+                active -= 1
 
         backend._generate_single = MethodType(fake_single, backend)
         thread = kernel.create_thread(CreateThreadRequest(title="batch worker"))
@@ -342,33 +360,28 @@ def test_real_worker_routes_one_batch_call_through_image_pool_and_public_facts(
                 client_message_id="image-batch-message",
             )
         )
-        created = kernel.create_turn(
+        kernel.create_turn(
             thread.thread_id,
             prepared.request,
             snapshot_context=prepared.snapshot_context,
         )
+        gateway = Gateway()
         worker = AgentTurnWorker(
             kernel,
-            gateway=Gateway(),
+            gateway=gateway,
             capabilities=composition.capability_service,
             image_execution_concurrency=2,
             image_execution_queue_capacity=2,
         )
 
-        first = await worker.run_once("worker-image-batch")
-        assert first.outcome is WorkerOutcome.RETRY_SCHEDULED
-        execution_id = worker._execution_id(
-            created.turn.turn_id, "call_image_batch"
-        )
-        executions = ToolExecutionRepository(kernel.database)
-        for _ in range(100):
-            if executions.get(execution_id).status == "completed":
-                break
-            await asyncio.sleep(0.01)
-        execution = executions.get(execution_id)
-        assert execution.status == "completed"
-        assert execution.result["status"] == "partial_failed"
-        batch_id = execution.result["batch_id"]
+        completed = await worker.run_once("worker-image-batch")
+        assert completed.outcome is WorkerOutcome.COMPLETED
+        assert managed_prompts == ["first image", "fail second image"]
+        assert peak == 2
+        continuation = gateway.requests[1].ordered_input_items()
+        assert len(continuation) == 1
+        assert continuation[0].tool_call_id == "call_image_batch"
+        assert "partial_failed" in str(continuation[0].output)
 
         events = kernel.events.page(thread.thread_id, limit=200).events
         failed = [
@@ -379,25 +392,23 @@ def test_real_worker_routes_one_batch_call_through_image_pool_and_public_facts(
             event for event in events
             if event.event_type == "artifact.image.batch_settled"
         ]
+        batch_id = settled[0].payload["batch_id"]
         assert failed[0].payload["image_batch"] == {
             "schema_version": 1,
             "batch_id": batch_id,
-            "parent_execution_id": execution_id,
+            "parent_execution_id": "call_image_batch",
             "index": 1,
             "count": 2,
-            "task_id": execution.result["items"][1]["task_id"],
+            "task_id": failed[0].payload["image_batch"]["task_id"],
         }
         assert settled[0].payload["status"] == "partial_failed"
+        assert any(event.event_type == "artifact.image.generated" for event in events)
         artifact_items = [
             item for item in kernel.projection(thread.thread_id).items
             if item.kind is ItemKind.ARTIFACT
         ]
         assert artifact_items[0].content["image_batch"]["batch_id"] == batch_id
         assert artifact_items[0].content["image_batch"]["index"] == 0
-
-        await asyncio.sleep(1.01)
-        resumed = await worker.run_once("worker-image-batch-resumed")
-        assert resumed.outcome is WorkerOutcome.COMPLETED
         await worker.close()
 
     asyncio.run(scenario())
