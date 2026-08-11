@@ -23,7 +23,7 @@ const MIME = {
   ".svg": "image/svg+xml; charset=utf-8",
 };
 
-const SCENARIOS = new Set(["empty", "unauthenticated", "thinking", "codex-layout", "slow-reconnect", "retry", "hitl", "connector-login", "connector-device", "connector-reauth", "connector-restart", "artifact", "image-gallery", "replay", "thread-switch", "many-threads", "long-timeline"]);
+const SCENARIOS = new Set(["empty", "unauthenticated", "thinking", "codex-layout", "slow-reconnect", "retry", "hitl", "connector-login", "connector-device", "connector-reauth", "connector-restart", "artifact", "image-gallery", "replay", "thread-switch", "many-threads", "long-timeline", "streaming-jitter"]);
 const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted", "superseded"]);
 const GA_THEMES = new Set(["light", "dark"]);
 const GA_VIEWPORTS = Object.freeze({
@@ -1029,6 +1029,36 @@ function scenarioState(name) {
     return base;
   }
 
+  if (name === "streaming-jitter") {
+    const selectedThread = thread("thread-ga", "流式回复稳定性验收");
+    const turns = [];
+    const items = [];
+    for (let index = 1; index <= 3; index += 1) {
+      const turnId = `turn-stream-history-${index}`;
+      turns.push(turn(turnId, "completed", `第 ${index} 轮问题`));
+      items.push(
+        { ...item(`item-stream-user-${index}`, turnId, "user", `第 ${index} 轮问题`), created_seq: index * 2 - 1 },
+        { ...item(`item-stream-assistant-${index}`, turnId, "assistant", `第 ${index} 轮回复已完成。`.repeat(8)), created_seq: index * 2 },
+      );
+    }
+    const active = turn("turn-stream-active", "streaming", "生成一份足够长的稳定性验收报告");
+    const assistant = {
+      ...item("item-stream-assistant-active", active.turn_id, "assistant", "正在生成验收报告。"),
+      status: "in_progress",
+      created_seq: 8,
+    };
+    turns.push(active);
+    items.push(
+      { ...item("item-stream-user-active", active.turn_id, "user", active.input), created_seq: 7 },
+      assistant,
+    );
+    base.threads.push(selectedThread);
+    base.projection = { thread: selectedThread, turns, items, jobs: [], interactions: [], watermark: 8 };
+    base.projections.set(selectedThread.thread_id, base.projection);
+    base.seq = 8;
+    return base;
+  }
+
   const activeThread = thread();
   let activeTurn = turn("turn-ga", "completed", "整理季度资料");
   const items = [item("item-user-ga", "turn-ga", "user", "整理季度资料")];
@@ -1762,6 +1792,44 @@ function scheduleSlowReconnectTerminal(state) {
       },
     }));
   }, 1_200);
+}
+
+function scheduleStreamingJitterTerminal(state) {
+  if (state.scenario !== "streaming-jitter" || state.terminalScheduled || !state.projection) return;
+  state.terminalScheduled = true;
+  const active = state.projection.turns.find((candidate) => candidate.turn_id === "turn-stream-active");
+  const assistant = state.projection.items.find((candidate) => candidate.item_id === "item-stream-assistant-active");
+  if (!active || !assistant) return;
+  const chunks = Array.from({ length: 36 }, (_value, index) => (
+    `\n\n### 检查项 ${index + 1}\n这是用于验证流式回复滚动稳定性的内容，包含足够多的中文文本以持续增加消息高度。`
+  ));
+  const emitChunk = (index) => {
+    const delta = chunks[index];
+    assistant.content.text += delta;
+    assistant.updated_at = new Date().toISOString();
+    emit(state, envelope(state, "item.delta", {
+      turnId: active.turn_id,
+      itemId: assistant.item_id,
+      payload: { delta },
+    }));
+    if (index + 1 < chunks.length) {
+      schedule(state, () => emitChunk(index + 1), 40);
+      return;
+    }
+    assistant.status = "completed";
+    emit(state, envelope(state, "item.status_changed", {
+      turnId: active.turn_id,
+      itemId: assistant.item_id,
+      payload: { from: "in_progress", to: "completed" },
+    }));
+    active.status = "completed";
+    active.terminal_reason = "completed";
+    emit(state, envelope(state, "turn.status_changed", {
+      turnId: active.turn_id,
+      payload: { from: "streaming", to: "completed", reason: "completed" },
+    }));
+  };
+  schedule(state, () => emitChunk(0), 700);
 }
 
 function scheduleTurnCompletion(state, activeTurn, selectedModel) {
@@ -2806,6 +2874,7 @@ async function handleApi(holder, req, res, url) {
     req.on("close", () => state.clients.delete(res));
     scheduleThinkingTerminal(state);
     scheduleSlowReconnectTerminal(state);
+    scheduleStreamingJitterTerminal(state);
     return true;
   }
 
