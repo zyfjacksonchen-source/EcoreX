@@ -428,7 +428,9 @@ class ImageProductionConfig:
             <= self.provider_max_connections
             <= 256
             or not 1.0 <= self.provider_timeout_seconds <= 600.0
-            or not 1.0 <= self.provider_generation_timeout_seconds <= 600.0
+            or not self.provider_timeout_seconds
+            <= self.provider_generation_timeout_seconds
+            <= 600.0
             or not 0.1 <= self.provider_connect_timeout_seconds <= min(60.0, self.provider_timeout_seconds)
             or not 1.0 <= self.dependency_timeout_seconds <= 60.0
             or not 1.0 <= self.readiness_cache_seconds <= 60.0
@@ -657,6 +659,13 @@ class ImageProductionConfig:
                 str(key): str(value)
                 for key, value in parsed_dynamic_origins.items()
             }
+        provider_timeout_seconds = _float(
+            values,
+            "ECOREX_IMAGE_PROVIDER_TIMEOUT_SECONDS",
+            minimum=1.0,
+            maximum=600.0,
+            default=120.0,
+        )
         return cls(
             storage_backend=backend,
             postgres_dsn=dsn,
@@ -756,8 +765,8 @@ class ImageProductionConfig:
             api_blob_memory_envelope_bytes=_integer(values, "ECOREX_IMAGE_API_BLOB_MEMORY_ENVELOPE_BYTES", minimum=32 * 1024 * 1024, maximum=16 * 1024**3, default=512 * 1024**2),
             provider_max_connections=_integer(values, "ECOREX_IMAGE_PROVIDER_MAX_CONNECTIONS", minimum=1, maximum=256, default=32),
             provider_max_concurrency=_integer(values, "ECOREX_IMAGE_PROVIDER_MAX_CONCURRENCY", minimum=1, maximum=256, default=16),
-            provider_timeout_seconds=_float(values, "ECOREX_IMAGE_PROVIDER_TIMEOUT_SECONDS", minimum=1.0, maximum=600.0, default=120.0),
-            provider_generation_timeout_seconds=_float(values, "ECOREX_IMAGE_PROVIDER_GENERATION_TIMEOUT_SECONDS", minimum=1.0, maximum=600.0, default=300.0),
+            provider_timeout_seconds=provider_timeout_seconds,
+            provider_generation_timeout_seconds=_float(values, "ECOREX_IMAGE_PROVIDER_GENERATION_TIMEOUT_SECONDS", minimum=provider_timeout_seconds, maximum=600.0, default=max(300.0, provider_timeout_seconds)),
             provider_connect_timeout_seconds=_float(values, "ECOREX_IMAGE_PROVIDER_CONNECT_TIMEOUT_SECONDS", minimum=0.1, maximum=60.0, default=5.0),
             dependency_timeout_seconds=_float(values, "ECOREX_IMAGE_DEPENDENCY_TIMEOUT_SECONDS", minimum=1.0, maximum=60.0, default=10.0),
             readiness_cache_seconds=_float(values, "ECOREX_IMAGE_READINESS_CACHE_SECONDS", minimum=1.0, maximum=60.0, default=10.0),
