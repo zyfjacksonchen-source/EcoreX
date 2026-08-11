@@ -17,6 +17,26 @@ function packagedBackendPath(resourcesPath) {
   return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
 }
 
+function packagedReleasePath(resourcesPath) {
+  try {
+    const runtimeRoot = path.join(resourcesPath, "runtime");
+    const pointerPath = path.join(runtimeRoot, "current-release");
+    const pointerMetadata = fs.lstatSync(pointerPath);
+    if (!pointerMetadata.isFile() || pointerMetadata.isSymbolicLink() || pointerMetadata.size > 64) return null;
+    const pointer = fs.readFileSync(pointerPath, "utf8");
+    if (!/^release-stable-[0-9a-f]{24}\n$/.test(pointer)) return null;
+    const releaseDir = path.join(runtimeRoot, "releases", pointer.slice(0, -1));
+    const releaseMetadata = fs.lstatSync(releaseDir);
+    const manifestMetadata = fs.lstatSync(path.join(releaseDir, "release-manifest.json"));
+    return releaseMetadata.isDirectory() && !releaseMetadata.isSymbolicLink()
+      && manifestMetadata.isFile() && !manifestMetadata.isSymbolicLink()
+      ? releaseDir
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function developmentPython() {
   if (process.env.EMATE_PYTHON) return process.env.EMATE_PYTHON;
   return process.platform === "win32" ? "python" : "python3";
@@ -185,8 +205,8 @@ class BackendManager extends EventEmitter {
     if (this.packaged) {
       command = packagedBackendPath(this.resourcesPath);
       if (!command) throw new Error("The packaged e-Mate Bootstrap is missing.");
-      const releaseDir = path.join(this.resourcesPath, "runtime", "release");
-      if (!fs.existsSync(path.join(releaseDir, "release-manifest.json"))) {
+      const releaseDir = packagedReleasePath(this.resourcesPath);
+      if (!releaseDir) {
         throw new Error("The packaged e-Mate release seed is missing.");
       }
       if (installedReleaseMatches(this.dataDir, releaseDir)) {
@@ -284,6 +304,7 @@ module.exports = {
   installedReleaseMatches,
   installedSlotExists,
   packagedBackendPath,
+  packagedReleasePath,
   runtimeOwnerNonce,
   runtimeResponds,
 };
