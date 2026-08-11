@@ -604,6 +604,11 @@ class ToolManager:
                             self, "mcp_oauth_redirect_uri", None
                         ),
                         reload_callback=self.reload_mcp_server,
+                        workspace_identity=(
+                            str(self.workspace_root)
+                            if getattr(self, "workspace_root", None) is not None
+                            else None
+                        ),
                     )
                     if not client.initialize():
                         if getattr(client, "needs_auth", False):

@@ -11,7 +11,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from agent.tools.mcp import mcp_oauth
-from agent.tools.mcp.mcp_client import McpClientRegistry, notify_server_authorized
+from agent.tools.mcp.mcp_client import (
+    McpClient,
+    McpClientRegistry,
+    notify_server_authorized,
+)
 from agent.tools.tool_manager import ToolManager
 from ecorex.extensions.cow_mcp import CowMCPSettingsService, create_cow_mcp_router
 from ecorex.runtime import RuntimeSettings, create_app
@@ -154,3 +158,76 @@ def test_settings_reads_do_not_rebind_another_workspace_runtime(
     assert service.workspace_root == workspace_a.resolve()
     assert manager_a.workspace_root == workspace_a.resolve()
     assert shutdowns == []
+
+
+def test_oauth_tokens_and_settings_clear_are_isolated_by_workspace(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    token_store = tmp_path / "mcp_oauth.json"
+    monkeypatch.setattr(mcp_oauth, "_store_path", lambda: str(token_store))
+    workspace_a = tmp_path / "a"
+    workspace_b = tmp_path / "b"
+    for workspace in (workspace_a, workspace_b):
+        workspace.mkdir()
+        (workspace / "mcp.json").write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "shared": {
+                            "type": "streamable-http",
+                            "url": "https://mcp.example/session",
+                            "_emate_auth_kind": "oauth2",
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+    identity_a = str(workspace_a.resolve())
+    identity_b = str(workspace_b.resolve())
+    handler_a = mcp_oauth.OAuthHandler(
+        "shared",
+        "https://mcp.example/session",
+        "http://127.0.0.1:8765/mcp/oauth/callback",
+        workspace_identity=identity_a,
+    )
+    handler_b = mcp_oauth.OAuthHandler(
+        "shared",
+        "https://mcp.example/session",
+        "http://127.0.0.1:8765/mcp/oauth/callback",
+        workspace_identity=identity_b,
+    )
+    assert handler_a._absorb_token_response({"access_token": "token-a"})
+    assert handler_b._absorb_token_response({"access_token": "token-b"})
+
+    client_a = McpClient(
+        {"name": "shared"}, workspace_identity=identity_a
+    )
+    client_a._http_url = "https://mcp.example/session"
+    client_a._maybe_load_oauth()
+    assert client_a._oauth.access_token == "token-a"
+    assert mcp_oauth.load_server_record("shared", identity_a)["access_token"] == "token-a"
+    assert mcp_oauth.load_server_record("shared", identity_b)["access_token"] == "token-b"
+
+    manager_a = ToolManager(workspace_root=workspace_a)
+    manager_b = ToolManager(workspace_root=workspace_b)
+    service_a = CowMCPSettingsService(workspace_a, manager_a)
+    service_b = CowMCPSettingsService(workspace_b, manager_b)
+    server_id = service_b._server_id("shared")
+    service_b.clear_oauth(server_id)
+
+    assert service_a.oauth_items()[0]["state"] == "authorized"
+    assert service_b.oauth_items()[0]["state"] == "authorization_required"
+    assert mcp_oauth.load_server_record("shared", identity_a)["access_token"] == "token-a"
+    assert mcp_oauth.load_server_record("shared", identity_b) == {}
+
+    mcp_oauth.save_server_record(
+        "shared", {"access_token": "token-b-2"}, identity_b
+    )
+    service_b.remove(server_id)
+    assert mcp_oauth.load_server_record("shared", identity_a)["access_token"] == "token-a"
+    assert mcp_oauth.load_server_record("shared", identity_b) == {}
+
+    mcp_oauth.save_server_record("shared", {"access_token": "legacy"})
+    assert mcp_oauth.load_server_record("shared")["access_token"] == "legacy"
+    assert mcp_oauth.load_server_record("shared", identity_a)["access_token"] == "token-a"

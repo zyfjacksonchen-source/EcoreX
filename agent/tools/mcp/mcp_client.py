@@ -90,6 +90,7 @@ class McpClient:
         *,
         oauth_redirect_uri: Optional[str] = None,
         reload_callback=None,
+        workspace_identity: Optional[str] = None,
     ):
         """
         config examples:
@@ -101,6 +102,7 @@ class McpClient:
         self.name: str = config.get("name", "unknown")
         self._oauth_redirect_uri = _oauth_redirect_uri(oauth_redirect_uri)
         self._reload_callback = reload_callback
+        self._workspace_identity = workspace_identity
         raw_transport: str = config.get("type", "stdio")
         # Per-server timeout for tool calls (default 120s, suitable for data queries)
         self._timeout: int = int(config.get("timeout", 120))
@@ -501,7 +503,11 @@ class McpClient:
             from agent.tools.mcp.mcp_oauth import OAuthHandler, load_server_record
         except Exception:
             return
-        rec = load_server_record(self.name)
+        rec = (
+            load_server_record(self.name)
+            if self._workspace_identity is None
+            else load_server_record(self.name, self._workspace_identity)
+        )
         # Only create a handler when we have something to reuse; otherwise it
         # is created lazily on the first 401.
         if rec.get("access_token") or rec.get("client_id"):
@@ -511,6 +517,7 @@ class McpClient:
                 redirect_uri=self._oauth_redirect_uri,
                 scope=self.config.get("scope", ""),
                 reload_callback=self._reload_callback,
+                workspace_identity=self._workspace_identity,
             )
 
     def _current_bearer(self) -> Optional[str]:
@@ -536,6 +543,7 @@ class McpClient:
                 redirect_uri=self._oauth_redirect_uri,
                 scope=self.config.get("scope", ""),
                 reload_callback=self._reload_callback,
+                workspace_identity=self._workspace_identity,
             )
 
         if not self._oauth.ensure_registered(www_authenticate):

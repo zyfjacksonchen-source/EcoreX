@@ -464,7 +464,7 @@ class CowMCPSettingsService:
 
         root, name, _config = self._find(server_id)
         root["mcpServers"].pop(name, None)
-        clear_server_record(name)
+        clear_server_record(name, str(self.workspace_root))
         self._write(root)
 
     def test(self, server_id: str) -> dict[str, Any]:
@@ -492,7 +492,7 @@ class CowMCPSettingsService:
         for name, config in root["mcpServers"].items():
             if not isinstance(config, Mapping) or config.get("_emate_auth_kind") != "oauth2":
                 continue
-            record = load_server_record(name)
+            record = load_server_record(name, str(self.workspace_root))
             expires_at = float(record.get("expires_at") or 0) or None
             authorized = bool(record.get("access_token"))
             items.append(
@@ -528,7 +528,7 @@ class CowMCPSettingsService:
         from agent.tools.mcp.mcp_oauth import clear_server_record
 
         _root, name, _config = self._find(server_id)
-        clear_server_record(name)
+        clear_server_record(name, str(self.workspace_root))
         self.manager.reload_mcp_server(name)
 
     @staticmethod

@@ -46,8 +46,13 @@ def _store_path() -> str:
     return os.path.join(base, "mcp_oauth.json")
 
 
-def _load_store() -> dict:
+def _workspace_store_path() -> str:
     path = _store_path()
+    stem, suffix = os.path.splitext(path)
+    return f"{stem}.workspaces{suffix}"
+
+
+def _load_store(path: str) -> dict:
     if not os.path.exists(path):
         return {}
     try:
@@ -59,8 +64,7 @@ def _load_store() -> dict:
         return {}
 
 
-def _save_store(store: dict) -> None:
-    path = _store_path()
+def _save_store(path: str, store: dict) -> None:
     tmp = f"{path}.tmp"
     try:
         with open(tmp, "w", encoding="utf-8") as f:
@@ -75,24 +79,47 @@ def _save_store(store: dict) -> None:
         logger.warning(f"[MCP-OAuth] Failed to persist token store: {e}")
 
 
-def load_server_record(server_name: str) -> dict:
+def _record_location(
+    server_name: str, workspace_identity: str | None = None
+) -> tuple[str, str]:
+    if workspace_identity is None:
+        return _store_path(), server_name
+    identity = os.path.realpath(os.path.expanduser(str(workspace_identity)))
+    digest = hashlib.sha256(
+        identity.encode("utf-8") + b"\0" + server_name.encode("utf-8")
+    ).hexdigest()
+    return _workspace_store_path(), digest
+
+
+def load_server_record(
+    server_name: str, workspace_identity: str | None = None
+) -> dict:
     with _STORE_LOCK:
-        return dict(_load_store().get(server_name, {}))
+        path, key = _record_location(server_name, workspace_identity)
+        return dict(_load_store(path).get(key, {}))
 
 
-def save_server_record(server_name: str, record: dict) -> None:
+def save_server_record(
+    server_name: str,
+    record: dict,
+    workspace_identity: str | None = None,
+) -> None:
     with _STORE_LOCK:
-        store = _load_store()
-        store[server_name] = record
-        _save_store(store)
+        path, key = _record_location(server_name, workspace_identity)
+        store = _load_store(path)
+        store[key] = record
+        _save_store(path, store)
 
 
-def clear_server_record(server_name: str) -> None:
+def clear_server_record(
+    server_name: str, workspace_identity: str | None = None
+) -> None:
     with _STORE_LOCK:
-        store = _load_store()
-        if server_name in store:
-            store.pop(server_name, None)
-            _save_store(store)
+        path, key = _record_location(server_name, workspace_identity)
+        store = _load_store(path)
+        if key in store:
+            store.pop(key, None)
+            _save_store(path, store)
 
 
 # ------------------------------------------------------------------
@@ -300,15 +327,20 @@ class OAuthHandler:
 
     def __init__(self, server_name: str, resource_url: str, redirect_uri: str,
                  scope: str = "", client_name: str = "CowAgent",
-                 reload_callback=None):
+                 reload_callback=None, workspace_identity: str | None = None):
         self.server_name = server_name
         self.resource_url = resource_url
         self.redirect_uri = redirect_uri
         self.scope = scope
         self.client_name = client_name
         self.reload_callback = reload_callback
+        self.workspace_identity = workspace_identity
 
-        rec = load_server_record(server_name)
+        rec = (
+            load_server_record(server_name)
+            if workspace_identity is None
+            else load_server_record(server_name, workspace_identity)
+        )
         self.metadata: dict = rec.get("metadata", {})
         self.client_id: Optional[str] = rec.get("client_id")
         self.client_secret: Optional[str] = rec.get("client_secret")
@@ -320,7 +352,7 @@ class OAuthHandler:
     # --- persistence -------------------------------------------------
 
     def _persist(self) -> None:
-        save_server_record(self.server_name, {
+        record = {
             "resource_url": self.resource_url,
             "metadata": self.metadata,
             "client_id": self.client_id,
@@ -328,7 +360,11 @@ class OAuthHandler:
             "access_token": self.access_token,
             "refresh_token": self.refresh_token,
             "expires_at": self.expires_at,
-        })
+        }
+        if self.workspace_identity is None:
+            save_server_record(self.server_name, record)
+        else:
+            save_server_record(self.server_name, record, self.workspace_identity)
 
     # --- token access ------------------------------------------------
 
