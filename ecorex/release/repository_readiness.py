@@ -129,6 +129,7 @@ def default_release_repository_contract() -> ReleaseRepositoryContract:
         workflows=frozenset(
             {
                 ".github/workflows/ecorex-v1-pr.yml",
+                ".github/workflows/ecorex-v1-pr-trusted.yml",
                 ".github/workflows/ecorex-v1-ci.yml",
                 ".github/workflows/ecorex-v1-platform-stage.yml",
                 ".github/workflows/ecorex-v1-candidate.yml",
