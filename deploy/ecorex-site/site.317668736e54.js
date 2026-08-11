@@ -1,6 +1,7 @@
 const MAX_INDEX_BYTES = 64 * 1024;
 const VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 const SHA256 = /^[0-9a-f]{64}$/;
+const CERTIFICATE_THUMBPRINT = /^[0-9A-F]{40}$/;
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,179}$/;
 const TARGETS = Object.freeze({
   "windows-x64": Object.freeze({ platform: "windows", architecture: "x64", label: "Windows x64" }),
@@ -42,7 +43,8 @@ export function normalizeDownloadIndex(raw) {
   const seen = new Set();
   const downloads = index.downloads.map((rawDownload) => {
     const download = object(rawDownload, "下载目标");
-    exactKeys(download, ["target", "platform", "architecture", "file_name", "url", "size_bytes", "sha256"], "下载目标");
+    const authenticode = manual && download.target === "windows-x64" && "authenticode" in download;
+    exactKeys(download, ["target", "platform", "architecture", "file_name", "url", "size_bytes", "sha256", ...(authenticode ? ["authenticode"] : [])], "下载目标");
     const target = TARGETS[download.target];
     if (!target || seen.has(download.target)) throw new Error("下载目标重复或未知");
     seen.add(download.target);
@@ -52,6 +54,12 @@ export function normalizeDownloadIndex(raw) {
     safeText(download.file_name, "下载文件名", SAFE_NAME);
     safeText(download.sha256, "下载摘要", SHA256);
     if (!Number.isSafeInteger(download.size_bytes) || download.size_bytes < 1) throw new Error("下载大小无效");
+    if (authenticode) {
+      const evidence = object(download.authenticode, "Windows 签名");
+      exactKeys(evidence, ["status", "signer_certificate_thumbprint"], "Windows 签名");
+      if (evidence.status !== "verified") throw new Error("Windows 签名状态无效");
+      safeText(evidence.signer_certificate_thumbprint, "Windows 签名证书", CERTIFICATE_THUMBPRINT);
+    }
     const expectedUrl = `https://mvdcm.ecoremedia.net/e-mate/update/${download.file_name}`;
     if (download.url !== expectedUrl) throw new Error("下载地址无效");
     return Object.freeze({ ...download, label: target.label });

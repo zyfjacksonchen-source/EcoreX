@@ -188,12 +188,17 @@ const raw = {
     download("macos-x64", "macos", "x64", `e-Mate-${version}-x64.dmg`),
   ],
 };
+const signed = structuredClone(raw);
+signed.schema_version = 1;
+delete signed.distribution_mode;
+raw.downloads[0].authenticode = { status: "verified", signer_certificate_thumbprint: "C".repeat(40) };
 assert.equal(contract.normalizeDownloadIndex(raw).version, version);
 assert.equal(contract.normalizeDownloadIndex(raw).distribution_mode, "unsigned-manual");
+assert.equal(contract.normalizeDownloadIndex(raw).downloads[0].authenticode.status, "verified");
 assert.throws(() => contract.normalizeDownloadIndex({ ...raw, distribution_mode: "unknown" }));
-const signed = { ...raw, schema_version: 1 };
-delete signed.distribution_mode;
 assert.equal(contract.normalizeDownloadIndex(signed).distribution_mode, "signed-automatic");
+assert.throws(() => contract.normalizeDownloadIndex({ ...raw, downloads: [{ ...raw.downloads[0], authenticode: { status: "verified", signer_certificate_thumbprint: "c".repeat(40) } }, ...raw.downloads.slice(1)] }));
+assert.throws(() => contract.normalizeDownloadIndex({ ...raw, downloads: [raw.downloads[0], { ...raw.downloads[1], authenticode: raw.downloads[0].authenticode }, raw.downloads[2]] }));
 assert.throws(() => contract.normalizeDownloadIndex({ ...raw, version: `v${version}` }));
 assert.throws(() => contract.normalizeDownloadIndex({ ...raw, extra: true }));
 assert.throws(() => contract.normalizeDownloadIndex({ ...raw, downloads: [raw.downloads[0], raw.downloads[0], raw.downloads[2]] }));
