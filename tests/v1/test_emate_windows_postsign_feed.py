@@ -57,12 +57,17 @@ def test_postsign_feed_replaces_only_installer_and_rebinds_inventory(tmp_path: P
 def test_postsign_feed_rejects_invalid_evidence_or_drift(tmp_path: Path, failure: str) -> None:
     args = _inputs(tmp_path)
     evidence = json.loads(args.authenticode_receipt.read_text())
-    if failure == "wrong-signer": evidence["signer_certificate_thumbprint"] = "D" * 40
-    elif failure == "unsigned": evidence["signature_status"] = "NotSigned"
-    elif failure == "signed-tamper": args.signed_windows_installer.write_bytes(b"tampered")
-    else: (args.base_feed / "other.bin").write_bytes(b"drift")
+    if failure == "wrong-signer":
+        evidence["signer_certificate_thumbprint"] = "D" * 40
+    elif failure == "unsigned":
+        evidence["signature_status"] = "NotSigned"
+    elif failure == "signed-tamper":
+        args.signed_windows_installer.write_bytes(b"tampered")
+    else:
+        (args.base_feed / "other.bin").write_bytes(b"drift")
     args.authenticode_receipt.write_text(json.dumps(evidence) + "\n")
-    with pytest.raises(MODULE["FinalizeError"]): MODULE["finalize"](args)
+    with pytest.raises(MODULE["FinalizeError"]):
+        MODULE["finalize"](args)
     assert not args.output.exists()
 
 
