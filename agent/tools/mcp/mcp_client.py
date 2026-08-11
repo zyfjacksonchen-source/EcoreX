@@ -48,9 +48,9 @@ def set_reload_callback(fn) -> None:
     _reload_callback = fn
 
 
-def notify_server_authorized(server_name: str) -> None:
+def notify_server_authorized(server_name: str, handler=None) -> None:
     """Called by the web callback once tokens are stored for a server."""
-    fn = _reload_callback
+    fn = getattr(handler, "reload_callback", None) or _reload_callback
     if fn is None:
         logger.debug(f"[MCP:{server_name}] Authorized but no reload callback registered")
         return
@@ -60,13 +60,16 @@ def notify_server_authorized(server_name: str) -> None:
         logger.warning(f"[MCP:{server_name}] reload callback failed: {e}")
 
 
-def _oauth_redirect_uri() -> str:
+def _oauth_redirect_uri(explicit_uri: Optional[str] = None) -> str:
     """Build the OAuth redirect URI served by the web console callback.
 
-    Priority: explicit mcp_oauth_redirect_base config, otherwise the local
+    Product composition supplies its real Runtime callback URI. Standalone Cow
+    keeps the upstream priority: explicit config, otherwise the local
     web console address (127.0.0.1:<web_port>). Both point at the shared
     /mcp/oauth/callback route.
     """
+    if explicit_uri:
+        return explicit_uri
     try:
         from config import conf
         base = (conf().get("mcp_oauth_redirect_base") or "").strip().rstrip("/")
@@ -81,7 +84,13 @@ def _oauth_redirect_uri() -> str:
 class McpClient:
     """Single MCP Server client supporting stdio, SSE and Streamable HTTP transports."""
 
-    def __init__(self, config: dict):
+    def __init__(
+        self,
+        config: dict,
+        *,
+        oauth_redirect_uri: Optional[str] = None,
+        reload_callback=None,
+    ):
         """
         config examples:
           stdio:           {"name": "filesystem", "type": "stdio", "command": "npx", "args": [...]}
@@ -90,6 +99,8 @@ class McpClient:
         """
         self.config = config
         self.name: str = config.get("name", "unknown")
+        self._oauth_redirect_uri = _oauth_redirect_uri(oauth_redirect_uri)
+        self._reload_callback = reload_callback
         raw_transport: str = config.get("type", "stdio")
         # Per-server timeout for tool calls (default 120s, suitable for data queries)
         self._timeout: int = int(config.get("timeout", 120))
@@ -497,8 +508,9 @@ class McpClient:
             self._oauth = OAuthHandler(
                 server_name=self.name,
                 resource_url=self._http_url,
-                redirect_uri=_oauth_redirect_uri(),
+                redirect_uri=self._oauth_redirect_uri,
                 scope=self.config.get("scope", ""),
+                reload_callback=self._reload_callback,
             )
 
     def _current_bearer(self) -> Optional[str]:
@@ -521,8 +533,9 @@ class McpClient:
             self._oauth = OAuthHandler(
                 server_name=self.name,
                 resource_url=self._http_url,
-                redirect_uri=_oauth_redirect_uri(),
+                redirect_uri=self._oauth_redirect_uri,
                 scope=self.config.get("scope", ""),
+                reload_callback=self._reload_callback,
             )
 
         if not self._oauth.ensure_registered(www_authenticate):
@@ -784,19 +797,13 @@ class McpClient:
 
 
 class McpClientRegistry:
-    """Global singleton managing the lifecycle of all MCP Server clients."""
+    """Manage MCP clients for one workspace-bound ToolManager."""
 
-    _instance = None
-    _instance_lock = threading.Lock()
+    _instance = None  # compatibility for callers that reset the former singleton
 
-    def __new__(cls):
-        with cls._instance_lock:
-            if cls._instance is None:
-                obj = super().__new__(cls)
-                obj._clients: dict[str, McpClient] = {}
-                obj._registry_lock = threading.Lock()
-                cls._instance = obj
-        return cls._instance
+    def __init__(self):
+        self._clients: dict[str, McpClient] = {}
+        self._registry_lock = threading.Lock()
 
     def start_all(self, configs: list) -> None:
         """Initialize McpClient for each config entry; skip failures with a warning."""

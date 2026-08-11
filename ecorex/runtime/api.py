@@ -1639,8 +1639,22 @@ def create_app(
     cow_workspace_root = settings.workspace_root or (
         Path(settings.database_path).expanduser().resolve().parent / "workspace"
     )
-    cow_tool_manager = ToolManager(workspace_root=cow_workspace_root)
-    cow_mcp_service = CowMCPSettingsService(cow_workspace_root, cow_tool_manager)
+    mcp_oauth_redirect_uri = (
+        settings.webui_origins[0].rstrip("/") + "/mcp/oauth/callback"
+    )
+
+    def cow_tool_manager_for(workspace_root: str | Path) -> ToolManager:
+        return ToolManager(
+            workspace_root=workspace_root,
+            mcp_oauth_redirect_uri=mcp_oauth_redirect_uri,
+        )
+
+    cow_tool_manager = cow_tool_manager_for(cow_workspace_root)
+    cow_mcp_service = CowMCPSettingsService(
+        cow_workspace_root,
+        cow_tool_manager,
+        manager_factory=cow_tool_manager_for,
+    )
     effective_mcp_bindings: tuple[Any, ...] = ()
     mcp_oauth_service = None
 
@@ -2164,6 +2178,7 @@ def create_app(
                 ),
                 workspace_root=settings.workspace_root,
                 workspace_root_resolver=settings.workspace_root_resolver,
+                mcp_oauth_redirect_uri=mcp_oauth_redirect_uri,
                 browser_handler=settings.capability_handlers.get("browser"),
                 max_model_rounds=settings.agent_max_model_rounds,
                 token_budget=settings.agent_token_budget,

@@ -131,6 +131,7 @@ class AgentInitializer:
             max_context_tokens=max_context_tokens,
             runtime_info=runtime_info  # Pass runtime_info for dynamic time updates
         )
+        agent._tool_manager = ToolManager(workspace_root=workspace_root)
         
         # Attach memory manager and share LLM model for summarization
         if memory_manager:

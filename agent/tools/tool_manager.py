@@ -36,16 +36,31 @@ class ToolManager:
     Tool manager for managing tools.
     """
     _instance = None
+    _workspace_instances: dict[Path, "ToolManager"] = {}
+    _instance_lock = threading.Lock()
 
-    def __new__(cls, workspace_root=None):
-        """Singleton pattern to ensure only one instance of ToolManager exists."""
-        if cls._instance is None:
-            cls._instance = super(ToolManager, cls).__new__(cls)
-            cls._instance.tool_classes = {}  # Store tool classes instead of instances
-            cls._instance._initialized = False
-        return cls._instance
+    def __new__(cls, workspace_root=None, *, mcp_oauth_redirect_uri=None):
+        """Keep one tool/MCP lifecycle per resolved workspace."""
+        del mcp_oauth_redirect_uri
+        if workspace_root is None:
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = super(ToolManager, cls).__new__(cls)
+                    cls._instance.tool_classes = {}
+                    cls._instance._initialized = False
+                return cls._instance
 
-    def __init__(self, workspace_root=None):
+        root = Path(workspace_root).expanduser().resolve()
+        with cls._instance_lock:
+            instance = cls._workspace_instances.get(root)
+            if instance is None:
+                instance = super(ToolManager, cls).__new__(cls)
+                instance.tool_classes = {}
+                instance._initialized = False
+                cls._workspace_instances[root] = instance
+            return instance
+
+    def __init__(self, workspace_root=None, *, mcp_oauth_redirect_uri=None):
         # Initialize only once
         if not hasattr(self, 'tool_classes'):
             self.tool_classes = {}  # Dictionary to store tool classes
@@ -78,6 +93,8 @@ class ToolManager:
             self._registry_errors: list = []
         if not hasattr(self, '_missing_configured_tools'):
             self._missing_configured_tools: list = []
+        if mcp_oauth_redirect_uri is not None:
+            self.mcp_oauth_redirect_uri = str(mcp_oauth_redirect_uri)
         if workspace_root is not None:
             self.bind_workspace(workspace_root)
 
@@ -88,7 +105,9 @@ class ToolManager:
         if getattr(self, "workspace_root", None) == root:
             return
         if getattr(self, "workspace_root", None) is not None:
-            self.shutdown_mcp()
+            raise RuntimeError(
+                "ToolManager is workspace-bound; create the manager for the target workspace"
+            )
         self.workspace_root = root
         self._mcp_registry = None
         self._mcp_tool_instances = {}
@@ -565,18 +584,22 @@ class ToolManager:
             from agent.tools.mcp.mcp_client import (
                 McpClient,
                 McpClientRegistry,
-                set_reload_callback,
             )
             from agent.tools.mcp.mcp_tool import McpTool
 
             registry = self._mcp_registry or McpClientRegistry()
             self._mcp_registry = registry
-            set_reload_callback(self.reload_mcp_server)
 
             for cfg in mcp_servers_config:
                 server_name = cfg.get("name", "<unnamed>")
                 try:
-                    client = McpClient(cfg)
+                    client = McpClient(
+                        cfg,
+                        oauth_redirect_uri=getattr(
+                            self, "mcp_oauth_redirect_uri", None
+                        ),
+                        reload_callback=self.reload_mcp_server,
+                    )
                     if not client.initialize():
                         if getattr(client, "needs_auth", False):
                             with registry._registry_lock:

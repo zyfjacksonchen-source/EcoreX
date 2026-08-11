@@ -1002,7 +1002,7 @@ class AgentStreamExecutor:
                 select_mcp_tools,
             )
 
-            tm = ToolManager()
+            tm = getattr(self.agent, "_tool_manager", None) or ToolManager()
             tool_vectors = tm.get_mcp_tool_vectors()
             query = build_retrieval_query(self.messages)
             query_vector = tm.embed_query(query)
@@ -1060,7 +1060,8 @@ class AgentStreamExecutor:
         # newly available MCP tools mid-conversation without a session restart.
         try:
             from agent.tools import ToolManager
-            ToolManager().sync_mcp_into_agent(self)
+            manager = getattr(self.agent, "_tool_manager", None) or ToolManager()
+            manager.sync_mcp_into_agent(self)
         except Exception as e:
             logger.debug(f"[Agent] MCP sync skipped: {e}")
 

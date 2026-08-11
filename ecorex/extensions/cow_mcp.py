@@ -315,21 +315,50 @@ class CowMCPConfigService:
 class CowMCPSettingsService:
     """Settings projection backed by the exact ``mcp.json`` Cow executes."""
 
-    def __init__(self, workspace_root: str | Path, manager: Any) -> None:
+    def __init__(
+        self,
+        workspace_root: str | Path,
+        manager: Any,
+        *,
+        manager_factory: Any | None = None,
+    ) -> None:
         self.default_workspace_root = Path(workspace_root).expanduser().resolve()
         self.workspace_root = self.default_workspace_root
         self.path = self.workspace_root / "mcp.json"
         self.manager = manager
+        if manager_factory is None:
+            from agent.tools import ToolManager
 
-    def bind_workspace(self, workspace_root: str | Path | None) -> None:
+            oauth_redirect_uri = getattr(manager, "mcp_oauth_redirect_uri", None)
+
+            def manager_factory(root: str | Path) -> ToolManager:
+                return ToolManager(
+                    workspace_root=root,
+                    mcp_oauth_redirect_uri=oauth_redirect_uri,
+                )
+        self._manager_factory = manager_factory
+
+    def for_workspace(
+        self, workspace_root: str | Path | None
+    ) -> "CowMCPSettingsService":
         root = (
             self.default_workspace_root
             if workspace_root is None
             else Path(workspace_root).expanduser().resolve()
         )
-        self.workspace_root = root
-        self.path = root / "mcp.json"
-        self.manager.bind_workspace(root)
+        if root == self.workspace_root:
+            return self
+        return type(self)(
+            root,
+            self._manager_factory(root),
+            manager_factory=self._manager_factory,
+        )
+
+    def bind_workspace(
+        self, workspace_root: str | Path | None
+    ) -> "CowMCPSettingsService":
+        """Compatibility alias that never mutates another workspace runtime."""
+        return self.for_workspace(workspace_root)
 
     @staticmethod
     def _server_id(name: str) -> str:
@@ -540,22 +569,20 @@ def create_cow_mcp_router(
     def mutation(server: dict[str, Any]) -> dict[str, Any]:
         return {"server": server, "restart_required": True, "restart_scheduled": True}
 
-    def select(project_id: str | None) -> None:
-        service.bind_workspace(
+    def select(project_id: str | None) -> CowMCPSettingsService:
+        return service.for_workspace(
             workspace_resolver(project_id) if workspace_resolver is not None else None
         )
 
     @router.get("/api/v1/mcp/servers")
     def list_servers(project_id: str | None = None) -> dict[str, Any]:
-        select(project_id)
-        return {"items": service.list()}
+        return {"items": select(project_id).list()}
 
     @router.post("/api/v1/mcp/servers", status_code=status.HTTP_201_CREATED)
     def create_server(
         request: UserMCPServerRequest, project_id: str | None = None
     ) -> dict[str, Any]:
-        select(project_id)
-        return mutation(service.create(request))
+        return mutation(select(project_id).create(request))
 
     @router.put("/api/v1/mcp/servers/{server_id}")
     def update_server(
@@ -563,44 +590,36 @@ def create_cow_mcp_router(
         request: UserMCPServerRequest,
         project_id: str | None = None,
     ) -> dict[str, Any]:
-        select(project_id)
-        return mutation(service.update(server_id, request))
+        return mutation(select(project_id).update(server_id, request))
 
     @router.post("/api/v1/mcp/servers/{server_id}/test")
     def test_server(server_id: str, project_id: str | None = None) -> dict[str, Any]:
-        select(project_id)
-        return mutation(service.test(server_id))
+        return mutation(select(project_id).test(server_id))
 
     @router.post("/api/v1/mcp/servers/{server_id}/enable")
     def enable_server(server_id: str, project_id: str | None = None) -> dict[str, Any]:
-        select(project_id)
-        return mutation(service.set_enabled(server_id, True))
+        return mutation(select(project_id).set_enabled(server_id, True))
 
     @router.post("/api/v1/mcp/servers/{server_id}/disable")
     def disable_server(server_id: str, project_id: str | None = None) -> dict[str, Any]:
-        select(project_id)
-        return mutation(service.set_enabled(server_id, False))
+        return mutation(select(project_id).set_enabled(server_id, False))
 
     @router.delete("/api/v1/mcp/servers/{server_id}", status_code=204)
     def delete_server(server_id: str, project_id: str | None = None) -> Response:
-        select(project_id)
-        service.remove(server_id)
+        select(project_id).remove(server_id)
         return Response(status_code=204)
 
     @router.get("/api/v1/mcp/oauth")
     def oauth_statuses(project_id: str | None = None) -> dict[str, Any]:
-        select(project_id)
-        return {"items": service.oauth_items()}
+        return {"items": select(project_id).oauth_items()}
 
     @router.post("/api/v1/mcp/oauth/{server_id}/begin")
     def begin_oauth(server_id: str, project_id: str | None = None) -> dict[str, Any]:
-        select(project_id)
-        return service.begin_oauth(server_id)
+        return select(project_id).begin_oauth(server_id)
 
     @router.delete("/api/v1/mcp/oauth/{server_id}", status_code=204)
     def clear_oauth(server_id: str, project_id: str | None = None) -> Response:
-        select(project_id)
-        service.clear_oauth(server_id)
+        select(project_id).clear_oauth(server_id)
         return Response(status_code=204)
 
     def finish_oauth(code: str = "", state: str = "", error: str = "") -> HTMLResponse:
@@ -612,7 +631,7 @@ def create_cow_mcp_router(
         handler = pop_pending(state)
         if handler is None or not handler.finish_authorization(code):
             return HTMLResponse("MCP authorization failed.", status_code=400)
-        notify_server_authorized(handler.server_name)
+        notify_server_authorized(handler.server_name, handler)
         return HTMLResponse("MCP authorization complete. You may close this window.")
 
     router.add_api_route("/mcp/oauth/callback", finish_oauth, methods=["GET"])

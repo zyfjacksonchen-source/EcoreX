@@ -677,16 +677,16 @@ class AgentBridge:
         """
         # Create LLM model that uses COW's bot infrastructure
         model = AgentLLMModel(self.bridge)
+        from agent.tools import ToolManager
         
         # Default tools if none provided
         if tools is None:
             # Use ToolManager to load all available tools
-            from agent.tools import ToolManager
-            tool_manager = ToolManager()
+            workspace_dir = kwargs.get("workspace_dir")
+            tool_manager = ToolManager(workspace_root=workspace_dir)
             tool_manager.load_tools()
             
             tools = []
-            workspace_dir = kwargs.get("workspace_dir")
             for tool_name in tool_manager.tool_classes.keys():
                 try:
                     tool = tool_manager.create_tool(tool_name)
@@ -713,6 +713,7 @@ class AgentBridge:
             context_reserve_tokens=kwargs.get("context_reserve_tokens"),
             runtime_info=kwargs.get("runtime_info"),
         )
+        agent._tool_manager = ToolManager(workspace_root=kwargs.get("workspace_dir"))
 
         # Log skill loading details
         if agent.skill_manager:
@@ -1063,7 +1064,7 @@ class AgentBridge:
 
         def _run():
             try:
-                tm = ToolManager()
+                tm = getattr(agent, "_tool_manager", None) or ToolManager()
                 ensure_mcp = getattr(tm, "ensure_mcp_configured_loaded", None)
                 if callable(ensure_mcp):
                     ensure_mcp(wait_seconds=0.0)

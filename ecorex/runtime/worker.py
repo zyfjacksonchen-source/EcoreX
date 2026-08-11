@@ -5746,6 +5746,7 @@ class AgentTurnWorker:
         workspace_root_resolver: Callable[[ToolExecutionScope | None], tuple[Path, ...]]
         | None = None,
         browser_handler: Callable[..., Any] | None = None,
+        mcp_oauth_redirect_uri: str | None = None,
         **_ignored: Any,
     ) -> None:
         self.kernel = kernel
@@ -5768,6 +5769,7 @@ class AgentTurnWorker:
         )
         self.workspace_root_resolver = workspace_root_resolver
         self.browser_handler = browser_handler
+        self.mcp_oauth_redirect_uri = mcp_oauth_redirect_uri
         self._cancel_events: dict[str, threading.Event] = {}
         self._cow_bridge = _CowAgentBridge()
         self._conversation_stores: dict[Path, Any] = {}
@@ -6377,6 +6379,12 @@ class AgentTurnWorker:
             )
         )
         try:
+            from agent.tools import ToolManager
+
+            ToolManager(
+                workspace_root=workspace,
+                mcp_oauth_redirect_uri=self.mcp_oauth_redirect_uri,
+            )
             agent = AgentInitializer(object(), bridge).initialize_agent(
                 session_id=thread_id,
                 workspace_root=workspace,
