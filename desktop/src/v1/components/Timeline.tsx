@@ -10,7 +10,7 @@ import {
   useState,
 } from "react";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { ArrowDown, FolderOpen, Workflow, WandSparkles } from "lucide-react";
+import { ArrowDown, FolderOpen, Minus, Workflow, WandSparkles } from "lucide-react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 
 import type {
@@ -507,6 +507,7 @@ export function Timeline({
   }, [chatModels, turns]);
   const [scrollParent, setScrollParent] = useState<HTMLElement | null>(null);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const [directoryIndex, setDirectoryIndex] = useState(0);
   const followLatestRef = useRef(true);
   const followPausedByUserRef = useRef(false);
   const resumeAtBottomRef = useRef(false);
@@ -514,6 +515,7 @@ export function Timeline({
   const pausedAnchorRef = useRef<{ turnId: string; viewportOffset: number } | null>(null);
   const mountRef = useRef<HTMLDivElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const directoryListRef = useRef<HTMLDivElement>(null);
   const bottomSettleTimer = useRef<number | null>(null);
   const pausedAnchorTimer = useRef<number | null>(null);
   const contentRevision = timelineItems.map((item) => `${item.item_id}:${item.updated_at}:${messageText(item).length}`).join("|");
@@ -569,6 +571,7 @@ export function Timeline({
     resumeAtBottomRef.current = false;
     clearPausedAnchor();
     setShowJumpToLatest(false);
+    setDirectoryIndex(Math.max(0, timelineTurns.length - 1));
   }, [timelineThreadId]);
 
   useEffect(() => {
@@ -578,6 +581,18 @@ export function Timeline({
       if (pausedAnchorTimer.current !== null) window.clearTimeout(pausedAnchorTimer.current);
     };
   }, []);
+
+  useLayoutEffect(() => {
+    const list = directoryListRef.current;
+    const item = list?.children.item(directoryIndex) as HTMLElement | null;
+    if (!list || !item) return;
+    const itemTop = item.offsetTop;
+    const itemBottom = itemTop + item.offsetHeight;
+    if (itemTop < list.scrollTop) list.scrollTop = itemTop;
+    else if (itemBottom > list.scrollTop + list.clientHeight) {
+      list.scrollTop = itemBottom - list.clientHeight;
+    }
+  }, [directoryIndex]);
 
   useEffect(() => {
     if (!scrollParent) return undefined;
@@ -697,6 +712,7 @@ export function Timeline({
     resumeAtBottomRef.current = false;
     clearPausedAnchor();
     setShowJumpToLatest(true);
+    setDirectoryIndex(index);
     virtuosoRef.current?.scrollToIndex({ index, align: "start", behavior: "auto" });
   };
 
@@ -747,19 +763,20 @@ export function Timeline({
     <>
       {timelineTurns.length > 1 ? (
         <nav className="ex-timeline-directory" aria-label="对话目录">
-          <div className="ex-timeline-directory-list">
+          <div ref={directoryListRef} className="ex-timeline-directory-list">
             {timelineTurns.map((entry, index) => {
               const summary = directorySummary(entry.turn.input, index);
               return (
                 <Tooltip.Root key={entry.turn.turn_id} delayDuration={120}>
                   <Tooltip.Trigger asChild>
                     <button
-                      className="ex-timeline-directory-item"
+                      className="ex-button ex-timeline-directory-item"
                       type="button"
                       aria-label={`跳转到第 ${index + 1} 轮：${summary}`}
+                      aria-current={directoryIndex === index ? "location" : undefined}
                       onClick={() => jumpToTurn(index)}
                     >
-                      <span aria-hidden="true" />
+                      <Minus aria-hidden="true" strokeLinecap="butt" />
                     </button>
                   </Tooltip.Trigger>
                   <Tooltip.Portal>
@@ -789,6 +806,7 @@ export function Timeline({
             computeItemKey={(_index, entry) => entry.turn.turn_id}
             increaseViewportBy={{ top: 800, bottom: 800 }}
             atBottomThreshold={TIMELINE_BOTTOM_THRESHOLD_PX}
+            rangeChanged={({ endIndex }) => setDirectoryIndex(endIndex)}
             totalListHeightChanged={() => {
               if (followPausedByUserRef.current) restorePausedAnchor();
               else if (followLatestRef.current) scrollParent.scrollTop = scrollParent.scrollHeight;
