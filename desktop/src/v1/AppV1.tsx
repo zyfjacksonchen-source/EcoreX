@@ -30,12 +30,6 @@ import {
   THEME_PREFERENCE_KEY,
   type ThemePreference,
 } from "./state/themePreference.ts";
-import {
-  hasPendingRuntimeUpdate,
-  isRuntimeUpdateInstalling,
-  isVerifiedRuntimeUpdateReady,
-  runtimeUpdateStatusText,
-} from "./state/updatePresentation.ts";
 import { serviceReasonMessage } from "./state/userLanguage.ts";
 import "./styles/primitives.css";
 import "./styles/layout.css";
@@ -128,7 +122,6 @@ function useMediaMatch(query: string): boolean {
   return matches;
 }
 
-const DISMISSED_UPDATE_BANNERS_KEY = "ecorex-dismissed-update-banners";
 const PROFILE_AVATAR_KEY = "emate-profile-avatar";
 const DESKTOP_THREAD_ID = /^thr_[A-Za-z0-9._:-]{1,252}$/u;
 
@@ -150,17 +143,6 @@ declare global {
       onDesktopUpdateStatus?: (callback: (status: DesktopUpdateStatus) => void) => () => void;
       onOpenThread?: (callback: (threadId: string) => void) => () => void;
     };
-  }
-}
-
-function initialDismissedUpdateBanners(): string[] {
-  try {
-    const value = JSON.parse(window.localStorage.getItem(DISMISSED_UPDATE_BANNERS_KEY) ?? "[]");
-    return Array.isArray(value)
-      ? value.filter((item): item is string => typeof item === "string")
-      : [];
-  } catch {
-    return [];
   }
 }
 
@@ -204,9 +186,6 @@ export function AppV1() {
   const [desktopUpdate, setDesktopUpdate] = useState<DesktopUpdateStatus | null>(null);
   const [desktopUpdateBusy, setDesktopUpdateBusy] = useState(false);
   const [dismissedDesktopUpdateVersion, setDismissedDesktopUpdateVersion] = useState<string | null>(null);
-  const [dismissedUpdateBanners, setDismissedUpdateBanners] = useState(
-    initialDismissedUpdateBanners,
-  );
   const [composerPrefill, setComposerPrefill] = useState<{ key: string; text: string } | null>(null);
   const [composerDraft, setComposerDraft] = useState("");
 
@@ -451,7 +430,6 @@ export function AppV1() {
   const modelUnavailable = modelServiceReady && !bootstrap?.models.chat.length
     ? "无可用 Agent 模型，请联系管理员。"
     : modelUnavailableMessage(authenticated, bootstrap?.model_service.reason);
-  const update = bootstrap?.update;
   const shareUnavailableReason = !authenticated
     ? "登录后才能分享任务。"
     : !runtime.state.thread
@@ -465,26 +443,6 @@ export function AppV1() {
   const retouchUnavailableReason = serviceReasonMessage(
     bootstrap?.retouch_service.reason,
     "精准修图暂时不可用，请稍后重试。",
-  );
-  const updatePending = hasPendingRuntimeUpdate(update) && update?.state !== "failed";
-  const updateReady = isVerifiedRuntimeUpdateReady(update);
-  const updateInstalling = isRuntimeUpdateInstalling(update, runtime.updateBusy);
-  const updateActionable = update?.state === "available" || updateReady;
-  const updateMessage = updatePending
-    ? runtimeUpdateStatusText(update, runtime.updateBusy)
-    : null;
-  const updateBannerKey = updateMessage && update
-    ? (update.release_id && update.build_digest
-        ? `${update.release_id}:${update.build_digest}`
-        : update.release_id ?? update.build_digest)
-      ?? update.target_version
-      ?? update.transaction_id
-      ?? "unknown-update"
-    : null;
-  const updateBannerVisible = Boolean(
-    updateMessage
-    && updateBannerKey
-    && !dismissedUpdateBanners.includes(updateBannerKey),
   );
   const desktopUpdateVersion = desktopUpdate && "version" in desktopUpdate
     ? desktopUpdate.version
@@ -517,19 +475,6 @@ export function AppV1() {
     } finally {
       setDesktopUpdateBusy(false);
     }
-  };
-  const dismissUpdateBanner = () => {
-    if (!updateBannerKey) return;
-    setDismissedUpdateBanners((current) => {
-      if (current.includes(updateBannerKey)) return current;
-      const next = [...current, updateBannerKey].slice(-32);
-      try {
-        window.localStorage.setItem(DISMISSED_UPDATE_BANNERS_KEY, JSON.stringify(next));
-      } catch {
-        // In-memory dismissal still works when storage is unavailable.
-      }
-      return next;
-    });
   };
   const isNewConversation = !runtime.state.thread;
 
@@ -962,47 +907,6 @@ export function AppV1() {
                 </IconButton>
               </section>
             ) : null}
-            {updateBannerVisible ? (
-              <section className="ex-update-banner" aria-live="polite">
-                <div className="ex-update-copy">
-                  <span>{updateMessage}</span>
-                  {updateInstalling ? (
-                    <progress aria-label="新版下载与安装进度" />
-                  ) : null}
-                </div>
-                {updateActionable ? (
-                  <button
-                    className="ex-button is-primary"
-                    type="button"
-                    disabled={runtime.updateBusy}
-                    aria-busy={runtime.updateBusy}
-                    onClick={() => void runtime.activateUpdate()}
-                  >
-                    {runtime.updateBusy
-                      ? "正在下载并安装"
-                      : update?.state === "available"
-                        ? "下载并安装"
-                        : "立即安装"}
-                  </button>
-                ) : null}
-                {!updateInstalling ? (
-                  <IconButton label="关闭更新提示" onClick={dismissUpdateBanner}>
-                    <X aria-hidden="true" />
-                  </IconButton>
-                ) : null}
-              </section>
-            ) : null}
-
-            {runtime.updateError ? (
-              <section className="ex-error-banner" role="alert">
-                <AlertCircle aria-hidden="true" />
-                <span>{runtime.updateError}</span>
-                <IconButton label="关闭更新错误" onClick={runtime.clearUpdateError}>
-                  <X aria-hidden="true" />
-                </IconButton>
-              </section>
-            ) : null}
-
             {bootstrap && authenticated && !modelServiceReady ? (
               <section className="ex-error-banner" role="status">
                 <WifiOff aria-hidden="true" />
@@ -1162,11 +1066,6 @@ export function AppV1() {
             onClearSystemHealthError={runtime.clearSystemHealthError}
             onRefreshSystemHealth={runtime.refreshSystemHealth}
             onLoadSystemTechnicalHealth={runtime.loadSystemTechnicalHealth}
-            updateBusy={runtime.updateBusy}
-            updateError={runtime.updateError}
-            onClearUpdateError={runtime.clearUpdateError}
-            onCheckUpdate={runtime.checkUpdate}
-            onActivateUpdate={runtime.activateUpdate}
           />
         </LazyFeatureBoundary>
         <LazyFeatureBoundary active={shareOpen} label="任务分享" onClose={closeShare}>

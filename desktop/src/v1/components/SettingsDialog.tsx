@@ -16,11 +16,6 @@ import {
   type RuntimeClient,
 } from "../api/runtimeClient.ts";
 import { userFacingError } from "../state/userLanguage.ts";
-import {
-  isRuntimeUpdateInstalling,
-  isVerifiedRuntimeUpdateReady,
-  runtimeUpdateStatusText,
-} from "../state/updatePresentation.ts";
 import { KnowledgeSettings, MemorySettings } from "./WorkspaceContentSettings.tsx";
 
 interface SettingsDialogProps {
@@ -46,11 +41,6 @@ interface SettingsDialogProps {
   onClearSystemHealthError: () => void;
   onRefreshSystemHealth: () => void;
   onLoadSystemTechnicalHealth: () => Promise<SystemHealthSample>;
-  updateBusy: boolean;
-  updateError: string | null;
-  onClearUpdateError: () => void;
-  onCheckUpdate: () => Promise<boolean>;
-  onActivateUpdate: () => Promise<boolean>;
 }
 
 type SettingsPage = "profile" | "general" | "knowledge" | "memory";
@@ -78,11 +68,6 @@ export function SettingsDialog({
   onClearSystemHealthError,
   onRefreshSystemHealth,
   onLoadSystemTechnicalHealth,
-  updateBusy,
-  updateError,
-  onClearUpdateError,
-  onCheckUpdate,
-  onActivateUpdate,
 }: SettingsDialogProps) {
   const authenticated = bootstrap?.login.authenticated === true;
   const [confirmQuarantineDelete, setConfirmQuarantineDelete] = useState(false);
@@ -100,11 +85,9 @@ export function SettingsDialog({
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [desktopUpdateChecking, setDesktopUpdateChecking] = useState(false);
   const [activePage, setActivePage] = useState<SettingsPage>("profile");
   const passwordRequestId = useRef<string | null>(null);
-  const updateReady = isVerifiedRuntimeUpdateReady(bootstrap?.update);
-  const updateAvailable = bootstrap?.update.state === "available";
-  const updateInstalling = isRuntimeUpdateInstalling(bootstrap?.update, updateBusy);
 
   const refreshMigrationQuarantine = useCallback(async (signal?: AbortSignal) => {
     setMigrationQuarantineLoadState((current) => current === "ready" ? current : "loading");
@@ -216,6 +199,17 @@ export function SettingsDialog({
     }, { once: true });
     reader.addEventListener("error", () => setAvatarError("头像读取失败，请重试。"), { once: true });
     reader.readAsDataURL(file);
+  };
+
+  const checkDesktopUpdate = async () => {
+    if (desktopUpdateChecking) return;
+    setDesktopUpdateChecking(true);
+    try {
+      await window.eMateDesktop?.checkForUpdates?.();
+    } finally {
+      setDesktopUpdateChecking(false);
+      onOpenChange(false);
+    }
   };
 
   const credentialKindLabel = (kind: MigrationCredentialKind) => ({
@@ -591,51 +585,18 @@ export function SettingsDialog({
             <div className="ex-settings-row">
               <div>
                 <strong>e-Mate {bootstrap?.update.current_version ?? "版本未读取"}</strong>
-                <p>
-                  {runtimeUpdateStatusText(bootstrap?.update, updateBusy)}
-                </p>
+                <p>由桌面更新器检查；Windows 下载已签名更新，macOS 打开官方下载页手动安装。</p>
               </div>
-              {updateAvailable || updateReady || updateInstalling ? (
-                <button
-                  className="ex-button is-primary ex-permission-change"
-                  type="button"
-                  disabled={updateBusy || updateInstalling}
-                  aria-busy={updateInstalling}
-                  onClick={() => void onActivateUpdate()}
-                >
-                  {bootstrap?.update.state === "activating"
-                    ? "正在打开新版"
-                    : updateInstalling
-                      ? "正在下载并安装"
-                      : updateAvailable
-                        ? "下载并安装"
-                        : "立即安装"}
-                </button>
-              ) : (
-                <button
-                  className="ex-button ex-permission-change"
-                  type="button"
-                  disabled={!bootstrap || updateBusy}
-                  onClick={() => void onCheckUpdate()}
-                >
-                  {updateBusy ? "正在检查" : "检查更新"}
-                </button>
-              )}
+              <button
+                className="ex-button ex-permission-change"
+                type="button"
+                disabled={!bootstrap || desktopUpdateChecking}
+                aria-busy={desktopUpdateChecking}
+                onClick={() => void checkDesktopUpdate()}
+              >
+                {desktopUpdateChecking ? "正在检查" : "检查更新"}
+              </button>
             </div>
-            {updateError ? (
-              <div className="ex-settings-error" role="alert">
-                <AlertCircle aria-hidden="true" />
-                <span>{updateError}</span>
-                <button
-                  className="ex-icon-button"
-                  type="button"
-                  aria-label="关闭更新错误"
-                  onClick={onClearUpdateError}
-                >
-                  <X aria-hidden="true" />
-                </button>
-              </div>
-            ) : null}
           </section>
         </div>
       </div>

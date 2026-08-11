@@ -123,12 +123,16 @@ test("the conversation directory reuses virtualized turn identity and scrolling"
     timeline,
     /virtuosoRef\.current\?\.scrollToIndex\(\{ index, align: "start", behavior: "auto" \}\)/u,
   );
+  assert.match(timeline, /directoryJumpTargetRef/u);
+  assert.match(timeline, /if \(directoryJumpTargetRef\.current !== null\) return/u);
   assert.match(timeline, /aria-current=\{directoryIndex === index \? "location" : undefined\}/u);
-  assert.match(timeline, /rangeChanged=\{\(\{ endIndex \}\) => setDirectoryIndex\(endIndex\)\}/u);
+  assert.match(timeline, /rangeChanged=\{\(\{ startIndex, endIndex \}\) =>/u);
+  assert.match(timeline, /setDirectoryIndex\(startIndex\)/u);
+  assert.doesNotMatch(timeline, /setDirectoryIndex\(endIndex\)/u);
   assert.match(timeline, /itemBottom - list\.clientHeight/u);
   assert.match(timeline, /<Minus aria-hidden="true" strokeLinecap="butt" \/>/u);
   assert.match(timeline, /<Tooltip\.Content className="ex-tooltip ex-timeline-directory-tooltip"/u);
-  assert.match(features, /\.ex-timeline-directory-list\s*\{[\s\S]*max-height:\s*calc\(100dvh - 48px\);[\s\S]*mask-image:\s*linear-gradient\(to bottom, rgb\(0 0 0 \/ 25%\), #000 48px\)/u);
+  assert.match(features, /\.ex-timeline-directory-list\s*\{[\s\S]*max-height:\s*calc\(100dvh - 176px\);[\s\S]*mask-image:\s*linear-gradient\(to bottom, rgb\(0 0 0 \/ 25%\), #000 48px\)/u);
   assert.match(features, /\.ex-timeline-directory-item\s*\{[\s\S]*width:\s*24px;[\s\S]*height:\s*20px;[\s\S]*min-height:\s*20px;/u);
   assert.match(features, /\.ex-timeline-directory-item svg\s*\{[\s\S]*width:\s*21px;[\s\S]*height:\s*20px;[\s\S]*stroke-width:\s*4px;[\s\S]*opacity:\s*0\.18;/u);
   assert.match(features, /\.ex-timeline-directory-item\[aria-current="location"\] svg\s*\{[\s\S]*opacity:\s*0\.55;/u);

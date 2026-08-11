@@ -1686,6 +1686,23 @@ test("timeline exposes a persistent jump-to-latest control after scrolling away 
   await expect(jumpButton).toBeHidden();
 });
 
+test("conversation directory jumps from turn 120 to turn 1 and tracks the top range", async ({ guardedPage }) => {
+  await openThreadScenario(guardedPage, "long-timeline");
+  const timeline = guardedPage.locator(".ex-timeline");
+  const directory = guardedPage.getByRole("navigation", { name: "对话目录" });
+  const first = directory.getByRole("button", { name: "跳转到第 1 轮：第 1 轮问题" });
+  await first.scrollIntoViewIfNeeded();
+  await first.click();
+
+  const firstTurn = timeline.locator('[data-turn-id="turn-long-1"]');
+  await expect(firstTurn).toBeVisible();
+  await expect(first).toHaveAttribute("aria-current", "location");
+  await expect.poll(() => firstTurn.evaluate((row) => {
+    const viewport = row.closest(".ex-timeline")?.getBoundingClientRect();
+    return viewport ? Math.abs(Math.round(row.getBoundingClientRect().top - viewport.top)) : Number.POSITIVE_INFINITY;
+  })).toBeLessThanOrEqual(4);
+});
+
 test("streaming reply never scrolls backward while following the latest output", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "streaming-jitter");
   const evidence = await guardedPage.evaluate(async () => {

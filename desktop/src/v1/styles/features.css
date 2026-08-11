@@ -2337,7 +2337,7 @@
 .ex-timeline-directory-list {
   position: absolute;
   right: var(--space-3);
-  max-height: calc(100dvh - 48px);
+  max-height: calc(100dvh - 176px);
   overflow-y: auto;
   transform: translateY(-50%);
   mask-image: linear-gradient(to bottom, rgb(0 0 0 / 25%), #000 48px);

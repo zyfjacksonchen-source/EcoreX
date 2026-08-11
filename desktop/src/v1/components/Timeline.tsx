@@ -516,6 +516,9 @@ export function Timeline({
   const mountRef = useRef<HTMLDivElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const directoryListRef = useRef<HTMLDivElement>(null);
+  const directoryJumpTargetRef = useRef<number | null>(null);
+  const directoryVisibleStartRef = useRef(0);
+  const directoryJumpSettleTimer = useRef<number | null>(null);
   const bottomSettleTimer = useRef<number | null>(null);
   const pausedAnchorTimer = useRef<number | null>(null);
   const contentRevision = timelineItems.map((item) => `${item.item_id}:${item.updated_at}:${messageText(item).length}`).join("|");
@@ -526,6 +529,15 @@ export function Timeline({
       delete scrollParent.dataset.scrollAnchorOffset;
     }
     pausedAnchorRef.current = null;
+  };
+  const finishDirectoryJump = () => {
+    if (directoryJumpTargetRef.current === null) return;
+    directoryJumpTargetRef.current = null;
+    if (directoryJumpSettleTimer.current !== null) {
+      window.clearTimeout(directoryJumpSettleTimer.current);
+      directoryJumpSettleTimer.current = null;
+    }
+    setDirectoryIndex(directoryVisibleStartRef.current);
   };
   const capturePausedAnchor = () => {
     if (!scrollParent) return;
@@ -550,6 +562,7 @@ export function Timeline({
     }
   };
   const restorePausedAnchor = () => {
+    if (directoryJumpTargetRef.current !== null) return;
     const anchor = pausedAnchorRef.current;
     if (!scrollParent || !followPausedByUserRef.current || !anchor) return;
     const row = [...scrollParent.querySelectorAll<HTMLElement>(".ex-timeline-turn[data-turn-id]")]
@@ -570,6 +583,11 @@ export function Timeline({
     followLatestRef.current = true;
     resumeAtBottomRef.current = false;
     clearPausedAnchor();
+    directoryJumpTargetRef.current = null;
+    if (directoryJumpSettleTimer.current !== null) {
+      window.clearTimeout(directoryJumpSettleTimer.current);
+      directoryJumpSettleTimer.current = null;
+    }
     setShowJumpToLatest(false);
     setDirectoryIndex(Math.max(0, timelineTurns.length - 1));
   }, [timelineThreadId]);
@@ -579,6 +597,7 @@ export function Timeline({
     return () => {
       if (bottomSettleTimer.current !== null) window.clearTimeout(bottomSettleTimer.current);
       if (pausedAnchorTimer.current !== null) window.clearTimeout(pausedAnchorTimer.current);
+      if (directoryJumpSettleTimer.current !== null) window.clearTimeout(directoryJumpSettleTimer.current);
     };
   }, []);
 
@@ -601,6 +620,7 @@ export function Timeline({
       return remaining <= TIMELINE_BOTTOM_THRESHOLD_PX;
     };
     const schedulePausedAnchorCapture = () => {
+      if (directoryJumpTargetRef.current !== null) return;
       if (pausedAnchorTimer.current !== null || pausedAnchorRef.current !== null) return;
       pausedAnchorTimer.current = window.setTimeout(() => {
         pausedAnchorTimer.current = null;
@@ -627,6 +647,7 @@ export function Timeline({
       }
     };
     const pauseFollowOnWheel = (event: WheelEvent) => {
+      finishDirectoryJump();
       if (event.deltaY < 0 || followPausedByUserRef.current) {
         resumeAtBottomRef.current = event.deltaY > 0;
         followPausedByUserRef.current = true;
@@ -637,6 +658,7 @@ export function Timeline({
       }
     };
     const pauseFollowOnTouch = () => {
+      finishDirectoryJump();
       followPausedByUserRef.current = true;
       followLatestRef.current = false;
       resumeAtBottomRef.current = false;
@@ -712,6 +734,11 @@ export function Timeline({
     resumeAtBottomRef.current = false;
     clearPausedAnchor();
     setShowJumpToLatest(true);
+    directoryJumpTargetRef.current = index;
+    if (directoryJumpSettleTimer.current !== null) {
+      window.clearTimeout(directoryJumpSettleTimer.current);
+    }
+    directoryJumpSettleTimer.current = window.setTimeout(finishDirectoryJump, 2_000);
     setDirectoryIndex(index);
     virtuosoRef.current?.scrollToIndex({ index, align: "start", behavior: "auto" });
   };
@@ -806,7 +833,23 @@ export function Timeline({
             computeItemKey={(_index, entry) => entry.turn.turn_id}
             increaseViewportBy={{ top: 800, bottom: 800 }}
             atBottomThreshold={TIMELINE_BOTTOM_THRESHOLD_PX}
-            rangeChanged={({ endIndex }) => setDirectoryIndex(endIndex)}
+            rangeChanged={({ startIndex, endIndex }) => {
+              directoryVisibleStartRef.current = startIndex;
+              const target = directoryJumpTargetRef.current;
+              if (target === null) {
+                setDirectoryIndex(startIndex);
+                return;
+              }
+              setDirectoryIndex(target);
+              if (target < startIndex || target > endIndex) return;
+              if (directoryJumpSettleTimer.current !== null) {
+                window.clearTimeout(directoryJumpSettleTimer.current);
+              }
+              directoryJumpSettleTimer.current = window.setTimeout(
+                finishDirectoryJump,
+                TIMELINE_SCROLL_SETTLE_MS * 2,
+              );
+            }}
             totalListHeightChanged={() => {
               if (followPausedByUserRef.current) restorePausedAnchor();
               else if (followLatestRef.current) scrollParent.scrollTop = scrollParent.scrollHeight;

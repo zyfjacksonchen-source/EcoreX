@@ -7,34 +7,16 @@ const settings = await readFile(
   new URL("../src/v1/components/SettingsDialog.tsx", import.meta.url),
   "utf8",
 );
-const session = await readFile(
-  new URL("../src/v1/state/useRuntimeSession.ts", import.meta.url),
-  "utf8",
-);
-const handoff = await readFile(
-  new URL("../src/v1/state/updateActivationHandoff.ts", import.meta.url),
-  "utf8",
-);
 const desktopUpdater = await readFile(new URL("../electron/updater.cjs", import.meta.url), "utf8");
 const desktopMain = await readFile(new URL("../electron/main.cjs", import.meta.url), "utf8");
 const desktopPreload = await readFile(new URL("../electron/preload.cjs", import.meta.url), "utf8");
 
-test("update notification keeps discovery and install behind one user action", () => {
-  assert.match(app, /hasPendingRuntimeUpdate/u);
-  assert.match(app, /update\?\.state !== "failed"/u);
-  assert.match(app, /<progress aria-label="新版下载与安装进度"/u);
-  assert.match(app, /下载并安装/u);
-  assert.match(settings, /runtimeUpdateStatusText/u);
-  assert.match(settings, /onCheckUpdate/u);
-  assert.match(settings, /onActivateUpdate/u);
-});
-
-test("activation opens the healthy target in a new window with in-place fallback", () => {
-  assert.match(session, /`emate-updated-runtime-\$\{crypto\.randomUUID\(\)\}`/u);
-  assert.match(session, /import\("\.\/updateActivationHandoff\.ts"\)/u);
-  assert.match(handoff, /bootstrap\.update\.current_version === options\.targetVersion/u);
-  assert.match(handoff, /options\.openUpdatedRuntime/u);
-  assert.match(handoff, /options\.replace\(next\.toString\(\)\)/u);
+test("packaged desktop exposes Electron updater as the only update UI and action", () => {
+  assert.doesNotMatch(app, /hasPendingRuntimeUpdate|updateBannerVisible|runtime\.activateUpdate/u);
+  assert.doesNotMatch(app, /新版下载与安装进度|label="关闭更新提示"/u);
+  assert.doesNotMatch(settings, /runtimeUpdateStatusText|onCheckUpdate|onActivateUpdate/u);
+  assert.match(settings, /window\.eMateDesktop\?\.checkForUpdates\?\.\(\)/u);
+  assert.match(app, /data-desktop-update-state/u);
 });
 
 test("desktop updates keep one feed and require a platform-correct user action", () => {
