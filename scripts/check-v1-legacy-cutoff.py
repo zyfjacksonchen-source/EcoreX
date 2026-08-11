@@ -32,8 +32,6 @@ RETIRED_FILES = (
     "desktop/build/README-macos-agent-install.txt",
     "desktop/build/README-migration.txt",
     "desktop/build/entitlements.mac.plist",
-    "desktop/build/icon.icns",
-    "desktop/build/icon.ico",
     "desktop/build/icon.png",
     "desktop/src/App.tsx",
     "desktop/src/styles/app.css",
@@ -79,7 +77,6 @@ RETIRED_FILES = (
 
 RETIRED_TREES = (
     "channel/web",
-    "desktop/electron",
     "deploy/ecorex-admin-api",
     "deploy/ecorex-usage-panel",
     "deploy/ecorex-site/admin",
