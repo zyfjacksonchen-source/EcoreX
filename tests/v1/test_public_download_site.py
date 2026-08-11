@@ -195,6 +195,16 @@ raw.downloads[0].authenticode = { status: "verified", signer_certificate_thumbpr
 assert.equal(contract.normalizeDownloadIndex(raw).version, version);
 assert.equal(contract.normalizeDownloadIndex(raw).distribution_mode, "unsigned-manual");
 assert.equal(contract.normalizeDownloadIndex(raw).downloads[0].authenticode.status, "verified");
+assert.deepEqual(contract.installationTrustCopy(contract.normalizeDownloadIndex(raw)), {
+  release: "Windows 已签名 · macOS 手动安装（未签名）",
+  help: "Windows 安装包已验证数字签名；macOS 暂未签名，请按系统提示允许打开。",
+});
+const unsignedManual = structuredClone(raw);
+delete unsignedManual.downloads[0].authenticode;
+assert.deepEqual(contract.installationTrustCopy(contract.normalizeDownloadIndex(unsignedManual)), {
+  release: "手动安装（未签名）",
+  help: "当前候选暂未签名，请按系统提示允许打开。",
+});
 assert.throws(() => contract.normalizeDownloadIndex({ ...raw, distribution_mode: "unknown" }));
 assert.equal(contract.normalizeDownloadIndex(signed).distribution_mode, "signed-automatic");
 assert.throws(() => contract.normalizeDownloadIndex({ ...raw, downloads: [{ ...raw.downloads[0], authenticode: { status: "verified", signer_certificate_thumbprint: "c".repeat(40) } }, ...raw.downloads.slice(1)] }));

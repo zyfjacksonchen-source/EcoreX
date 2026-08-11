@@ -68,6 +68,14 @@ export function normalizeDownloadIndex(raw) {
   return Object.freeze({ ...index, distribution_mode: manual ? "unsigned-manual" : "signed-automatic", downloads: Object.freeze(downloads) });
 }
 
+export function installationTrustCopy(index) {
+  if (index.distribution_mode !== "unsigned-manual") return null;
+  const windowsSigned = index.downloads.some((item) => item.target === "windows-x64" && item.authenticode?.status === "verified");
+  return windowsSigned
+    ? Object.freeze({ release: "Windows 已签名 · macOS 手动安装（未签名）", help: "Windows 安装包已验证数字签名；macOS 暂未签名，请按系统提示允许打开。" })
+    : Object.freeze({ release: "手动安装（未签名）", help: "当前候选暂未签名，请按系统提示允许打开。" });
+}
+
 export function targetFromPlatformSignals({ source = "", architecture = "", renderer = "" }) {
   source = String(source).toLowerCase();
   architecture = String(architecture).toLowerCase();
@@ -187,8 +195,11 @@ function renderIndex(index, target) {
   const [major, minor] = index.version.split(".");
   const featureNav = document.querySelector("[data-feature-nav]");
   if (featureNav) featureNav.textContent = `${major}.${minor} 新功能`;
+  const trustCopy = installationTrustCopy(index);
   const releaseLabel = document.querySelector("[data-release-label]");
-  if (releaseLabel) releaseLabel.textContent = `当前版本 ${index.version} · ${index.released_at.slice(0, 10)}${index.distribution_mode === "unsigned-manual" ? " · 手动安装（未签名）" : ""}`;
+  if (releaseLabel) releaseLabel.textContent = `当前版本 ${index.version} · ${index.released_at.slice(0, 10)}${trustCopy ? ` · ${trustCopy.release}` : ""}`;
+  const firstLaunchHelp = document.querySelector("[data-first-launch-help]");
+  if (firstLaunchHelp && trustCopy) firstLaunchHelp.textContent = trustCopy.help;
   const grid = document.querySelector("[data-downloads]");
   if (!grid) return;
   grid.replaceChildren();
