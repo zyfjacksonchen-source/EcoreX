@@ -5,7 +5,9 @@ from dataclasses import replace
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
 import zipfile
 
 import pytest
@@ -65,8 +67,49 @@ def test_verified_pack_transfer_reuses_the_transaction_file_without_copying(
 
     assert not source.exists()
     assert destination.read_bytes() == payload
-    if source_identity:
+    if source_identity and os.name != "nt":
         assert destination.stat().st_ino == source_identity
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows inherited DACL contract")
+def test_verified_pack_transfer_inherits_the_candidate_directory_dacl(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "transaction"
+    destination_root = tmp_path / "slot" / "capability-packs"
+    source_root.mkdir()
+    destination_root.mkdir(parents=True)
+    source = source_root / "large-pack.zip"
+    destination = destination_root / source.name
+    source.write_bytes(b"verified-pack")
+    sid = "S-1-15-2-1"  # ALL APPLICATION PACKAGES
+    icacls = Path(os.environ["SYSTEMROOT"]) / "System32/icacls.exe"
+    granted = subprocess.run(
+        [
+            str(icacls),
+            str(destination_root),
+            "/grant:r",
+            f"*{sid}:(OI)(CI)(RX)",
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=30,
+        check=False,
+    )
+    assert granted.returncode == 0, granted.stdout.decode(errors="replace")
+
+    pack_install_module._transfer_stable(source, destination)
+
+    found = subprocess.run(
+        [str(icacls), str(destination), "/findsid", f"*{sid}"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=30,
+        check=False,
+    )
+    assert b"SID Found:" in found.stdout, found.stdout.decode(errors="replace")
 
 
 class AcceptingTestVerifier:
