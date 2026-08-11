@@ -132,9 +132,22 @@ const DISMISSED_UPDATE_BANNERS_KEY = "ecorex-dismissed-update-banners";
 const PROFILE_AVATAR_KEY = "emate-profile-avatar";
 const DESKTOP_THREAD_ID = /^thr_[A-Za-z0-9._:-]{1,252}$/u;
 
+type DesktopUpdateStatus =
+  | { state: "checking" | "not-available"; userInitiated: boolean }
+  | { state: "available"; version: string; platform: "windows" | "macos"; manualInstall: boolean; userInitiated: boolean }
+  | { state: "downloading"; version: string | null; percent: number }
+  | { state: "downloaded"; version: string }
+  | { state: "error"; version: string | null; message: string; userInitiated: boolean };
+
 declare global {
   interface Window {
     eMateDesktop?: {
+      checkForUpdates?: () => Promise<void>;
+      openUpdatePage?: () => Promise<void>;
+      downloadDesktopUpdate?: () => Promise<void>;
+      installDesktopUpdate?: () => Promise<void>;
+      desktopUpdateStatus?: () => Promise<DesktopUpdateStatus | null>;
+      onDesktopUpdateStatus?: (callback: (status: DesktopUpdateStatus) => void) => () => void;
       onOpenThread?: (callback: (threadId: string) => void) => () => void;
     };
   }
@@ -188,6 +201,9 @@ export function AppV1() {
   const [retouchArtifact, setRetouchArtifact] = useState<ArtifactProjection | null>(null);
   const retouchReturnFocusRef = useRef<HTMLElement | null>(null);
   const [artifactNotice, setArtifactNotice] = useState<string | null>(null);
+  const [desktopUpdate, setDesktopUpdate] = useState<DesktopUpdateStatus | null>(null);
+  const [desktopUpdateBusy, setDesktopUpdateBusy] = useState(false);
+  const [dismissedDesktopUpdateVersion, setDismissedDesktopUpdateVersion] = useState<string | null>(null);
   const [dismissedUpdateBanners, setDismissedUpdateBanners] = useState(
     initialDismissedUpdateBanners,
   );
@@ -204,6 +220,28 @@ export function AppV1() {
       setSidebarOpen(false);
     });
   }), [runtime.openThread]);
+
+  useEffect(() => {
+    const desktop = window.eMateDesktop;
+    if (!desktop) return undefined;
+    let active = true;
+    const accept = (status: DesktopUpdateStatus) => {
+      if (!active) return;
+      if (status.state === "available" && status.userInitiated) {
+        setDismissedDesktopUpdateVersion(null);
+      }
+      setDesktopUpdateBusy(false);
+      setDesktopUpdate(status);
+    };
+    const unsubscribe = desktop.onDesktopUpdateStatus?.(accept);
+    void desktop.desktopUpdateStatus?.().then((status) => {
+      if (status) accept(status);
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, []);
 
   const updateProfileAvatar = (value: string | null) => {
     setProfileAvatar(value);
@@ -452,6 +490,38 @@ export function AppV1() {
     && updateBannerKey
     && !dismissedUpdateBanners.includes(updateBannerKey),
   );
+  const desktopUpdateVersion = desktopUpdate && "version" in desktopUpdate
+    ? desktopUpdate.version
+    : null;
+  const desktopUpdateMessage = (() => {
+    switch (desktopUpdate?.state) {
+      case "available":
+        return desktopUpdate.manualInstall
+          ? `e-Mate ${desktopUpdate.version} 已发布。当前 macOS 版本未签名，请打开官方下载页，并按安装图解或信任命令手动更新。`
+          : `e-Mate ${desktopUpdate.version} 已发布，已签名 Windows 安装包可供下载。`;
+      case "downloading":
+        return `正在下载并验证 e-Mate ${desktopUpdate.version ?? "新版"}（${desktopUpdate.percent}%）`;
+      case "downloaded":
+        return `e-Mate ${desktopUpdate.version} 已下载并验证，重启后完成更新。`;
+      case "error":
+        return "桌面更新失败，当前版本不受影响，请稍后重试。";
+      default:
+        return null;
+    }
+  })();
+  const desktopUpdateVisible = Boolean(
+    desktopUpdateMessage
+    && (desktopUpdate?.state !== "error" || desktopUpdate.userInitiated)
+    && dismissedDesktopUpdateVersion !== (desktopUpdateVersion ?? "update-error"),
+  );
+  const downloadDesktopUpdate = async () => {
+    setDesktopUpdateBusy(true);
+    try {
+      await window.eMateDesktop?.downloadDesktopUpdate?.();
+    } finally {
+      setDesktopUpdateBusy(false);
+    }
+  };
   const dismissUpdateBanner = () => {
     if (!updateBannerKey) return;
     setDismissedUpdateBanners((current) => {
@@ -861,6 +931,46 @@ export function AppV1() {
                 <span>
                   这是新版候选验收窗口。消息、生图和本地工具写入隔离副本；登录、更新、外部分享不会影响当前正式版本。
                 </span>
+              </section>
+            ) : null}
+            {desktopUpdateVisible && desktopUpdateMessage ? (
+              <section className="ex-update-banner" aria-live="polite" data-desktop-update-state={desktopUpdate?.state}>
+                <div className="ex-update-copy">
+                  <span>{desktopUpdateMessage}</span>
+                  {desktopUpdate?.state === "downloading" ? (
+                    <progress aria-label="桌面更新下载进度" max={100} value={desktopUpdate.percent} />
+                  ) : null}
+                </div>
+                {desktopUpdate?.state === "available" ? (
+                  <button
+                    className="ex-button is-primary"
+                    type="button"
+                    disabled={desktopUpdateBusy}
+                    onClick={() => void (desktopUpdate.manualInstall
+                      ? window.eMateDesktop?.openUpdatePage?.()
+                      : downloadDesktopUpdate())}
+                  >
+                    {desktopUpdate.manualInstall
+                      ? "打开官方下载页"
+                      : desktopUpdateBusy ? "正在准备下载" : "下载更新"}
+                  </button>
+                ) : null}
+                {desktopUpdate?.state === "downloaded" ? (
+                  <button className="ex-button is-primary" type="button" onClick={() => void window.eMateDesktop?.installDesktopUpdate?.()}>
+                    重启并更新
+                  </button>
+                ) : null}
+                {desktopUpdate?.state === "error" ? (
+                  <button className="ex-button" type="button" onClick={() => void window.eMateDesktop?.checkForUpdates?.()}>
+                    重新检查
+                  </button>
+                ) : null}
+                <IconButton
+                  label="关闭桌面更新提示"
+                  onClick={() => setDismissedDesktopUpdateVersion(desktopUpdateVersion ?? "update-error")}
+                >
+                  <X aria-hidden="true" />
+                </IconButton>
               </section>
             ) : null}
             {updateBannerVisible ? (

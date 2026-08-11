@@ -267,34 +267,34 @@ test("Windows in-place upgrades select a clean release identity namespace", asyn
   }
 });
 
-test("mac metadata parsing only offers newer stable releases", () => {
-  assert.equal(updateContract.parseUpdateVersion("version: 2.0.1\nfiles: []\n"), "2.0.1");
-  const digest = Buffer.alloc(64, 7).toString("base64");
-  assert.deepEqual(updateContract.parseMacUpdateMetadata([
-    "version: 2.0.1",
-    "files:",
-    "  - url: e-Mate-2.0.1-arm64.zip",
-    `    sha512: ${digest}`,
-    "    size: 123456",
-    "",
-  ].join("\n")), {
-    version: "2.0.1",
-    files: [{ url: "e-Mate-2.0.1-arm64.zip", sha512: digest, size: 123456 }],
+test("public download index parsing only offers newer stable releases", () => {
+  const version = "2.0.1";
+  const download = (target, platform, architecture, fileName) => ({
+    target,
+    platform,
+    architecture,
+    file_name: fileName,
+    url: `https://mvdcm.ecoremedia.net/e-mate/update/${fileName}`,
+    size_bytes: 123456,
+    sha256: "a".repeat(64),
   });
-  assert.equal(updateContract.parseMacUpdateMetadata([
-    "version: 2.0.1",
-    "files:",
-    "  - url: ../forged.zip",
-    `    sha512: ${digest}`,
-    "    size: 1",
-  ].join("\n")), null);
-  assert.equal(updateContract.parseMacUpdateMetadata([
-    "version: 2.0.1",
-    "files:",
-    "  - url: e-Mate-2.0.1-arm64.zip",
-    "    sha512: not-a-digest",
-    "    size: 1",
-  ].join("\n")), null);
+  const index = {
+    schema_version: 2,
+    product: "e-Mate",
+    version,
+    distribution_mode: "unsigned-manual",
+    released_at: "2026-08-11T00:00:00Z",
+    downloads: [
+      download("windows-x64", "windows", "x64", `e-Mate-Setup-${version}-x64.exe`),
+      download("macos-arm64", "macos", "arm64", `e-Mate-${version}-arm64.dmg`),
+      download("macos-x64", "macos", "x64", `e-Mate-${version}-x64.dmg`),
+    ],
+  };
+  assert.equal(updateContract.parseDownloadIndex(JSON.stringify(index))?.version, version);
+  const forged = structuredClone(index);
+  forged.downloads[1].url = "https://example.invalid/forged.dmg";
+  assert.equal(updateContract.parseDownloadIndex(JSON.stringify(forged)), null);
+  assert.equal(updateContract.parseDownloadIndex(JSON.stringify({ ...index, distribution_mode: "signed" })), null);
   assert.equal(updateContract.isNewerStableVersion("2.0.1", "2.0.0"), true);
   assert.equal(updateContract.isNewerStableVersion("2.0.0", "2.0.0"), false);
   assert.equal(updateContract.isNewerStableVersion("1.9.9", "2.0.0"), false);
@@ -304,12 +304,13 @@ test("mac metadata parsing only offers newer stable releases", () => {
 test("unsigned mac updates remain manual while Windows retains electron-updater", async () => {
   const updater = await load("electron/updater.cjs");
   assert.match(updater, /process\.platform !== "win32"/);
-  assert.match(updater, /shell\.openExternal\(UPDATE_URL\)/);
-  assert.match(updater, /parseMacUpdateMetadata/);
-  assert.match(updater, /SHA-512/);
-  assert.match(updater, /autoUpdater\.autoDownload = true/);
+  assert.match(updater, /shell\.openExternal\(DOWNLOAD_URL\)/);
+  assert.match(updater, /parseDownloadIndex/);
+  assert.match(updater, /download-index\.json/);
+  assert.doesNotMatch(updater, /latest-mac\.yml/);
+  assert.match(updater, /autoUpdater\.autoDownload = false/);
   assert.match(updater, /autoUpdater\.quitAndInstall/);
-  assert.match(updater, /当前 macOS 版本暂未签名/);
+  assert.match(updater, /manualInstall: true/);
 });
 
 test("native completion notifications are Runtime-driven and deep-link through preload", async () => {
