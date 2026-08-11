@@ -1,5 +1,6 @@
 import asyncio
 import base64
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 import json
@@ -177,6 +178,40 @@ def test_generation_uses_fixed_inline_images_route_and_exact_model() -> None:
             "/v1/images/generations",
             "/v1/models",
         ]
+        await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_generation_can_complete_after_two_minutes_without_widening_health_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        virtual_durations = iter((121.0, 1.0))
+        budgets: list[float] = []
+
+        @asynccontextmanager
+        async def virtual_timeout(seconds: float):
+            budgets.append(seconds)
+            if seconds <= next(virtual_durations):
+                raise TimeoutError
+            yield
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/v1/models":
+                return httpx.Response(200, json={"data": [{"id": "gpt-image-2"}]})
+            return _completed()
+
+        monkeypatch.setattr(asyncio, "timeout", virtual_timeout)
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        provider = _provider(client)
+        result = await provider.submit(
+            _job(), idempotency_key="provider-idempotency-0001"
+        )
+        await provider.health()
+
+        assert result.state is ProviderState.COMPLETED
+        assert budgets == [300.0, 120.0]
         await client.aclose()
 
     asyncio.run(scenario())

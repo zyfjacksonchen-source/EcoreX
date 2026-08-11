@@ -76,6 +76,7 @@ class DynamicManagedImageProvider:
         provider_id: str,
         origins: Mapping[str, str],
         timeout_seconds: float,
+        generation_timeout_seconds: float = 300.0,
         connect_timeout_seconds: float,
         max_image_bytes: int,
         max_connections: int,
@@ -91,6 +92,7 @@ class DynamicManagedImageProvider:
         self.provider_id = provider_id
         self.origins = dict(origins)
         self.timeout_seconds = timeout_seconds
+        self.generation_timeout_seconds = generation_timeout_seconds
         self.connect_timeout_seconds = connect_timeout_seconds
         self.max_image_bytes = max_image_bytes
         self.max_connections = max_connections
@@ -286,6 +288,7 @@ class DynamicManagedImageProvider:
             bearer_token=lambda value=configuration.api_key: value,
             input_store=self.input_store,
             timeout_seconds=self.timeout_seconds,
+            generation_timeout_seconds=self.generation_timeout_seconds,
             connect_timeout_seconds=self.connect_timeout_seconds,
             max_image_bytes=self.max_image_bytes,
             max_connections=self.max_connections,

@@ -211,7 +211,14 @@ def test_production_config_is_postgres_only_and_bounds_process_memory() -> None:
     config = ImageProductionConfig.from_environment(values)
     assert config.storage_backend == "postgresql"
     assert config.model_allowlist == frozenset({"image-2"})
+    assert config.provider_timeout_seconds == 120
+    assert config.provider_generation_timeout_seconds == 300
     assert "secret" not in repr(config)
+
+    with pytest.raises(ImageProductionConfigurationError, match="out of range"):
+        ImageProductionConfig.from_environment(
+            dict(values, ECOREX_IMAGE_PROVIDER_GENERATION_TIMEOUT_SECONDS="119")
+        )
 
     sqlite = dict(values, ECOREX_IMAGE_STORAGE_BACKEND="sqlite-wal")
     with pytest.raises(ImageProductionConfigurationError, match="PostgreSQL"):
