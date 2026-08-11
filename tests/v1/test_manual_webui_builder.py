@@ -90,14 +90,15 @@ def test_checked_in_predecessor_trust_covers_supported_v2_release_identities() -
     )
 
     assert identity == {
-        "version": "2.0.1",
-        "release_id": "release-stable-61992f640b29e51d12f06333",
-        "build_digest": "61992f640b29e51d12f0633311b281b3637f00abbb71973d528843eaa4697766",
-        "signing_key_id": "ecorex-webui-release-4f7c45cbc4965e3f5e83",
+        "version": "2.0.2",
+        "release_id": "release-stable-0fc72baa9cde99e7edcdbaeb",
+        "build_digest": "0fc72baa9cde99e7edcdbaeb59d378fd2eb8980a4aec2a8563220192daadd274",
+        "signing_key_id": "ecorex-webui-release-87e4b43e080932855e2b",
     }
     assert keys == {
         "ecorex-webui-release-0ef113eca992433d9d43": "+v+fPP/7gWk/VB1k2V8hRmIfkQ/j+IobGgfC+PaWR7A=",
         "ecorex-webui-release-4f7c45cbc4965e3f5e83": "mS+1bsB7xm5mNd1YXyDI6D93w9AHCSw2IyMjHyU7NiE=",
+        "ecorex-webui-release-87e4b43e080932855e2b": "ehzYdNnp2cPlGIn3aW4khw/lY/WjJGedQol3XWyQJrc=",
         "ecorex-webui-release-cfb9b141bd87235444ca": "bXoHp+C9D1I6amv2yfM8BN+qpzztXHJCvi9VOyXJ/fA=",
     }
 
