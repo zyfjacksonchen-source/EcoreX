@@ -616,6 +616,25 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
     assert '"desktop/release/latest-mac-$arch.yml"' in workflow
     assert "name: verify and merge desktop feed" in workflow
     assert "scripts/prepare-emate-desktop-feed.py" in workflow
+    assert "--unsigned-manual" in workflow
+    assert (
+        "--nginx-config deploy/e-mate/nginx/update-feed-unsigned-manual.conf"
+        in workflow
+    )
+    assert "value['schema_version'] == 2" in workflow
+    assert "value['distribution_mode'] == 'unsigned-manual'" in workflow
+    assert "value['status'] == 'activation-ready-unsigned-manual'" in workflow
+    upload = workflow.split("- name: Upload the verified unsigned manual feed base", 1)[
+        1
+    ]
+    assert (
+        "name: e-mate-${{ needs.runtime.outputs.version }}-unsigned-manual-feed-base"
+        in upload
+    )
+    assert "path: .handoff/feed" in upload
+    assert ".handoff/feed/latest.yml" not in upload
+    assert ".handoff/feed/latest-mac.yml" not in upload
+    assert ".handoff/feed/public-bootstrap-index.json" not in upload
     for required_gate in (
         "tests/v1/test_public_download_site.py",
         "tests/v1/test_emate_feed_deploy.py",
