@@ -2324,6 +2324,70 @@
   height: var(--icon-size-sm);
 }
 
+.ex-timeline-directory {
+  position: sticky;
+  top: 50%;
+  z-index: var(--z-sticky);
+  width: 0;
+  height: 0;
+  margin-left: auto;
+  pointer-events: none;
+}
+
+.ex-timeline-directory-list {
+  position: absolute;
+  right: var(--space-3);
+  max-height: min(60dvh, 420px);
+  padding-block: var(--space-1);
+  overflow-y: auto;
+  transform: translateY(-50%);
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  pointer-events: auto;
+}
+
+.ex-timeline-directory-list::-webkit-scrollbar {
+  display: none;
+}
+
+.ex-timeline-directory-item {
+  width: 32px;
+  height: 28px;
+  border: 0;
+  display: grid;
+  place-items: center end;
+  color: var(--color-ink-subtle);
+  background: transparent;
+}
+
+.ex-timeline-directory-item > span {
+  width: 10px;
+  height: 2px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  transition: width var(--chat-motion-fast) var(--ease-out);
+}
+
+.ex-timeline-directory-item:hover,
+.ex-timeline-directory-item:focus-visible {
+  color: var(--color-ink);
+}
+
+.ex-timeline-directory-item:hover > span,
+.ex-timeline-directory-item:focus-visible > span {
+  width: 20px;
+}
+
+.ex-timeline-directory-tooltip {
+  width: min(320px, calc(100vw - 48px));
+  display: grid;
+  gap: 2px;
+}
+
+.ex-timeline-directory-tooltip small {
+  color: var(--color-ink-muted);
+}
+
 .ex-interaction-stack {
   grid-row: 1;
   width: min(820px, calc(100% - var(--space-8)));
@@ -5087,6 +5151,10 @@ button.ex-artifact-primary {
 }
 
 @container workspace (max-width: 680px) {
+  .ex-timeline-directory {
+    display: none;
+  }
+
   .ex-timeline-inner {
     padding: var(--space-6) var(--space-4) var(--space-10);
   }

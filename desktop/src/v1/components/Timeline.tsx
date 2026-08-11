@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import { ArrowDown, FolderOpen, Workflow, WandSparkles } from "lucide-react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 
@@ -78,6 +79,15 @@ interface TimelineProps {
 
 const TIMELINE_BOTTOM_THRESHOLD_PX = 72;
 const TIMELINE_SCROLL_SETTLE_MS = 80;
+const DIRECTORY_SUMMARY_LIMIT = 80;
+
+function directorySummary(input: string, index: number): string {
+  const summary = input.trim().replace(/\s+/gu, " ");
+  if (!summary) return `第 ${index + 1} 轮对话`;
+  return summary.length > DIRECTORY_SUMMARY_LIMIT
+    ? `${summary.slice(0, DIRECTORY_SUMMARY_LIMIT - 1)}…`
+    : summary;
+}
 
 function role(item: ItemProjection): string {
   return typeof item.content.role === "string" ? item.content.role : "assistant";
@@ -681,6 +691,14 @@ export function Timeline({
       }, TIMELINE_SCROLL_SETTLE_MS);
     }
   };
+  const jumpToTurn = (index: number) => {
+    followPausedByUserRef.current = true;
+    followLatestRef.current = false;
+    resumeAtBottomRef.current = false;
+    clearPausedAnchor();
+    setShowJumpToLatest(true);
+    virtuosoRef.current?.scrollToIndex({ index, align: "start", behavior: "auto" });
+  };
 
   if (!timelineTurns.length && !visibleArtifacts.length && !isThinking) {
     return (
@@ -727,6 +745,36 @@ export function Timeline({
   ));
   return (
     <>
+      {timelineTurns.length > 1 ? (
+        <nav className="ex-timeline-directory" aria-label="对话目录">
+          <div className="ex-timeline-directory-list">
+            {timelineTurns.map((entry, index) => {
+              const summary = directorySummary(entry.turn.input, index);
+              return (
+                <Tooltip.Root key={entry.turn.turn_id} delayDuration={120}>
+                  <Tooltip.Trigger asChild>
+                    <button
+                      className="ex-timeline-directory-item"
+                      type="button"
+                      aria-label={`跳转到第 ${index + 1} 轮：${summary}`}
+                      onClick={() => jumpToTurn(index)}
+                    >
+                      <span aria-hidden="true" />
+                    </button>
+                  </Tooltip.Trigger>
+                  <Tooltip.Portal>
+                    <Tooltip.Content className="ex-tooltip ex-timeline-directory-tooltip" side="left" sideOffset={8}>
+                      <small>第 {index + 1} 轮</small>
+                      <span>{summary}</span>
+                      <Tooltip.Arrow className="ex-tooltip-arrow" />
+                    </Tooltip.Content>
+                  </Tooltip.Portal>
+                </Tooltip.Root>
+              );
+            })}
+          </div>
+        </nav>
+      ) : null}
       <div ref={mountRef} className="ex-timeline-inner ex-timeline-virtualized">
         <div className="ex-live-status" aria-live="polite" aria-atomic="true">
           {latestTerminal ? <span key={latestTerminal.turn_id}>
