@@ -71,6 +71,7 @@ class OpenAICompatibleImageProvider:
         bearer_token: Callable[[], str],
         input_store: ImageContentAddressedStore | None,
         timeout_seconds: float = 120.0,
+        generation_timeout_seconds: float = 300.0,
         connect_timeout_seconds: float = 5.0,
         max_image_bytes: int = 64 * 1024 * 1024,
         max_connections: int = 32,
@@ -115,8 +116,12 @@ class OpenAICompatibleImageProvider:
             raise ManagedImageProviderConfigurationError(
                 "image provider input store is invalid"
             )
-        if not 1.0 <= timeout_seconds <= 600.0 or not (
-            0.1 <= connect_timeout_seconds <= min(60.0, timeout_seconds)
+        if (
+            not 1.0 <= timeout_seconds <= 600.0
+            or not 1.0 <= generation_timeout_seconds <= 600.0
+            or not (
+                0.1 <= connect_timeout_seconds <= min(60.0, timeout_seconds)
+            )
         ):
             raise ManagedImageProviderConfigurationError(
                 "image provider timeout is invalid"
@@ -136,16 +141,20 @@ class OpenAICompatibleImageProvider:
         self.allowed_models = allowed_models
         self.input_store = input_store
         self.timeout_seconds = timeout_seconds
+        self.generation_timeout_seconds = max(
+            timeout_seconds, generation_timeout_seconds
+        )
         self.max_image_bytes = max_image_bytes
         self._bearer_token = bearer_token
         self._slots = asyncio.BoundedSemaphore(max_concurrency)
         self._owns_client = client is None
+        client_timeout_seconds = max(timeout_seconds, generation_timeout_seconds)
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(
-                timeout_seconds,
+                client_timeout_seconds,
                 connect=connect_timeout_seconds,
-                read=timeout_seconds,
-                write=timeout_seconds,
+                read=client_timeout_seconds,
+                write=client_timeout_seconds,
                 pool=connect_timeout_seconds,
             ),
             limits=httpx.Limits(
@@ -203,6 +212,7 @@ class OpenAICompatibleImageProvider:
                 submission=True,
                 model_id=job.request.model_id,
                 maximum=self._image_json_limit,
+                timeout_seconds=self.generation_timeout_seconds,
             )
         else:
             fields, files = await self._retouch_fields(job)
@@ -465,6 +475,7 @@ class OpenAICompatibleImageProvider:
         submission: bool,
         maximum: int,
         model_id: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> tuple[bytes, Mapping[str, str]]:
         headers = self._headers()
         if content_type is not None:
@@ -482,7 +493,7 @@ class OpenAICompatibleImageProvider:
         async with self._slots:
             response: httpx.Response | None = None
             try:
-                async with asyncio.timeout(self.timeout_seconds):
+                async with asyncio.timeout(timeout_seconds or self.timeout_seconds):
                     response = await self._client.send(request, stream=True)
                     if response.status_code == 429:
                         raise ProviderRateLimited(
