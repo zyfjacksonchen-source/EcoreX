@@ -100,44 +100,61 @@ _EMATE_MODEL_INSTRUCTIONS = (
     "search result as a completed fact and do not repeat an equivalent search."
 )
 _GATEWAY_INSTRUCTION_LIMIT = 131_072
+_COW_WORKSPACE_CONTEXT_LIMIT = 64 * 1024
+
+
+def _read_cow_context_file(root: Path, relative: str, *, limit: int) -> str:
+    path = root / relative
+    try:
+        if not path.is_file():
+            return ""
+        data = path.read_bytes()
+    except OSError:
+        return ""
+    truncated = len(data) > limit
+    content = data[-limit:].decode("utf-8", errors="ignore").strip()
+    if truncated and content:
+        content = "...(older content truncated)\n\n" + content
+    return content
 
 
 def _cow_workspace_instructions(workspace_root: Path | None) -> str | None:
+    """Load the same workspace truth CowAgent gives every session."""
+
     if workspace_root is None:
         return None
-
-    def read(relative: str, limit: int) -> str:
-        path = workspace_root / relative
-        try:
-            if not path.is_file() or path.is_symlink():
-                return ""
-            content = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            return ""
-        encoded = content.encode("utf-8")
-        if len(encoded) <= limit:
-            return content.strip()
-        return encoded[-limit:].decode("utf-8", errors="ignore").strip()
-
-    memory = read("MEMORY.md", 24 * 1024)
-    knowledge = read("knowledge/index.md", 24 * 1024)
     sections = [
-        "## CowAgent-compatible memory and knowledge\n"
-        "Recall is mandatory when the user refers to earlier events, decisions, preferences, "
-        "relationships or to-dos. Use memory_search when the location is unknown and memory_get "
-        "when the path is known. MEMORY.md is the concise long-term index; memory/YYYY-MM-DD.md "
-        "holds daily progress; knowledge/ holds structured topic pages. Proactively maintain these "
-        "files with write/edit without asking for a separate approval: stable preferences and "
-        "decisions go to MEMORY.md, current progress to today's daily file, articles to "
-        "knowledge/sources, conclusions to knowledge/analysis, entities to knowledge/entities, "
-        "and concepts to knowledge/concepts. After changing a knowledge page, update "
-        "knowledge/index.md. Never store passwords, API keys or tokens. Use remembered facts "
-        "naturally and do not announce internal file operations unless asked."
+        "## e-Mate workspace\n"
+        f"Your working directory is `{workspace_root}`. Relative file paths, MEMORY.md, "
+        "memory/YYYY-MM-DD.md, knowledge/, and workspace Skills all belong to this exact "
+        "directory. Use memory_search when a remembered location is unknown and memory_get "
+        "when its path is known. Store durable preferences and decisions in MEMORY.md, daily "
+        "progress in memory/YYYY-MM-DD.md, and structured reference material in knowledge/."
     ]
-    if memory:
-        sections.append(f"### MEMORY.md (current snapshot)\n{memory}")
-    if knowledge:
-        sections.append(f"### knowledge/index.md (current snapshot)\n{knowledge}")
+    remaining = _COW_WORKSPACE_CONTEXT_LIMIT - len(sections[0].encode("utf-8"))
+    for relative, limit in (
+        ("AGENT.md", 12 * 1024),
+        ("USER.md", 12 * 1024),
+        ("RULE.md", 12 * 1024),
+        ("MEMORY.md", 25 * 1024),
+        ("knowledge/index.md", 12 * 1024),
+    ):
+        if remaining <= 0:
+            break
+        content = _read_cow_context_file(
+            workspace_root,
+            relative,
+            limit=min(limit, remaining),
+        )
+        if not content:
+            continue
+        rendered = f"### {relative}\n{content}"
+        encoded = rendered.encode("utf-8")
+        if len(encoded) > remaining:
+            rendered = encoded[-remaining:].decode("utf-8", errors="ignore")
+            encoded = rendered.encode("utf-8")
+        sections.append(rendered)
+        remaining -= len(encoded)
     return "\n\n".join(sections)
 
 
@@ -375,6 +392,10 @@ class AgentTurnWorker:
         image_execution_queue_capacity: int = 8,
         image_execution_timeout_seconds: float = 900.0,
         workspace_root: str | Path | None = None,
+        workspace_root_resolver: Callable[
+            [ToolExecutionScope | None], tuple[Path, ...]
+        ]
+        | None = None,
     ) -> None:
         if lease_seconds < 5:
             raise ValueError("Agent worker lease must be at least five seconds")
@@ -417,6 +438,11 @@ class AgentTurnWorker:
             if workspace_root is not None
             else None
         )
+        if workspace_root_resolver is not None and not callable(
+            workspace_root_resolver
+        ):
+            raise ValueError("workspace root resolver is invalid")
+        self.workspace_root_resolver = workspace_root_resolver
         self._workflow_guidance_cache: dict[
             tuple[str, tuple[str, ...]], Mapping[str, Any] | None
         ] = {}
@@ -2112,6 +2138,7 @@ class AgentTurnWorker:
         *,
         extension_snapshot_id: str,
         direct_tool_ids: tuple[str, ...],
+        reserved_instruction_bytes: int = 0,
     ) -> tuple[str | None, dict[str, Any] | None]:
         workflow_skill_ids = tuple(
             dict.fromkeys(
@@ -2153,6 +2180,7 @@ class AgentTurnWorker:
             > _GATEWAY_INSTRUCTION_LIMIT
             - len(_EMATE_MODEL_INSTRUCTIONS.encode("utf-8"))
             - len("\n\n".encode("utf-8"))
+            - reserved_instruction_bytes
             or not isinstance(instruction_sha256, str)
             or hashlib.sha256(instructions.encode("utf-8")).hexdigest()
             != instruction_sha256
@@ -2223,15 +2251,26 @@ class AgentTurnWorker:
             context["execution_batch_id"],
             plan.snapshot_id,
         )
+        workspace_instructions = _cow_workspace_instructions(
+            self._workspace_root_for_request(
+                job_id=job_id,
+                turn_id=turn_id,
+                thread_id=turn.thread_id,
+                execution_batch_id=context["execution_batch_id"],
+            )
+        )
         workflow_instructions, workflow_metadata = self._workflow_guidance(
             extension_snapshot_id=context["extension_snapshot_id"],
             direct_tool_ids=tool_projection.direct_tool_ids,
+            reserved_instruction_bytes=len(
+                (workspace_instructions or "").encode("utf-8")
+            ),
         )
         gateway_instructions = "\n\n".join(
             value
             for value in (
                 _EMATE_MODEL_INSTRUCTIONS,
-                _cow_workspace_instructions(self.workspace_root),
+                workspace_instructions,
                 workflow_instructions,
             )
             if value
@@ -2569,6 +2608,30 @@ class AgentTurnWorker:
         if workflow_metadata is not None:
             self._workflow_request_metadata[request.request_id] = workflow_metadata
         return request
+
+    def _workspace_root_for_request(
+        self,
+        *,
+        job_id: str,
+        turn_id: str,
+        thread_id: str,
+        execution_batch_id: str,
+    ) -> Path | None:
+        resolver = self.workspace_root_resolver
+        if resolver is not None:
+            resolved = resolver(
+                ToolExecutionScope(
+                    job_id=job_id,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    execution_batch_id=execution_batch_id,
+                )
+            )
+            if not isinstance(resolved, tuple):
+                raise ConflictError("workspace authority returned invalid roots")
+            if resolved:
+                return Path(resolved[0]).expanduser().resolve()
+        return self.workspace_root
 
     def _thread_conversation_context(
         self,
