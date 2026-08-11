@@ -359,18 +359,12 @@ def _validate_inventory(candidate: Path, receipt: dict[str, Any], device: int) -
     return payload
 
 
-def _validate_stage(args: argparse.Namespace) -> tuple[Path, Path, dict[str, Any], bytes]:
-    if os.name != "posix":
-        raise FeedDeployError("platform_unsupported")
-    root = _safe_absolute(args.root, "root")
-    root_metadata = root.lstat()
-    releases = root / "releases"
-    _safe_directory(releases, "releases", root_metadata.st_dev)
-    candidate = _safe_absolute(args.candidate, "candidate")
-    if candidate.parent != releases or candidate.lstat().st_dev != root_metadata.st_dev:
-        raise FeedDeployError("candidate_boundary_invalid")
-
-    receipt = _strict_json(candidate / "feed-stage-receipt.json")
+def _validate_target(
+    target_path: Path,
+    receipt: dict[str, Any],
+    device: int,
+    expected: dict[str, tuple[str, re.Pattern[str]]] | None = None,
+) -> tuple[str, bytes]:
     base_keys = {
         "schema_version", "document_type", "status", "version", "source_commit",
         "release_id", "build_digest", "runtime_manifest_sha256", "feed_build_id",
@@ -389,29 +383,35 @@ def _validate_stage(args: argparse.Namespace) -> tuple[Path, Path, dict[str, Any
         raise FeedDeployError("stage_not_activation_ready")
     if schema == 2 and receipt.get("distribution_mode") != "unsigned-manual":
         raise FeedDeployError("distribution_mode_invalid")
-    identities = (
-        ("version", args.expected_version, _SEMVER),
-        ("source_commit", args.expected_source_sha, _COMMIT),
-        ("release_id", args.expected_release_id, _SAFE_ID),
-        ("build_digest", args.expected_build_digest, _SHA256),
-        ("runtime_manifest_sha256", args.expected_manifest_sha256, _SHA256),
-    )
-    for field, expected, pattern in identities:
-        if not isinstance(expected, str) or not pattern.fullmatch(expected) or receipt.get(field) != expected:
+    identities = {
+        "version": _SEMVER,
+        "source_commit": _COMMIT,
+        "release_id": _SAFE_ID,
+        "build_digest": _SHA256,
+        "runtime_manifest_sha256": _SHA256,
+    }
+    for field, pattern in identities.items():
+        value = receipt.get(field)
+        if not isinstance(value, str) or not pattern.fullmatch(value):
+            raise FeedDeployError(f"{field}_invalid")
+        if expected is not None and value != expected[field][0]:
             raise FeedDeployError(f"{field}_mismatch")
     for field in ("feed_build_id", "nginx_config_sha256"):
         if not isinstance(receipt.get(field), str) or not _SHA256.fullmatch(receipt[field]):
             raise FeedDeployError(f"{field}_invalid")
-    target = f"releases/v{args.expected_version}-{receipt['feed_build_id'][:16]}"
+    target = f"releases/v{receipt['version']}-{receipt['feed_build_id'][:16]}"
     if receipt.get("candidate_target") != target or not _TARGET.fullmatch(target):
         raise FeedDeployError("candidate_target_invalid")
-    if candidate != root / PurePosixPath(target):
+    if target_path.name != PurePosixPath(target).name:
         raise FeedDeployError("candidate_identity_mismatch")
     activation = receipt.get("activation")
     pointer_files = (
         _MANUAL_POINTER_FILES
         if schema == 2
         else _SIGNED_POINTER_FILES
+    )
+    readback_name = (
+        "download-index.json" if schema == 2 else "public-bootstrap-index.json"
     )
     if not isinstance(activation, dict) or activation != {
         "strategy": "same-filesystem-current-symlink-rename",
@@ -422,7 +422,37 @@ def _validate_stage(args: argparse.Namespace) -> tuple[Path, Path, dict[str, Any
         "receipt_required_fields": _RECEIPT_FIELDS,
     }:
         raise FeedDeployError("activation_contract_invalid")
-    public_bytes = _validate_inventory(candidate, receipt, root_metadata.st_dev)
+    public_bytes = _validate_inventory(target_path, receipt, device)
+    return readback_name, public_bytes
+
+
+def _validate_stage(args: argparse.Namespace) -> tuple[Path, Path, dict[str, Any], bytes]:
+    if os.name != "posix":
+        raise FeedDeployError("platform_unsupported")
+    root = _safe_absolute(args.root, "root")
+    root_metadata = root.lstat()
+    releases = root / "releases"
+    _safe_directory(releases, "releases", root_metadata.st_dev)
+    candidate = _safe_absolute(args.candidate, "candidate")
+    if candidate.parent != releases or candidate.lstat().st_dev != root_metadata.st_dev:
+        raise FeedDeployError("candidate_boundary_invalid")
+
+    receipt = _strict_json(candidate / "feed-stage-receipt.json")
+    expected = {
+        "version": (args.expected_version, _SEMVER),
+        "source_commit": (args.expected_source_sha, _COMMIT),
+        "release_id": (args.expected_release_id, _SAFE_ID),
+        "build_digest": (args.expected_build_digest, _SHA256),
+        "runtime_manifest_sha256": (args.expected_manifest_sha256, _SHA256),
+    }
+    if any(
+        not isinstance(value, str) or not pattern.fullmatch(value)
+        for value, pattern in expected.values()
+    ):
+        raise FeedDeployError("expected_identity_invalid")
+    _readback_name, public_bytes = _validate_target(
+        candidate, receipt, root_metadata.st_dev, expected
+    )
     return root, candidate, receipt, public_bytes
 
 
@@ -442,6 +472,19 @@ def _current_target(root: Path, device: int) -> str | None:
     destination = root / PurePosixPath(target)
     _safe_directory(destination, "current_target", device)
     return target
+
+
+def _validate_previous(
+    root: Path, target: str, device: int
+) -> tuple[dict[str, Any], str, bytes]:
+    target_path = root / PurePosixPath(target)
+    receipt = _strict_json(target_path / "feed-stage-receipt.json")
+    readback_name, readback_bytes = _validate_target(
+        target_path, receipt, device
+    )
+    if _current_target(root, device) != target:
+        raise FeedDeployError("current_target_changed")
+    return receipt, readback_name, readback_bytes
 
 
 def _fsync_directory(path: Path) -> None:
@@ -508,11 +551,28 @@ def _validate_readback_options(args: argparse.Namespace) -> None:
             or not os.access(command, os.X_OK)
         ):
             raise FeedDeployError("readback_command_invalid")
+        if any(
+            "{" in value.replace("{pointer}", "")
+            or "}" in value.replace("{pointer}", "")
+            for value in args.readback_argument
+        ):
+            raise FeedDeployError("readback_argument_invalid")
         return
     if args.readback_argument:
         raise FeedDeployError("readback_options_invalid")
     try:
-        parsed = urllib.parse.urlsplit(args.readback_url)
+        template = urllib.parse.urlsplit(args.readback_url)
+        if any(
+            "{pointer}" in value
+            for value in (template.scheme, template.netloc, template.query, template.fragment)
+        ):
+            raise ValueError
+        rendered_url = args.readback_url.replace(
+            "{pointer}", "download-index.json"
+        )
+        if "{" in rendered_url or "}" in rendered_url:
+            raise ValueError
+        parsed = urllib.parse.urlsplit(rendered_url)
         port = parsed.port
     except ValueError:
         raise FeedDeployError("readback_url_invalid") from None
@@ -547,13 +607,18 @@ def _validate_readback_options(args: argparse.Namespace) -> None:
             raise FeedDeployError("readback_proxy_invalid")
 
 
-def _http_readback(args: argparse.Namespace, maximum: int) -> bytes:
+def _http_readback(
+    args: argparse.Namespace, maximum: int, pointer_name: str
+) -> bytes:
     handlers: list[Any] = [_NoRedirect()]
     if args.readback_proxy:
         handlers.append(urllib.request.ProxyHandler({"http": args.readback_proxy, "https": args.readback_proxy}))
     else:
         handlers.append(urllib.request.ProxyHandler({}))
-    request = urllib.request.Request(args.readback_url, headers={"Accept": "application/json", "Cache-Control": "no-cache"})
+    request = urllib.request.Request(
+        args.readback_url.replace("{pointer}", pointer_name),
+        headers={"Accept": "application/json", "Cache-Control": "no-cache"},
+    )
     observed = b""
     try:
         with urllib.request.build_opener(*handlers).open(request, timeout=args.readback_timeout_seconds) as response:
@@ -574,12 +639,17 @@ def _http_readback(args: argparse.Namespace, maximum: int) -> bytes:
     return observed
 
 
-def _command_readback(args: argparse.Namespace, maximum: int) -> bytes:
+def _command_readback(
+    args: argparse.Namespace, maximum: int, pointer_name: str
+) -> bytes:
     command = args.readback_command
     assert command is not None
     try:
         result = subprocess.run(
-            [os.fspath(command), *args.readback_argument],
+            [
+                os.fspath(command),
+                *(value.replace("{pointer}", pointer_name) for value in args.readback_argument),
+            ],
             check=False,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -594,14 +664,22 @@ def _command_readback(args: argparse.Namespace, maximum: int) -> bytes:
     return result.stdout
 
 
-def _readback(args: argparse.Namespace, expected: bytes) -> bytes:
+def _readback(
+    args: argparse.Namespace, expected: bytes, pointer_name: str
+) -> bytes:
     if args.readback_command is not None:
-        observed = _command_readback(args, len(expected))
+        observed = _command_readback(args, len(expected), pointer_name)
     else:
-        observed = _http_readback(args, len(expected))
+        observed = _http_readback(args, len(expected), pointer_name)
     if observed != expected:
         raise ReadbackError(observed)
     return observed
+
+
+def _has_pointer_route(args: argparse.Namespace) -> bool:
+    return (
+        args.readback_url is not None and "{pointer}" in args.readback_url
+    ) or any("{pointer}" in value for value in args.readback_argument)
 
 
 def _receipt_path(root: Path, requested: Path) -> Path:
@@ -678,6 +756,7 @@ def _verify_rollback(
     args: argparse.Namespace,
     root: Path,
     previous: str | None,
+    previous_stage: dict[str, Any] | None,
     previous_bytes: bytes | None,
     readback_name: str,
 ) -> None:
@@ -685,13 +764,19 @@ def _verify_rollback(
     if _current_target(root, device) != previous:
         raise FeedDeployError("rollback_readback_target_mismatch")
     if previous is not None:
+        previous_path = root / PurePosixPath(previous)
         if (
-            previous_bytes is None
-            or _stable_readback_file(root / "current" / readback_name)
+            previous_stage is None
+            or previous_bytes is None
+            or _strict_json(previous_path / "feed-stage-receipt.json")
+            != previous_stage
+            or _validate_inventory(previous_path, previous_stage, device)
+            != previous_bytes
+            or _stable_readback_file(previous_path / readback_name)
             != previous_bytes
         ):
             raise FeedDeployError("rollback_readback_mismatch")
-        _readback(args, previous_bytes)
+        _readback(args, previous_bytes, readback_name)
 
 
 def _completed_at() -> str:
@@ -708,23 +793,34 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
             output = _receipt_path(root, args.activation_receipt)
             device = root.lstat().st_dev
             previous = _current_target(root, device)
-            readback_name = (
+            candidate_readback_name = (
                 "download-index.json"
                 if stage["schema_version"] == 2
                 else "public-bootstrap-index.json"
             )
-            previous_bytes = (
-                _stable_readback_file(root / "current" / readback_name)
-                if previous is not None
-                else None
-            )
+            previous_stage = None
+            previous_readback_name = candidate_readback_name
+            previous_bytes = None
+            if previous is not None:
+                (
+                    previous_stage,
+                    previous_readback_name,
+                    previous_bytes,
+                ) = _validate_previous(root, previous, device)
+                if (
+                    previous_readback_name != candidate_readback_name
+                    and not _has_pointer_route(args)
+                ):
+                    raise FeedDeployError("cross_mode_readback_route_required")
             candidate_target = stage["candidate_target"]
             _replace_current(root, candidate_target)
             observed = b""
             phase = "post_switch_verification"
             try:
                 public_bytes = _validate_inventory(candidate, stage, device)
-                observed = _readback(args, public_bytes)
+                observed = _readback(
+                    args, public_bytes, candidate_readback_name
+                )
                 receipt = {
                     "operation": "activate",
                     "feed_build_id": stage["feed_build_id"],
@@ -744,7 +840,12 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
                 try:
                     _rollback(root, candidate_target, previous)
                     _verify_rollback(
-                        args, root, previous, previous_bytes, readback_name
+                        args,
+                        root,
+                        previous,
+                        previous_stage,
+                        previous_bytes,
+                        previous_readback_name,
                     )
                 except FeedDeployError:
                     raise FeedDeployError(f"{phase}_failed_rollback_failed") from None
