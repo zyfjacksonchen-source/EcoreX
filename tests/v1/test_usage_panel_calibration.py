@@ -10,6 +10,7 @@ import pytest
 
 from ecorex import __version__ as PRODUCT_VERSION
 from ecorex.control_plane import usage_panel_service
+from ecorex.gateway import GatewayAccountUsageProjection
 
 
 TZ = timezone(timedelta(hours=8))
@@ -827,6 +828,8 @@ def test_composer_account_projection_uses_the_exact_panel_ledger(
     assert projection["week"]["total_tokens"] == 39
     assert projection["scope"] == "account"
     assert projection["coverage_started_at"] is not None
+    assert set(projection) == set(GatewayAccountUsageProjection.model_fields)
+    GatewayAccountUsageProjection.model_validate(projection)
 
 
 def test_tool_handoff_usage_is_counted_as_a_terminal_provider_fact(
