@@ -33,8 +33,6 @@ from ecorex.capabilities import (
     ToolProviderKind,
     ToolArgumentsValidationError,
     ToolExecutionScope,
-    ToolInvocationContext,
-    SandboxLevel,
     UnknownCapabilityError,
 )
 from ecorex.gateway import (
@@ -5709,6 +5707,7 @@ class AgentTurnWorker:
         capabilities: CapabilityService | None = None,
         image_backend: Any | None = None,
         input_attachments: InputAttachmentService | None = None,
+        builtin_skill_root: str | Path | None = None,
         workspace_root: str | Path | None = None,
         workspace_root_resolver: Callable[[ToolExecutionScope | None], tuple[Path, ...]]
         | None = None,
@@ -5723,6 +5722,11 @@ class AgentTurnWorker:
             capabilities, "_invocation_backend", None
         )
         self.input_attachments = input_attachments
+        self.builtin_skill_root = (
+            str(Path(builtin_skill_root).expanduser().resolve())
+            if builtin_skill_root is not None
+            else None
+        )
         self.workspace_root = (
             Path(workspace_root).expanduser().resolve()
             if workspace_root is not None
@@ -6254,7 +6258,9 @@ class AgentTurnWorker:
         )
         try:
             agent = AgentInitializer(object(), bridge).initialize_agent(
-                session_id=f"emate-{thread_id}", workspace_root=workspace
+                session_id=f"emate-{thread_id}",
+                workspace_root=workspace,
+                builtin_skill_root=self.builtin_skill_root,
             )
             if channel_context:
                 self._attach_scheduler_context(agent, channel_context)

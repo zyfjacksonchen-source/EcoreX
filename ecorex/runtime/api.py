@@ -2198,6 +2198,7 @@ def create_app(
                     connector_composition.repository.resolve_uncertain_invocation
                 ),
                 input_attachments=input_attachment_service,
+                builtin_skill_root=getattr(settings, "builtin_skill_root", None),
                 image_context_resolver=composition.recent_thread_images,
                 image_execution_concurrency=settings.image_execution_concurrency,
                 image_execution_queue_capacity=(
@@ -2358,6 +2359,8 @@ def create_app(
         )
         scheduler_service.execute_callback = scheduler_lifecycle.execute_from_scheduler
         bind_scheduler_runtime(scheduler_handler.task_store, scheduler_service)
+    else:
+        bind_scheduler_runtime(None, None)
     app.state.scheduler_service = scheduler_service
     gateway_lifecycle = (
         _AsyncResourceCloser(settings.model_gateway)

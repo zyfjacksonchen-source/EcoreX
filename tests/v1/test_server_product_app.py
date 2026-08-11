@@ -468,7 +468,37 @@ def test_product_composes_native_cow_channels_with_the_agent_runtime(tmp_path: P
         assert app.state.cow_channel_service.started is True
 
 
-def test_installed_payload_builtin_skill_search_read_run_chain(tmp_path: Path) -> None:
+def test_installed_payload_builtin_skills_feed_the_cow_agent(tmp_path: Path) -> None:
+    from bridge.agent_initializer import AgentInitializer
+
+    signed = _write_signed_bundle(tmp_path)
+    builtin_skill_root = tmp_path / "payload" / "skills"
+    shutil.copytree(
+        Path(__file__).resolve().parents[2] / "skills",
+        builtin_skill_root,
+    )
+    settings = replace(
+        _settings(tmp_path, signed),
+        builtin_skill_root=builtin_skill_root,
+    )
+    create_product_app(settings)
+    manager = AgentInitializer(object(), object())._initialize_skill_manager(
+        str(tmp_path / "workspace"),
+        builtin_skill_root=str(settings.builtin_skill_root),
+    )
+    skill = manager.get_skill("office-presentations")
+
+    assert skill is not None
+    assert skill.skill.source == "builtin"
+    assert "Office Presentations" in skill.skill.content
+    assert "office-presentations" in {
+        entry.skill.name for entry in manager.filter_skills()
+    }
+
+
+def retired_legacy_installed_payload_skill_discovery_chain(tmp_path: Path) -> None:
+    """The ecorex discovery/run path is not part of the public Cow executor."""
+
     signed = _write_signed_bundle(tmp_path)
     builtin_skill_root = tmp_path / "payload" / "skills"
     shutil.copytree(

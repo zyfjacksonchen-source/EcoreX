@@ -30,7 +30,6 @@ class TaskStore:
         
         self.store_path = store_path
         self.lock = threading.Lock()
-        self._ensure_store_dir()
     
     def _ensure_store_dir(self):
         """Ensure the storage directory exists"""
@@ -65,6 +64,7 @@ class TaskStore:
         """
         with self.lock:
             try:
+                self._ensure_store_dir()
                 # Create backup
                 if os.path.exists(self.store_path):
                     backup_path = f"{self.store_path}.bak"

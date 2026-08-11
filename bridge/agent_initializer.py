@@ -46,6 +46,7 @@ class AgentInitializer:
         self,
         session_id: Optional[str] = None,
         workspace_root: Optional[str] = None,
+        builtin_skill_root: Optional[str] = None,
     ) -> Agent:
         """
         Initialize agent for a session
@@ -89,7 +90,15 @@ class AgentInitializer:
         context_files = load_context_files(workspace_root)
         
         # Initialize skill manager
-        skill_manager = self._initialize_skill_manager(workspace_root, session_id)
+        skill_manager = (
+            self._initialize_skill_manager(workspace_root, session_id)
+            if builtin_skill_root is None
+            else self._initialize_skill_manager(
+                workspace_root,
+                session_id,
+                builtin_skill_root=builtin_skill_root,
+            )
+        )
         
         # Build system prompt
         prompt_builder = PromptBuilder(workspace_dir=workspace_root, language="zh")
@@ -647,11 +656,20 @@ class AgentInitializer:
             except Exception as e:
                 logger.warning(f"[AgentInitializer] Failed to inject scheduler dependencies: {e}")
     
-    def _initialize_skill_manager(self, workspace_root: str, session_id: Optional[str] = None):
+    def _initialize_skill_manager(
+        self,
+        workspace_root: str,
+        session_id: Optional[str] = None,
+        *,
+        builtin_skill_root: Optional[str] = None,
+    ):
         """Initialize skill manager"""
         try:
             from agent.skills import SkillManager
-            skill_manager = SkillManager(custom_dir=os.path.join(workspace_root, "skills"))
+            skill_manager = SkillManager(
+                builtin_dir=builtin_skill_root,
+                custom_dir=os.path.join(workspace_root, "skills"),
+            )
             return skill_manager
         except Exception as e:
             logger.warning(f"[AgentInitializer] Failed to initialize SkillManager: {e}")

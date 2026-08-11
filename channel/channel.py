@@ -4,7 +4,7 @@ Message sending channel abstract class
 
 from bridge.bridge import Bridge
 from bridge.context import Context
-from bridge.reply import *
+from bridge.reply import Reply, ReplyType
 from common.log import logger
 from config import conf
 
