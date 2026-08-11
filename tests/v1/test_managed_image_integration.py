@@ -63,11 +63,17 @@ PNG = _test_png((30, 90, 210))
 MASK = b"\x89PNG\r\n\x1a\nmanaged-image-mask"
 
 
-def _snapshot(account_id: str) -> ManagedSessionSnapshot:
+def _snapshot(
+    account_id: str,
+    *,
+    generation: int = 7,
+    lease_digest: str | None = None,
+    revision: int = 1,
+) -> ManagedSessionSnapshot:
     now = datetime.now(UTC)
     return ManagedSessionSnapshot(
-        generation=7,
-        lease_digest=("a" if account_id == "tenant-001" else "b") * 64,
+        generation=generation,
+        lease_digest=lease_digest or ("a" if account_id == "tenant-001" else "b") * 64,
         lease_id="lease-0001",
         account_id=account_id,
         organization_id="organization-001",
@@ -78,7 +84,7 @@ def _snapshot(account_id: str) -> ManagedSessionSnapshot:
         admin_denies=(),
         issued_at=now - timedelta(minutes=1),
         expires_at=now + timedelta(hours=1),
-        revision=1,
+        revision=revision,
     )
 
 
@@ -200,6 +206,108 @@ def test_managed_client_restart_recovers_before_submit_and_downloads_verified_re
             replay = await restarted.execute(request)
             assert replay.job.job_id == first.job.job_id
             assert replay.content == PNG
+            assert provider.submits == 1
+
+    asyncio.run(scenario())
+
+
+def test_client_accepts_same_account_refresh_between_execute_operations(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        app, _store, _cas, provider, image_worker = _cloud(tmp_path)
+        state = {"snapshot": _snapshot("tenant-001")}
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = ManagedImageOrchestrationClient(
+                "https://images.example/api/v1/images",
+                session=_session(state),
+                allowed_hosts=frozenset({"images.example"}),
+                database_path=tmp_path / "local.db",
+                client=http,
+                poll_interval_seconds=0.05,
+                max_poll_seconds=10,
+            )
+
+            async def execute(client_request_id: str) -> ManagedImageDownloadedResult:
+                task = asyncio.create_task(
+                    client.execute(
+                        ImageSubmitRequest(
+                            ImageOperation.GENERATE,
+                            "gpt-image-2",
+                            client_request_id,
+                            "create an office dashboard",
+                            deadline_seconds=30,
+                        )
+                    )
+                )
+                while not task.done():
+                    await image_worker.run_once("cloud-worker-refresh")
+                    await asyncio.sleep(0.01)
+                return await task
+
+            first = await execute("managed-client-before-refresh-0001")
+            state["snapshot"] = _snapshot(
+                "tenant-001",
+                generation=8,
+                lease_digest="c" * 64,
+                revision=2,
+            )
+            second = await execute("managed-client-after-refresh-0002")
+
+            assert first.content == second.content == PNG
+            assert provider.submits == 2
+
+            state["snapshot"] = _snapshot("tenant-002")
+            with pytest.raises(ManagedImageClientError) as fenced:
+                await execute("managed-client-cross-account-0003")
+            assert fenced.value.code == "managed_image_session_changed"
+            assert provider.submits == 2
+
+    asyncio.run(scenario())
+
+
+def test_client_rejects_refresh_during_one_execute_operation(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        app, _store, _cas, provider, image_worker = _cloud(tmp_path)
+        state = {"snapshot": _snapshot("tenant-001")}
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = ManagedImageOrchestrationClient(
+                "https://images.example/api/v1/images",
+                session=_session(state),
+                allowed_hosts=frozenset({"images.example"}),
+                database_path=tmp_path / "local.db",
+                client=http,
+                poll_interval_seconds=0.05,
+                max_poll_seconds=10,
+            )
+            original_poll = client.poll
+
+            async def poll_after_refresh(
+                job: ManagedImageJob, *, timeout_seconds: float | None = None
+            ) -> ManagedImageJob:
+                await image_worker.run_once("cloud-worker-mid-operation-refresh")
+                state["snapshot"] = _snapshot(
+                    "tenant-001",
+                    generation=8,
+                    lease_digest="c" * 64,
+                    revision=2,
+                )
+                return await original_poll(job, timeout_seconds=timeout_seconds)
+
+            client.poll = poll_after_refresh  # type: ignore[method-assign]
+            with pytest.raises(ManagedImageClientError) as fenced:
+                await client.execute(
+                    ImageSubmitRequest(
+                        ImageOperation.GENERATE,
+                        "gpt-image-2",
+                        "managed-client-mid-operation-refresh-0001",
+                        "create an office dashboard",
+                        deadline_seconds=30,
+                    )
+                )
+            assert fenced.value.code == "managed_image_session_changed"
             assert provider.submits == 1
 
     asyncio.run(scenario())
