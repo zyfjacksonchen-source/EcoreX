@@ -5837,7 +5837,16 @@ class AgentTurnWorker:
 
         browser.execute = execute
 
-    def _workspace(self, job_id: str, thread_id: str, turn_id: str) -> Path:
+    def _workspace(
+        self,
+        job_id: str,
+        thread_id: str,
+        turn_id: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> Path:
+        frozen = (metadata or {}).get("_cow_workspace_root")
+        if isinstance(frozen, str) and frozen:
+            return Path(frozen).expanduser().resolve()
         if self.workspace_root_resolver is not None:
             roots = self.workspace_root_resolver(
                 ToolExecutionScope(
@@ -6494,7 +6503,11 @@ class AgentTurnWorker:
                 model_id=turn.agent_model_id,
             )
             workspace = await _run_blocking(
-                self._workspace, job.job_id, job.thread_id, job.turn_id
+                self._workspace,
+                job.job_id,
+                job.thread_id,
+                job.turn_id,
+                turn.metadata,
             )
             conversation_store = self._conversation_store(workspace)
             project_context = self._project_context(turn.metadata, workspace)

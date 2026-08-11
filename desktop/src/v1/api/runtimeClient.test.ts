@@ -2059,13 +2059,14 @@ test("user MCP client covers HTTPS server CRUD, test, and activation routes", as
       oauth_scope: "",
       authorization_hosts: [],
     };
-    const catalog = await client.userMcpServers();
-    await client.createUserMcpServer(payload);
-    await client.updateUserMcpServer("user.mcp/one", { ...payload, credential: undefined });
-    await client.mutateUserMcpServer("user.mcp/one", "test");
-    await client.mutateUserMcpServer("user.mcp/one", "enable");
-    await client.mutateUserMcpServer("user.mcp/one", "disable");
-    await client.deleteUserMcpServer("user.mcp/one");
+    const projectId = "project/current";
+    const catalog = await client.userMcpServers(undefined, projectId);
+    await client.createUserMcpServer(payload, projectId);
+    await client.updateUserMcpServer("user.mcp/one", { ...payload, credential: undefined }, projectId);
+    await client.mutateUserMcpServer("user.mcp/one", "test", projectId);
+    await client.mutateUserMcpServer("user.mcp/one", "enable", projectId);
+    await client.mutateUserMcpServer("user.mcp/one", "disable", projectId);
+    await client.deleteUserMcpServer("user.mcp/one", projectId);
 
     assert.equal(catalog.items[0]?.credential_configured, true);
     assert.equal("credential" in catalog.items[0]!, false);
@@ -2075,9 +2076,10 @@ test("user MCP client covers HTTPS server CRUD, test, and activation routes", as
       requests.slice(3, 6).map((request) => new URL(request.url).pathname.split("/").at(-1)),
       ["test", "enable", "disable"],
     );
-    assert.match(requests[2]?.url ?? "", /user\.mcp%2Fone$/u);
+    assert.match(new URL(requests[2]?.url ?? "").pathname, /user\.mcp%2Fone$/u);
     assert.equal(requests[6]?.method, "DELETE");
     assert.equal(requests[6]?.headers.get("x-ecorex-csrf"), "mcp-csrf-token");
+    assert.ok(requests.every((request) => new URL(request.url).searchParams.get("project_id") === projectId));
   } finally {
     globalThis.fetch = originalFetch;
   }

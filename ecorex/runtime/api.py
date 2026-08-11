@@ -68,11 +68,9 @@ from ecorex.gateway import (
 )
 from ecorex.ids import is_id
 from ecorex.extensions.api import register_extension_routes
-from ecorex.extensions.cow_mcp import CowMCPConfigService
-from ecorex.extensions.mcp_oauth import MCPOAuthService, register_mcp_oauth_routes
-from ecorex.extensions.user_mcp import (
-    UserMCPService,
-    create_user_mcp_router,
+from ecorex.extensions.cow_mcp import (
+    CowMCPSettingsService,
+    create_cow_mcp_router,
 )
 from ecorex.extensions.local_bundle import LocalSkillBundleStore
 from ecorex.extensions.repository import SQLiteExtensionRepository
@@ -1635,46 +1633,23 @@ def create_app(
     managed_organization_id = (
         startup_data_scope.organization_id if startup_data_scope is not None else None
     )
-    user_mcp_service = UserMCPService(
-        Path(settings.database_path).expanduser().resolve().with_name("user-mcp-v1.db"),
-        account_id=settings.account_id,
-        organization_id=managed_organization_id,
-        vault=connector_vault,
-        runtime_api_version="1.0.0",
-        platform=settings.platform,
-        architecture=settings.architecture,
-        reload_requester=settings.session_reload_requester,
-        initialize=startup_convergence_allowed,
+    from agent.tools import ToolManager
+
+    cow_workspace_root = settings.workspace_root or (
+        Path(settings.database_path).expanduser().resolve().parent / "workspace"
     )
-    cow_mcp_service = CowMCPConfigService(
-        settings.workspace_root
-        or (Path(settings.database_path).expanduser().resolve().parent / "workspace"),
-        runtime_api_version="1.0.0",
-        platform=settings.platform,
-        architecture=settings.architecture,
-        reload_requester=settings.session_reload_requester,
-    )
-    effective_mcp_bindings = (
-        tuple(settings.mcp_runtime_bindings)
-        + cow_mcp_service.bindings()
-        + user_mcp_service.runtime_bindings()
-    )
-    mcp_oauth_registrations = tuple(
-        binding.oauth_registration
-        for binding in settings.mcp_runtime_bindings
-        if getattr(binding, "oauth_registration", None) is not None
-    ) + user_mcp_service.oauth_registrations()
-    mcp_oauth_service = (
-        MCPOAuthService(
-            mcp_oauth_registrations,
-            redirect_uri=(
-                oauth_return_uri.rsplit("/api/v1/", 1)[0] + "/api/v1/mcp/oauth/callback"
-            ),
-            vault=connector_vault,
-        )
-        if mcp_oauth_registrations
-        else None
-    )
+    cow_tool_manager = ToolManager(workspace_root=cow_workspace_root)
+    cow_mcp_service = CowMCPSettingsService(cow_workspace_root, cow_tool_manager)
+    effective_mcp_bindings: tuple[Any, ...] = ()
+    mcp_oauth_service = None
+
+    def cow_turn_workspace(thread_id: str | None) -> Path:
+        if thread_id:
+            thread = kernel.get_thread(thread_id)
+            project_id = thread.metadata.get("project_id")
+            if isinstance(project_id, str) and project_id:
+                return Path(project_service.require(project_id).project_path)
+        return Path(cow_workspace_root)
     connector_registry = connector_composition.service.registry
     channel_owner = ChannelCredentialOwner(
         account_id=settings.account_id,
@@ -1967,8 +1942,8 @@ def create_app(
         mcp_runtime_bindings=effective_mcp_bindings,
         mcp_oauth_service=mcp_oauth_service,
         tenant_id=settings.account_id,
-        mcp_tenant_id=user_mcp_service.tenant_namespace,
         persist_startup_snapshots=startup_convergence_allowed,
+        turn_workspace_resolver=cow_turn_workspace,
     )
     office_skill_backend = None
     office_service = settings.capability_pack_services.get("office.formats")
@@ -1990,7 +1965,7 @@ def create_app(
     app.state.mcp_client_supervisor = composition.mcp_supervisor
     app.state.cow_mcp_service = cow_mcp_service
     app.state.mcp_oauth_service = mcp_oauth_service
-    app.state.user_mcp_service = user_mcp_service
+    app.state.user_mcp_service = cow_mcp_service
     app.state.channel_self_service = channel_self_service
     app.state.permission_authority = permission_authority
     app.state.extension_service = extension_service
@@ -2019,14 +1994,15 @@ def create_app(
     app.include_router(create_migration_quarantine_router(migration_quarantine_service))
     register_extension_routes(app, extension_service)
     app.include_router(
-        create_user_mcp_router(user_mcp_service, oauth_service=mcp_oauth_service)
-    )
-    if mcp_oauth_service is not None:
-        register_mcp_oauth_routes(
-            app,
-            mcp_oauth_service,
-            tenant_id=user_mcp_service.tenant_namespace,
+        create_cow_mcp_router(
+            cow_mcp_service,
+            workspace_resolver=lambda project_id: (
+                Path(project_service.require(project_id).project_path)
+                if project_id
+                else Path(cow_workspace_root)
+            ),
         )
+    )
 
     @app.get("/api/v1/capability-mentions")
     def capability_mentions() -> dict[str, object]:
@@ -2185,18 +2161,6 @@ def create_app(
                 kernel,
                 gateway=settings.model_gateway,
                 capabilities=composition.capability_service,
-                extension_fence=(
-                    composition.extension_invocation_fence
-                    if extension_governance_enabled
-                    else None
-                ),
-                workflow_instruction_resolver=composition.workflow_instructions,
-                turn_preparer=composition.prepare_turn,
-                permission_mutation_lock=composition.permission_mutation_lock,
-                permission_account_id=composition.permission_account_id,
-                connector_uncertain_resolver=(
-                    connector_composition.repository.resolve_uncertain_invocation
-                ),
                 input_attachments=input_attachment_service,
                 builtin_skill_root=getattr(settings, "builtin_skill_root", None),
                 image_context_resolver=composition.recent_thread_images,
@@ -2309,7 +2273,6 @@ def create_app(
                     thread_id,
                     prepared.request,
                     snapshot_context=prepared.snapshot_context,
-                    permission_account_id=composition.permission_account_id,
                     causation_id=execution_key,
                     correlation_id=execution_key,
                 ),
@@ -2460,7 +2423,9 @@ def create_app(
             kernel,
             snapshot_context_provider=(
                 lambda **values: (
-                    composition.prepare_turn(values["turn_request"]).snapshot_context
+                    composition.prepare_governed_operation_turn(
+                        values["turn_request"]
+                    ).snapshot_context
                 )
             ),
             permission_mutation_lock=composition.permission_mutation_lock,
@@ -2921,8 +2886,6 @@ def create_app(
         (3, "runtime_invariant", invariant_supervisor),
         (2, "agent_worker", worker_supervisor),
         (1, "mcp", composition.mcp_supervisor),
-        (1, "cow_mcp_config", cow_mcp_service),
-        (1, "mcp_oauth", mcp_oauth_service),
         (
             1,
             "channel_self_service",
@@ -4109,7 +4072,6 @@ def create_app(
                     thread_id,
                     prepared.request,
                     snapshot_context=prepared.snapshot_context,
-                    permission_account_id=composition.permission_account_id,
                 ),
                 thread_id=thread_id,
             )
@@ -4168,7 +4130,6 @@ def create_app(
                     thread_id,
                     prepared.request,
                     snapshot_context=prepared.snapshot_context,
-                    permission_account_id=composition.permission_account_id,
                 ),
                 thread_id=thread_id,
             )
@@ -4207,7 +4168,6 @@ def create_app(
                 turn_id,
                 canonical,
                 snapshot_context=prepared.snapshot_context,
-                permission_account_id=composition.permission_account_id,
             )
 
         try:

@@ -55,8 +55,6 @@ Read = _safe_import("agent.tools.read.read", "Read")
 Write = _safe_import("agent.tools.write.write", "Write")
 Edit = _safe_import("agent.tools.edit.edit", "Edit")
 Bash = _safe_import("agent.tools.bash.bash", "Bash")
-FeishuCli = _safe_import("agent.tools.feishu_cli.feishu_cli", "FeishuCli")
-TongxinCli = _safe_import("agent.tools.tongxin_cli.tongxin_cli", "TongxinCli")
 SubagentTool = _safe_import("agent.tools.subagent.subagent", "SubagentTool")
 Find = _safe_import("agent.tools.find.find", "Find")
 SearchFiles = _safe_import("agent.tools.search_files.search_files", "SearchFiles")
@@ -88,8 +86,6 @@ __all__ = [
     "Write",
     "Edit",
     "Bash",
-    "FeishuCli",
-    "TongxinCli",
     "SubagentTool",
     "SearchFiles",
     "Ls",

@@ -50,7 +50,7 @@ class SkillManager:
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.builtin_dir = builtin_dir or os.path.join(project_root, 'skills')
         self.custom_dir = custom_dir or os.path.join(project_root, 'workspace', 'skills')
-        self.extra_dirs = self._discover_extra_skill_dirs()
+        self.extra_dirs: List[str] = []
         self.config = config or {}
         self._skills_config_path = os.path.join(self.custom_dir, SKILLS_CONFIG_FILE)
 
@@ -148,31 +148,6 @@ class SkillManager:
                 "copy of a built-in skill. It is left untouched; use the registry UI "
                 "to inspect, disable, or fork/repair it explicitly."
             )
-
-    @staticmethod
-    def _discover_extra_skill_dirs() -> List[str]:
-        home = Path.home()
-        roots: List[Path] = [
-            home / ".codex" / "skills",
-            home / ".agents" / "skills",
-            home / ".codex" / "skills" / ".system",
-        ]
-        plugin_cache = home / ".codex" / "plugins" / "cache"
-        if plugin_cache.exists():
-            for candidate in sorted(plugin_cache.glob("**/skills"), key=lambda item: str(item).lower()):
-                roots.append(candidate)
-        seen = set()
-        result: List[str] = []
-        for root in roots:
-            try:
-                resolved = str(root.expanduser().resolve())
-            except Exception:
-                resolved = str(root)
-            if resolved in seen or not os.path.isdir(resolved):
-                continue
-            seen.add(resolved)
-            result.append(resolved)
-        return result
 
     @staticmethod
     def _read_skill_tree_text(skill_dir: Path) -> str:

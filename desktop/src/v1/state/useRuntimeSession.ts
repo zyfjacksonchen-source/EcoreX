@@ -472,10 +472,15 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     refreshBootstrap: refreshBootstrapQuietly,
     formatError: errorMessage,
   });
+  const threadProjectId = state.thread?.metadata.project_id;
+  const mcpProjectId = typeof threadProjectId === "string"
+    ? threadProjectId
+    : newConversationProject?.project_id ?? null;
   const extensionSession = useExtensionSession({
     client,
     bootstrap: state.bootstrap,
     formatError: errorMessage,
+    mcpProjectId,
   });
 
   useEffect(() => {
@@ -1780,6 +1785,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     projectCatalogError,
     projectPickerBusy,
     newConversationProject,
+    mcpProjectId,
     clearProjectCatalogError: () => setProjectCatalogError(null),
     refreshProjects: () => void refreshProjects(),
     pickProject,

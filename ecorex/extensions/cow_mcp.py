@@ -10,8 +10,12 @@ import json
 import os
 from pathlib import Path
 import re
+import time
 from typing import Any
 from urllib.parse import urlsplit
+
+from fastapi import APIRouter, HTTPException, Response, status
+from fastapi.responses import HTMLResponse
 
 from ecorex.capabilities import (
     ApprovalRequirement,
@@ -46,6 +50,7 @@ from .models import (
     canonical_digest,
     verify_user_configured_mcp,
 )
+from .user_mcp import UserMCPServerRequest
 
 
 _CACHE_SCHEMA_VERSION = 1
@@ -307,6 +312,314 @@ class CowMCPConfigService:
         )
 
 
+class CowMCPSettingsService:
+    """Settings projection backed by the exact ``mcp.json`` Cow executes."""
+
+    def __init__(self, workspace_root: str | Path, manager: Any) -> None:
+        self.default_workspace_root = Path(workspace_root).expanduser().resolve()
+        self.workspace_root = self.default_workspace_root
+        self.path = self.workspace_root / "mcp.json"
+        self.manager = manager
+
+    def bind_workspace(self, workspace_root: str | Path | None) -> None:
+        root = (
+            self.default_workspace_root
+            if workspace_root is None
+            else Path(workspace_root).expanduser().resolve()
+        )
+        self.workspace_root = root
+        self.path = root / "mcp.json"
+        self.manager.bind_workspace(root)
+
+    @staticmethod
+    def _server_id(name: str) -> str:
+        return "user.mcp." + hashlib.sha256(name.encode("utf-8")).hexdigest()[:32]
+
+    def _root(self) -> dict[str, Any]:
+        if not self.path.is_file():
+            return {"mcpServers": {}}
+        try:
+            value = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            raise HTTPException(503, detail={"code": "mcp_configuration_corrupt"})
+        if not isinstance(value, dict):
+            raise HTTPException(503, detail={"code": "mcp_configuration_corrupt"})
+        raw = value.get("mcpServers") or value.get("mcp_servers") or {}
+        if not isinstance(raw, dict):
+            raise HTTPException(503, detail={"code": "mcp_configuration_corrupt"})
+        value["mcpServers"] = raw
+        value.pop("mcp_servers", None)
+        return value
+
+    def _write(self, root: dict[str, Any]) -> None:
+        self.workspace_root.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(root, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, self.path)
+        try:
+            os.chmod(self.path, 0o600)
+        except OSError:
+            pass
+        self.manager.refresh_mcp_if_changed()
+
+    def _find(self, server_id: str) -> tuple[dict[str, Any], str, dict[str, Any]]:
+        root = self._root()
+        for name, config in root["mcpServers"].items():
+            if self._server_id(name) == server_id and isinstance(config, dict):
+                return root, name, config
+        raise HTTPException(404, detail={"code": "mcp_server_not_found"})
+
+    def projection(self, name: str, config: Mapping[str, Any]) -> dict[str, Any]:
+        tools = sorted(
+            tool_name
+            for tool_name, tool in self.manager._mcp_tool_instances.items()
+            if getattr(tool, "server_name", None) == name
+        )
+        headers = config.get("headers")
+        authorization = headers.get("Authorization") if isinstance(headers, Mapping) else None
+        endpoint = str(config.get("url") or config.get("command") or "")
+        return {
+            "server_id": self._server_id(name),
+            "display_name": str(config.get("_emate_display_name") or name),
+            "endpoint": endpoint,
+            "auth_kind": str(config.get("_emate_auth_kind") or ("bearer" if authorization else "none")),
+            "oauth_client_id": config.get("_emate_oauth_client_id"),
+            "oauth_scope": str(config.get("_emate_oauth_scope") or ""),
+            "authorization_hosts": list(config.get("_emate_authorization_hosts") or []),
+            "enabled": config.get("enabled", True) is not False,
+            "credential_configured": bool(authorization),
+            "tested_at": config.get("_emate_tested_at"),
+            "tool_count": len(tools),
+            "tool_names": tools,
+            "revision": int(config.get("_emate_revision") or 1),
+        }
+
+    def list(self) -> list[dict[str, Any]]:
+        root = self._root()
+        return [
+            self.projection(name, config)
+            for name, config in root["mcpServers"].items()
+            if isinstance(name, str) and isinstance(config, Mapping)
+        ]
+
+    def create(self, request: UserMCPServerRequest) -> dict[str, Any]:
+        root = self._root()
+        name = request.display_name
+        if name in root["mcpServers"]:
+            raise HTTPException(409, detail={"code": "mcp_server_exists"})
+        config = self._request_config(request, previous=None)
+        root["mcpServers"][name] = config
+        self._write(root)
+        return self.projection(name, config)
+
+    def update(self, server_id: str, request: UserMCPServerRequest) -> dict[str, Any]:
+        root, name, previous = self._find(server_id)
+        config = self._request_config(request, previous=previous)
+        config["_emate_revision"] = int(previous.get("_emate_revision") or 1) + 1
+        root["mcpServers"][name] = config
+        self._write(root)
+        return self.projection(name, config)
+
+    def set_enabled(self, server_id: str, enabled: bool) -> dict[str, Any]:
+        root, name, config = self._find(server_id)
+        config["enabled"] = enabled
+        config["_emate_revision"] = int(config.get("_emate_revision") or 1) + 1
+        self._write(root)
+        return self.projection(name, config)
+
+    def remove(self, server_id: str) -> None:
+        from agent.tools.mcp.mcp_oauth import clear_server_record
+
+        root, name, _config = self._find(server_id)
+        root["mcpServers"].pop(name, None)
+        clear_server_record(name)
+        self._write(root)
+
+    def test(self, server_id: str) -> dict[str, Any]:
+        root, name, config = self._find(server_id)
+        self.manager.ensure_mcp_configured_loaded(
+            wait_seconds=5.0,
+            poll_interval_seconds=0.05,
+            server_name=name,
+        )
+        state = self.manager.list_mcp_status().get(name)
+        if state != "ready":
+            code = "mcp_oauth_authorization_required" if state == "needs_auth" else "mcp_server_test_failed"
+            raise HTTPException(422, detail={"code": code})
+        config["_emate_tested_at"] = int(time.time())
+        config["_emate_revision"] = int(config.get("_emate_revision") or 1) + 1
+        root["mcpServers"][name] = config
+        self._write(root)
+        return self.projection(name, config)
+
+    def oauth_items(self) -> list[dict[str, Any]]:
+        from agent.tools.mcp.mcp_oauth import load_server_record
+
+        root = self._root()
+        items = []
+        for name, config in root["mcpServers"].items():
+            if not isinstance(config, Mapping) or config.get("_emate_auth_kind") != "oauth2":
+                continue
+            record = load_server_record(name)
+            expires_at = float(record.get("expires_at") or 0) or None
+            authorized = bool(record.get("access_token"))
+            items.append(
+                {
+                    "service_id": self._server_id(name),
+                    "state": "authorized" if authorized else "authorization_required",
+                    "expires_at": expires_at,
+                    "scope": str(config.get("_emate_oauth_scope") or ""),
+                }
+            )
+        return items
+
+    def begin_oauth(self, server_id: str) -> dict[str, Any]:
+        _root, name, _config = self._find(server_id)
+        self.manager.ensure_mcp_configured_loaded(
+            wait_seconds=5.0,
+            poll_interval_seconds=0.05,
+            server_name=name,
+        )
+        client = self.manager._mcp_registry.get(name) if self.manager._mcp_registry else None
+        handler = getattr(client, "_oauth", None)
+        url = handler.build_authorization_url() if handler is not None else None
+        if not url:
+            raise HTTPException(422, detail={"code": "mcp_oauth_authorization_unavailable"})
+        return {
+            "service_id": server_id,
+            "state": "authorizing",
+            "authorization_url": url,
+            "expires_at": int(time.time()) + 600,
+        }
+
+    def clear_oauth(self, server_id: str) -> None:
+        from agent.tools.mcp.mcp_oauth import clear_server_record
+
+        _root, name, _config = self._find(server_id)
+        clear_server_record(name)
+        self.manager.reload_mcp_server(name)
+
+    @staticmethod
+    def _request_config(
+        request: UserMCPServerRequest, *, previous: Mapping[str, Any] | None
+    ) -> dict[str, Any]:
+        config = {
+            "type": "streamable-http",
+            "url": request.endpoint,
+            "enabled": previous.get("enabled", True) if previous else True,
+            "_emate_display_name": request.display_name,
+            "_emate_auth_kind": request.auth_kind,
+            "_emate_oauth_client_id": request.oauth_client_id,
+            "_emate_oauth_scope": request.oauth_scope,
+            "_emate_authorization_hosts": request.authorization_hosts,
+            "_emate_revision": int(previous.get("_emate_revision") or 1) if previous else 1,
+        }
+        if request.auth_kind == "bearer":
+            token = request.credential.get_secret_value() if request.credential is not None else None
+            if token:
+                config["headers"] = {"Authorization": f"Bearer {token}"}
+            elif previous and isinstance(previous.get("headers"), Mapping):
+                config["headers"] = dict(previous["headers"])
+            else:
+                raise HTTPException(422, detail={"code": "mcp_bearer_credential_required"})
+        return config
+
+
+def create_cow_mcp_router(
+    service: CowMCPSettingsService,
+    *,
+    workspace_resolver: Any | None = None,
+) -> APIRouter:
+    """Keep the existing desktop API while making ``mcp.json`` authoritative."""
+
+    router = APIRouter(tags=["mcp-servers"])
+
+    def mutation(server: dict[str, Any]) -> dict[str, Any]:
+        return {"server": server, "restart_required": True, "restart_scheduled": True}
+
+    def select(project_id: str | None) -> None:
+        service.bind_workspace(
+            workspace_resolver(project_id) if workspace_resolver is not None else None
+        )
+
+    @router.get("/api/v1/mcp/servers")
+    def list_servers(project_id: str | None = None) -> dict[str, Any]:
+        select(project_id)
+        return {"items": service.list()}
+
+    @router.post("/api/v1/mcp/servers", status_code=status.HTTP_201_CREATED)
+    def create_server(
+        request: UserMCPServerRequest, project_id: str | None = None
+    ) -> dict[str, Any]:
+        select(project_id)
+        return mutation(service.create(request))
+
+    @router.put("/api/v1/mcp/servers/{server_id}")
+    def update_server(
+        server_id: str,
+        request: UserMCPServerRequest,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        select(project_id)
+        return mutation(service.update(server_id, request))
+
+    @router.post("/api/v1/mcp/servers/{server_id}/test")
+    def test_server(server_id: str, project_id: str | None = None) -> dict[str, Any]:
+        select(project_id)
+        return mutation(service.test(server_id))
+
+    @router.post("/api/v1/mcp/servers/{server_id}/enable")
+    def enable_server(server_id: str, project_id: str | None = None) -> dict[str, Any]:
+        select(project_id)
+        return mutation(service.set_enabled(server_id, True))
+
+    @router.post("/api/v1/mcp/servers/{server_id}/disable")
+    def disable_server(server_id: str, project_id: str | None = None) -> dict[str, Any]:
+        select(project_id)
+        return mutation(service.set_enabled(server_id, False))
+
+    @router.delete("/api/v1/mcp/servers/{server_id}", status_code=204)
+    def delete_server(server_id: str, project_id: str | None = None) -> Response:
+        select(project_id)
+        service.remove(server_id)
+        return Response(status_code=204)
+
+    @router.get("/api/v1/mcp/oauth")
+    def oauth_statuses(project_id: str | None = None) -> dict[str, Any]:
+        select(project_id)
+        return {"items": service.oauth_items()}
+
+    @router.post("/api/v1/mcp/oauth/{server_id}/begin")
+    def begin_oauth(server_id: str, project_id: str | None = None) -> dict[str, Any]:
+        select(project_id)
+        return service.begin_oauth(server_id)
+
+    @router.delete("/api/v1/mcp/oauth/{server_id}", status_code=204)
+    def clear_oauth(server_id: str, project_id: str | None = None) -> Response:
+        select(project_id)
+        service.clear_oauth(server_id)
+        return Response(status_code=204)
+
+    def finish_oauth(code: str = "", state: str = "", error: str = "") -> HTMLResponse:
+        from agent.tools.mcp.mcp_client import notify_server_authorized
+        from agent.tools.mcp.mcp_oauth import pop_pending
+
+        if error or not code or not state:
+            return HTMLResponse("MCP authorization failed.", status_code=400)
+        handler = pop_pending(state)
+        if handler is None or not handler.finish_authorization(code):
+            return HTMLResponse("MCP authorization failed.", status_code=400)
+        notify_server_authorized(handler.server_name)
+        return HTMLResponse("MCP authorization complete. You may close this window.")
+
+    router.add_api_route("/mcp/oauth/callback", finish_oauth, methods=["GET"])
+    router.add_api_route("/api/v1/mcp/oauth/callback", finish_oauth, methods=["GET"])
+    return router
+
+
 def _config_path(workspace_root: Path) -> Path:
     mcp = workspace_root / "mcp.json"
     return mcp if mcp.is_file() else workspace_root / "config.json"
@@ -503,4 +816,8 @@ def _file_signature(path: Path) -> tuple[int, int, str] | None:
     return stat.st_mtime_ns, len(payload), hashlib.sha256(payload).hexdigest()
 
 
-__all__ = ["CowMCPConfigService"]
+__all__ = [
+    "CowMCPConfigService",
+    "CowMCPSettingsService",
+    "create_cow_mcp_router",
+]

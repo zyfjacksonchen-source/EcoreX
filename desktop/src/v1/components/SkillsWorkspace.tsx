@@ -58,6 +58,7 @@ interface SkillsWorkspaceProps {
   openChannelsKey?: number;
   connectorRuntime: ConnectorCatalogPanelProps;
   mcpClient: RuntimeClient;
+  mcpProjectId: string | null;
   snapshot: ExtensionCatalogSnapshot | null;
   loadState: ExtensionLoadState;
   error: string | null;
@@ -187,6 +188,7 @@ export function SkillsWorkspace({
   openChannelsKey = 0,
   connectorRuntime,
   mcpClient,
+  mcpProjectId,
   snapshot,
   loadState,
   error,
@@ -500,6 +502,7 @@ export function SkillsWorkspace({
               </section>
               <UserMCPPanel
                 client={mcpClient}
+                projectId={mcpProjectId}
                 oauthStatuses={mcpOAuthStatuses}
                 oauthBusy={mcpOAuthBusy}
                 onRefreshOAuth={onRefreshMcpOAuth}

@@ -323,10 +323,14 @@ class RuntimeComposition:
         mcp_tenant_id: str | None = None,
         enforce_admin_tool_denies: bool = False,
         persist_startup_snapshots: bool = True,
+        turn_workspace_resolver: Callable[[str | None], str | Path] | None = None,
     ) -> None:
         if not isinstance(persist_startup_snapshots, bool):
             raise TypeError("persist_startup_snapshots must be a boolean")
         self._persist_startup_snapshots = persist_startup_snapshots
+        if turn_workspace_resolver is not None and not callable(turn_workspace_resolver):
+            raise TypeError("turn workspace resolver must be callable")
+        self._turn_workspace_resolver = turn_workspace_resolver
         self.model_catalog = model_catalog or builtin_model_catalog()
         self._model_catalog_provider = model_catalog_provider
         self.permission_mutation_lock = permission_mutation_lock or threading.RLock()
@@ -666,7 +670,7 @@ class RuntimeComposition:
             connector_catalog_snapshot_id=self.connector_catalog_snapshot.snapshot_id,
         )
 
-    def prepare_turn(
+    def prepare_governed_operation_turn(
         self, request: CreateTurnRequest, *, thread_id: str | None = None
     ) -> PreparedTurn:
         if thread_id is None:
@@ -827,6 +831,62 @@ class RuntimeComposition:
             ),
         )
 
+    def prepare_turn(
+        self, request: CreateTurnRequest, *, thread_id: str | None = None
+    ) -> PreparedTurn:
+        """Freeze only the facts the Cow data plane actually consumes.
+
+        Tool discovery and execution belong to Cow's live ``ToolManager``.  The
+        legacy capability planner, Extension registry and permission profiles
+        therefore cannot reject a valid Cow tool such as ``subagent`` here.
+        """
+
+        if not self._persist_startup_snapshots:
+            raise RuntimeError(
+                "Runtime is in projection-only mode and cannot accept a Turn"
+            )
+        self._refresh_model_catalog()
+        agent_model_id, image_model_id = self.resolve_model_selection(
+            agent_model_id=request.agent_model_id,
+            image_model_id=request.image_model_id,
+        )
+        config_snapshot = self._record_config(
+            self.availability,
+            "cow-local-skills-mcp",
+            connector_catalog_snapshot_id=self.connector_catalog_snapshot.snapshot_id,
+            agent_model_id=agent_model_id,
+            image_model_id=image_model_id,
+            agent_model_selection_source=(
+                "request" if request.agent_model_id is not None else "default"
+            ),
+            image_model_selection_source=(
+                "request" if request.image_model_id is not None else "default"
+            ),
+        )
+        metadata = dict(request.metadata)
+        if self._turn_workspace_resolver is not None:
+            metadata["_cow_workspace_root"] = str(
+                Path(self._turn_workspace_resolver(thread_id)).expanduser().resolve()
+            )
+        else:
+            metadata.pop("_cow_workspace_root", None)
+        return PreparedTurn(
+            request=request.model_copy(
+                update={
+                    "agent_model_id": agent_model_id,
+                    "image_model_id": image_model_id,
+                    "metadata": metadata,
+                }
+            ),
+            snapshot_context=TurnSnapshotContext(
+                config_snapshot_id=config_snapshot.snapshot_id,
+                capability_snapshot_id="cow-tool-manager-2.1.5",
+                permission_snapshot_id="cow-account-audit",
+                model_catalog_snapshot_id=self.model_snapshot.snapshot_id,
+                extension_snapshot_id="cow-local-skills-mcp",
+            ),
+        )
+
     def _refresh_model_catalog(self) -> None:
         provider = self._model_catalog_provider
         if provider is None:
@@ -851,30 +911,18 @@ class RuntimeComposition:
         *,
         thread_id: str | None = None,
     ) -> _TurnAdmissionResult:
-        """Linearize permission capture with durable Turn acceptance.
-
-        The callback must perform only synchronous local persistence. Holding
-        this process admission across an await or provider call would block
-        permission revocation and is rejected explicitly.
-        """
+        """Canonically select models, then persist one ordinary Cow Turn."""
 
         if not callable(accept):
             raise TypeError("Turn acceptance callback must be callable")
-        with self.permission_mutation_lock:
-            token = _ADMISSION_THREAD_ID.set(thread_id)
-            try:
-                prepared = self.prepare_turn(request)
-                result = accept(prepared)
-                if inspect.isawaitable(result):
-                    close = getattr(result, "close", None)
-                    if callable(close):
-                        close()
-                    raise TypeError(
-                        "Turn acceptance callback must not return an awaitable"
-                    )
-                return result
-            finally:
-                _ADMISSION_THREAD_ID.reset(token)
+        prepared = self.prepare_turn(request, thread_id=thread_id)
+        result = accept(prepared)
+        if inspect.isawaitable(result):
+            close = getattr(result, "close", None)
+            if callable(close):
+                close()
+            raise TypeError("Turn acceptance callback must not return an awaitable")
+        return result
 
     def _thread_has_successful_image_context(self, thread_id: str | None) -> bool:
         """Trust only a durable image Artifact result from this Thread."""

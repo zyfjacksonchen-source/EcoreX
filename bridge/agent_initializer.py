@@ -544,7 +544,7 @@ class AgentInitializer:
     
     def _load_tools(self, workspace_root: str, memory_manager, memory_tools: List, session_id: Optional[str] = None):
         """Load all tools"""
-        tool_manager = ToolManager()
+        tool_manager = ToolManager(workspace_root=workspace_root)
         tool_manager.load_tools()
         ensure_mcp = getattr(tool_manager, "ensure_mcp_configured_loaded", None)
         if callable(ensure_mcp):
@@ -579,7 +579,7 @@ class AgentInitializer:
                     # config.json's `tools.<name>` section) instead of replacing
                     # it, otherwise per-tool user configs (e.g. browser.cdp_endpoint)
                     # would be silently dropped.
-                    if tool_name in ['read', 'write', 'edit', 'bash', 'search_files', 'ls', 'web_fetch', 'send', 'browser', 'ocr', 'feishu_cli', 'tongxin_cli', 'office_documents', 'office_pdf', 'office_presentations', 'office_spreadsheets']:
+                    if tool_name in ['read', 'write', 'edit', 'bash', 'search_files', 'ls', 'web_fetch', 'send', 'browser', 'ocr', 'office_documents', 'office_pdf', 'office_presentations', 'office_spreadsheets']:
                         merged_config = dict(getattr(tool, 'config', None) or {})
                         merged_config.update(file_config)
                         apply_config = getattr(tool, "apply_config", None)

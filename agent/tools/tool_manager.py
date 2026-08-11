@@ -17,10 +17,12 @@ def _normalize_mcp_configs(raw) -> list:
       - dict format (mcpServers):   {"x": {"command": "npx", ...}}
     """
     if isinstance(raw, list):
-        return raw
+        return [item for item in raw if item.get("enabled", True) is not False]
     if isinstance(raw, dict):
         result = []
         for name, cfg in raw.items():
+            if not isinstance(cfg, dict) or cfg.get("enabled", True) is False:
+                continue
             entry = {"name": name, **cfg}
             if "type" not in entry:
                 entry["type"] = "sse" if "url" in entry else "stdio"
@@ -35,7 +37,7 @@ class ToolManager:
     """
     _instance = None
 
-    def __new__(cls):
+    def __new__(cls, workspace_root=None):
         """Singleton pattern to ensure only one instance of ToolManager exists."""
         if cls._instance is None:
             cls._instance = super(ToolManager, cls).__new__(cls)
@@ -43,7 +45,7 @@ class ToolManager:
             cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self):
+    def __init__(self, workspace_root=None):
         # Initialize only once
         if not hasattr(self, 'tool_classes'):
             self.tool_classes = {}  # Dictionary to store tool classes
@@ -76,6 +78,24 @@ class ToolManager:
             self._registry_errors: list = []
         if not hasattr(self, '_missing_configured_tools'):
             self._missing_configured_tools: list = []
+        if workspace_root is not None:
+            self.bind_workspace(workspace_root)
+
+    def bind_workspace(self, workspace_root) -> None:
+        """Bind MCP discovery to the same workspace as the current Agent."""
+
+        root = Path(workspace_root).expanduser().resolve()
+        if getattr(self, "workspace_root", None) == root:
+            return
+        if getattr(self, "workspace_root", None) is not None:
+            self.shutdown_mcp()
+        self.workspace_root = root
+        self._mcp_registry = None
+        self._mcp_tool_instances = {}
+        self._mcp_loaded = False
+        self._mcp_status = {}
+        self._mcp_signature = (None, None)
+        self._mcp_active_configs = {}
 
     def _record_registry_error(self, source: str, exc_or_message: Any) -> None:
         if isinstance(exc_or_message, BaseException):
@@ -302,7 +322,13 @@ class ToolManager:
 
     def _mcp_json_path(self) -> str:
         import os
-        workspace = os.path.expanduser(conf().get("agent_workspace", "~/cow"))
+        workspace = str(
+            getattr(
+                self,
+                "workspace_root",
+                Path(os.path.expanduser(conf().get("agent_workspace", "~/cow"))).resolve(),
+            )
+        )
         return os.path.join(workspace, "mcp.json")
 
     def _read_mcp_json_signature(self):
@@ -326,17 +352,8 @@ class ToolManager:
         return (mtime, digest)
 
     def _load_mcp_configs(self) -> list:
-        """
-        Load MCP server configs with priority:
-          1. ~/cow/mcp.json  (supports both mcpServers and mcp_servers keys)
-          2. config.json mcp_servers field (fallback)
-        """
-        workspace_configs = self._load_workspace_mcp_configs()
-        if workspace_configs is not None:
-            return workspace_configs
-
-        raw = conf().get("mcp_servers", [])
-        return _normalize_mcp_configs(raw)
+        """Load MCP servers only from the currently bound workspace."""
+        return self._load_workspace_mcp_configs() or []
 
     def _load_workspace_mcp_configs(self) -> Optional[list]:
         """Load only the workspace MCP config, returning None when no file exists or parsing fails."""
@@ -353,18 +370,14 @@ class ToolManager:
             logger.info(f"[ToolManager] Loading MCP config from {mcp_json_path}")
             return _normalize_mcp_configs(raw)
         except Exception as e:
-            logger.warning(f"[ToolManager] Failed to read {mcp_json_path}: {e}, falling back to config.json")
-            return None
+            logger.warning(f"[ToolManager] Failed to read {mcp_json_path}: {e}")
+            return []
 
     def has_mcp_configured(self, *, include_config_fallback: bool = False) -> bool:
-        """Return True when a workspace MCP server is present, or when config fallback is explicitly allowed."""
+        """Return True only when the current workspace configures an MCP server."""
+        del include_config_fallback
         try:
-            workspace_configs = self._load_workspace_mcp_configs()
-            if workspace_configs:
-                return True
-            if include_config_fallback:
-                return bool(_normalize_mcp_configs(conf().get("mcp_servers", [])))
-            return False
+            return bool(self._load_workspace_mcp_configs())
         except Exception as e:
             logger.debug(f"[ToolManager] MCP config probe failed: {e}")
             return False
@@ -386,8 +399,7 @@ class ToolManager:
         if getattr(self, "_mcp_loaded", False):
             self.refresh_mcp_if_changed()
         else:
-            include_config_fallback = bool(conf().get("mcp_auto_start", False))
-            should_start = self.has_mcp_configured(include_config_fallback=include_config_fallback)
+            should_start = self.has_mcp_configured()
             if should_start:
                 self._load_mcp_tools()
 
@@ -409,9 +421,7 @@ class ToolManager:
         statuses = self.list_mcp_status()
         return {
             "status": statuses,
-            "configured": bool(statuses) or self.has_mcp_configured(
-                include_config_fallback=bool(conf().get("mcp_auto_start", False))
-            ),
+            "configured": bool(statuses) or self.has_mcp_configured(),
             "toolCount": len(self._mcp_tool_instances),
         }
 
@@ -559,7 +569,7 @@ class ToolManager:
             )
             from agent.tools.mcp.mcp_tool import McpTool
 
-            registry = McpClientRegistry()
+            registry = self._mcp_registry or McpClientRegistry()
             self._mcp_registry = registry
             set_reload_callback(self.reload_mcp_server)
 
@@ -569,6 +579,8 @@ class ToolManager:
                     client = McpClient(cfg)
                     if not client.initialize():
                         if getattr(client, "needs_auth", False):
+                            with registry._registry_lock:
+                                registry._clients[server_name] = client
                             self._mcp_status[server_name] = "needs_auth"
                             logger.info(
                                 f"[MCP] Server '{server_name}' needs authorization"
@@ -812,3 +824,9 @@ class ToolManager:
         """Shut down all MCP server clients."""
         if self._mcp_registry:
             self._mcp_registry.shutdown_all()
+        self._mcp_registry = None
+        self._mcp_tool_instances = {}
+        self._mcp_status = {}
+        self._mcp_loaded = False
+        self._mcp_signature = (None, None)
+        self._mcp_active_configs = {}

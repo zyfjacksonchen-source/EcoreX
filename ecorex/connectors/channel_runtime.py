@@ -56,8 +56,6 @@ class _PreparedTurn(Protocol):
 
 
 class _RuntimeAdmission(Protocol):
-    permission_account_id: str
-
     def admit_turn(
         self,
         request: CreateTurnRequest,
@@ -219,7 +217,6 @@ class ChannelRuntimeDispatcher:
                 thread.thread_id,
                 prepared.request,
                 snapshot_context=prepared.snapshot_context,
-                permission_account_id=self.composition.permission_account_id,
                 causation_id=client_message_id,
                 correlation_id=f"channel-thread-{conversation_sha256}",
             ),

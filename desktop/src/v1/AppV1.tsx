@@ -739,6 +739,7 @@ export function AppV1() {
               <SkillsWorkspace
                 openChannelsKey={openChannelsKey}
                 mcpClient={runtime.client}
+                mcpProjectId={runtime.mcpProjectId}
                 connectorRuntime={{
                   catalog: runtime.connectorCatalog,
                   channelCatalog: runtime.channelConnectorCatalog,
