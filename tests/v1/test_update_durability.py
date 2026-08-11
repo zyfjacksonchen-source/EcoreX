@@ -607,6 +607,50 @@ def test_slot_store_keeps_orphan_when_security_convergence_fails(
     assert orphan.is_dir()
 
 
+@pytest.mark.parametrize("cleanup_fails", (False, True))
+def test_slot_store_converges_security_when_preparer_fails(
+    tmp_path: Path,
+    cleanup_fails: bool,
+) -> None:
+    package = tmp_path / "runtime.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("runtime/app.txt", "safe")
+    manifest, artifact = _storage_manifest(package)
+    store = SlotStore(tmp_path / "install")
+    cleanup_calls: list[Path] = []
+
+    def fail_after_intent(slot: Path, _payload: Path) -> dict[str, object]:
+        (slot / "security.intent").write_text("provisioning", encoding="ascii")
+        raise RuntimeError("native provision failed")
+
+    def cleanup(slot: Path, _payload: Path, preparation: object) -> None:
+        assert preparation == {}
+        assert (slot / "security.intent").read_text(encoding="ascii") == "provisioning"
+        cleanup_calls.append(slot)
+        if cleanup_fails:
+            raise RuntimeError("native cleanup failed")
+
+    with pytest.raises(
+        RuntimeError,
+        match="native cleanup failed" if cleanup_fails else "native provision failed",
+    ):
+        store.stage(
+            package,
+            slot_id="v1-security-failure",
+            manifest=manifest,
+            artifact=artifact,
+            payload_preparer=fail_after_intent,
+            payload_attester=lambda *_args: {"attested": True},
+            payload_cleanup=cleanup,
+        )
+
+    assert len(cleanup_calls) == 1
+    staging = tuple(store.slots_dir.glob(".v1-security-failure.staging-*"))
+    assert bool(staging) is cleanup_fails
+    if staging:
+        assert (staging[0] / "security.intent").is_file()
+
+
 def test_local_fetcher_refuses_oversized_source_before_writing(tmp_path: Path) -> None:
     package = tmp_path / "expected.zip"
     package.write_bytes(b"expected")

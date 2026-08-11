@@ -43,6 +43,20 @@ from .windows_path_identity import windows_invariant_path_key
 _MAX_CONFIG_BYTES = 256 * 1024
 _PREPARATION_FILE = ".sandbox-security-preparation.json"
 _HELPER_FILE_NAME = "ecorex-sandbox-host.exe"
+_HELPER_FAILURE_PREFIX = b"ecorex_sandbox_security:"
+_HELPER_FAILURE_REASONS = {
+    "digest",
+    "operation",
+    "read_acl",
+    "read_identity",
+    "read_label",
+    "read_metadata",
+    "tree",
+    "workspace_acl",
+    "workspace_identity",
+    "workspace_label",
+    "workspace_metadata",
+}
 _STABLE_PROVISION_CONTRACT = "windows-appcontainer-stable-provision-v4"
 _STRICT_INHERITANCE_PROOF = "immutable-runtime-durable-cas-mutable-workspace-acl-mic-v4"
 _PROVISION_INHERITANCE_PROOF = "fresh-runtime-durable-cas-v1"
@@ -795,8 +809,12 @@ class WindowsSandboxSlotSecurity:
             stderr_limit=4 * 1024,
         )
         if completed is None or completed.returncode != 0 or completed.stderr:
+            reason = _helper_failure_reason(
+                completed.stderr if completed is not None else b""
+            )
             raise WindowsSandboxSecurityError(
                 f"Windows sandbox helper {operation} failed"
+                + (f": {reason}" if reason is not None else "")
             )
         try:
             value = json.loads(completed.stdout.decode("utf-8"))
@@ -1340,6 +1358,16 @@ def _real_directory(path: Path) -> Path:
             break
         current = current.parent
     return absolute.resolve(strict=True)
+
+
+def _helper_failure_reason(stderr: bytes) -> str | None:
+    if not stderr.startswith(_HELPER_FAILURE_PREFIX):
+        return None
+    try:
+        reason = stderr.removeprefix(_HELPER_FAILURE_PREFIX).decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    return reason if reason in _HELPER_FAILURE_REASONS else None
 
 
 def _ordered_roots_digest(roots: tuple[Path, ...]) -> str:

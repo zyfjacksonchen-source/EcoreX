@@ -737,16 +737,23 @@ bool AttestSecurity(const SecurityRoots& request, PSID sid, bool full,
   return true;
 }
 
-bool ProvisionSecurity(const SecurityRoots& request, PSID sid) {
+bool ProvisionSecurity(const SecurityRoots& request, PSID sid,
+                       std::string* failure) {
   std::vector<std::filesystem::path> workspace_nodes;
   std::vector<std::filesystem::path> ignored_read_nodes;
-  if (!CollectSecurityNodes(request, false, &ignored_read_nodes, &workspace_nodes)) return false;
+  if (!CollectSecurityNodes(request, false, &ignored_read_nodes, &workspace_nodes)) {
+    if (failure) *failure = "tree";
+    return false;
+  }
   const auto durable_cas = request.install_root / L"state" / L"extension-cas";
   for (const auto& root : request.read_roots) {
     const bool durable = FoldPath(root) == FoldPath(durable_cas);
     std::vector<std::filesystem::path> nodes;
     if (durable) {
-      if (!EnumerateSecureTree(root, &nodes)) return false;
+      if (!EnumerateSecureTree(root, &nodes)) {
+        if (failure) *failure = "read_metadata";
+        return false;
+      }
     } else {
       nodes.push_back(root);
     }
@@ -758,16 +765,28 @@ bool ProvisionSecurity(const SecurityRoots& request, PSID sid) {
         ++existing;
         if (FoldPath(iterator->path()) != FoldPath(ModulePath()) ||
             ReparsePoint(iterator->path()) || !iterator->is_regular_file(scan_error)) {
+          if (failure) *failure = "read_identity";
           return false;
         }
       }
-      if (scan_error || existing > 1) return false;
+      if (scan_error || existing > 1) {
+        if (failure) *failure = "read_identity";
+        return false;
+      }
     }
     for (const auto& path : nodes) {
       std::error_code error;
       const bool directory = std::filesystem::is_directory(path, error);
-      if (error || !ResourceIntegrityAtMostMedium(path) ||
-          !ApplyGrant(path, sid, GENERIC_READ | GENERIC_EXECUTE, directory)) {
+      if (error) {
+        if (failure) *failure = "read_metadata";
+        return false;
+      }
+      if (!ResourceIntegrityAtMostMedium(path)) {
+        if (failure) *failure = "read_label";
+        return false;
+      }
+      if (!ApplyGrant(path, sid, GENERIC_READ | GENERIC_EXECUTE, directory)) {
+        if (failure) *failure = "read_acl";
         return false;
       }
     }
@@ -775,11 +794,18 @@ bool ProvisionSecurity(const SecurityRoots& request, PSID sid) {
   for (const auto& path : workspace_nodes) {
     std::error_code error;
     const bool directory = std::filesystem::is_directory(path, error);
-    if (error ||
-        !ResourceIntegrityAtMostMedium(path) ||
-        !ApplyGrant(path, sid,
+    if (error) {
+      if (failure) *failure = "workspace_metadata";
+      return false;
+    }
+    if (!ResourceIntegrityAtMostMedium(path)) {
+      if (failure) *failure = "workspace_label";
+      return false;
+    }
+    if (!ApplyGrant(path, sid,
                     GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | DELETE,
                     directory)) {
+      if (failure) *failure = "workspace_acl";
       return false;
     }
   }
@@ -929,8 +955,9 @@ int SecurityCommand(const std::wstring& operation, int argc, wchar_t** argv) {
       request->read_roots, request->install_root, request->slot_root);
   bool ok = permission_domain.has_value() && sid_text.has_value() &&
             helper_digest.has_value() && read_digest.has_value();
+  std::string security_failure;
   if (ok && operation == L"provision") {
-    ok = ProvisionSecurity(*request, sid);
+    ok = ProvisionSecurity(*request, sid, &security_failure);
   } else if (ok && operation == L"repair") {
     ok = RepairSecurity(*request, sid);
   } else if (ok && operation == L"unprovision-slot") {
@@ -942,7 +969,6 @@ int SecurityCommand(const std::wstring& operation, int argc, wchar_t** argv) {
   }
   std::string root_security;
   std::string tree_security;
-  std::string security_failure;
   if (ok && operation != L"unprovision-slot" && operation != L"unprovision-domain") {
     ok = AttestSecurity(*request, sid, false, &root_security, &security_failure);
     if (ok && request->mode == L"full" && operation == L"attest") {
