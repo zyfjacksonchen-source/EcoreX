@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 import runpy
+import subprocess
+import sys
 import zipfile
 
 import pytest
@@ -242,6 +244,55 @@ def test_manual_webui_channel_overlay_keeps_fastapi_multipart_authority() -> Non
         "websocket-client",
         "wechatpy",
     } <= builder["CHANNEL_RUNTIME_DISTRIBUTIONS"]
+
+
+def test_manual_webui_product_overlay_contains_the_cow_runtime_spine(
+    tmp_path: Path,
+) -> None:
+    builder = _builder()
+    core = tmp_path / "core"
+    site_packages = builder["_runtime_site_packages"](core, "macos")
+    archive = tmp_path / "python311.zip"
+    with zipfile.ZipFile(archive, "w") as output:
+        member = zipfile.ZipInfo("ecorex/stale.py", builder["FIXED_TIME"])
+        member.create_system = 3
+        member.external_attr = (0o100644) << 16
+        output.writestr(member, b"stale = True\n")
+
+    builder["_install_cow_runtime_overlay"](
+        ROOT,
+        core,
+        tmp_path,
+        platform="macos",
+    )
+    builder["_replace_product_imports"](archive, ROOT)
+
+    with zipfile.ZipFile(archive) as packaged:
+        assert "ecorex/runtime/worker.py" in packaged.namelist()
+    assert (site_packages / "agent/tools/tool_manager.py").is_file()
+    assert (site_packages / "bridge/agent_initializer.py").is_file()
+    assert (site_packages / "config.py").is_file()
+    probe = subprocess.run(
+        (
+            sys.executable,
+            "-I",
+            "-B",
+            "-c",
+            "import sys; "
+            f"sys.path.insert(0, {str(archive)!r}); "
+            f"sys.path.insert(0, {str(site_packages)!r}); "
+            "from agent.tools.tool_manager import ToolManager; "
+            "from ecorex.runtime.worker import AgentTurnWorker; "
+            "assert ToolManager.__module__ == 'agent.tools.tool_manager'; "
+            "assert AgentTurnWorker.__module__ == 'ecorex.runtime.worker'; "
+            f"assert sys.modules[ToolManager.__module__].__file__.startswith({str(site_packages)!r})",
+        ),
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert probe.returncode == 0, probe.stderr
 
 
 def test_manual_webui_core_contains_exact_tracked_builtin_skills(tmp_path: Path) -> None:

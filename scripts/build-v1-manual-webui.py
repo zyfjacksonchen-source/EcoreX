@@ -45,6 +45,7 @@ from ecorex.product_version import (  # noqa: E402
     is_stable_release_version,
     stable_release_sequence,
 )
+from ecorex.pack_catalog import COW_RUNTIME_SOURCE_ROOTS  # noqa: E402
 from ecorex.release import (  # noqa: E402
     ArtifactBuildInput,
     ArtifactKind,
@@ -534,10 +535,7 @@ def _install_channel_runtime_overlay(
             timeout=300,
             code="manual_webui_runtime_overlay_install_failed",
         )
-        destination = core / "bin" / "pack-python"
-        destination = destination / (
-            "Lib/site-packages" if platform == "windows" else "lib/python3.11/site-packages"
-        )
+        destination = _runtime_site_packages(core, platform)
         selected = [staging / name for name in CHANNEL_RUNTIME_PACKAGES]
         if any(not path.exists() for path in selected):
             _fail("manual_webui_runtime_overlay_invalid")
@@ -569,6 +567,42 @@ def _install_channel_runtime_overlay(
                 )
             else:
                 shutil.copy2(source_path, target)
+
+
+def _runtime_site_packages(core: Path, platform: str) -> Path:
+    if platform == "windows":
+        return core / "bin" / "pack-python" / "Lib" / "site-packages"
+    if platform == "macos":
+        return core / "bin" / "pack-python" / "lib/python3.11/site-packages"
+    _fail("manual_webui_runtime_overlay_invalid")
+
+
+def _install_cow_runtime_overlay(
+    source: Path,
+    core: Path,
+    root: Path,
+    *,
+    platform: str,
+) -> None:
+    destination = _runtime_site_packages(core, platform)
+    source_roots = (*COW_RUNTIME_SOURCE_ROOTS, "config.py")
+    with tempfile.TemporaryDirectory(dir=root, prefix=f".{platform}-cow-overlay-") as raw:
+        staging = Path(raw)
+        for source_root in source_roots:
+            for path in _tracked_source_files(source, source_root):
+                target = staging / path.relative_to(source)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, target)
+        if not all((staging / source_root).exists() for source_root in source_roots):
+            _fail("manual_webui_product_overlay_failed")
+        destination.mkdir(parents=True, exist_ok=True)
+        for source_root in source_roots:
+            target = destination / source_root
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink(missing_ok=True)
+            os.replace(staging / source_root, target)
 
 
 def _replace_product_imports(archive_path: Path, source: Path) -> None:
@@ -718,6 +752,12 @@ def _prepare_stages(
             platform=platform,
             architecture=architecture,
         )
+        _install_cow_runtime_overlay(
+            source,
+            core,
+            target_root,
+            platform=platform,
+        )
         _replace_product_imports(imports[0], source)
         _replace_builtin_skills(core, source)
         _runtime_config(
@@ -752,7 +792,11 @@ def _prepare_stages(
                     "-c",
                     "import ecorex.bootstrap.install_local, "
                     "ecorex.integration.dependency_pack_process, lark_channel, qrcode; "
+                    "from agent.tools.tool_manager import ToolManager; "
+                    "from bridge.agent_initializer import AgentInitializer; "
+                    "from ecorex.runtime.worker import AgentTurnWorker; "
                     "from ecorex.connectors.weixin import _qr_png_data_url; "
+                    "assert ToolManager and AgentInitializer and AgentTurnWorker; "
                     "assert _qr_png_data_url('https://weixin.qq.com/q/emate').startswith('data:image/png;base64,')",
                 ),
                 cwd=core,

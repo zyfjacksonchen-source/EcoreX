@@ -26,6 +26,20 @@ CAPABILITY_PACK_SERVICE_IDS = MappingProxyType(
     }
 )
 
+# Product Python roots inherited from CowAgent and shipped with every Runtime.
+COW_RUNTIME_SOURCE_ROOTS = (
+    "agent",
+    "bridge",
+    "models",
+    "channel",
+    "plugins",
+    "common",
+    "skills",
+    "voice",
+    "translate",
+    "cli",
+)
+
 _tool_pack_ids = frozenset(CAPABILITY_PACK_TOOL_IDS)
 _service_pack_ids = frozenset(CAPABILITY_PACK_SERVICE_IDS)
 if _tool_pack_ids != _service_pack_ids:
@@ -69,6 +83,7 @@ __all__ = [
     "CAPABILITY_PACK_SERVICE_IDS",
     "CAPABILITY_PACK_TOOL_IDS",
     "CAPABILITY_PACK_PROFILES",
+    "COW_RUNTIME_SOURCE_ROOTS",
     "REQUIRED_CAPABILITY_PACK_IDS",
     "capability_pack_profile",
 ]

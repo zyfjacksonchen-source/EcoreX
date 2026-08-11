@@ -55,6 +55,7 @@ from ecorex.release.macos_native_contract import (  # noqa: E402
 from ecorex.pack_catalog import (  # noqa: E402
     CAPABILITY_PACK_SERVICE_IDS as PACK_SERVICES,
     CAPABILITY_PACK_TOOL_IDS as PACK_TOOLS,
+    COW_RUNTIME_SOURCE_ROOTS,
 )
 from ecorex.release.process_boundary import (  # noqa: E402
     BoundedProcessError,
@@ -827,18 +828,7 @@ def _build_python_closure(
         site_packages / "ecorex",
         excluded=frozenset({"__pycache__"}),
     )
-    for package in (
-        "agent",
-        "bridge",
-        "models",
-        "channel",
-        "plugins",
-        "common",
-        "skills",
-        "voice",
-        "translate",
-        "cli",
-    ):
+    for package in COW_RUNTIME_SOURCE_ROOTS:
         _copy_tree(
             ROOT / package,
             site_packages / package,
