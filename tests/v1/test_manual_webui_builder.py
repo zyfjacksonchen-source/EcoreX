@@ -222,6 +222,28 @@ def test_manual_webui_macos_core_keeps_both_runtime_entries_executable() -> None
     assert builder["_core_executable_paths"]("windows") == ("bin/ecorex.exe",)
 
 
+def test_manual_webui_channel_overlay_keeps_fastapi_multipart_authority() -> None:
+    builder = _builder()
+
+    assert builder["_canonical_distribution_name"](
+        Path("web.py-0.61.dist-info")
+    ) == "web-py"
+    assert "multipart" not in builder["CHANNEL_RUNTIME_PACKAGES"]
+    assert "multipart" not in builder["CHANNEL_RUNTIME_DISTRIBUTIONS"]
+    assert {
+        "aiohappyeyeballs",
+        "aiohttp",
+        "dingtalk-stream",
+        "discord-py",
+        "lark-oapi",
+        "python-telegram-bot",
+        "slack-bolt",
+        "web-py",
+        "websocket-client",
+        "wechatpy",
+    } <= builder["CHANNEL_RUNTIME_DISTRIBUTIONS"]
+
+
 def test_manual_webui_core_contains_exact_tracked_builtin_skills(tmp_path: Path) -> None:
     builder = _builder()
     core = tmp_path / "core"

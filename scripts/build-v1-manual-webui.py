@@ -96,6 +96,63 @@ PURE_RUNTIME_OVERLAYS = {
     "requests-toolbelt": ("requests_toolbelt", "1.0.0"),
     "urllib3": ("urllib3", "2.7.0"),
 }
+CHANNEL_RUNTIME_PACKAGES = (
+    "aiohappyeyeballs",
+    "aiohttp",
+    "aiosignal",
+    "attr",
+    "attrs",
+    "cheroot",
+    "Crypto",
+    "dateutil",
+    "dingtalk_stream",
+    "discord",
+    "frozenlist",
+    "jaraco",
+    "lark_oapi",
+    "more_itertools",
+    "multidict",
+    "optionaldict",
+    "propcache",
+    "six.py",
+    "slack_bolt",
+    "slack_sdk",
+    "telegram",
+    "web",
+    "websocket",
+    "wechatpy",
+    "xmltodict.py",
+    "yarl",
+)
+CHANNEL_RUNTIME_DISTRIBUTIONS = frozenset(
+    {
+        "aiohappyeyeballs",
+        "aiohttp",
+        "aiosignal",
+        "attrs",
+        "cheroot",
+        "dingtalk-stream",
+        "discord-py",
+        "frozenlist",
+        "jaraco-functools",
+        "lark-oapi",
+        "more-itertools",
+        "multidict",
+        "optionaldict",
+        "propcache",
+        "pycryptodome",
+        "python-dateutil",
+        "python-telegram-bot",
+        "six",
+        "slack-bolt",
+        "slack-sdk",
+        "web-py",
+        "websocket-client",
+        "wechatpy",
+        "xmltodict",
+        "yarl",
+    }
+)
 
 
 class ManualWebUIBuildError(RuntimeError):
@@ -427,7 +484,11 @@ def _pure_runtime_overlay_files() -> tuple[tuple[str, Path], ...]:
     return tuple(files)
 
 
-def _install_pycryptodome_overlay(
+def _canonical_distribution_name(dist_info: Path) -> str:
+    return re.sub(r"[-_.]+", "-", dist_info.name.split("-", 1)[0]).casefold()
+
+
+def _install_channel_runtime_overlay(
     source: Path,
     core: Path,
     root: Path,
@@ -473,26 +534,41 @@ def _install_pycryptodome_overlay(
             timeout=300,
             code="manual_webui_runtime_overlay_install_failed",
         )
-        package = staging / "Crypto"
         destination = core / "bin" / "pack-python"
         destination = destination / (
             "Lib/site-packages" if platform == "windows" else "lib/python3.11/site-packages"
         )
-        if not package.is_dir() or (destination / "Crypto").exists():
+        selected = [staging / name for name in CHANNEL_RUNTIME_PACKAGES]
+        if any(not path.exists() for path in selected):
             _fail("manual_webui_runtime_overlay_invalid")
-        for path in sorted(package.rglob("*")):
-            relative = path.relative_to(package)
-            if "__pycache__" in relative.parts or "SelfTest" in relative.parts or path.suffix == ".pyc":
-                continue
-            if path.is_symlink():
+        for info in staging.glob("*.dist-info"):
+            project = _canonical_distribution_name(info)
+            if project in CHANNEL_RUNTIME_DISTRIBUTIONS:
+                selected.append(info)
+        observed = {
+            _canonical_distribution_name(path)
+            for path in selected
+            if path.name.endswith(".dist-info")
+        }
+        if observed != CHANNEL_RUNTIME_DISTRIBUTIONS:
+            _fail("manual_webui_runtime_overlay_invalid")
+        destination.mkdir(parents=True, exist_ok=True)
+        for source_path in selected:
+            target = destination / source_path.name
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink(missing_ok=True)
+            if source_path.is_symlink():
                 _fail("manual_webui_runtime_overlay_invalid")
-            if not path.is_file():
-                continue
-            target = destination / "Crypto" / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("rb") as input_stream, target.open("xb") as output_stream:
-                shutil.copyfileobj(input_stream, output_stream, 1024 * 1024)
-            target.chmod(0o644)
+            if source_path.is_dir():
+                shutil.copytree(
+                    source_path,
+                    target,
+                    ignore=shutil.ignore_patterns("__pycache__", "SelfTest", "*.pyc"),
+                )
+            else:
+                shutil.copy2(source_path, target)
 
 
 def _replace_product_imports(archive_path: Path, source: Path) -> None:
@@ -635,7 +711,7 @@ def _prepare_stages(
         imports = tuple(core.rglob("python311.zip"))
         if len(imports) != 1:
             _fail("manual_webui_pack_python_invalid")
-        _install_pycryptodome_overlay(
+        _install_channel_runtime_overlay(
             source,
             core,
             target_root,

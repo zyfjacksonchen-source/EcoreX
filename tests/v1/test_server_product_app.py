@@ -23,6 +23,7 @@ from ecorex.connectors import InMemoryCredentialVault
 from ecorex.extensions import SkillReadFact, SkillSearchFact
 from ecorex.integration import ImageGenerationToolHandler
 from ecorex.observability import AuditIntegrityError
+from ecorex.protocol import CreateThreadRequest
 from ecorex.server import (
     BundleIntegrityError,
     ProductServerSettings,
@@ -452,9 +453,8 @@ def test_product_composes_native_cow_channels_with_the_agent_runtime(tmp_path: P
     }
 
     assert service.adapters == {}
-    assert all(
-        not catalog[channel_id]["adapter_available"] for channel_id in channel_ids
-    )
+    assert service.native_service is app.state.cow_channel_service
+    assert all(catalog[channel_id]["adapter_available"] for channel_id in channel_ids)
     assert all(catalog[channel_id]["instance"] is None for channel_id in channel_ids)
     assert app.state.channel_runtime_dispatcher is not None
     assert app.state.cow_channel_service is not None
@@ -466,6 +466,47 @@ def test_product_composes_native_cow_channels_with_the_agent_runtime(tmp_path: P
     assert all(catalog[channel_id]["icon"] for channel_id in channel_ids)
     with TestClient(app, base_url=ORIGIN):
         assert app.state.cow_channel_service.started is True
+
+
+def test_product_scheduler_uses_kernel_thread_and_native_vendor_delivery(
+    tmp_path: Path,
+) -> None:
+    signed = _write_signed_bundle(tmp_path)
+    app = create_product_app(
+        replace(_settings(tmp_path, signed), model_gateway=_ProductGateway())
+    )
+    thread = app.state.runtime.create_thread(CreateThreadRequest(title="scheduled"))
+    sent = []
+
+    class Channel:
+        def send(self, reply, context) -> None:
+            sent.append((reply, context))
+
+        def stop(self) -> None:
+            return None
+
+    task = {
+        "id": "scheduled-message",
+        "next_run_at": "2026-08-12T12:00:00",
+        "action": {
+            "type": "send_message",
+            "content": "提醒内容",
+            "thread_id": thread.thread_id,
+            "channel_type": "telegram",
+            "conversation_id": "vendor-conversation",
+            "receiver": "vendor-receiver",
+            "is_group": True,
+        },
+    }
+
+    with TestClient(app, base_url=ORIGIN):
+        app.state.cow_channel_service.manager._channels["telegram"] = Channel()
+        assert app.state.scheduler_service.execute_callback(task) is True
+    assert len(sent) == 1
+    assert sent[0][0].content == "提醒内容"
+    assert sent[0][1].get("session_id") == "vendor-conversation"
+    assert sent[0][1].get("receiver") == "vendor-receiver"
+    assert sent[0][1].get("telegram_chat_id") == "vendor-receiver"
 
 
 def test_installed_payload_builtin_skills_feed_the_cow_agent(tmp_path: Path) -> None:
@@ -620,7 +661,7 @@ def test_acceptance_preview_is_visible_and_blocks_external_mutations(
         for item in app.state.channel_self_service.catalog()["items"]
         if item["channel_id"] == "telegram"
     )
-    assert telegram["adapter_available"] is False
+    assert telegram["adapter_available"] is True
     assert app.state.channel_runtime_dispatcher is None
     with TestClient(app, base_url=ORIGIN) as client:
         index = client.get("/")

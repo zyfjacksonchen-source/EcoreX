@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
 from bridge.context import Context
@@ -16,13 +20,29 @@ from ecorex.protocol import ItemKind, ItemStatus, TurnStatus
 class _Manager:
     def __init__(self) -> None:
         self.started: list[tuple[list[str], bool]] = []
-        self.stopped = 0
+        self.stopped: list[str | None] = []
+        self.restarted: list[str] = []
+        self.added: list[str] = []
+        self.removed: list[str] = []
+        self.channels: dict[str, object] = {}
 
     def start(self, channel_names: list[str], first_start: bool = False) -> None:
         self.started.append((channel_names, first_start))
 
-    def stop(self) -> None:
-        self.stopped += 1
+    def stop(self, channel_name: str | None = None) -> None:
+        self.stopped.append(channel_name)
+
+    def restart(self, channel_name: str) -> None:
+        self.restarted.append(channel_name)
+
+    def add_channel(self, channel_name: str) -> None:
+        self.added.append(channel_name)
+
+    def remove_channel(self, channel_name: str) -> None:
+        self.removed.append(channel_name)
+
+    def get_channel(self, channel_name: str):
+        return self.channels.get(channel_name)
 
 
 def test_cow_channel_service_starts_official_config_without_managed_session() -> None:
@@ -36,7 +56,116 @@ def test_cow_channel_service_starts_official_config_without_managed_session() ->
     service.stop_sync()
 
     assert manager.started == [(["telegram", "feishu"], True)]
-    assert manager.stopped == 1
+    assert manager.stopped == [None]
+
+
+def test_cow_channel_ui_edits_the_live_config_and_manager(tmp_path: Path) -> None:
+    manager = _Manager()
+    config_path = tmp_path / "config.json"
+    service = CowChannelService(manager=manager, config_path=config_path)
+    service.started = True
+
+    saved = service.save(
+        "telegram",
+        display_name="Telegram Bot",
+        config={},
+        secrets={"telegram_token": "token-one"},
+    )
+    enabled = service.enable("telegram")
+    service.save(
+        "telegram",
+        display_name="Telegram Bot",
+        config={},
+        secrets={"telegram_token": "token-two"},
+    )
+    service.disable("telegram")
+    service.remove("telegram")
+
+    assert saved["enabled"] is False
+    assert enabled["enabled"] is True
+    assert manager.added == ["telegram"]
+    assert manager.restarted == ["telegram"]
+    assert manager.removed == ["telegram", "telegram"]
+    assert json.loads(config_path.read_text(encoding="utf-8")) == {}
+
+
+def test_scheduler_reply_uses_the_same_native_channel_for_text_and_file() -> None:
+    sent: list[tuple[object, Context]] = []
+    channel = SimpleNamespace(send=lambda reply, context: sent.append((reply, context)))
+    manager = _Manager()
+    manager.channels["telegram"] = channel
+    service = CowChannelService(manager=manager, config={})
+
+    service.send_outbound(
+        "telegram",
+        conversation_id="conversation-1",
+        receiver="receiver-1",
+        is_group=True,
+        text="报告已生成",
+        attachment={
+            "file_type": "document",
+            "path": "/tmp/report.pdf",
+            "file_name": "report.pdf",
+        },
+    )
+
+    assert [reply.type for reply, _context in sent] == [
+        ReplyType.TEXT,
+        ReplyType.FILE,
+    ]
+    assert sent[0][0].content == "报告已生成"
+    assert sent[1][0].content == "file:///tmp/report.pdf"
+    assert sent[1][0].file_name == "report.pdf"
+    assert sent[0][1] is sent[1][1]
+    assert sent[0][1].get("session_id") == "conversation-1"
+    assert sent[0][1].get("receiver") == "receiver-1"
+    assert sent[0][1].get("isgroup") is True
+    assert sent[0][1].get("telegram_chat_id") == "receiver-1"
+
+
+def test_all_public_cow_channels_import_and_construct_without_network(tmp_path: Path) -> None:
+    script = r'''
+import os
+import socket
+import sys
+sys.path.insert(0, os.getcwd())
+from config import conf
+from channel.channel_catalog import CHANNEL_CATALOG
+from channel.channel_factory import create_channel
+
+def blocked(*_args, **_kwargs):
+    raise AssertionError("channel constructor attempted network access")
+
+socket.create_connection = blocked
+socket.socket.connect = blocked
+conf().update({
+    "wechatcom_corp_id": "corp", "wechatcomapp_agent_id": "agent",
+    "wechatcomapp_secret": "secret", "wechatcomapp_token": "token",
+    "wechatcomapp_aes_key": "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
+    "wechat_kf_corp_id": "corp", "wechat_kf_secret": "secret",
+    "wechat_kf_token": "token",
+    "wechat_kf_aes_key": "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
+    "wechatmp_app_id": "app", "wechatmp_app_secret": "secret",
+    "wechatmp_token": "token",
+    "wechatmp_aes_key": "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
+})
+created = []
+for name in CHANNEL_CATALOG:
+    channel = create_channel(name)
+    created.append(channel.channel_type)
+    channel.stop()
+assert created == list(CHANNEL_CATALOG)
+'''
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", script],
+        cwd=Path(__file__).resolve().parents[2],
+        env={**dict(__import__("os").environ), "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 class _Dispatcher:
@@ -236,6 +365,7 @@ def test_agent_worker_attaches_the_same_cow_scheduler_to_home_channel() -> None:
     scheduler = SimpleNamespace(name="scheduler", current_context=None, config={})
     AgentTurnWorker._attach_scheduler_context(
         SimpleNamespace(tools=[scheduler]),
+        "thread-1",
         {
             "channel_id": "telegram",
             "conversation_id": "conversation-1",
@@ -245,7 +375,43 @@ def test_agent_worker_attaches_the_same_cow_scheduler_to_home_channel() -> None:
     )
 
     assert scheduler.current_context.get("channel_type") == "telegram"
+    assert scheduler.current_context.get("thread_id") == "thread-1"
     assert scheduler.current_context.get("session_id") == "conversation-1"
     assert scheduler.current_context.get("receiver") == "receiver-1"
     assert scheduler.current_context.get("isgroup") is True
     assert scheduler.config["channel_type"] == "telegram"
+
+
+def test_scheduler_task_keeps_kernel_thread_and_vendor_delivery_context(
+    tmp_path: Path,
+) -> None:
+    from agent.tools.scheduler.scheduler_tool import SchedulerTool
+    from agent.tools.scheduler.task_store import TaskStore
+
+    store = TaskStore(str(tmp_path / "tasks.json"))
+    tool = SchedulerTool({"channel_type": "telegram"})
+    tool.task_store = store
+    tool.current_context = Context(
+        kwargs={
+            "thread_id": "thread-1",
+            "session_id": "conversation-1",
+            "receiver": "receiver-1",
+            "isgroup": True,
+        }
+    )
+
+    result = tool.execute(
+        {
+            "action": "create",
+            "name": "follow-up",
+            "message": "hello later",
+            "schedule_type": "once",
+            "schedule_value": "+5m",
+        }
+    )
+
+    assert result.status == "success"
+    action = store.list_tasks()[0]["action"]
+    assert action["thread_id"] == "thread-1"
+    assert action["conversation_id"] == "conversation-1"
+    assert action["receiver"] == "receiver-1"

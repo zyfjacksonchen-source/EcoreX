@@ -61,6 +61,7 @@ from ecorex.connectors import (
     channel_audit_outbox_event,
     create_channel_self_service_router,
 )
+from ecorex.connectors.channel_catalog import normalize_channel_name
 from ecorex.gateway import (
     GatewayAccountUsageProjection,
     ManagedModelGatewayClient,
@@ -1655,15 +1656,6 @@ def create_app(
         account_id=settings.account_id,
         organization_id=managed_organization_id or "personal-local",
     )
-    channel_self_service = ChannelSelfService(
-        owner=channel_owner,
-        vault=connector_vault,
-        adapters=settings.channel_lifecycle_adapters,
-        audit_sink=lambda event: connector_event_sink.publish(
-            channel_audit_outbox_event(event)
-        ),
-        stop_timeout_seconds=settings.lifecycle_shutdown_seconds,
-    )
     connector_catalog = connector_composition.service.catalog()
     # CowAgent treats local Skills and MCP servers as user data-plane
     # configuration.  The Extension repository may still back the e-Mate UI,
@@ -1966,7 +1958,6 @@ def create_app(
     app.state.cow_mcp_service = cow_mcp_service
     app.state.mcp_oauth_service = mcp_oauth_service
     app.state.user_mcp_service = cow_mcp_service
-    app.state.channel_self_service = channel_self_service
     app.state.permission_authority = permission_authority
     app.state.extension_service = extension_service
     app.state.managed_session_service = managed_session
@@ -2188,11 +2179,6 @@ def create_app(
             close_gateway_on_stop=settings.close_model_gateway_on_shutdown,
         )
     app.state.model_worker_supervisor = worker_supervisor
-    bindable_channel_adapters = tuple(
-        adapter
-        for adapter in settings.channel_lifecycle_adapters.values()
-        if callable(getattr(adapter, "bind_runtime", None))
-    )
     channel_runtime_dispatcher = None
     if worker_supervisor is not None and not settings.acceptance_preview:
         channel_runtime_dispatcher = ChannelRuntimeDispatcher(
@@ -2201,21 +2187,27 @@ def create_app(
             kernel=kernel,
             worker=worker_supervisor,
         )
-        for adapter in bindable_channel_adapters:
-            adapter.bind_runtime(channel_owner, channel_runtime_dispatcher)
-    elif worker_supervisor is None and bindable_channel_adapters:
-        raise ValueError("message channel adapters require the Agent worker")
     app.state.channel_runtime_dispatcher = channel_runtime_dispatcher
-    cow_channel_service = (
-        CowChannelService(
-            config_path=Path(settings.database_path).expanduser().resolve().parent
-            / "config.json",
-            bridge=CowChannelRuntimeBridge(channel_runtime_dispatcher),
-        )
-        if channel_runtime_dispatcher is not None
-        else None
+    cow_channel_service = CowChannelService(
+        config_path=Path(settings.database_path).expanduser().resolve().parent
+        / "config.json",
+        bridge=(
+            CowChannelRuntimeBridge(channel_runtime_dispatcher)
+            if channel_runtime_dispatcher is not None
+            else None
+        ),
+    )
+    channel_self_service = ChannelSelfService(
+        owner=channel_owner,
+        vault=connector_vault,
+        audit_sink=lambda event: connector_event_sink.publish(
+            channel_audit_outbox_event(event)
+        ),
+        stop_timeout_seconds=settings.lifecycle_shutdown_seconds,
+        native_service=cow_channel_service,
     )
     app.state.cow_channel_service = cow_channel_service
+    app.state.channel_self_service = channel_self_service
     scheduler_service = None
     scheduler_lifecycle = None
     scheduler_handler = settings.capability_handlers.get("scheduler")
@@ -2223,38 +2215,40 @@ def create_app(
 
         async def execute_scheduled_task(task: Mapping[str, Any]) -> bool:
             action = dict(task.get("action") or {})
-            thread_id = str(
-                action.get("thread_id")
-                or action.get("notify_session_id")
-                or action.get("receiver")
-                or ""
-            )
+            thread_id = str(action.get("thread_id") or "")
             content = str(
                 action.get("content") or action.get("task_description") or ""
             ).strip()
             if not thread_id or not content:
                 return False
-            thread = await asyncio.to_thread(kernel.get_thread, thread_id)
-            channel = dict(thread.metadata.get("channel") or {})
-            channel_id = str(channel.get("channel_id") or "")
-            conversation_id = str(channel.get("conversation_id") or "")
-            adapter = settings.channel_lifecycle_adapters.get(channel_id)
+            await asyncio.to_thread(kernel.get_thread, thread_id)
+            channel_id = normalize_channel_name(action.get("channel_type") or "")
+            conversation_id = str(
+                action.get("conversation_id")
+                or action.get("notify_session_id")
+                or ""
+            )
+            receiver = str(action.get("receiver") or conversation_id)
+            is_group = bool(action.get("is_group", False))
             execution_key = (
                 f"scheduler-{task['id']}-{task.get('next_run_at') or 'due'}"
             )
             if (
                 action.get("type") == "send_message"
-                and adapter is not None
-                and channel_id
+                and channel_id != "web"
                 and conversation_id
             ):
-                await asyncio.to_thread(
-                    adapter.send_text,
-                    channel_id=channel_id,
-                    conversation_id=conversation_id,
-                    text=content,
-                    idempotency_key=execution_key,
-                )
+                try:
+                    await asyncio.to_thread(
+                        cow_channel_service.send_outbound,
+                        channel_id,
+                        conversation_id=conversation_id,
+                        receiver=receiver,
+                        is_group=is_group,
+                        text=content,
+                    )
+                except (RuntimeError, ValueError):
+                    return False
                 return True
             prompt = (
                 content
@@ -2279,38 +2273,46 @@ def create_app(
                 thread_id=thread_id,
             )
             worker_supervisor.notify()
-            if (
-                not bool(action.get("silent"))
-                and adapter is not None
-                and channel_runtime_dispatcher is not None
-                and channel_id
-                and conversation_id
-            ):
-
-                async def deliver_when_ready() -> None:
-                    receipt = ChannelTurnReceipt(
-                        channel_id=channel_id,
-                        thread_id=thread_id,
-                        turn_id=accepted.turn.turn_id,
-                        client_message_id=execution_key,
-                        conversation_sha256=str(channel["conversation_sha256"]),
+            receipt = ChannelTurnReceipt(
+                channel_id=channel_id or "web",
+                thread_id=thread_id,
+                turn_id=accepted.turn.turn_id,
+                client_message_id=execution_key,
+                conversation_sha256="",
+            )
+            for _ in range(9000):
+                try:
+                    outbound = await asyncio.to_thread(
+                        channel_runtime_dispatcher.project_outbound_reply,
+                        receipt,
                     )
-                    for _ in range(900):
-                        await asyncio.sleep(1)
-                        try:
-                            delivered = await asyncio.to_thread(
-                                channel_runtime_dispatcher.deliver,
-                                receipt,
-                                conversation_id=conversation_id,
-                                transport=adapter,
-                            )
-                        except Exception:
-                            return
-                        if delivered:
-                            return
-
-                asyncio.create_task(deliver_when_ready())
-            return True
+                except Exception:
+                    return False
+                if outbound is None:
+                    await asyncio.sleep(0.1)
+                    continue
+                if (
+                    bool(action.get("silent"))
+                    or channel_id == "web"
+                    or not channel_id
+                ):
+                    return True
+                if not conversation_id:
+                    return False
+                try:
+                    await asyncio.to_thread(
+                        cow_channel_service.send_outbound,
+                        channel_id,
+                        conversation_id=conversation_id,
+                        receiver=receiver,
+                        is_group=is_group,
+                        text=outbound.text,
+                        attachment=outbound.attachment,
+                    )
+                except (RuntimeError, ValueError):
+                    return False
+                return True
+            return False
 
         scheduler_service = SchedulerService(
             scheduler_handler.task_store,
@@ -2886,12 +2888,7 @@ def create_app(
         (3, "runtime_invariant", invariant_supervisor),
         (2, "agent_worker", worker_supervisor),
         (1, "mcp", composition.mcp_supervisor),
-        (
-            1,
-            "channel_self_service",
-            channel_self_service if settings.channel_lifecycle_adapters else None,
-        ),
-        (1, "cow_channel", cow_channel_service),
+        (1, "cow_channel", cow_channel_service if channel_runtime_dispatcher else None),
         (1, "scheduler", scheduler_lifecycle),
         (4, "model_gateway", gateway_lifecycle),
         (4, "image_gateway", image_client_lifecycle),

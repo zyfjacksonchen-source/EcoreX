@@ -5862,7 +5862,7 @@ class AgentTurnWorker:
 
     @staticmethod
     def _attach_scheduler_context(
-        agent: Any, channel_context: Mapping[str, Any]
+        agent: Any, thread_id: str, channel_context: Mapping[str, Any]
     ) -> None:
         from agent.tools.scheduler.integration import attach_scheduler_to_tool
         from bridge.context import Context
@@ -5881,6 +5881,7 @@ class AgentTurnWorker:
                 Context(
                     kwargs={
                         "channel_type": channel_context.get("channel_id"),
+                        "thread_id": thread_id,
                         "session_id": channel_context.get("conversation_id"),
                         "receiver": channel_context.get("receiver"),
                         "isgroup": bool(channel_context.get("is_group", False)),
@@ -6384,13 +6385,14 @@ class AgentTurnWorker:
                 conversation_max_turns=_COW_MAX_CONTEXT_TURNS,
             )
             if channel_context:
-                self._attach_scheduler_context(agent, channel_context)
+                self._attach_scheduler_context(agent, thread_id, channel_context)
             else:
                 from agent.tools.scheduler.integration import attach_scheduler_to_tool
                 from bridge.context import Context, ContextType
 
                 scheduler_context = Context(ContextType.TEXT, input_text)
                 scheduler_context["receiver"] = receiver
+                scheduler_context["thread_id"] = thread_id
                 scheduler_context["session_id"] = thread_id
                 scheduler_context["channel_type"] = channel_type
                 for tool in agent.tools:
