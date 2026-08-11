@@ -11,7 +11,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
 import hashlib
+from html import escape
 import json
+import math
 from pathlib import Path
 import threading
 import time
@@ -101,6 +103,61 @@ _EMATE_MODEL_INSTRUCTIONS = (
 )
 _GATEWAY_INSTRUCTION_LIMIT = 131_072
 _COW_WORKSPACE_CONTEXT_LIMIT = 64 * 1024
+_COW_MAX_CONTEXT_TOKENS = 64_000
+_COW_MAX_CONTEXT_TURNS = 30
+
+
+def _cow_estimate_text_tokens(text: str) -> int:
+    ascii_count = sum(ord(character) < 128 for character in text)
+    return math.ceil(ascii_count * 0.25 + (len(text) - ascii_count) * 1.5)
+
+
+def _cow_retained_turn_count(total_turns: int) -> int:
+    """Reproduce CowAgent's half-trim cycle over durable thread history."""
+
+    if total_turns <= _COW_MAX_CONTEXT_TURNS:
+        return max(0, total_turns)
+    retained_after_trim = _COW_MAX_CONTEXT_TURNS + 1
+    retained_after_trim -= retained_after_trim // 2
+    cycle_length = _COW_MAX_CONTEXT_TURNS - retained_after_trim + 1
+    return retained_after_trim + (total_turns - _COW_MAX_CONTEXT_TURNS - 1) % cycle_length
+
+
+def _cow_fallback_context_summary(
+    turns: list[list[GatewayUserMessageInput | GatewayAssistantMessageInput]],
+) -> str:
+    events: list[str] = []
+    for turn in turns:
+        user = next(
+            (item.content.strip() for item in turn if item.type == "user_message"),
+            "",
+        )
+        assistant = next(
+            (
+                item.content.strip().splitlines()[0]
+                for item in reversed(turn)
+                if item.type == "assistant_message" and item.content.strip()
+            ),
+            "",
+        )
+        if not user:
+            continue
+        event = f"- 用户: {user[:120]}"
+        if assistant:
+            event += f" → 回复: {assistant[:160]}"
+        events.append(event)
+    return "\n".join(events[-10:])
+
+
+def _cow_text_only_turn(
+    turn: list[GatewayUserMessageInput | GatewayAssistantMessageInput],
+) -> list[GatewayUserMessageInput | GatewayAssistantMessageInput]:
+    user = next((item for item in turn if item.type == "user_message"), None)
+    assistant = next(
+        (item for item in reversed(turn) if item.type == "assistant_message"),
+        None,
+    )
+    return [item for item in (user, assistant) if item is not None]
 
 
 def _read_cow_context_file(root: Path, relative: str, *, limit: int) -> str:
@@ -116,6 +173,55 @@ def _read_cow_context_file(root: Path, relative: str, *, limit: int) -> str:
     if truncated and content:
         content = "...(older content truncated)\n\n" + content
     return content
+
+
+def _cow_workspace_skills_prompt(root: Path, *, limit: int) -> str:
+    """Expose workspace Skills exactly as Cow does: metadata plus readable path."""
+
+    skill_root = root / "skills"
+    if not skill_root.is_dir() or limit <= 0:
+        return ""
+    entries: list[str] = []
+    for path in sorted(skill_root.rglob("SKILL.md")):
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if not content.startswith("---"):
+            continue
+        parts = content.split("---", 2)
+        if len(parts) != 3:
+            continue
+        metadata: dict[str, str] = {}
+        for line in parts[1].splitlines():
+            key, separator, value = line.partition(":")
+            if separator and key.strip() in {"name", "description", "disable-model-invocation"}:
+                metadata[key.strip()] = value.strip().strip("\"'")
+        name = metadata.get("name", "")
+        description = metadata.get("description", "")
+        if (
+            not name
+            or not description
+            or metadata.get("disable-model-invocation", "false").casefold() == "true"
+        ):
+            continue
+        relative = path.relative_to(root).as_posix()
+        rendered = (
+            "  <skill>\n"
+            f"    <name>{escape(name)}</name>\n"
+            f"    <description>{escape(description)}</description>\n"
+            f"    <location>{escape(relative)}</location>\n"
+            f"    <base_dir>{escape(path.parent.relative_to(root).as_posix())}</base_dir>\n"
+            "  </skill>"
+        )
+        if sum(len(item.encode("utf-8")) for item in entries) + len(
+            rendered.encode("utf-8")
+        ) > max(0, limit - 40):
+            break
+        entries.append(rendered)
+    if not entries:
+        return ""
+    return "<available_skills>\n" + "\n".join(entries) + "\n</available_skills>"
 
 
 def _cow_workspace_instructions(workspace_root: Path | None) -> str | None:
@@ -155,6 +261,9 @@ def _cow_workspace_instructions(workspace_root: Path | None) -> str | None:
             encoded = rendered.encode("utf-8")
         sections.append(rendered)
         remaining -= len(encoded)
+    skills = _cow_workspace_skills_prompt(workspace_root, limit=remaining)
+    if skills:
+        sections.append(skills)
     return "\n\n".join(sections)
 
 
@@ -2444,6 +2553,12 @@ class AgentTurnWorker:
             self._thread_conversation_context(
                 thread_id=turn.thread_id,
                 current_turn_id=turn_id,
+                max_tokens=max(
+                    0,
+                    _COW_MAX_CONTEXT_TOKENS
+                    - _cow_estimate_text_tokens(gateway_instructions)
+                    - _cow_estimate_text_tokens(turn.input),
+                ),
             )
             if previous_response_id is None and not tool_outputs
             else _ConversationContext((), 0, 0, False)
@@ -2638,6 +2753,7 @@ class AgentTurnWorker:
         *,
         thread_id: str,
         current_turn_id: str,
+        max_tokens: int = _COW_MAX_CONTEXT_TOKENS,
     ) -> _ConversationContext:
         """Project completed public dialogue in stable, bounded order.
 
@@ -2648,8 +2764,20 @@ class AgentTurnWorker:
         """
 
         with self.kernel.database.reader() as connection:
+            historical_turn_count = int(
+                connection.execute(
+                    "SELECT COUNT(DISTINCT turn_id) FROM items "
+                    "WHERE thread_id=? AND turn_id<>? AND kind=? AND status=?",
+                    (
+                        thread_id,
+                        current_turn_id,
+                        ItemKind.MESSAGE.value,
+                        ItemStatus.COMPLETED.value,
+                    ),
+                ).fetchone()[0]
+            )
             rows = connection.execute(
-                "SELECT item_id,status,content_json FROM items "
+                "SELECT item_id,turn_id,status,content_json FROM items "
                 "WHERE thread_id=? AND turn_id<>? AND kind=? AND status=? "
                 "ORDER BY created_at DESC,item_id DESC LIMIT ?",
                 (
@@ -2657,14 +2785,15 @@ class AgentTurnWorker:
                     current_turn_id,
                     ItemKind.MESSAGE.value,
                     ItemStatus.COMPLETED.value,
-                    self._MAX_THREAD_CONTEXT_ITEMS * 4,
+                    max(self._MAX_THREAD_CONTEXT_ITEMS * 4, 512),
                 ),
             ).fetchall()
 
-        selected: list[GatewayUserMessageInput | GatewayAssistantMessageInput] = []
-        character_count = 0
+        grouped: dict[
+            str, list[GatewayUserMessageInput | GatewayAssistantMessageInput]
+        ] = {}
         source_item_count = 0
-        truncated = False
+        truncated = historical_turn_count > len({str(row["turn_id"]) for row in rows})
         for row in rows:
             content = json_loads(row["content_json"], {})
             role = content.get("role")
@@ -2681,12 +2810,6 @@ class AgentTurnWorker:
                     + text[-self._MAX_THREAD_CONTEXT_MESSAGE_CHARACTERS :]
                 )
                 truncated = True
-            if (
-                len(selected) >= self._MAX_THREAD_CONTEXT_ITEMS
-                or character_count + len(text) > self._MAX_THREAD_CONTEXT_CHARACTERS
-            ):
-                truncated = True
-                continue
             item = (
                 GatewayUserMessageInput(message_id=str(row["item_id"]), content=text)
                 if role == "user"
@@ -2694,10 +2817,44 @@ class AgentTurnWorker:
                     message_id=str(row["item_id"]), content=text
                 )
             )
-            selected.append(item)
-            character_count += len(text)
+            grouped.setdefault(str(row["turn_id"]), []).append(item)
 
-        selected.reverse()
+        turns = [list(reversed(items)) for items in grouped.values()]
+        retained_total = _cow_retained_turn_count(historical_turn_count + 1)
+        retained_history = max(0, retained_total - 1)
+        discarded = turns[retained_history:]
+        turns = turns[:retained_history]
+        if discarded:
+            truncated = True
+
+        turns.reverse()
+        current_tokens = sum(
+            _cow_estimate_text_tokens(item.content)
+            for turn_items in turns
+            for item in turn_items
+        )
+        if current_tokens > max_tokens and len(turns) >= 5:
+            removed_count = len(turns) // 2
+            discarded = [*discarded, *turns[:removed_count]]
+            turns = turns[removed_count:]
+            truncated = True
+        elif current_tokens > max_tokens:
+            turns = [_cow_text_only_turn(turn_items) for turn_items in turns]
+
+        selected = [item for turn_items in turns for item in turn_items]
+        if discarded:
+            summary = _cow_fallback_context_summary(list(reversed(discarded)))
+            if summary:
+                selected.insert(
+                    0,
+                    GatewayUserMessageInput(
+                        message_id=f"{thread_id}:cow-context-summary",
+                        content=(
+                            "[较早会话已按 CowAgent 上下文策略压缩]\n" + summary
+                        ),
+                    ),
+                )
+        character_count = sum(len(item.content) for item in selected)
         if self.image_context_resolver is not None:
             images = self.image_context_resolver(thread_id)
             if images:

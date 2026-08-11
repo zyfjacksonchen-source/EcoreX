@@ -285,11 +285,13 @@ def test_knowledge_and_memory_http_contracts_are_real_and_csrf_protected(tmp_pat
     auth = {"Authorization": f"Bearer {token}"}
     mutation = {**auth, "Origin": "http://testserver", "X-EcoreX-CSRF": csrf}
 
-    assert client.get("/api/v1/knowledge/tree", headers=auth).json() == {
-        "root": "knowledge",
-        "query": None,
-        "items": [],
-    }
+    initial_tree = client.get("/api/v1/knowledge/tree", headers=auth).json()
+    assert initial_tree["root"] == "knowledge"
+    assert initial_tree["query"] is None
+    assert [item["path"] for item in initial_tree["items"]] == [
+        "index.md",
+        "log.md",
+    ]
     denied = client.post(
         "/api/v1/knowledge/documents",
         headers=auth,

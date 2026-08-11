@@ -192,13 +192,13 @@ def test_imagegen_toolspec_accepts_bounded_tasks_and_preserves_single_input() ->
         schema,
         label="imagegen arguments",
     )
-    with pytest.raises(SchemaInstanceError, match="too few"):
+    with pytest.raises(SchemaInstanceError, match="oneOf|too few"):
         validate_schema_instance(
             {"tasks": [{"prompt": "one"}]},
             schema,
             label="imagegen arguments",
         )
-    with pytest.raises(SchemaInstanceError, match="too many"):
+    with pytest.raises(SchemaInstanceError, match="oneOf|too many"):
         validate_schema_instance(
             {"tasks": [{"prompt": str(index)} for index in range(9)]},
             schema,

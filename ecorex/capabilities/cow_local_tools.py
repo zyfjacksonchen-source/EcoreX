@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections import deque
 import fnmatch
+import mimetypes
 import os
 from pathlib import Path
 import re
@@ -453,4 +454,47 @@ class CowLocalTools:
         return ""
 
 
-__all__ = ["CowLocalToolError", "CowLocalTools"]
+class CowSendTool:
+    """Publish CowAgent's local-file send result through e-Mate Artifacts."""
+
+    def __init__(self, artifact_service: Any, *, account_id: str) -> None:
+        self.artifact_service = artifact_service
+        self.account_id = account_id
+        self.declaration = artifact_service.issue_trusted_deliverable_declaration(
+            "send"
+        )
+
+    def __call__(self, arguments: Mapping[str, Any], context: Any = None) -> dict[str, Any]:
+        from ecorex.artifacts import ArtifactScope
+
+        raw = str(arguments.get("path") or "").strip()
+        if not raw or raw.casefold().startswith(("http://", "https://")):
+            raise CowLocalToolError("send requires a local file path")
+        path = Path(raw).expanduser().resolve()
+        if not path.is_file():
+            raise CowLocalToolError(f"file not found: {raw}")
+        scope = getattr(context, "execution_scope", None)
+        artifact = self.artifact_service.create_artifact(
+            path.read_bytes(),
+            requested_name=path.name,
+            mime_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+            declaration=self.declaration,
+            scope=ArtifactScope(
+                account_id=self.account_id,
+                thread_id=getattr(scope, "thread_id", None),
+                turn_id=getattr(scope, "turn_id", None),
+                created_by_tool_id="send",
+            ),
+        )
+        return {
+            "type": "file_to_send",
+            "artifact_id": artifact.artifact_id,
+            "revision_id": artifact.revision_id,
+            "file_name": artifact.display_name,
+            "mime_type": artifact.mime_type,
+            "size": artifact.size_bytes,
+            "message": str(arguments.get("message") or f"正在发送 {artifact.display_name}"),
+        }
+
+
+__all__ = ["CowLocalToolError", "CowLocalTools", "CowSendTool"]

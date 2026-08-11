@@ -454,7 +454,23 @@ def _complete_skill_search(composition, created, prepared, batch, scope, *, quer
     return result
 
 
-def test_new_skill_is_discoverable_on_the_next_turn(
+def test_cow_skill_meta_tools_are_not_model_visible() -> None:
+    from ecorex.capabilities.builtin import builtin_capability_registry
+
+    registry = builtin_capability_registry()
+    assert {
+        tool_id: registry.get(tool_id).default_exposure
+        for tool_id in ("skill_search", "skill_read", "skill_run")
+    } == {
+        "skill_search": Exposure.HIDDEN,
+        "skill_read": Exposure.HIDDEN,
+        "skill_run": Exposure.HIDDEN,
+    }
+
+
+# Removed enterprise skill_search/read/run model path. Cow-compatible Skills are
+# prompt-discovered from workspace SKILL.md and executed through ordinary tools.
+def _removed_enterprise_skill_is_discoverable_on_the_next_turn(
     tmp_path: Path,
 ) -> None:
     (
@@ -494,7 +510,7 @@ def test_new_skill_is_discoverable_on_the_next_turn(
     ] == ["skill:local.gamma-workflow"]
 
 
-def test_skill_resource_grant_rejects_guess_cross_skill_and_cross_tool(
+def _removed_enterprise_skill_resource_grant_rejects_guess_cross_skill_and_cross_tool(
     tmp_path: Path,
 ) -> None:
     (
@@ -578,7 +594,7 @@ def test_skill_resource_grant_rejects_guess_cross_skill_and_cross_tool(
             )
         )
 
-def test_skill_run_uses_the_turn_snapshot_without_a_disclosure_ticket(tmp_path: Path) -> None:
+def _removed_enterprise_skill_run_uses_the_turn_snapshot_without_a_disclosure_ticket(tmp_path: Path) -> None:
     (_app, service, _kernel, composition, _thread, created, prepared, batch, scope) = (
         _prepared_skill_runtime(tmp_path)
     )
@@ -753,7 +769,7 @@ def test_controlled_skill_runner_receives_only_frozen_declared_contract(
         replace(runner.request, parameters={"document_id": "doc-1"})
 
 
-def test_skill_read_uses_the_frozen_snapshot_without_search_fact_authority(tmp_path: Path) -> None:
+def _removed_enterprise_skill_read_uses_the_frozen_snapshot_without_search_fact_authority(tmp_path: Path) -> None:
     (
         _app,
         _service_value,
@@ -830,7 +846,7 @@ def test_skill_read_uses_the_frozen_snapshot_without_search_fact_authority(tmp_p
     assert second["instructions"] == first["instructions"]
 
 
-def test_skill_search_and_read_are_worker_durable_and_restart_safe(
+def _removed_enterprise_skill_search_and_read_are_worker_durable_and_restart_safe(
     tmp_path: Path,
 ) -> None:
     service = _service(tmp_path)

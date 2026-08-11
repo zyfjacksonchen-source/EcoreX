@@ -956,9 +956,9 @@ def test_discovery_policy_finds_image_capability_without_tool_id_branches(
     )
 
     assert results and results[0].tool_id == "imagegen"
-    assert results[0].discovery_id == "tool:imagegen@1.1.0"
+    assert results[0].discovery_id == "tool:imagegen@2.0.0"
     described = service.tool_describe(plan.snapshot_id, results[0].discovery_id)
-    assert described["decision"]["tool_version"] == "1.1.0"
+    assert described["decision"]["tool_version"] == "2.0.0"
     assert results[0].match_class in {
         "reviewed_term",
         "reviewed_term_exact",

@@ -16,6 +16,7 @@ from ecorex.capabilities import (
 )
 from ecorex.capabilities.builtin import builtin_capability_registry
 from ecorex.capabilities.cow_local_tools import CowLocalTools
+from ecorex.artifacts import ArtifactService
 from ecorex.capabilities.service import ToolExecutionScope
 from ecorex.extensions.cow_mcp import CowMCPConfigService
 from ecorex.extensions.mcp import discover_mcp_tools
@@ -40,6 +41,7 @@ def test_cow_first_party_tools_are_direct_without_approval() -> None:
         "memory_search",
         "memory_get",
         "scheduler",
+        "send",
     }
     specs = {spec.tool_id: spec for spec in registry.all()}
     assert required <= specs.keys()
@@ -63,6 +65,12 @@ def test_memory_and_knowledge_share_workspace_files(tmp_path: Path) -> None:
     (tmp_path / "memory").mkdir(exist_ok=True)
     (tmp_path / "memory" / "2026-08-11.md").write_text(
         "今天完成 Cow 数据面还原\n", encoding="utf-8"
+    )
+    skill = tmp_path / "skills" / "report"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: report\ndescription: Build a report from workspace facts.\n---\n\n# Report\n",
+        encoding="utf-8",
     )
 
     tools = CowLocalTools((tmp_path,))
@@ -88,7 +96,29 @@ def test_memory_and_knowledge_share_workspace_files(tmp_path: Path) -> None:
     assert instructions is not None
     assert "深色模式" in instructions
     assert "knowledge/index.md" in instructions
-    assert "without asking for a separate approval" in instructions
+    assert "<available_skills>" in instructions
+    assert "<name>report</name>" in instructions
+    assert "<location>skills/report/SKILL.md</location>" in instructions
+
+
+def test_cow_send_publishes_a_real_user_artifact(tmp_path: Path) -> None:
+    from ecorex.capabilities.cow_local_tools import CowSendTool
+
+    source = tmp_path / "report.txt"
+    source.write_text("ready", encoding="utf-8")
+    artifacts = ArtifactService(tmp_path / "artifacts")
+    result = CowSendTool(artifacts, account_id="local-user")(
+        {"path": str(source), "message": "报告"}
+    )
+
+    artifact = artifacts.get_user_artifact(
+        result["artifact_id"], account_id="local-user"
+    )
+    assert result["type"] == "file_to_send"
+    assert result["revision_id"] == artifact.revision_id
+    assert artifact.display_name.startswith("report_")
+    assert artifact.display_name.endswith(".txt")
+    assert artifacts.blobs.read_bytes(artifact.sha256) == b"ready"
 
 
 def test_cow_scheduler_runs_due_task_from_local_store(tmp_path: Path) -> None:

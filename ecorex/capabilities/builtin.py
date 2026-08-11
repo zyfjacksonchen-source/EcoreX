@@ -298,6 +298,21 @@ _MEMORY_GET_INPUT = {
     "required": ["path"],
     "additionalProperties": False,
 }
+
+_SEND_INPUT = {
+    "type": "object",
+    "properties": {
+        "path": {
+            "type": "string",
+            "description": "Local file path to send to the user.",
+            "minLength": 1,
+            "maxLength": 4096,
+        },
+        "message": {"type": "string", "maxLength": 2000},
+    },
+    "required": ["path"],
+    "additionalProperties": False,
+}
 def _image_task_properties():
     return {
         "prompt": {
@@ -352,9 +367,9 @@ _IMAGE_INPUT = {
         {
             "type": "object",
             "properties": {
-                "instruction": {"type": "string", "minLength": 1, "maxLength": 20000}
+                "prompt": {"type": "string", "minLength": 1, "maxLength": 20000}
             },
-            "required": ["instruction"],
+            "required": ["prompt"],
         },
         {
             "type": "object",
@@ -366,7 +381,7 @@ _IMAGE_INPUT = {
                     "items": {
                         "type": "object",
                         "properties": _image_task_properties(),
-                        "required": ["instruction"],
+                        "required": ["prompt"],
                         "additionalProperties": False,
                     },
                 }
@@ -1485,6 +1500,22 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             idempotency=IdempotencyClass.NON_IDEMPOTENT,
             default_exposure=Exposure.DIRECT,
             intent_tags=frozenset({"schedule", "reminder", "cron", "定时", "提醒"}),
+        ),
+        ToolSpec(
+            tool_id="send",
+            version="1.0.0",
+            display_name="发送文件",
+            description=(
+                "把本机文件作为可下载产物发送给用户；网页 URL 直接写入回复，"
+                "不要先下载再发送"
+            ),
+            input_schema=_SEND_INPUT,
+            output_schema=_OBJECT,
+            aliases=("send-file", "发送文件"),
+            effects=frozenset({CapabilityEffect.READ}),
+            idempotency=IdempotencyClass.READ_ONLY,
+            default_exposure=Exposure.DIRECT,
+            intent_tags=frozenset({"send", "file", "deliver", "发送", "交付"}),
         ),
         ToolSpec(
             tool_id="memory_search",

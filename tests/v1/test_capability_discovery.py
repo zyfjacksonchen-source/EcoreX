@@ -74,10 +74,10 @@ def test_image_contracts_reject_requests_the_handlers_cannot_execute() -> None:
     registry = builtin_capability_registry()
     imagegen = registry.get("imagegen").input_schema
     vision = registry.get("vision").input_schema
-    for invalid in ({}, {"instruction": "draw", "tasks": [{"instruction": "a"}, {"instruction": "b"}]}):
+    for invalid in ({}, {"prompt": "draw", "tasks": [{"prompt": "a"}, {"prompt": "b"}]}):
         with pytest.raises(SchemaInstanceError):
             validate_schema_instance(invalid, imagegen, label="imagegen")
-    validate_schema_instance({"instruction": "draw"}, imagegen, label="imagegen")
+    validate_schema_instance({"prompt": "draw"}, imagegen, label="imagegen")
     with pytest.raises(SchemaInstanceError):
         validate_schema_instance({"instruction": "inspect"}, vision, label="vision")
     validate_schema_instance(

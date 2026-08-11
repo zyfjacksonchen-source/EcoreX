@@ -86,6 +86,11 @@ _CORE_POLICIES: dict[str, _CorePublicPolicy] = {
     "ocr": _CorePublicPolicy("正在识别图片文字", "已完成图片文字识别"),
     "browser": _CorePublicPolicy("正在浏览网页", "已完成网页操作"),
     "bash": _CorePublicPolicy("正在执行命令", "命令执行已完成"),
+    "send": _CorePublicPolicy(
+        "正在发送文件",
+        "文件已发送",
+        result_artifacts="root_pair",
+    ),
     "imagegen": _CorePublicPolicy(
         "正在生成或修改图片",
         "图片已生成并保存",

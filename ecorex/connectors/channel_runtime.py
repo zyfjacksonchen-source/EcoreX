@@ -176,7 +176,6 @@ class ChannelRuntimeDispatcher:
                     "channel": {
                         "contract_version": _CONTRACT_VERSION,
                         "channel_id": message.channel_id,
-                        "conversation_id": message.conversation_id,
                         "conversation_sha256": conversation_sha256,
                     }
                 },

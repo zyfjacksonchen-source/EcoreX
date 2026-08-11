@@ -484,6 +484,7 @@ class RuntimeComposition:
         self.input_attachment_read_runtime = None
         self.input_attachment_ocr_runtime = None
         if artifact_service is not None:
+            from ecorex.capabilities.cow_local_tools import CowSendTool
             from ecorex.integration.connector_results import ArtifactReadRuntime
             from ecorex.input_attachments import (
                 InputAttachmentOCRRuntime,
@@ -496,6 +497,10 @@ class RuntimeComposition:
                 account_id=tenant_id,
             )
             resolved_handlers["artifact_read"] = self.artifact_read_runtime.read
+            resolved_handlers["send"] = CowSendTool(
+                artifact_service,
+                account_id=tenant_id,
+            )
             input_attachments = InputAttachmentService(
                 artifact_service, account_id=tenant_id
             )

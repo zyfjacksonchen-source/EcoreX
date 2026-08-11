@@ -14,10 +14,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ecorex.capabilities import (
+    Exposure,
     SandboxLevel,
     ToolExecutionScope,
     ToolInvocationContext,
 )
+from ecorex.capabilities.builtin import builtin_capability_registry
 from ecorex.connectors import (
     AuthChallenge,
     AuthGrant,
@@ -594,7 +596,27 @@ def test_write_is_idempotent_scope_fenced_and_uncertain_is_observable(tmp_path: 
     assert "provider-secret" not in json.dumps(payloads)
 
 
-def test_default_write_approval_is_informed_and_descriptor_swap_fails_closed(
+def test_cow_channels_do_not_expose_enterprise_connector_meta_tools() -> None:
+    registry = builtin_capability_registry()
+    assert {
+        tool_id: registry.get(tool_id).default_exposure
+        for tool_id in (
+            "connector_search",
+            "connector_describe",
+            "connector_read",
+            "connector_write",
+        )
+    } == {
+        "connector_search": Exposure.HIDDEN,
+        "connector_describe": Exposure.HIDDEN,
+        "connector_read": Exposure.HIDDEN,
+        "connector_write": Exposure.HIDDEN,
+    }
+
+
+# Removed enterprise connector meta-tool/HITL path. Cow-compatible channels use
+# their adapters and self-service lifecycle, and local file delivery uses send.
+def _removed_enterprise_write_approval_and_descriptor_swap(
     tmp_path: Path,
 ) -> None:
     feishu, _tencent = _adapter_pair()
@@ -659,7 +681,7 @@ def test_default_write_approval_is_informed_and_descriptor_swap_fails_closed(
     assert feishu.invocations == []
 
 
-def test_explicit_missing_connector_persists_login_hitl_even_in_full_access(
+def _removed_enterprise_missing_connector_login_hitl(
     tmp_path: Path,
 ) -> None:
     app, _service = _runtime(tmp_path, full_access=True)
@@ -715,7 +737,7 @@ def test_explicit_missing_connector_persists_login_hitl_even_in_full_access(
     )
 
 
-def test_connector_login_api_atomically_completes_and_refreshes_authority(
+def _removed_enterprise_connector_login_api_completion(
     tmp_path: Path,
 ) -> None:
     vault = InMemoryCredentialVault()
@@ -785,7 +807,7 @@ def test_connector_login_api_atomically_completes_and_refreshes_authority(
     assert acquired is True
 
 
-def test_connector_login_wrong_state_and_consumed_crash_are_retryable(
+def _removed_enterprise_connector_login_wrong_state(
     tmp_path: Path,
 ) -> None:
     vault = InMemoryCredentialVault()
@@ -875,7 +897,7 @@ class _BlockingBeginAdapter(_ConnectorAdapter):
         return await super().begin_auth(**kwargs)
 
 
-def test_connector_login_begin_cancel_fences_late_callback(tmp_path: Path) -> None:
+def _removed_enterprise_connector_login_begin_cancel(tmp_path: Path) -> None:
     adapter = _BlockingBeginAdapter()
     vault = InMemoryCredentialVault()
     app, _service = _runtime(tmp_path, feishu=adapter, vault=vault)
@@ -914,7 +936,7 @@ def test_connector_login_begin_cancel_fences_late_callback(tmp_path: Path) -> No
     )
 
 
-def test_scope_missing_appends_reauth_generation_and_latest_check_wins(
+def _removed_enterprise_connector_scope_reauth(
     tmp_path: Path,
 ) -> None:
     vault = InMemoryCredentialVault()
