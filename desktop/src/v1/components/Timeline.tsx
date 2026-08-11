@@ -597,10 +597,7 @@ export function Timeline({
       } else if (atBottom) {
         followLatestRef.current = true;
         setShowJumpToLatest(false);
-      } else if (followLatestRef.current) {
-        scrollParent.scrollTop = scrollParent.scrollHeight;
-        setShowJumpToLatest(false);
-      } else {
+      } else if (!followLatestRef.current) {
         setShowJumpToLatest(true);
       }
     };
@@ -663,19 +660,6 @@ export function Timeline({
       if (secondFrame) window.cancelAnimationFrame(secondFrame);
       window.clearTimeout(settle);
     };
-  }, [contentRevision, interactions, scrollParent, timelineTurns.length]);
-
-  useEffect(() => {
-    if (!followLatestRef.current || timelineTurns.length === 0) return;
-    const frame = window.requestAnimationFrame(() => {
-      if (!followLatestRef.current) return;
-      virtuosoRef.current?.scrollToIndex({
-        index: timelineTurns.length - 1,
-        align: "end",
-        behavior: "auto",
-      });
-    });
-    return () => window.cancelAnimationFrame(frame);
   }, [contentRevision, interactions, scrollParent, timelineTurns.length]);
 
   const jumpToLatest = () => {
@@ -757,7 +741,6 @@ export function Timeline({
             computeItemKey={(_index, entry) => entry.turn.turn_id}
             increaseViewportBy={{ top: 800, bottom: 800 }}
             atBottomThreshold={TIMELINE_BOTTOM_THRESHOLD_PX}
-            followOutput={() => followLatestRef.current ? "auto" : false}
             totalListHeightChanged={() => {
               if (followPausedByUserRef.current) restorePausedAnchor();
               else if (followLatestRef.current) scrollParent.scrollTop = scrollParent.scrollHeight;

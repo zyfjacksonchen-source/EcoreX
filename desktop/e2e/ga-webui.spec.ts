@@ -94,7 +94,7 @@ async function openArtifactScenario(page: Page, theme: "light" | "dark" = "light
 
 async function openThreadScenario(
   page: Page,
-  scenario: "thinking" | "codex-layout" | "slow-reconnect" | "retry" | "hitl" | "connector-login" | "connector-device" | "connector-reauth" | "connector-restart" | "artifact" | "image-gallery" | "replay" | "thread-switch" | "many-threads" | "long-timeline",
+  scenario: "thinking" | "codex-layout" | "slow-reconnect" | "retry" | "hitl" | "connector-login" | "connector-device" | "connector-reauth" | "connector-restart" | "artifact" | "image-gallery" | "replay" | "thread-switch" | "many-threads" | "long-timeline" | "streaming-jitter",
   theme: "light" | "dark" = "light",
 ): Promise<void> {
   await page.goto(`/__ga/frame-app?scenario=${scenario}&theme=${theme}`, {
@@ -1684,4 +1684,52 @@ test("timeline exposes a persistent jump-to-latest control after scrolling away 
     return Math.max(0, Math.round(remaining));
   })).toBeLessThanOrEqual(4);
   await expect(jumpButton).toBeHidden();
+});
+
+test("streaming reply never scrolls backward while following the latest output", async ({ guardedPage }) => {
+  await openThreadScenario(guardedPage, "streaming-jitter");
+  const evidence = await guardedPage.evaluate(async () => {
+    const timeline = document.querySelector<HTMLElement>(".ex-timeline");
+    if (!timeline) throw new Error("timeline missing");
+    const samples: Array<{ top: number; status: string | null }> = [];
+    let sampling = true;
+    const sample = () => {
+      const active = timeline.querySelector('[data-turn-id="turn-stream-active"]');
+      samples.push({
+        top: timeline.scrollTop,
+        status: active?.getAttribute("data-turn-status") ?? null,
+      });
+      if (sampling) window.requestAnimationFrame(sample);
+    };
+    window.requestAnimationFrame(sample);
+    await new Promise<void>((resolve) => {
+      const observer = new MutationObserver(() => {
+        const active = timeline.querySelector('[data-turn-id="turn-stream-active"]');
+        if (active?.getAttribute("data-turn-status") !== "completed") return;
+        observer.disconnect();
+        resolve();
+      });
+      observer.observe(timeline, { attributes: true, childList: true, subtree: true });
+    });
+    sampling = false;
+    const reversals = samples.flatMap((sample, index) => {
+      const previous = samples[index - 1];
+      return previous
+        && previous.status === "streaming"
+        && sample.status === "streaming"
+        && sample.top < previous.top - 0.5
+        ? [{ before: previous.top, after: sample.top }]
+        : [];
+    });
+    return {
+      reversals,
+      startTop: samples[0]?.top ?? 0,
+      maxTop: Math.max(...samples.map((sample) => sample.top)),
+    };
+  });
+  expect(evidence.reversals).toEqual([]);
+  expect(evidence.maxTop - evidence.startTop).toBeGreaterThan(500);
+  await expect.poll(() => guardedPage.locator(".ex-timeline").evaluate((timeline) => (
+    Math.max(0, timeline.scrollHeight - timeline.clientHeight - timeline.scrollTop)
+  ))).toBeLessThanOrEqual(4);
 });

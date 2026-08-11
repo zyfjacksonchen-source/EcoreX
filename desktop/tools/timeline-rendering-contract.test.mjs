@@ -114,6 +114,22 @@ test("jump to latest is a transient centered circular affordance", () => {
   assert.match(features, /\.ex-timeline-jump-button\s*\{[\s\S]*width:\s*32px[\s\S]*border-radius:\s*var\(--radius-pill\)/u);
 });
 
+test("streaming output has one automatic scroll owner", () => {
+  assert.doesNotMatch(timeline, /followOutput=/u);
+  assert.doesNotMatch(
+    timeline,
+    /useEffect\(\(\) => \{[\s\S]{0,700}scrollToIndex\([\s\S]{0,300}\[contentRevision/u,
+  );
+  assert.doesNotMatch(
+    timeline,
+    /else if \(followLatestRef\.current\) \{[\s\S]{0,160}scrollParent\.scrollTop/u,
+  );
+  assert.match(
+    timeline,
+    /totalListHeightChanged=\{\(\) => \{[\s\S]{0,300}else if \(followLatestRef\.current\) scrollParent\.scrollTop/u,
+  );
+});
+
 test("assistant office Markdown is lazy, bounded, and cannot load raw HTML or images", () => {
   assert.match(timeline, /lazy\(\(\) => import\("\.\/OfficeMarkdown\.tsx"\)\)/u);
   assert.match(timeline, /<Suspense fallback=/u);
