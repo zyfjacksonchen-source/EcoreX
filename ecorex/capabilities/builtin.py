@@ -1273,6 +1273,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
                     "file",
                     "执行命令",
                     "写文件",
+                    "存储空间",
                 }
             ),
             required_packs=frozenset({"sandbox"}),
