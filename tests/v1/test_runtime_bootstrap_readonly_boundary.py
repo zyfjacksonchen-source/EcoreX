@@ -107,6 +107,7 @@ def test_cold_start_audits_before_any_business_convergence(
 
     monkeypatch.setattr(RuntimeInvariantAuditor, "audit", observed_audit)
     durable_before_startup = _logical_database_snapshot(database)
+    (tmp_path / "workspace").mkdir()
     app = create_app(
         settings=RuntimeSettings(
             database_path=database,

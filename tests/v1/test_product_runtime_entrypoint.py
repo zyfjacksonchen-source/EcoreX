@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -167,6 +168,8 @@ def _filesystem_snapshot(root: Path) -> tuple[tuple[str, str, str], ...]:
         root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()
     ):
         relative = path.relative_to(root).as_posix()
+        if path.name.endswith(("-shm", "-wal")):
+            continue
         if path.is_symlink():
             records.append((relative, "link", str(path.readlink())))
         elif path.is_dir():
@@ -176,6 +179,13 @@ def _filesystem_snapshot(root: Path) -> tuple[tuple[str, str, str], ...]:
                 (relative, "file", hashlib.sha256(path.read_bytes()).hexdigest())
             )
     return tuple(records)
+
+
+def test_filesystem_snapshot_ignores_sqlite_transient_sidecars(tmp_path: Path) -> None:
+    (tmp_path / "runtime.sqlite3-shm").write_bytes(b"transient")
+    (tmp_path / "runtime.sqlite3-wal").write_bytes(b"transient")
+
+    assert _filesystem_snapshot(tmp_path) == ()
 
 
 def _startup_filesystem_snapshot(
@@ -1576,6 +1586,7 @@ def test_release_builder_embeds_the_signed_web_payload_in_product_core(
             architecture=target_architecture,
         )
     )
+    shutil.copytree(Path(__file__).resolve().parents[2] / "skills", core / "skills")
     dist = tmp_path / "dist"
     (dist / "assets").mkdir(parents=True)
     javascript = b"document.body.dataset.product='ready';\n"
@@ -2260,7 +2271,7 @@ def test_cli_contract_has_no_credential_arguments_and_redacts_failures(
     result = product_main(["serve", "--host", "127.0.0.1", "--port", "8765"])
     captured = capsys.readouterr()
     assert result == int(ProductRuntimeExitCode.CONFIGURATION)
-    assert "EcoreX startup stage: update_runtime" in captured.err
+    assert "e-Mate startup stage: update_runtime" in captured.err
     assert "plaintext-configuration-secret" not in captured.err
 
 
@@ -2586,5 +2597,5 @@ def test_cli_classifies_uvicorn_bind_failure_without_echoing_details(
     result = product_main(["serve", "--host", "127.0.0.1", "--port", "8765"])
     captured = capsys.readouterr()
     assert result == int(ProductRuntimeExitCode.CONFIGURATION)
-    assert "EcoreX startup stage: http_server_bind" in captured.err
+    assert "e-Mate startup stage: http_server_bind" in captured.err
     assert "uvicorn-native-plaintext-secret" not in captured.err
