@@ -212,14 +212,13 @@ def test_contract_covers_every_protected_workflow_and_environment() -> None:
     combined = "\n".join(workflow_text.values())
 
     assert set(workflow_text) == {
-        ".github/workflows/ecorex-v1-pr.yml",
         ".github/workflows/ecorex-v1-pr-trusted.yml",
         ".github/workflows/ecorex-v1-ci.yml",
         ".github/workflows/ecorex-v1-platform-stage.yml",
         ".github/workflows/ecorex-v1-candidate.yml",
     }
     assert default_release_repository_contract().status_checks == frozenset(
-        {"v1 PR development gate"}
+        {"v1 PR trusted development gate"}
     )
     for environment in contract.environments:
         if environment.name.endswith(("-canary", "-stable")):

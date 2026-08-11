@@ -225,42 +225,34 @@ def test_manual_workflows_have_no_automatic_trigger_or_publication_permission():
     assert "runs-on: macos-15-intel" not in online  # matrix value, not ambient runner
     assert "os: macos-15-intel" in online
 
-    pull_request = (ROOT / ".github/workflows/ecorex-v1-pr.yml").read_text(
-        encoding="utf-8"
-    )
-    assert "  pull_request:" in pull_request
-    assert "  pull_request_target:" not in pull_request
-    assert "name: v1 PR development gate" in pull_request
+    assert not (ROOT / ".github/workflows/ecorex-v1-pr.yml").exists()
     trusted = (ROOT / ".github/workflows/ecorex-v1-pr-trusted.yml").read_text(
         encoding="utf-8"
     )
     assert "  pull_request_target:" in trusted
     assert "  pull_request:" not in trusted
-    assert "  workflow_dispatch:" not in pull_request
-    assert "  push:" not in pull_request
+    assert "  workflow_dispatch:" not in trusted
+    assert "  push:" not in trusted
     assert "name: v1 PR trusted development gate" in trusted
-    for workflow in (pull_request, trusted):
-        assert "contents: read" in workflow
-        assert "fetch-depth: 0" in workflow
-        assert "persist-credentials: false" in workflow
-        assert workflow.index("run: npm run build:web") < workflow.index(
-            "run: npm run test:v1"
-        )
-        assert "git diff --name-only -z --diff-filter=ACMRT" in workflow
-        assert 'if ((${#guarded[@]} && ! ${#tests[@]})); then' in workflow
-        assert "python_product_change_requires_changed_regression" in workflow
-        assert "python -m pytest --collect-only -q" in workflow
-        for smoke in (
-            "test_version_source.py",
-            "test_bootstrap_supervisor.py",
-            "test_connector_vault.py",
-            "test_output_service.py",
-            "test_runtime_state_machine_invariants.py",
-            "test_macos_codesign_contract.py",
-            "test_update_manifest.py",
-            "test_update_coordinator.py",
-        ):
-            assert f"tests/v1/{smoke}" in workflow
+    assert "contents: read" in trusted
+    assert "fetch-depth: 0" in trusted
+    assert "persist-credentials: false" in trusted
+    assert trusted.index("run: npm run build:web") < trusted.index("run: npm run test:v1")
+    assert "git diff --name-only -z --diff-filter=ACMRT" in trusted
+    assert 'if ((${#guarded[@]} && ! ${#tests[@]})); then' in trusted
+    assert "python_product_change_requires_changed_regression" in trusted
+    assert "python -m pytest --collect-only -q" in trusted
+    for smoke in (
+        "test_version_source.py",
+        "test_bootstrap_supervisor.py",
+        "test_connector_vault.py",
+        "test_output_service.py",
+        "test_runtime_state_machine_invariants.py",
+        "test_macos_codesign_contract.py",
+        "test_update_manifest.py",
+        "test_update_coordinator.py",
+    ):
+        assert f"tests/v1/{smoke}" in trusted
     assert "ref: ${{ github.event.pull_request.head.sha }}" in trusted
     assert "cache:" not in trusted
     for forbidden in (
@@ -273,7 +265,7 @@ def test_manual_workflows_have_no_automatic_trigger_or_publication_permission():
         "deploy",
         "release-v1.py",
     ):
-        assert forbidden not in pull_request.lower()
+        assert forbidden not in trusted.lower()
 
 
 def test_online_smokes_use_the_installed_old_bootstrap_not_the_new_installer():
