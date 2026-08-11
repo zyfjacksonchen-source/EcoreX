@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ecorex.integration.windows_sandbox_security import _helper_failure_reason
+
 
 ROOT = Path(__file__).resolve().parents[2]
 NATIVE = ROOT / "platform-staging" / "native" / "windows"
@@ -9,6 +11,12 @@ NATIVE = ROOT / "platform-staging" / "native" / "windows"
 
 def _source(name: str) -> str:
     return (NATIVE / name).read_text(encoding="utf-8")
+
+
+def test_windows_sandbox_helper_failure_reason_is_bounded() -> None:
+    assert _helper_failure_reason(b"ecorex_sandbox_security:read_acl") == "read_acl"
+    assert _helper_failure_reason(b"ecorex_sandbox_security:C:\\private") is None
+    assert _helper_failure_reason(b"ecorex_sandbox_security:read_acl\nsecret") is None
 
 
 def test_workspace_security_uses_exact_package_dacl_and_attests_existing_mic() -> None:
@@ -23,6 +31,11 @@ def test_workspace_security_uses_exact_package_dacl_and_attests_existing_mic() -
     assert "effective != required" in security
     assert "access.grfAccessMode = SET_ACCESS" in security
     assert 'failure) *failure = "read_label"' in security
+    assert "ProvisionSecurity(const SecurityRoots& request, PSID sid," in security
+    assert "ProvisionSecurity(*request, sid, &security_failure)" in security
+    assert security.index("std::string security_failure;") < security.index(
+        "ProvisionSecurity(*request, sid, &security_failure)"
+    )
     assert "ApplyLowIntegrity" not in security
     assert "RemoveIntegrityLabel" not in security
     # Only exact Package-SID DACL grant/revoke calls may mutate filesystem

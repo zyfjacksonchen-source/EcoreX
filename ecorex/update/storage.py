@@ -286,11 +286,13 @@ class SlotStore:
             tempfile.mkdtemp(prefix=f".{slot_id}.staging-", dir=self.slots_dir)
         )
         security_preparation: Mapping[str, Any] | None = None
+        security_prepare_started = False
         committed = False
         try:
             payload_root = temporary / "payload"
             payload_root.mkdir()
             if payload_preparer is not None:
+                security_prepare_started = True
                 prepared_security = payload_preparer(temporary, payload_root)
                 if not isinstance(prepared_security, Mapping) or not prepared_security:
                     raise UnsafePackage("payload security preparer returned no identity")
@@ -364,18 +366,14 @@ class SlotStore:
             committed = True
             return target
         finally:
-            try:
-                if (
-                    not committed
-                    and security_preparation is not None
-                    and payload_cleanup is not None
-                ):
-                    payload_cleanup(
-                        temporary, temporary / "payload", security_preparation
-                    )
-            finally:
-                if temporary.exists():
-                    _safe_remove_tree(temporary, parent=self.slots_dir)
+            if not committed and security_prepare_started and payload_cleanup is not None:
+                payload_cleanup(
+                    temporary,
+                    temporary / "payload",
+                    security_preparation or {},
+                )
+            if temporary.exists():
+                _safe_remove_tree(temporary, parent=self.slots_dir)
 
     def validate(
         self,
