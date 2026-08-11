@@ -430,6 +430,106 @@ def test_manual_webui_core_contains_exact_tracked_builtin_skills(tmp_path: Path)
     assert (core / "skills" / "office-presentations" / "SKILL.md").is_file()
 
 
+def test_manual_webui_rebuilds_browser_pack_from_current_cow_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    builder = _builder()
+    function_globals = builder["_prepare_stages"].__globals__
+    monkeypatch.setitem(function_globals, "TARGETS", (("windows", "x64"),))
+    monkeypatch.setitem(
+        function_globals,
+        "PACK_TOOLS",
+        {"browser": ("browser", "web_fetch", "web_search")},
+    )
+    for name in (
+        "_install_locked_runtime_overlay",
+        "_install_cow_runtime_overlay",
+        "_replace_product_imports",
+        "_replace_builtin_skills",
+        "_runtime_config",
+    ):
+        monkeypatch.setitem(function_globals, name, lambda *args, **kwargs: None)
+    monkeypatch.setitem(
+        function_globals, "build_pack_python_manifest", lambda *args, **kwargs: b"{}"
+    )
+    monkeypatch.setitem(
+        function_globals,
+        "resolve_pack_python",
+        lambda *args, **kwargs: (Path(sys.executable), None),
+    )
+
+    python_zip = tmp_path / "python311.zip"
+    with zipfile.ZipFile(python_zip, "w"):
+        pass
+
+    def write_member(archive: zipfile.ZipFile, name: str, payload: bytes) -> None:
+        member = zipfile.ZipInfo(name, builder["FIXED_TIME"])
+        member.create_system = 3
+        member.external_attr = (0o100644) << 16
+        archive.writestr(member, payload)
+
+    core = tmp_path / "core.zip"
+    with zipfile.ZipFile(core, "w") as archive:
+        write_member(archive, "bin/python311.zip", python_zip.read_bytes())
+
+    runtime_manifest = b'{"verified":"predecessor"}'
+    runtime_archive = b"verified predecessor browser runtime"
+    browser = tmp_path / "browser.zip"
+    with zipfile.ZipFile(browser, "w") as archive:
+        write_member(archive, "__main__.py", b"run('browser', {'cdp', 'fetch'}, handle)\n")
+        write_member(archive, "browser_pack.py", b"def handle(request): return request\n")
+        write_member(
+            archive,
+            "ecorex-pack.json",
+            b'{"pack_id":"browser","protocol":"ecorex-stdio-tool-v1",'
+            b'"runtime_api_version":"1.0.0","schema_version":1,'
+            b'"tools":["cdp","fetch"]}',
+        )
+        write_member(archive, "ecorex_pack_protocol.py", b"stale = True\n")
+        write_member(archive, "stale.py", b"stale = True\n")
+        write_member(archive, "browser-runtime.json", runtime_manifest)
+        write_member(archive, "browser-runtime.zip", runtime_archive)
+
+    stages = builder["_prepare_stages"](
+        ROOT,
+        {
+            "core-windows-x64": core,
+            "capability-pack-browser-windows-x64": browser,
+        },
+        tmp_path / "stages",
+        {},
+    )
+    pack = stages[("windows", "x64")]["browser"]
+    source = ROOT / "release" / "capability-packs"
+
+    assert (pack / "__main__.py").read_bytes() == (
+        source / "browser" / "__main__.py"
+    ).read_bytes()
+    assert (pack / "browser_pack.py").read_bytes() == (
+        source / "browser" / "browser_pack.py"
+    ).read_bytes()
+    assert (pack / "ecorex_pack_protocol.py").read_bytes() == (
+        source / "common" / "ecorex_pack_protocol.py"
+    ).read_bytes()
+    expected_descriptor = {
+        "schema_version": 1,
+        "protocol": "ecorex-stdio-tool-v1",
+        "pack_id": "browser",
+        "runtime_api_version": "1.0.0",
+        "tools": ["browser", "web_fetch", "web_search"],
+    }
+    assert (pack / "ecorex-pack.json").read_bytes() == json.dumps(
+        expected_descriptor,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    assert (pack / "browser-runtime.json").read_bytes() == runtime_manifest
+    assert (pack / "browser-runtime.zip").read_bytes() == runtime_archive
+    assert not (pack / "stale.py").exists()
+
+
 def test_manual_update_contract_is_the_only_release_authority() -> None:
     contract = (
         ROOT / "release" / "v1" / "CLI_AND_MANUAL_UPDATE_CONTRACT.md"
