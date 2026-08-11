@@ -428,11 +428,6 @@ def _validate_platform_stage_workflow_binding(text: str) -> None:
 def _validate_workflows(repo: Path) -> dict[str, object]:
     approved_actions, action_lock = _load_action_lock(repo)
     workflow_profiles = {
-        "ecorex-v1-pr.yml": {
-            "profiles": {"dev": 1},
-            "npm_ci": 1,
-            "node": True,
-        },
         "ecorex-v1-pr-trusted.yml": {
             "profiles": {"dev": 1},
             "npm_ci": 1,
