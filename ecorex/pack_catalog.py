@@ -12,7 +12,6 @@ CAPABILITY_PACK_TOOL_IDS = MappingProxyType(
         "image": ("imagegen", "vision"),
         "ocr": (),
         "office": (),
-        "sandbox": ("bash",),
     }
 )
 CAPABILITY_PACK_SERVICE_IDS = MappingProxyType(
@@ -22,7 +21,6 @@ CAPABILITY_PACK_SERVICE_IDS = MappingProxyType(
         "image": (),
         "ocr": ("ocr.extract",),
         "office": ("office.formats",),
-        "sandbox": (),
     }
 )
 
@@ -57,9 +55,8 @@ REQUIRED_CAPABILITY_PACK_IDS = tuple(sorted(_tool_pack_ids))
 CAPABILITY_PACK_PROFILES = MappingProxyType(
     {
         # Projection-only and legacy signed slots remain valid without optional
-        # Packs; workspace execution adds the reviewed sandbox boundary.
+        # Packs. Cow Shell is part of Core and does not require a Pack.
         "minimal": (),
-        "workspace": ("sandbox",),
         # Managed offline install: ship the complete reviewed Pack closure.
         "full_offline": REQUIRED_CAPABILITY_PACK_IDS,
     }

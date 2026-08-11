@@ -2227,12 +2227,11 @@ def test_configured_capability_pack_requires_verified_artifact_and_trusted_adapt
 
 def test_capability_pack_profiles_are_exact_and_share_one_catalog() -> None:
     assert CAPABILITY_PACK_PROFILES["minimal"] == ()
-    assert CAPABILITY_PACK_PROFILES["workspace"] == ("sandbox",)
     assert CAPABILITY_PACK_PROFILES["full_offline"] == REQUIRED_CAPABILITY_PACK_IDS
     assert capability_pack_profile(()) == "minimal"
-    assert capability_pack_profile(("sandbox",)) == "workspace"
     assert capability_pack_profile(REQUIRED_CAPABILITY_PACK_IDS) == "full_offline"
     assert capability_pack_profile(("image",)) is None
+    assert capability_pack_profile(("sandbox",)) is None
 
 
 def test_config_or_ancestor_link_is_rejected(tmp_path: Path) -> None:

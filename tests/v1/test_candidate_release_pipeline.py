@@ -490,7 +490,7 @@ def _stages(root: Path, public: bytes) -> list[dict[str, str]]:
                     ),
                     encoding="utf-8",
                 )
-            elif pack_id in {"browser", "sandbox"}:
+            elif pack_id == "browser":
                 (pack / "__main__.py").write_text(
                     "raise SystemExit('fixture is packaging-only')\n", encoding="utf-8"
                 )
@@ -657,7 +657,7 @@ def test_external_signer_rejects_unpinned_adapter(tmp_path: Path) -> None:
     assert signer.receipts == ()
 
 
-def test_candidate_builds_three_bootstraps_runtime_archives_and_eighteen_real_packs(
+def test_candidate_builds_three_bootstraps_runtime_archives_and_fifteen_real_packs(
     tmp_path: Path,
 ) -> None:
     signer, public, private = _external_signer(tmp_path)
@@ -701,7 +701,7 @@ def test_candidate_builds_three_bootstraps_runtime_archives_and_eighteen_real_pa
         "bootstrap-macos-arm64",
         "bootstrap-macos-x64",
     }.issubset(artifact_ids)
-    assert sum(item.startswith("capability-pack-") for item in artifact_ids) == 36
+    assert sum(item.startswith("capability-pack-") for item in artifact_ids) == 30
     assert "web-manifest" in artifact_ids
     assert built.manifest.sources[0].base_url.endswith(
         f"/canary/{built.manifest.release_id}"
@@ -768,7 +768,7 @@ def test_candidate_builds_three_bootstraps_runtime_archives_and_eighteen_real_pa
             "content": receipt["python_dependency_lock_sha256"],
         }
     ]
-    assert len(receipt["stage_receipts"]) == 24
+    assert len(receipt["stage_receipts"]) == 21
     assert receipt["staging_provenance"]["workflow_run_id"] == RUN_ID
     assert receipt["signing"]["operation_count"] == len(signer.receipts)
     supply = subprocess.run(
@@ -1421,7 +1421,7 @@ def test_recipe_assembler_uses_release_scoped_channel_roots(tmp_path: Path) -> N
     )
     assert result.returncode == 0, result.stderr.decode(errors="replace")
     recipe = json.loads(output.read_text())
-    assert len(recipe["inputs"]) == 24
+    assert len(recipe["inputs"]) == 21
     assert recipe["sources"][0]["base_url"].endswith(
         f"/v{PRODUCT_VERSION}/canary"
     )

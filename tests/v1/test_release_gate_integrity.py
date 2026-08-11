@@ -415,7 +415,7 @@ def test_release_binding_requires_candidate_identity_windows_boundary_and_four_h
     value = json.loads(output.read_text(encoding="utf-8"))
     assert value["release_id"] == "release-canary-" + "1" * 24
     assert value["build_digest"] == "f" * 64
-    assert len(value["stage_receipts"]) == 24
+    assert len(value["stage_receipts"]) == 21
 
     forged = json.loads(candidate.read_text())
     forged["web_tree_sha256"] = "9" * 64

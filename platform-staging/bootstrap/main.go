@@ -2306,7 +2306,7 @@ func verifySignature(payload []byte, value signature, keys map[string]ed25519.Pu
 func requiredArtifacts(value *manifest, platform, architecture string) ([]artifact, error) {
 	target := platform + "-" + architecture
 	ids := []string{"core-" + target}
-	for _, packID := range []string{"browser", "channels", "image", "ocr", "office", "sandbox"} {
+	for _, packID := range []string{"browser", "channels", "image", "ocr", "office"} {
 		base := "capability-pack-" + packID + "-" + target
 		ids = append(ids, base, base+"-manifest")
 	}

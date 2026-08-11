@@ -370,7 +370,6 @@ def _stage(request: Mapping[str, Any]) -> None:
         platform=platform,
         architecture=architecture,
         interpreter=interpreter,
-        native=native,
         evidence=evidence,
     )
     _core_gates(
@@ -3057,7 +3056,6 @@ def _stage_packs(
     platform: str,
     architecture: str,
     interpreter: Path,
-    native: Path,
     evidence: Path,
 ) -> None:
     common = (
@@ -3067,7 +3065,7 @@ def _stage_packs(
         source = ROOT / "release" / "capability-packs" / pack_id
         destination = root / pack_id
         _copy_tree(source, destination, excluded=frozenset({"__pycache__"}))
-        if pack_id in {"browser", "sandbox"}:
+        if pack_id == "browser":
             _copy_regular(common, destination / common.name)
             _normalize_process_pack_descriptor(destination, pack_id=pack_id)
     browser_inventory = _vendor_browser_runtime(
@@ -3121,14 +3119,6 @@ def _stage_packs(
         interpreter=interpreter,
         inventory=office_inventory,
         evidence=evidence / "office",
-    )
-    _sandbox_gates(
-        root / "sandbox",
-        platform=platform,
-        architecture=architecture,
-        interpreter=interpreter,
-        native=native,
-        evidence=evidence / "sandbox",
     )
 
 

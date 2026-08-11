@@ -67,7 +67,6 @@ PACK_REQUIRED_FILES: Mapping[str, tuple[str, ...]] = {
     "image": ("__main__.py", "ecorex-image-pack.json"),
     "ocr": ("ecorex-dependency-pack.json", "runtime-inventory.json"),
     "office": ("ecorex-dependency-pack.json", "runtime-inventory.json"),
-    "sandbox": ("__main__.py", "ecorex-pack.json"),
 }
 STAGE_GATES: Mapping[str, frozenset[str]] = {
     "core": frozenset(
@@ -94,9 +93,6 @@ STAGE_GATES: Mapping[str, frozenset[str]] = {
     ),
     "office": frozenset(
         {"pack-contract", "office-format-smoke", "format-closure", "supply-chain"}
-    ),
-    "sandbox": frozenset(
-        {"pack-contract", "sandbox-boundary", "process-tree", "supply-chain"}
     ),
 }
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -825,7 +821,7 @@ def _stage_input(
             kind=ArtifactKind.CAPABILITY_PACK,
             platform=platform,
             architecture=architecture,
-            executable_paths=("__main__.py",) if pack_id in {"browser", "sandbox"} else (),
+            executable_paths=("__main__.py",) if pack_id == "browser" else (),
             pack_id=pack_id,
             pack_tool_ids=PACK_TOOLS[str(pack_id)],
             pack_service_ids=PACK_SERVICES[str(pack_id)],
@@ -988,7 +984,7 @@ def _validate_stage_payload(
             != expected_pack_paths
         ):
             raise CandidateBuildError("stage_runtime_pack_projection_invalid")
-    if pack_id in {"browser", "sandbox"}:
+    if pack_id == "browser":
         descriptor = _read_json(root / "ecorex-pack.json", code="stage_pack_contract_invalid")
         expected_tools = list(PACK_TOOLS[pack_id])
         if (

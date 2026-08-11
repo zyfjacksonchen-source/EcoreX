@@ -4585,13 +4585,13 @@ def test_office_pack_declares_formats_not_rendering() -> None:
     assert "office-runtime-smoke" not in stager_source
 
 
-def test_bootstrap_requires_the_complete_six_pack_set() -> None:
+def test_bootstrap_requires_the_complete_cow_pack_set() -> None:
     source = (ROOT / "platform-staging" / "bootstrap" / "main.go").read_text(
         encoding="utf-8"
     )
 
     assert (
-        '[]string{"browser", "channels", "image", "ocr", "office", "sandbox"}' in source
+        '[]string{"browser", "channels", "image", "ocr", "office"}' in source
     )
     assert 'strings.HasPrefix(item.ArtifactID, "capability-pack-")' in source
     assert "unexpected host Capability Pack" in source

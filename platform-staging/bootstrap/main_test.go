@@ -1119,7 +1119,7 @@ func TestRequiredArtifactsIncludesEveryProductCapabilityPack(t *testing.T) {
 	value := &manifest{Artifacts: []artifact{{
 		ArtifactID: "core-" + target, Platform: "windows", Architecture: "x64",
 	}}}
-	packIDs := []string{"browser", "channels", "image", "ocr", "office", "sandbox"}
+	packIDs := []string{"browser", "channels", "image", "ocr", "office"}
 	for _, packID := range packIDs {
 		base := "capability-pack-" + packID + "-" + target
 		value.Artifacts = append(value.Artifacts,

@@ -129,7 +129,7 @@ jobs:
       - name: Build the final content-addressed Web dist
         run: python scripts/run-v1-platform-stage-step.py build-web
 
-      - name: Build real Core and six Packs with the source-pinned stager
+      - name: Build real Core and five Packs with the source-pinned stager
         env:
           ECOREX_GITHUB_HOSTED_WINDOWS_NATIVE_COMPATIBILITY: ${{ matrix.id == 'windows-x64' && '1' || '0' }}
           ECOREX_STAGE_RUNTIME_CONFIG_TEMPLATE: ${{ runner.temp }}/ecorex-runtime-config.json

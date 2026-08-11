@@ -1039,7 +1039,7 @@ def _build_release(
                     platform,
                     architecture,
                     executable_paths=("__main__.py",)
-                    if pack_id in {"browser", "sandbox"}
+                    if pack_id == "browser"
                     else (),
                     pack_id=pack_id,
                     pack_tool_ids=tuple(PACK_TOOLS[pack_id]),

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble the fixed 24-stage Candidate recipe without inventing artifacts."""
+"""Assemble the fixed 21-stage Candidate recipe without inventing artifacts."""
 
 from __future__ import annotations
 
