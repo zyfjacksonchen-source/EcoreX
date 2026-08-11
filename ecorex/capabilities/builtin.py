@@ -300,25 +300,39 @@ _MEMORY_GET_INPUT = {
 }
 def _image_task_properties():
     return {
-        "instruction": {"type": "string", "minLength": 1, "maxLength": 20000},
-        "reference_artifact_ids": {
-            "type": "array",
-            "items": {"type": "string", "minLength": 1, "maxLength": 128},
-            "maxItems": 20,
+        "prompt": {
+            "type": "string",
+            "description": "Image description or edit instruction.",
+            "minLength": 1,
+            "maxLength": 20000,
         },
-        "attachment_ids": {
-            "type": "array",
-            "items": {"type": "string", "minLength": 1, "maxLength": 128},
-            "maxItems": 4,
+        "image_url": {
+            "type": ["string", "array"],
+            "description": (
+                "One image reference or an ordered list for editing/fusion. "
+                "Accepts a local path, HTTP(S) URL, attachment_id, artifact_id, "
+                "or a prior imagegen result URL."
+            ),
+            "items": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "minLength": 1,
+            "maxLength": 4096,
+            "maxItems": 16,
         },
         "size": {"type": "string", "maxLength": 64},
-        "quality": {"type": "string", "maxLength": 64},
+        "quality": {
+            "type": "string",
+            "enum": ["low", "medium", "high", "auto"],
+        },
+        "aspect_ratio": {"type": "string", "minLength": 3, "maxLength": 16},
     }
 
 
 _IMAGE_INPUT = {
     "type": "object",
-    "description": "Provide one instruction or one tasks array, never both.",
+    "description": (
+        "CowAgent-compatible image generation/edit contract. Provide one prompt "
+        "or one tasks array, never both. The Runtime owns the fixed image model."
+    ),
     "properties": {
         **_image_task_properties(),
         "tasks": {
@@ -329,7 +343,7 @@ _IMAGE_INPUT = {
             "items": {
                 "type": "object",
                 "properties": _image_task_properties(),
-                "required": ["instruction"],
+                "required": ["prompt"],
                 "additionalProperties": False,
             },
         },
@@ -361,6 +375,27 @@ _IMAGE_INPUT = {
         },
     ],
     "additionalProperties": False,
+}
+_IMAGE_OUTPUT = {
+    "type": "object",
+    "properties": {
+        "model": {"type": "string", "minLength": 1, "maxLength": 256},
+        "images": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "artifact_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "revision_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                },
+                "required": ["url"],
+                "additionalProperties": True,
+            },
+        },
+    },
+    "additionalProperties": True,
 }
 _TASK_LIST_INPUT = {
     "type": "object",
@@ -1484,11 +1519,14 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
         ),
         ToolSpec(
             tool_id="imagegen",
-            version="1.1.0",
+            version="2.0.0",
             display_name="图片生成与编辑",
-            description="生成图片或基于现有图片创建新修订",
+            description=(
+                "使用固定图片模型生成或编辑图片；兼容 CowAgent 的 "
+                "prompt/image_url/quality/size/aspect_ratio 语义"
+            ),
             input_schema=_IMAGE_INPUT,
-            output_schema=_OBJECT,
+            output_schema=_IMAGE_OUTPUT,
             aliases=("generate-image", "edit-image", "image-generation"),
             effects=frozenset(
                 {CapabilityEffect.NETWORK, CapabilityEffect.GENERATE_MEDIA}

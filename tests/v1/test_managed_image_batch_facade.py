@@ -62,34 +62,34 @@ def test_image_batch_is_bounded_ordered_idempotent_and_reports_partial_failure()
 
         async def fake_single(self, arguments, context, *, image_batch=None):
             nonlocal active, peak
-            instruction = arguments["instruction"]
-            child_keys.setdefault(instruction, []).append(context.idempotency_key)
+            prompt = arguments["prompt"]
+            child_keys.setdefault(prompt, []).append(context.idempotency_key)
             active += 1
             peak = max(peak, active)
             try:
-                await asyncio.sleep({"first": 0.03, "fails": 0, "last": 0.01}[instruction])
-                if instruction == "fails":
+                await asyncio.sleep({"first": 0.03, "fails": 0, "last": 0.01}[prompt])
+                if prompt == "fails":
                     raise ImageToolError("managed_image_unavailable", retryable=True)
                 return {
-                    "artifact_id": "artifact-" + instruction,
-                    "preview_url": "/preview/" + instruction,
+                    "artifact_id": "artifact-" + prompt,
+                    "preview_url": "/preview/" + prompt,
                 }
             finally:
                 active -= 1
 
         backend._generate_single = MethodType(fake_single, backend)
         tasks = [
-            {"instruction": "first", "quality": "high"},
-            {"instruction": "fails"},
-            {"instruction": "last", "size": "square"},
+            {"prompt": "first", "quality": "high"},
+            {"prompt": "fails"},
+            {"prompt": "last", "size": "square"},
         ]
         first = await backend.generate_image({"tasks": tasks}, _context())
         second = await backend.generate_image(
             {
                 "tasks": [
-                    {"quality": "high", "instruction": "first"},
-                    {"instruction": "fails"},
-                    {"size": "square", "instruction": "last"},
+                    {"quality": "high", "prompt": "first"},
+                    {"prompt": "fails"},
+                    {"size": "square", "prompt": "last"},
                 ]
             },
             _context(),
@@ -98,6 +98,16 @@ def test_image_batch_is_bounded_ordered_idempotent_and_reports_partial_failure()
         assert peak == 2
         assert first["result_type"] == "image_gallery"
         assert first["status"] == "partial_failed"
+        assert first["model"] == "gpt-image-2-pro"
+        assert [image["url"] for image in first["images"]] == [
+            "/preview/first",
+            "/preview/last",
+        ]
+        validate_schema_instance(
+            first,
+            builtin_capability_registry().get("imagegen").output_schema,
+            label="imagegen result",
+        )
         assert first["completed_count"] == 2
         assert first["failed_count"] == 1
         assert first["batch_id"].startswith("imgbatch_")
@@ -139,7 +149,7 @@ def test_image_batch_parent_cancellation_fails_closed() -> None:
         backend._generate_single = MethodType(blocked, backend)
         pending = asyncio.create_task(
             backend.generate_image(
-                {"tasks": [{"instruction": "one"}, {"instruction": "two"}]},
+                {"tasks": [{"prompt": "one"}, {"prompt": "two"}]},
                 _context(),
             )
         )
@@ -154,17 +164,17 @@ def test_image_batch_parent_cancellation_fails_closed() -> None:
         with pytest.raises(ImageToolError, match="cannot mix"):
             await handler(
                 {
-                    "instruction": "single",
-                    "tasks": [{"instruction": "one"}, {"instruction": "two"}],
+                    "prompt": "single",
+                    "tasks": [{"prompt": "one"}, {"prompt": "two"}],
                 },
                 handler_context,
             )
         with pytest.raises(ImageToolError, match="cannot mix"):
             await handler(
-                {"instruction": "single", "tasks": None},
+                {"prompt": "single", "tasks": None},
                 handler_context,
             )
-        with pytest.raises(ImageToolError, match="instruction or tasks"):
+        with pytest.raises(ImageToolError, match="prompt or tasks"):
             await handler({}, handler_context)
 
     asyncio.run(scenario())
@@ -173,27 +183,75 @@ def test_image_batch_parent_cancellation_fails_closed() -> None:
 def test_imagegen_toolspec_accepts_bounded_tasks_and_preserves_single_input() -> None:
     schema = builtin_capability_registry().get("imagegen").input_schema
     validate_schema_instance(
-        {"instruction": "one image", "size": "square"},
+        {"prompt": "one image", "size": "1024x1024"},
         schema,
         label="imagegen arguments",
     )
     validate_schema_instance(
-        {"tasks": [{"instruction": "one"}, {"instruction": "two"}]},
+        {"tasks": [{"prompt": "one"}, {"prompt": "two"}]},
         schema,
         label="imagegen arguments",
     )
     with pytest.raises(SchemaInstanceError, match="too few"):
         validate_schema_instance(
-            {"tasks": [{"instruction": "one"}]},
+            {"tasks": [{"prompt": "one"}]},
             schema,
             label="imagegen arguments",
         )
     with pytest.raises(SchemaInstanceError, match="too many"):
         validate_schema_instance(
-            {"tasks": [{"instruction": str(index)} for index in range(9)]},
+            {"tasks": [{"prompt": str(index)} for index in range(9)]},
             schema,
             label="imagegen arguments",
         )
+
+
+def test_imagegen_toolspec_accepts_cowagent_generate_and_edit_contract() -> None:
+    schema = builtin_capability_registry().get("imagegen").input_schema
+    validate_schema_instance(
+        {
+            "prompt": "combine the two references into a team portrait",
+            "image_url": ["art_reference_one", "art_reference_two"],
+            "quality": "medium",
+            "size": "2K",
+            "aspect_ratio": "16:9",
+        },
+        schema,
+        label="imagegen arguments",
+    )
+
+
+def test_cowagent_image_contract_reads_local_edit_source_and_emits_image_list(
+    tmp_path,
+) -> None:
+    source = tmp_path / "reference.png"
+    source.write_bytes(b"\x89PNG\r\n\x1a\nreference")
+    backend = _backend()
+    backend.workspace_root = tmp_path
+
+    asset, source_id = asyncio.run(
+        backend._image_source(source.name, scope=SimpleNamespace())
+    )
+    result = backend._cow_result(
+        {
+            "artifact_id": "art_result",
+            "revision_id": "rev_result",
+            "preview_url": "/api/v1/artifacts/art_result/preview",
+        },
+        "gpt-image-2-pro",
+    )
+
+    assert source_id is None
+    assert asset.content == source.read_bytes()
+    assert backend._size("2K", "16:9") == (2048, 1152)
+    assert result["model"] == "gpt-image-2-pro"
+    assert result["images"] == [
+        {
+            "url": "/api/v1/artifacts/art_result/preview",
+            "artifact_id": "art_result",
+            "revision_id": "rev_result",
+        }
+    ]
 
 
 def test_real_worker_routes_one_batch_call_through_image_pool_and_public_facts(
@@ -211,8 +269,8 @@ def test_real_worker_routes_one_batch_call_through_image_pool_and_public_facts(
                         "tool_name": "imagegen",
                         "arguments": {
                             "tasks": [
-                                {"instruction": "first image"},
-                                {"instruction": "fail second image"},
+                                {"prompt": "first image"},
+                                {"prompt": "fail second image"},
                             ]
                         },
                     }
@@ -249,7 +307,7 @@ def test_real_worker_routes_one_batch_call_through_image_pool_and_public_facts(
         backend = app.state.image_tool_backend
 
         async def fake_single(self, arguments, context, *, image_batch=None):
-            if arguments["instruction"].startswith("fail"):
+            if arguments["prompt"].startswith("fail"):
                 raise ImageToolError("managed_image_unavailable", retryable=True)
             artifact = SimpleNamespace(
                 artifact_id="artifact-batch-first",
