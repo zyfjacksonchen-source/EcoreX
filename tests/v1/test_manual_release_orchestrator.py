@@ -229,20 +229,46 @@ def test_manual_workflows_have_no_automatic_trigger_or_publication_permission():
         encoding="utf-8"
     )
     assert "  pull_request:" in pull_request
+    assert "  pull_request_target:" not in pull_request
+    assert "name: v1 PR development gate" in pull_request
+    trusted = (ROOT / ".github/workflows/ecorex-v1-pr-trusted.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "  pull_request_target:" in trusted
+    assert "  pull_request:" not in trusted
     assert "  workflow_dispatch:" not in pull_request
     assert "  push:" not in pull_request
-    assert "contents: read" in pull_request
-    assert "name: v1 PR development gate" in pull_request
-    assert "fetch-depth: 0" in pull_request
-    assert pull_request.index("run: npm run build:web") < pull_request.index(
-        "run: npm run test:v1"
-    )
-    assert "git diff --name-only -z --diff-filter=ACMRT" in pull_request
-    assert 'python -m pytest -q "${tests[@]}"' in pull_request
+    assert "name: v1 PR trusted development gate" in trusted
+    for workflow in (pull_request, trusted):
+        assert "contents: read" in workflow
+        assert "fetch-depth: 0" in workflow
+        assert "persist-credentials: false" in workflow
+        assert workflow.index("run: npm run build:web") < workflow.index(
+            "run: npm run test:v1"
+        )
+        assert "git diff --name-only -z --diff-filter=ACMRT" in workflow
+        assert 'if ((${#guarded[@]} && ! ${#tests[@]})); then' in workflow
+        assert "python_product_change_requires_changed_regression" in workflow
+        assert "python -m pytest --collect-only -q" in workflow
+        for smoke in (
+            "test_version_source.py",
+            "test_bootstrap_supervisor.py",
+            "test_connector_vault.py",
+            "test_output_service.py",
+            "test_runtime_state_machine_invariants.py",
+            "test_macos_codesign_contract.py",
+            "test_update_manifest.py",
+            "test_update_coordinator.py",
+        ):
+            assert f"tests/v1/{smoke}" in workflow
+    assert "ref: ${{ github.event.pull_request.head.sha }}" in trusted
+    assert "cache:" not in trusted
     for forbidden in (
         "environment:",
         "secrets.",
-        "sign",
+        "codesign ",
+        "signtool",
+        "ecorex_release_signer",
         "electron-builder",
         "deploy",
         "release-v1.py",

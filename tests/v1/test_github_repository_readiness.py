@@ -213,6 +213,7 @@ def test_contract_covers_every_protected_workflow_and_environment() -> None:
 
     assert set(workflow_text) == {
         ".github/workflows/ecorex-v1-pr.yml",
+        ".github/workflows/ecorex-v1-pr-trusted.yml",
         ".github/workflows/ecorex-v1-ci.yml",
         ".github/workflows/ecorex-v1-platform-stage.yml",
         ".github/workflows/ecorex-v1-candidate.yml",
@@ -315,6 +316,7 @@ def test_governance_apply_is_head_fenced_and_idempotent_put_only() -> None:
         "contexts": sorted(contract.status_checks),
         "strict": True,
     }
+    assert protection["required_pull_request_reviews"]["required_approving_review_count"] == 0
 
 
 def test_billing_plan_failure_is_typed_and_compensates_new_environment() -> None:
