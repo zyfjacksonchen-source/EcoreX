@@ -34,7 +34,8 @@ import (
 const (
 	maxIndexBytes      = 256 * 1024
 	maxManifestBytes   = 1024 * 1024
-	maxEvidenceBytes   = 16 * 1024 * 1024
+	maxMetadataBytes   = 16 * 1024 * 1024
+	maxSBOMBytes       = 64 * 1024 * 1024
 	maxBootstrapBytes  = 10 * 1024 * 1024
 	maxCoreBytes       = 150 * 1024 * 1024
 	maxPackBytes       = 500 * 1024 * 1024
@@ -678,7 +679,7 @@ func validateLocalReleaseEvidence(releaseDir string, manifestBytes []byte, relea
 	if metadataErr != nil || sbomErr != nil {
 		return fmt.Errorf("local release evidence verification failed")
 	}
-	metadataBytes, err := readStableRegularFile(metadataPath, maxEvidenceBytes)
+	metadataBytes, err := readStableRegularFile(metadataPath, maxMetadataBytes)
 	if err != nil {
 		return fmt.Errorf("local release evidence verification failed")
 	}
@@ -712,7 +713,7 @@ func validateLocalReleaseEvidence(releaseDir string, manifestBytes []byte, relea
 			return fmt.Errorf("local release evidence verification failed")
 		}
 	}
-	sbomBytes, err := readStableRegularFile(sbomPath, maxEvidenceBytes)
+	sbomBytes, err := readStableRegularFile(sbomPath, maxSBOMBytes)
 	if err != nil || sha256Hex(sbomBytes) != metadata.SBOMSHA256 {
 		return fmt.Errorf("local release evidence verification failed")
 	}

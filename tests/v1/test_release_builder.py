@@ -594,6 +594,25 @@ def test_builder_emits_machine_verifiable_metadata_and_sbom(tmp_path: Path) -> N
     )
 
 
+def test_builder_rejects_sbom_above_bootstrap_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ecorex.release.builder as builder_module
+
+    signer, _public, _private = _signer()
+    monkeypatch.setattr(builder_module, "MAX_RELEASE_SBOM_BYTES", 1)
+
+    with pytest.raises(
+        ReleaseBuildError,
+        match="release SBOM exceeds its Bootstrap bound",
+    ):
+        ReleaseBuilder(signer).build(
+            _spec(_input(_source_tree(tmp_path / "source"))),
+            tmp_path / "release",
+        )
+
+
 @pytest.mark.parametrize(
     ("platform", "architecture"),
     [("windows", "x64"), ("macos", "arm64"), ("macos", "x64")],

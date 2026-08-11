@@ -74,6 +74,8 @@ from .web_bundle import (
 MAX_CORE_BYTES = MAX_CORE_ARTIFACT_BYTES
 MAX_BOOTSTRAP_BYTES = 10 * 1024 * 1024
 MAX_CAPABILITY_PACK_BYTES = MAX_CAPABILITY_PACK_ARTIFACT_BYTES
+MAX_RELEASE_METADATA_BYTES = 16 * 1024 * 1024
+MAX_RELEASE_SBOM_BYTES = 64 * 1024 * 1024
 MAX_UNPACKED_BYTES = 2 * 1024 * 1024 * 1024
 MAX_SOURCE_MEMBERS = 50_000
 FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
@@ -648,6 +650,8 @@ class ReleaseBuilder:
         sbom_bytes = _pretty_json_bytes(
             _cyclonedx_sbom(spec, build_digest, built, scanned_web)
         )
+        if len(sbom_bytes) > MAX_RELEASE_SBOM_BYTES:
+            raise ReleaseBuildError("release SBOM exceeds its Bootstrap bound")
         _atomic_write_bytes(sbom_path, sbom_bytes)
         sbom_sha256 = hashlib.sha256(sbom_bytes).hexdigest()
 
@@ -686,7 +690,10 @@ class ReleaseBuilder:
         }
         if spec.dependency_lock_sha256 is not None:
             metadata["python_dependency_lock_sha256"] = spec.dependency_lock_sha256
-        _atomic_write_bytes(metadata_path, _pretty_json_bytes(metadata))
+        metadata_bytes = _pretty_json_bytes(metadata)
+        if len(metadata_bytes) > MAX_RELEASE_METADATA_BYTES:
+            raise ReleaseBuildError("release metadata exceeds its Bootstrap bound")
+        _atomic_write_bytes(metadata_path, metadata_bytes)
         if (
             spec.web_bundle is not None
             and scan_web_bundle(spec.web_bundle) != scanned_web

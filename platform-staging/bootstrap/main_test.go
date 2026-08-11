@@ -380,6 +380,116 @@ func TestLocalReleaseEvidenceMatchesManifestAndSBOM(t *testing.T) {
 	}
 }
 
+func writeSignedLocalRelease(t *testing.T, sbomBytes []byte) (string, map[string]ed25519.PublicKey, minimumStable) {
+	t.Helper()
+	platform, architecture, err := productTarget()
+	if err != nil {
+		t.Skip(err)
+	}
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseDir := canonicalTestTempDir(t)
+	value := manifest{
+		SchemaVersion: 1,
+		ReleaseID:     "release-stable-000000000000000000000001",
+		Version:       "1.0.0",
+		BuildDigest:   strings.Repeat("1", 64),
+		Channel:       "stable",
+		CreatedAt:     "2026-08-12T00:00:00Z",
+		Sources: []source{
+			{SourceID: "mirror", Kind: "github-cn-mirror", Priority: 0, BaseURL: "https://mirror.example/v1"},
+			{SourceID: "github", Kind: "github-release", Priority: 1, BaseURL: "https://github.example/v1"},
+			{SourceID: "cdn", Kind: "ecorex-cdn", Priority: 2, BaseURL: "https://cdn.example/v1"},
+		},
+	}
+	artifactIDs := []string{"core-" + platform + "-" + architecture}
+	for _, packID := range []string{"browser", "channels", "image", "ocr", "office"} {
+		base := "capability-pack-" + packID + "-" + platform + "-" + architecture
+		artifactIDs = append(artifactIDs, base, base+"-manifest")
+	}
+	artifactIDs = append(artifactIDs, "bootstrap-"+platform+"-"+architecture, "web-manifest")
+	for index, artifactID := range artifactIDs {
+		payload := []byte{byte(index + 1)}
+		itemPlatform, itemArchitecture := platform, architecture
+		if artifactID == "web-manifest" {
+			itemPlatform, itemArchitecture = "all", "all"
+		}
+		item := artifact{
+			ArtifactID: artifactID, Platform: itemPlatform, Architecture: itemArchitecture,
+			FileName: artifactID + ".bin", SizeBytes: int64(len(payload)), SHA256: sha256Hex(payload),
+			Signature: signature{Algorithm: "ed25519", KeyID: "release-key"},
+		}
+		signedPayload := strings.Join([]string{
+			"ecorex-artifact-v1", value.ReleaseID, value.Version, value.BuildDigest,
+			item.ArtifactID, item.Platform, item.Architecture, item.FileName,
+			strconv.FormatInt(item.SizeBytes, 10), item.SHA256, "",
+		}, "\n")
+		item.Signature.Value = base64.StdEncoding.EncodeToString(ed25519.Sign(private, []byte(signedPayload)))
+		value.Artifacts = append(value.Artifacts, item)
+		if err := os.WriteFile(filepath.Join(releaseDir, item.FileName), payload, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	value.Signature = signature{Algorithm: "ed25519", KeyID: "release-key"}
+	manifestPayload, err := canonicalManifestPayload(&value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value.Signature.Value = base64.StdEncoding.EncodeToString(ed25519.Sign(private, manifestPayload))
+	manifestBytes, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(releaseDir, "release-manifest.json"), manifestBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(releaseDir, "sbom.cdx.json"), sbomBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metadataArtifacts := make([]localReleaseMetadataArtifact, len(value.Artifacts))
+	for index, item := range value.Artifacts {
+		metadataArtifacts[index] = localReleaseMetadataArtifact{
+			ArtifactID: item.ArtifactID, Kind: "artifact", Platform: item.Platform,
+			Architecture: item.Architecture, FileName: item.FileName,
+			SizeBytes: item.SizeBytes, SHA256: item.SHA256, Signature: item.Signature,
+		}
+	}
+	metadataBytes, err := json.Marshal(localReleaseMetadata{
+		SchemaVersion: 1, ReleaseID: value.ReleaseID, Version: value.Version,
+		Channel: value.Channel, CreatedAt: value.CreatedAt, BuildDigest: value.BuildDigest,
+		Manifest: "release-manifest.json", ManifestSHA256: sha256Hex(manifestBytes),
+		ManifestSignature: value.Signature, SBOM: "sbom.cdx.json", SBOMSHA256: sha256Hex(sbomBytes),
+		Artifacts: metadataArtifacts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(releaseDir, "release-metadata.json"), metadataBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return releaseDir, map[string]ed25519.PublicKey{"release-key": public}, signedMinimum(t, private, value.Version)
+}
+
+func TestLoadLocalReleaseAcceptsLargeBoundedSBOM(t *testing.T) {
+	prefix := []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5","components":[],"metadata":{"properties":[{"name":"test:padding","value":"`)
+	suffix := []byte(`"}]}}`)
+	sbomBytes := append(prefix, bytes.Repeat([]byte("a"), 17*1024*1024)...)
+	sbomBytes = append(sbomBytes, suffix...)
+	releaseDir, keys, floor := writeSignedLocalRelease(t, sbomBytes)
+
+	if _, _, _, _, _, err := loadLocalRelease(releaseDir, keys, floor); err != nil {
+		t.Fatalf("valid SBOM above the legacy 16 MiB limit was rejected: %v", err)
+	}
+	if err := os.Truncate(filepath.Join(releaseDir, "sbom.cdx.json"), maxSBOMBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, _, err := loadLocalRelease(releaseDir, keys, floor); err == nil {
+		t.Fatal("SBOM above the Bootstrap evidence bound was accepted")
+	}
+}
+
 func TestPreviewStateReceiptIncludesRedactedObservabilitySummary(t *testing.T) {
 	payload := []byte(`{
 		"created_at":"2026-08-07T15:19:05Z",

@@ -226,6 +226,32 @@ def test_manual_webui_macos_core_keeps_both_runtime_entries_executable() -> None
     assert builder["_core_executable_paths"]("windows") == ("bin/ecorex.exe",)
 
 
+def test_manual_webui_release_evidence_matches_bootstrap_bounds(
+    tmp_path: Path,
+) -> None:
+    builder = _builder()
+    metadata_path = tmp_path / "release-metadata.json"
+    sbom_path = tmp_path / "sbom.cdx.json"
+    metadata_path.write_bytes(b"{}")
+    with sbom_path.open("wb") as stream:
+        stream.truncate(39_790_694)
+
+    builder["_verify_release_evidence_bounds"](metadata_path, sbom_path)
+    go_source = (ROOT / "platform-staging/bootstrap/main.go").read_text()
+    assert builder["MAX_RELEASE_METADATA_BYTES"] == 16 * 1024 * 1024
+    assert builder["MAX_RELEASE_SBOM_BYTES"] == 64 * 1024 * 1024
+    assert "maxMetadataBytes   = 16 * 1024 * 1024" in go_source
+    assert "maxSBOMBytes       = 64 * 1024 * 1024" in go_source
+
+    with sbom_path.open("wb") as stream:
+        stream.truncate(builder["MAX_RELEASE_SBOM_BYTES"] + 1)
+    with pytest.raises(
+        builder["ManualWebUIBuildError"],
+        match="manual_webui_release_evidence_invalid",
+    ):
+        builder["_verify_release_evidence_bounds"](metadata_path, sbom_path)
+
+
 def test_manual_webui_runtime_overlay_tracks_the_complete_active_lock() -> None:
     builder = _builder()
 

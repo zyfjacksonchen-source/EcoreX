@@ -4,6 +4,8 @@ from .builder import (
     MAX_BOOTSTRAP_BYTES,
     MAX_CAPABILITY_PACK_BYTES,
     MAX_CORE_BYTES,
+    MAX_RELEASE_METADATA_BYTES,
+    MAX_RELEASE_SBOM_BYTES,
     SUPPORTED_TARGETS,
     ReleaseBuildError,
     ReleaseBuilder,

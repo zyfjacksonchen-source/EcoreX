@@ -50,6 +50,8 @@ from ecorex.release import (  # noqa: E402
     ArtifactBuildInput,
     ArtifactKind,
     Ed25519MemorySigner,
+    MAX_RELEASE_METADATA_BYTES,
+    MAX_RELEASE_SBOM_BYTES,
     ReleaseBuildSpec,
     ReleaseBuilder,
     WebBundleBuildInput,
@@ -113,6 +115,14 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _verify_release_evidence_bounds(metadata_path: Path, sbom_path: Path) -> None:
+    if (
+        not 1 <= metadata_path.stat().st_size <= MAX_RELEASE_METADATA_BYTES
+        or not 1 <= sbom_path.stat().st_size <= MAX_RELEASE_SBOM_BYTES
+    ):
+        _fail("manual_webui_release_evidence_invalid")
 
 
 def _canonical_json(value: object) -> bytes:
@@ -1264,6 +1274,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             generated_at,
             source,
         )
+        _verify_release_evidence_bounds(built.metadata_path, built.sbom_path)
         verifier = Ed25519SignatureVerifier({key_id: public})
         verify_manifest_signature(built.manifest, verifier)
         for artifact in built.manifest.artifacts:
