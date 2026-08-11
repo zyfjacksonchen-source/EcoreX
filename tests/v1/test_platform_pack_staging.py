@@ -2054,6 +2054,7 @@ def test_platform_stager_binds_installed_runtime_inventory_to_hash_lock() -> Non
     versions = stager["_active_lock_versions"](
         ROOT / "requirements" / "locks" / "runtime.lock"
     )
+    assert set(stager["_RUNTIME_DISTRIBUTIONS"]) == set(versions)
     inventory = tuple(
         {"name": name, "version": version, "license": "test"}
         for name, version in sorted(versions.items())

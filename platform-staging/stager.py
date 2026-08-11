@@ -75,20 +75,6 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{2,127}$")
 _SAFE_KEY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _TARGETS = frozenset({("windows", "x64"), ("macos", "arm64"), ("macos", "x64")})
-_RUNTIME_DISTRIBUTIONS = (
-    "cryptography",
-    "fastapi",
-    "httpx",
-    "lark-channel-sdk",
-    "pillow",
-    "pydantic",
-    "python-multipart",
-    "qrcode",
-    "regex",
-    "tzdata",
-    "uvicorn",
-    "websockets",
-)
 _FIXED_TIME = (1980, 1, 1, 0, 0, 0)
 _MAX_FILE_BYTES = 512 * 1024 * 1024
 _IMPORT_ARCHIVE_NATIVE_SUFFIXES = frozenset({".dll", ".dylib", ".exe", ".pyd", ".so"})
@@ -4460,6 +4446,11 @@ def _active_lock_versions(path: Path) -> dict[str, str]:
             raise StageError("python_dependency_lock_invalid")
         versions[name] = specifiers[0].version
     return versions
+
+
+_RUNTIME_DISTRIBUTIONS = tuple(
+    _active_lock_versions(ROOT / "requirements" / "locks" / "runtime.lock")
+)
 
 
 def _stage_size_gate(
