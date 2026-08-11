@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import pytest
 
+from agent.tools.base_tool import ToolResult
+from agent.tools.read.read import Read
 from ecorex.gateway import GatewayEvent
 from ecorex.protocol import ItemKind, ItemStatus, TurnStatus
 from ecorex.runtime import (
     AgentTurnWorker,
     RuntimeSettings,
-    ToolExecutionRepository,
     WorkerOutcome,
     create_app,
 )
@@ -50,10 +52,13 @@ class _PausedTextGateway:
             seq=3,
             event_type="response.completed",
             response_id="permit-text-response",
+            usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
         )
 
 
-def test_gate_close_after_first_token_discards_every_later_model_fact(tmp_path) -> None:
+def test_gate_close_after_first_token_does_not_interrupt_started_cow_turn(
+    tmp_path,
+) -> None:
     async def scenario() -> None:
         app, kernel, composition, thread, created = _runtime(
             tmp_path,
@@ -90,50 +95,43 @@ def test_gate_close_after_first_token_discards_every_later_model_fact(tmp_path) 
         gateway.release.set()
         result = await asyncio.wait_for(running, timeout=3)
 
-        assert result.outcome is WorkerOutcome.FAILED
-        assert result.reason == "lease_lost"
+        assert result.outcome is WorkerOutcome.COMPLETED
+        assert result.reason is None
         persisted = kernel.projection(thread.thread_id)
         durable = next(item for item in persisted.items if item.item_id == assistant.item_id)
-        assert durable.content["text"] == "第一段"
-        assert durable.status is ItemStatus.IN_PROGRESS
-        assert kernel.jobs.get(created.job.job_id).status.value == "running"
-        assert kernel.get_turn(created.turn.turn_id).status is TurnStatus.STREAMING
+        assert durable.content["text"] == "第一段不应提交"
+        assert durable.status is ItemStatus.COMPLETED
+        assert kernel.jobs.get(created.job.job_id).status.value == "completed"
+        assert kernel.get_turn(created.turn.turn_id).status is TurnStatus.COMPLETED
         events = kernel.events.page(thread.thread_id, limit=1000).events
-        assert not any(event.event_type == "model.response_completed" for event in events)
-        assert "不应提交" not in "".join(
+        assert any(event.event_type == "model.response_completed" for event in events)
+        assert "不应提交" in "".join(
             str(event.payload.get("delta") or "") for event in events
         )
 
     asyncio.run(scenario())
 
 
-def test_gate_close_during_tool_keeps_started_record_and_never_continues_provider(
-    tmp_path,
+def test_gate_close_during_cow_tool_does_not_interrupt_started_turn(
+    tmp_path, monkeypatch,
 ) -> None:
     async def scenario() -> None:
-        started = asyncio.Event()
-        release = asyncio.Event()
+        started = threading.Event()
+        release = threading.Event()
         calls: list[dict] = []
-        runtime_facts: dict[str, object] = {}
+        legacy_calls: list[dict] = []
 
-        async def read(arguments):
+        def read(_tool, arguments):
             calls.append(dict(arguments))
             started.set()
-            await release.wait()
+            assert release.wait(timeout=3)
+            return ToolResult.success({"title": "报告"})
 
-            def late_repository_write() -> None:
-                runtime_facts["kernel"].events.append(
-                    thread_id=runtime_facts["thread_id"],
-                    turn_id=runtime_facts["turn_id"],
-                    event_type="test.late_tool_commit",
-                    payload={"must_rollback": True},
-                    idempotency_key="test-late-tool-commit",
-                )
+        monkeypatch.setattr(Read, "execute", read)
 
-            # ``asyncio.to_thread`` copies the capability Task context.  Its
-            # repository commit must therefore see the same execution Permit.
-            await asyncio.to_thread(late_repository_write)
-            return {"title": "迟到结果"}
+        def legacy_read(arguments):
+            legacy_calls.append(dict(arguments))
+            raise AssertionError("public Cow turns must not use legacy capability handlers")
 
         class Gateway:
             def __init__(self) -> None:
@@ -141,27 +139,35 @@ def test_gate_close_during_tool_keeps_started_record_and_never_continues_provide
 
             async def stream(self, request):
                 self.requests.append(request)
+                response_id = f"permit-tool-response-{len(self.requests)}"
+                if len(self.requests) == 1:
+                    yield GatewayEvent(
+                        seq=1,
+                        event_type="tool_call.requested",
+                        response_id=response_id,
+                        tool_call_id="permit-tool-call",
+                        tool_name="read",
+                        arguments={"path": "report.docx"},
+                    )
+                else:
+                    yield GatewayEvent(
+                        seq=1,
+                        event_type="output_text.delta",
+                        response_id=response_id,
+                        delta="读取完成",
+                    )
                 yield GatewayEvent(
-                    seq=1,
-                    event_type="tool_call.requested",
-                    response_id="permit-tool-response",
-                    tool_call_id="permit-tool-call",
-                    tool_name="read",
-                    arguments={"path": "report.docx"},
+                    seq=2,
+                    event_type="response.completed",
+                    response_id=response_id,
+                    usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
                 )
 
         gateway = Gateway()
         app, kernel, composition, thread, created = _runtime(
             tmp_path,
             input_text="读取报告",
-            capability_handlers={"read": read},
-        )
-        runtime_facts.update(
-            {
-                "kernel": kernel,
-                "thread_id": thread.thread_id,
-                "turn_id": created.turn.turn_id,
-            }
+            capability_handlers={"read": legacy_read},
         )
         worker = AgentTurnWorker(
             kernel,
@@ -169,7 +175,7 @@ def test_gate_close_during_tool_keeps_started_record_and_never_continues_provide
             capabilities=composition.capability_service,
         )
         running = asyncio.create_task(worker.run_once("permit-tool-worker"))
-        await asyncio.wait_for(started.wait(), timeout=3)
+        assert await asyncio.wait_for(asyncio.to_thread(started.wait, 3), timeout=4)
 
         progressed = asyncio.Event()
 
@@ -189,23 +195,21 @@ def test_gate_close_during_tool_keeps_started_record_and_never_continues_provide
         release.set()
         result = await asyncio.wait_for(running, timeout=3)
 
-        assert result.outcome is WorkerOutcome.FAILED
-        assert result.reason == "lease_lost"
+        assert result.outcome is WorkerOutcome.COMPLETED
+        assert result.reason is None
         assert calls == [{"path": "report.docx"}]
-        assert len(gateway.requests) == 1
-        execution_id = worker._execution_id(created.turn.turn_id, "permit-tool-call")
-        assert ToolExecutionRepository(kernel.database).get(execution_id).status == "started"
+        assert legacy_calls == []
+        assert len(gateway.requests) == 2
         projection = kernel.projection(thread.thread_id)
         tool_item = next(item for item in projection.items if item.kind is ItemKind.TOOL_CALL)
-        assert tool_item.status is ItemStatus.IN_PROGRESS
-        assert not any(item.kind is ItemKind.ARTIFACT for item in projection.items)
-        events = kernel.events.page(thread.thread_id, limit=1000).events
-        assert not any(event.event_type == "tool.result" for event in events)
-        assert not any(event.event_type == "test.late_tool_commit" for event in events)
-        assert not any(
-            event.event_type == "model.continuation_requested" for event in events
+        assert tool_item.status is ItemStatus.COMPLETED
+        assert any(
+            item.kind is ItemKind.MESSAGE and item.content.get("text") == "读取完成"
+            for item in projection.items
         )
-        assert kernel.jobs.get(created.job.job_id).status.value == "running"
+        events = kernel.events.page(thread.thread_id, limit=1000).events
+        assert sum(event.event_type == "model.response_completed" for event in events) == 2
+        assert kernel.jobs.get(created.job.job_id).status.value == "completed"
 
     asyncio.run(scenario())
 

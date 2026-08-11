@@ -6,6 +6,7 @@ import hashlib
 import sqlite3
 import threading
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator
 
@@ -39,6 +40,18 @@ from .reasoning import archive_visible_reasoning_in_transaction
 
 
 PRESERVE_ATTEMPT_CHECKPOINT_KEY = "_ecorex_preserve_job_attempt"
+_COW_TURN_EXECUTION: ContextVar[bool] = ContextVar(
+    "ecorex_cow_turn_execution",
+    default=False,
+)
+
+
+def bind_cow_turn_execution():
+    return _COW_TURN_EXECUTION.set(True)
+
+
+def reset_cow_turn_execution(token: Any) -> None:
+    _COW_TURN_EXECUTION.reset(token)
 
 
 def _utc_now() -> datetime:
@@ -320,6 +333,16 @@ class DurableJobStore:
                 yield connection
             return
         permit = self._execution_permit(job_id, lease_token)
+        if _COW_TURN_EXECUTION.get() and not gate.snapshot().draining:
+            with self.database.transaction() as connection:
+                self._assert_live_execution_binding_in_transaction(
+                    connection,
+                    job_id,
+                    lease_token,
+                    now=observed,
+                )
+                yield connection
+            return
         try:
             gate.assert_permit(permit)
             connection = self.database.connect()
@@ -369,7 +392,7 @@ class DurableJobStore:
     ) -> Iterator[sqlite3.Connection]:
         stable_subject = subject if isinstance(subject, str) and subject else scope
         gate = self.execution_gate
-        if gate is None:
+        if gate is None or _COW_TURN_EXECUTION.get():
             with self.database.transaction() as connection:
                 yield connection
             return

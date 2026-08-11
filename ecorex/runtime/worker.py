@@ -75,6 +75,7 @@ from .errors import ConflictError, LeaseError
 from .kernel import RuntimeKernel
 from .invariant_guard import RuntimeExecutionPermit
 from .image_execution import ImageExecutionPool
+from .jobs import bind_cow_turn_execution, reset_cow_turn_execution
 from .public_tools import PublicToolActivityProjector
 from .snapshots import TurnSnapshotContext
 from .tool_executions import StaleInvocationAdmission, ToolExecutionRepository
@@ -5977,6 +5978,7 @@ class AgentTurnWorker:
         self._cancel_events[job.turn_id] = cancel_event
         heartbeat: asyncio.Task[None] | None = None
         watcher: asyncio.Task[int] | None = None
+        execution_token: Any | None = None
         watch_stop = asyncio.Event()
         state: dict[str, Any] = {
             "seq": 0,
@@ -5988,6 +5990,7 @@ class AgentTurnWorker:
             job = await _run_blocking(
                 self.kernel.jobs.start, job.job_id, worker_id, lease_token
             )
+            execution_token = bind_cow_turn_execution()
             turn = await _run_blocking(self.kernel.get_turn, job.turn_id)
             if turn.status in {TurnStatus.QUEUED, TurnStatus.RETRY_WAIT}:
                 turn = await _run_blocking(
@@ -6148,4 +6151,6 @@ class AgentTurnWorker:
             if heartbeat is not None:
                 heartbeat.cancel()
                 await asyncio.gather(heartbeat, return_exceptions=True)
+            if execution_token is not None:
+                reset_cow_turn_execution(execution_token)
             self._cancel_events.pop(job.turn_id, None)
