@@ -984,7 +984,11 @@ def _sources() -> tuple[ReleaseSource, ...]:
 def _core_executable_paths(platform: str) -> tuple[str, ...]:
     if platform == "windows":
         return ("bin/ecorex.exe",)
-    return ("bin/ecorex", "bin/pack-python/bin/python3")
+    return (
+        "bin/ecorex",
+        "bin/pack-python/bin/python3",
+        "bin/pack-python/lib/python3.11/site-packages/playwright/driver/node",
+    )
 
 
 def _build_release(

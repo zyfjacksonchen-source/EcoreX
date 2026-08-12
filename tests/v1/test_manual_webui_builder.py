@@ -4,9 +4,11 @@ import base64
 import hashlib
 from importlib import metadata
 import json
+import os
 from pathlib import Path
 import runpy
 import shutil
+import stat
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -15,6 +17,8 @@ import zipfile
 import pytest
 
 from ecorex import __version__
+from ecorex.release.builder import _build_deterministic_zip
+from ecorex.update.storage import _extract_zip_safely
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "build-v1-manual-webui.py"
@@ -240,12 +244,13 @@ def test_manual_webui_release_sources_are_one_ordered_set() -> None:
     assert sources[2].base_url == "https://mvdcm.ecoremedia.net/e-mate/update"
 
 
-def test_manual_webui_macos_core_keeps_both_runtime_entries_executable() -> None:
+def test_manual_webui_macos_core_keeps_runtime_entries_executable() -> None:
     builder = _builder()
 
     assert builder["_core_executable_paths"]("macos") == (
         "bin/ecorex",
         "bin/pack-python/bin/python3",
+        "bin/pack-python/lib/python3.11/site-packages/playwright/driver/node",
     )
     assert builder["_core_executable_paths"]("windows") == ("bin/ecorex.exe",)
 
@@ -351,6 +356,46 @@ def test_manual_webui_runtime_overlay_targets_supported_intel_macos(
 
     command = commands[0]
     assert command[command.index("--platform") + 1] == "macosx_11_0_x86_64"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits are a macOS runtime contract")
+def test_manual_webui_core_stages_executable_playwright_driver_on_macos(
+    tmp_path: Path,
+) -> None:
+    builder = _builder()
+    driver_paths = {
+        "macos": "bin/pack-python/lib/python3.11/site-packages/playwright/driver/node",
+        "windows": "bin/pack-python/Lib/site-packages/playwright/driver/node.exe",
+    }
+    expected_modes = {"macos": 0o755, "windows": 0o644}
+
+    for platform, driver_path in driver_paths.items():
+        core = tmp_path / platform / "core"
+        driver = core / driver_path
+        driver.parent.mkdir(parents=True)
+        driver.write_bytes(b"driver")
+        for executable_path in builder["_core_executable_paths"](platform):
+            executable = core / executable_path
+            executable.parent.mkdir(parents=True, exist_ok=True)
+            executable.write_bytes(b"executable")
+        package = tmp_path / f"core-{platform}.zip"
+        _build_deterministic_zip(
+            source=core,
+            destination=package,
+            executable_paths=builder["_core_executable_paths"](platform),
+            size_limit=1024 * 1024,
+            expanded_limit=1024 * 1024,
+        )
+        staged = tmp_path / platform / "staged"
+        staged.mkdir()
+        _extract_zip_safely(
+            package,
+            staged,
+            max_members=100,
+            max_unpacked_bytes=1024 * 1024,
+        )
+
+        assert stat.S_IMODE((staged / driver_path).stat().st_mode) == expected_modes[platform]
 
 
 def test_manual_webui_product_overlay_contains_the_cow_runtime_spine(
