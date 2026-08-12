@@ -162,8 +162,8 @@ class SchedulerTool(BaseTool):
             try:
                 from agent.tools.scheduler.integration import ensure_scheduler_runtime, get_task_store
 
-                if ensure_scheduler_runtime():
-                    self.task_store = get_task_store()
+                if ensure_scheduler_runtime(workspace_root=self.cwd):
+                    self.task_store = get_task_store(self.cwd)
             except Exception as exc:
                 logger.warning(f"[SchedulerTool] lazy scheduler init failed: {_scheduler_exception_summary(exc)}")
 
