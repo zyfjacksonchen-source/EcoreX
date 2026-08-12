@@ -4010,6 +4010,22 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(error)) from error
 
     @app.post(
+        "/api/v1/threads/{thread_id}/generate_title",
+        response_model=ThreadProjection,
+    )
+    def generate_thread_title(thread_id: str) -> ThreadProjection:
+        context = kernel.automatic_title_context(thread_id)
+        if context is None:
+            return kernel.get_thread(thread_id)
+        from agent.chat.session_service import generate_session_title
+
+        title = generate_session_title(
+            context["user_message"],
+            context["assistant_reply"],
+        )
+        return kernel.apply_generated_thread_title(thread_id, title)
+
+    @app.post(
         "/api/v1/threads/{thread_id}/archive",
         response_model=ThreadProjection,
     )
