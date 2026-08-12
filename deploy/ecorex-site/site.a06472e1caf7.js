@@ -3,6 +3,9 @@ const VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const CERTIFICATE_THUMBPRINT = /^[0-9A-F]{40}$/;
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,179}$/;
+const GITHUB_RELEASE_REPOSITORY = "zyfjacksonchen-source/EcoreX";
+const GITHUB_RELEASE_MIRRORS = Object.freeze(["https://ghproxy.net/", "https://ghfast.top/"]);
+const DOWNLOAD_SOURCE_LABELS = Object.freeze(["国内镜像 1", "国内镜像 2", "GitHub", "官方源"]);
 const TARGETS = Object.freeze({
   "windows-x64": Object.freeze({ platform: "windows", architecture: "x64", label: "Windows x64" }),
   "macos-arm64": Object.freeze({ platform: "macos", architecture: "arm64", label: "macOS Apple Silicon" }),
@@ -74,6 +77,17 @@ export function installationTrustCopy(index) {
   return windowsSigned
     ? Object.freeze({ release: "Windows 已签名 · macOS 手动安装（未签名）", help: "Windows 安装包已验证数字签名；macOS 暂未签名，请按系统提示允许打开。" })
     : Object.freeze({ release: "手动安装（未签名）", help: "当前候选暂未签名，请按系统提示允许打开。" });
+}
+
+export function downloadSources(index, target, repository = GITHUB_RELEASE_REPOSITORY) {
+  const download = index.downloads.find((item) => item.target === target);
+  if (!download) return [];
+  const origin = `https://github.com/${repository}/releases/download/v${index.version}/${download.file_name}`;
+  return Object.freeze([
+    ...GITHUB_RELEASE_MIRRORS.map((mirror) => `${mirror}${origin}`),
+    origin,
+    download.url,
+  ]);
 }
 
 export function targetFromPlatformSignals({ source = "", architecture = "", renderer = "" }) {
@@ -185,8 +199,9 @@ function setPrimary(index, target) {
     detail.textContent = "请选择与你的电脑匹配的系统和芯片";
     return;
   }
+  const [preferred] = downloadSources(index, target);
   label.textContent = "立即下载";
-  link.href = download.url;
+  link.href = preferred;
   link.download = download.file_name;
   detail.textContent = `已为你识别 ${download.label} · ${index.version}`;
 }
@@ -204,6 +219,7 @@ function renderIndex(index, target) {
   if (!grid) return;
   grid.replaceChildren();
   for (const download of index.downloads) {
+    const sources = downloadSources(index, download.target);
     const card = document.createElement("article");
     card.className = `download-card${download.target === target ? " is-recommended" : ""}`;
     card.dataset.downloadTarget = download.target;
@@ -216,7 +232,7 @@ function renderIndex(index, target) {
     body.textContent = download.architecture === "arm64" ? "适用于 Apple 芯片 Mac。" : download.platform === "macos" ? "适用于 Intel 芯片 Mac。" : "适用于 64 位 Windows 电脑。";
     const link = document.createElement("a");
     link.className = "download-link";
-    link.href = download.url;
+    link.href = sources[0];
     link.download = download.file_name;
     link.textContent = "下载安装包";
     link.setAttribute("aria-label", `下载 ${download.label}`);
@@ -231,6 +247,19 @@ function renderIndex(index, target) {
       card.append(digest);
     }
     card.append(link);
+    const fallback = document.createElement("details");
+    const fallbackSummary = document.createElement("summary");
+    fallbackSummary.textContent = "镜像下载失败？使用备用线路";
+    fallback.append(fallbackSummary);
+    sources.slice(1).forEach((url, index) => {
+      const alternate = document.createElement("a");
+      alternate.href = url;
+      alternate.download = download.file_name;
+      alternate.textContent = DOWNLOAD_SOURCE_LABELS[index + 1];
+      alternate.setAttribute("aria-label", `通过${DOWNLOAD_SOURCE_LABELS[index + 1]}下载 ${download.label}`);
+      fallback.append(index ? " · " : "", alternate);
+    });
+    card.append(fallback);
     grid.append(card);
   }
   const platform = preferredPlatform(target);

@@ -56,6 +56,9 @@ def test_public_download_site_uses_real_product_assets_and_dynamic_release_data(
     assert "/e-mate/update/download-index.json" in javascript
     assert "normalizeDownloadIndex" in javascript
     assert "targetFromPlatformSignals" in javascript
+    assert "downloadSources(index, download.target)" in javascript
+    assert "link.href = sources[0]" in javascript
+    assert "镜像下载失败？使用备用线路" in javascript
     assert 'summary.textContent = "核对 SHA-256"' in javascript
     assert 'label.textContent = "立即下载"' in javascript
     assert "WEBUI_RELEASE" not in javascript
@@ -195,6 +198,13 @@ raw.downloads[0].authenticode = { status: "verified", signer_certificate_thumbpr
 assert.equal(contract.normalizeDownloadIndex(raw).version, version);
 assert.equal(contract.normalizeDownloadIndex(raw).distribution_mode, "unsigned-manual");
 assert.equal(contract.normalizeDownloadIndex(raw).downloads[0].authenticode.status, "verified");
+assert.deepEqual(contract.downloadSources(contract.normalizeDownloadIndex(raw), "windows-x64"), [
+  `https://ghproxy.net/https://github.com/zyfjacksonchen-source/EcoreX/releases/download/v${version}/e-Mate-Setup-${version}-x64.exe`,
+  `https://ghfast.top/https://github.com/zyfjacksonchen-source/EcoreX/releases/download/v${version}/e-Mate-Setup-${version}-x64.exe`,
+  `https://github.com/zyfjacksonchen-source/EcoreX/releases/download/v${version}/e-Mate-Setup-${version}-x64.exe`,
+  `https://mvdcm.ecoremedia.net/e-mate/update/e-Mate-Setup-${version}-x64.exe`,
+]);
+assert.deepEqual(contract.downloadSources(contract.normalizeDownloadIndex(raw), "unknown"), []);
 assert.deepEqual(contract.installationTrustCopy(contract.normalizeDownloadIndex(raw)), {
   release: "Windows 已签名 · macOS 手动安装（未签名）",
   help: "Windows 安装包已验证数字签名；macOS 暂未签名，请按系统提示允许打开。",
