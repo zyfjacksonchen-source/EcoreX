@@ -47,10 +47,13 @@ class EvolutionUndoTool(BaseTool):
         except Exception:
             return ToolResult.fail("Error: Permission broker unavailable; self-evolution rollback was blocked.")
         try:
-            from agent.memory.config import get_default_memory_config
             from agent.evolution.backup import restore_backup
 
-            workspace_dir = get_default_memory_config().get_workspace()
+            workspace_dir = getattr(getattr(self, "context", None), "workspace_dir", None)
+            if not workspace_dir:
+                return ToolResult.fail(
+                    "Error: Current agent workspace is unavailable; rollback was blocked."
+                )
             ok = restore_backup(workspace_dir, backup_id)
             if ok:
                 return ToolResult.success(

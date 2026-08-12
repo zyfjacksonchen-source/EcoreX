@@ -41,11 +41,11 @@ from ecorex.gateway import (
     MAX_DISCLOSED_WORKING_SET,
     MAX_MODEL_VISIBLE_TOOLS,
     MAX_TOOL_DESCRIPTOR_BYTES,
-    MAX_TOOL_SCHEMA_BATCH_BYTES,
     TOOL_PROJECTION_BUDGET_VERSION,
     GatewayEvent,
     GatewayEventType,
     GatewayAssistantMessageInput,
+    GatewayFunctionCallInput,
     GatewayFunctionCallOutputInput,
     GatewayImageInput,
     GatewayModelPolicy,
@@ -90,22 +90,8 @@ _CUMULATIVE_MODEL_TOKENS: ContextVar[int] = ContextVar(
     default=0,
 )
 
-_EMATE_MODEL_INSTRUCTIONS = (
-    "You are the intelligent work Agent 小芯 inside the e-Mate Agent product. Maintain this "
-    "identity without repeating an introduction. Only when the user explicitly asks who you "
-    "are or asks for an introduction, say '我是智能体小芯，来自 e-Mate Agent'. Do not add "
-    "this self-introduction to ordinary greetings, task replies, follow-up turns, or tool "
-    "results. Do not claim to be e-Mate, Claude, Codex, ChatGPT, or the underlying model. "
-    "Use a professional and rigorous tone by default. Do not prepend 同学 or another fixed form "
-    "of address to ordinary replies unless the user explicitly asks for it. When asked what you can do, explain only "
-    "capabilities actually available in the current request, such as analysis, research, "
-    "writing, files, code, data, images, office work, tools, connectors, or scheduled tasks. "
-    "Reply in the user's language. Treat tool failures as evidence: adjust the plan, "
-    "parameters, or safe tool choice instead of blindly repeating the same call. "
-    "Never repeat an already completed side-effecting tool call. Every tool present in the "
-    "request is directly callable; use it without searching for it again. tool_search is only "
-    "for installed extensions that are absent from the current tool list. Treat an empty "
-    "search result as a completed fact and do not repeat an equivalent search."
+_EMATE_IDENTITY_INSTRUCTION = (
+    "You are the intelligent work Agent 小芯 inside the e-Mate Agent product."
 )
 _GATEWAY_INSTRUCTION_LIMIT = 131_072
 _COW_WORKSPACE_CONTEXT_LIMIT = 64 * 1024
@@ -1981,15 +1967,6 @@ class LegacyAgentTurnWorker:
                     "tool_projection_descriptor_budget_exceeded",
                     retryable=False,
                 )
-            candidate_batch = [*descriptors, descriptor]
-            if (
-                len(canonical_tool_schema_batch_bytes(candidate_batch))
-                > MAX_TOOL_SCHEMA_BATCH_BYTES
-            ):
-                raise _GatewayResponseFailure(
-                    "tool_projection_schema_budget_exceeded",
-                    retryable=False,
-                )
             descriptors.append(descriptor)
             direct_ids.append(decision.tool_id)
 
@@ -2019,13 +1996,6 @@ class LegacyAgentTurnWorker:
                 suppressed_ids.append(tool_id)
                 continue
             if descriptor_bytes > MAX_TOOL_DESCRIPTOR_BYTES:
-                suppressed_ids.append(tool_id)
-                continue
-            candidate_batch = [*descriptors, descriptor]
-            if (
-                len(canonical_tool_schema_batch_bytes(candidate_batch))
-                > MAX_TOOL_SCHEMA_BATCH_BYTES
-            ):
                 suppressed_ids.append(tool_id)
                 continue
             descriptors.append(descriptor)
@@ -2293,7 +2263,7 @@ class LegacyAgentTurnWorker:
             or not instructions.strip()
             or len(instructions.encode("utf-8"))
             > _GATEWAY_INSTRUCTION_LIMIT
-            - len(_EMATE_MODEL_INSTRUCTIONS.encode("utf-8"))
+            - len(_EMATE_IDENTITY_INSTRUCTION.encode("utf-8"))
             - len("\n\n".encode("utf-8"))
             - reserved_instruction_bytes
             or not isinstance(instruction_sha256, str)
@@ -2384,7 +2354,7 @@ class LegacyAgentTurnWorker:
         gateway_instructions = "\n\n".join(
             value
             for value in (
-                _EMATE_MODEL_INSTRUCTIONS,
+                _EMATE_IDENTITY_INSTRUCTION,
                 workspace_instructions,
                 workflow_instructions,
             )
@@ -5416,6 +5386,18 @@ class _CowGatewayModel:
         self._user_images_lock = threading.Lock()
         self._round = 0
 
+    @property
+    def bot(self) -> "_CowGatewayModel":
+        return self
+
+    @property
+    def supports_vision(self) -> bool:
+        return True
+
+    @property
+    def managed_gateway(self) -> bool:
+        return True
+
     def fork(self, scope: str) -> "_CowGatewayModel":
         return _CowGatewayModel(
             self.gateway,
@@ -5439,24 +5421,15 @@ class _CowGatewayModel:
     def _image_assignments(
         self, messages: list[dict[str, Any]]
     ) -> dict[int, list[GatewayImageInput]]:
-        last_assistant = max(
-            (
-                index
-                for index, message in enumerate(messages)
-                if message.get("role") == "assistant"
-            ),
-            default=-1,
-        )
         candidates = [
             (index, self._text(message.get("content")))
             for index, message in enumerate(messages)
-            if index > last_assistant and message.get("role") == "user"
+            if message.get("role") == "user"
         ]
         assignments: dict[int, list[GatewayImageInput]] = {}
         with self._user_images_lock:
             cursor = 0
-            while self._user_images:
-                bound_text, images = self._user_images[0]
+            for bound_text, images in self._user_images:
                 matched = next(
                     (
                         offset
@@ -5466,10 +5439,9 @@ class _CowGatewayModel:
                     None,
                 )
                 if matched is None:
-                    break
+                    continue
                 message_index = candidates[matched][0]
                 assignments[message_index] = images
-                self._user_images.popleft()
                 cursor = matched + 1
         return assignments
 
@@ -5488,53 +5460,64 @@ class _CowGatewayModel:
         )
 
     def _inputs(self, messages: list[dict[str, Any]]) -> list[Any]:
-        if self.previous_response_id:
-            continuation: list[Any] = []
-            latest = messages[-1:]
-            image_assignments = self._image_assignments(latest)
-            for message_index, message in enumerate(latest):
-                content = message.get("content")
-                if not isinstance(content, list):
-                    content = [{"type": "text", "text": content}]
-                for block_index, block in enumerate(content):
-                    if not isinstance(block, dict):
-                        continue
-                    if block.get("type") == "tool_result":
-                        call_id = str(block.get("tool_use_id") or "").strip()
-                        if call_id:
-                            continuation.append(
-                                GatewayFunctionCallOutputInput(
-                                    tool_call_id=call_id,
-                                    output=block.get("content", ""),
-                                )
-                            )
-                    elif block.get("type") == "text":
-                        text = str(block.get("text") or "").strip()
-                        if text:
-                            continuation.append(
-                                GatewayUserMessageInput(
-                                    message_id=(
-                                        f"{self.request_scope}:cow:{self._round}:"
-                                        f"{message_index}:{block_index}"
-                                    ),
-                                    content=text,
-                                    images=image_assignments.get(message_index, []),
-                                )
-                            )
-            return continuation
-
         inputs: list[Any] = []
+        seen_calls: set[str] = set()
+        seen_outputs: set[str] = set()
         image_assignments = self._image_assignments(messages)
         for index, message in enumerate(messages):
-            text = self._text(message.get("content"))
-            if not text:
-                continue
+            role = message.get("role")
+            content = message.get("content")
+            blocks = (
+                content
+                if isinstance(content, list)
+                else [{"type": "text", "text": content}]
+            )
+            text_parts: list[str] = []
+            assistant_calls: list[GatewayFunctionCallInput] = []
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type == "text":
+                    text = str(block.get("text") or "").strip()
+                    if text:
+                        text_parts.append(text)
+                elif role == "assistant" and block_type == "tool_use":
+                    call_id = str(block.get("id") or "").strip()
+                    tool_name = str(block.get("name") or "").strip()
+                    arguments = block.get("input")
+                    if (
+                        call_id
+                        and call_id not in seen_calls
+                        and tool_name
+                        and isinstance(arguments, dict)
+                    ):
+                        seen_calls.add(call_id)
+                        assistant_calls.append(
+                            GatewayFunctionCallInput(
+                                tool_call_id=call_id,
+                                tool_name=tool_name,
+                                arguments=arguments,
+                            )
+                        )
+                elif role == "user" and block_type == "tool_result":
+                    call_id = str(block.get("tool_use_id") or "").strip()
+                    if call_id and call_id not in seen_outputs:
+                        seen_outputs.add(call_id)
+                        inputs.append(
+                            GatewayFunctionCallOutputInput(
+                                tool_call_id=call_id,
+                                output=block.get("content", ""),
+                            )
+                        )
+            text = "\n".join(text_parts)
             identity = f"{self.request_scope}:cow:{self._round}:{index}"
-            if message.get("role") == "assistant":
+            if role == "assistant" and text:
                 inputs.append(
                     GatewayAssistantMessageInput(message_id=identity, content=text)
                 )
-            elif message.get("role") == "user":
+            inputs.extend(assistant_calls)
+            if role == "user" and text:
                 inputs.append(
                     GatewayUserMessageInput(
                         message_id=identity,
@@ -5584,7 +5567,7 @@ class _CowGatewayModel:
         instructions = "\n\n".join(
             part
             for part in (
-                _EMATE_MODEL_INSTRUCTIONS,
+                _EMATE_IDENTITY_INSTRUCTION,
                 str(getattr(request, "system", "") or "").strip(),
             )
             if part
@@ -5604,7 +5587,7 @@ class _CowGatewayModel:
             capability_snapshot_id="cow_tools_2.1.5",
             permission_snapshot_id="cow_local_2.1.5",
             direct_tools=self._tools(getattr(request, "tools", None)),
-            previous_response_id=self.previous_response_id,
+            previous_response_id=None,
         )
 
     async def _produce(self, request: ModelGatewayRequest, output: Any, end: object) -> None:
@@ -5643,6 +5626,10 @@ class _CowGatewayModel:
                 }
             elif event.event_type is GatewayEventType.TOOL_CALL_REQUESTED:
                 saw_tool = True
+                self.previous_response_id = event.response_id
+                self.last_usage = event.usage
+                if event.usage is not None:
+                    self.usage_events.append((event.response_id, event.usage))
                 yield {
                     "choices": [
                         {
@@ -5696,6 +5683,91 @@ class _CowGatewayModel:
                 text += str(choices[0].get("delta", {}).get("content") or "")
         return {"choices": [{"message": {"content": text}}]}
 
+    def call_vision(
+        self,
+        *,
+        image_url: str,
+        question: str,
+        model: str | None = None,
+        max_tokens: int | None = None,
+    ) -> dict[str, Any]:
+        """Run Cow Vision through this turn's authenticated managed Gateway."""
+
+        del model, max_tokens
+        try:
+            header, data_base64 = image_url.split(",", 1)
+            if not header.startswith("data:image/") or not header.endswith(";base64"):
+                raise ValueError
+            mime_type = header[5:-7]
+            image_bytes = base64.b64decode(data_base64, validate=True)
+        except (ValueError, TypeError):
+            raise ValueError("vision image must be a valid base64 image data URL") from None
+        digest = hashlib.sha256(image_bytes).hexdigest()
+        self._round += 1
+        gateway_request = ModelGatewayRequest(
+            request_id=f"cow_{self.request_scope}_vision_{self._round}",
+            thread_id=self.thread_id,
+            turn_id=self.turn_id,
+            trace_id=f"trace_{self.turn_id}",
+            model_id=self.model,
+            model_policy=GatewayModelPolicy.model_validate(
+                ecorex_chat_gateway_policy(self.model).model_dump(mode="json")
+            ),
+            instructions=_EMATE_IDENTITY_INSTRUCTION,
+            input_items=[
+                GatewayUserMessageInput(
+                    message_id=f"{self.request_scope}:vision:{self._round}",
+                    content=question.strip() or "Describe this image.",
+                    images=[
+                        GatewayImageInput(
+                            attachment_id=f"vision_{digest[:24]}",
+                            revision_id=f"vision_revision_{digest[:24]}",
+                            mime_type=mime_type,
+                            data_base64=data_base64,
+                            sha256=digest,
+                            source_sha256=digest,
+                        )
+                    ],
+                )
+            ],
+            config_snapshot_id="cow_config_2.1.5",
+            capability_snapshot_id="cow_tools_2.1.5",
+            permission_snapshot_id="cow_local_2.1.5",
+            direct_tools=[],
+            previous_response_id=None,
+        )
+        from queue import Queue
+
+        output: Queue[Any] = Queue()
+        end = object()
+        future = asyncio.run_coroutine_threadsafe(
+            self._produce(gateway_request, output, end), self.loop
+        )
+        text = ""
+        usage: dict[str, int] = {}
+        while True:
+            event = output.get()
+            if event is end:
+                break
+            if isinstance(event, BaseException):
+                raise event
+            if event.event_type is GatewayEventType.OUTPUT_TEXT_DELTA:
+                text += str(event.delta or "")
+            elif event.event_type is GatewayEventType.RESPONSE_FAILED:
+                raise _GatewayResponseFailure(
+                    event.error_code or event.error_message or "vision_gateway_failed",
+                    retryable=False,
+                )
+            elif event.event_type is GatewayEventType.RESPONSE_COMPLETED:
+                usage = event.usage or {}
+                self.last_usage = event.usage
+                if event.usage is not None:
+                    self.usage_events.append((event.response_id, event.usage))
+        future.result()
+        if not text:
+            raise _GatewayResponseFailure("vision_gateway_empty_response", retryable=False)
+        return {"content": text, "model": self.model, "usage": usage}
+
 
 class _CowAgentBridge:
     def __init__(self) -> None:
@@ -5745,7 +5817,6 @@ class AgentTurnWorker:
         workspace_root: str | Path | None = None,
         workspace_root_resolver: Callable[[ToolExecutionScope | None], tuple[Path, ...]]
         | None = None,
-        browser_handler: Callable[..., Any] | None = None,
         mcp_oauth_redirect_uri: str | None = None,
         **_ignored: Any,
     ) -> None:
@@ -5768,7 +5839,6 @@ class AgentTurnWorker:
             else kernel.database.path.parent / "workspace"
         )
         self.workspace_root_resolver = workspace_root_resolver
-        self.browser_handler = browser_handler
         self.mcp_oauth_redirect_uri = mcp_oauth_redirect_uri
         self._cancel_events: dict[str, threading.Event] = {}
         self._cow_bridge = _CowAgentBridge()
@@ -5785,59 +5855,6 @@ class AgentTurnWorker:
             event.set()
         self._cancel_events.clear()
         self._cow_bridge.agents.clear()
-        close_browser = getattr(self.browser_handler, "aclose", None)
-        if callable(close_browser):
-            await close_browser()
-
-    def _bind_browser_pack(
-        self,
-        agent: Any,
-        *,
-        loop: asyncio.AbstractEventLoop,
-        job_id: str,
-        thread_id: str,
-        turn_id: str,
-    ) -> None:
-        """Route Cow's browser schema through the verified stateful Browser Pack."""
-
-        if self.browser_handler is None:
-            return
-        browser = next(
-            (tool for tool in agent.tools if getattr(tool, "name", None) == "browser"),
-            None,
-        )
-        if browser is None:
-            raise RuntimeError("verified browser pack has no Cow browser tool")
-
-        from agent.tools.base_tool import ToolResult
-
-        def execute(arguments: dict[str, Any]) -> ToolResult:
-            context = ToolInvocationContext(
-                invocation_id=f"{turn_id}:cow:browser:{time.monotonic_ns()}",
-                capability_snapshot_id="cow-direct-browser",
-                policy_snapshot_id="cow-direct-tools",
-                tool_id="browser",
-                idempotency_key=None,
-                approved=True,
-                effective_sandbox=SandboxLevel.DANGER_FULL_ACCESS,
-                execution_scope=ToolExecutionScope(
-                    job_id=job_id,
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                    execution_batch_id=f"cow_{turn_id}",
-                ),
-            )
-            try:
-                future = asyncio.run_coroutine_threadsafe(
-                    self.browser_handler(arguments, context), loop
-                )
-                return ToolResult.success(future.result())
-            except Exception as error:
-                return ToolResult.fail(
-                    getattr(error, "code", None) or error.__class__.__name__.casefold()
-                )
-
-        browser.execute = execute
 
     def _workspace(
         self,
@@ -6152,6 +6169,7 @@ class AgentTurnWorker:
                 )
             delta = str(data.get("delta") or "")
             if delta:
+                state["assistant_text_emitted"] = True
                 self.kernel.append_message_delta(
                     state["message_item"],
                     delta,
@@ -6168,6 +6186,26 @@ class AgentTurnWorker:
                     lease_token=lease_token,
                 )
                 state["message_item"] = None
+        elif event_type == "agent_end":
+            final_response = str(data.get("final_response") or "").strip()
+            if (
+                final_response
+                and not state.get("assistant_text_emitted")
+                and not state.get("final_response_projected")
+            ):
+                self.kernel.create_item(
+                    turn_id=turn_id,
+                    kind=ItemKind.MESSAGE,
+                    status=ItemStatus.COMPLETED,
+                    content={
+                        "role": "assistant",
+                        "text": final_response,
+                        "executor": "cow-2.1.5",
+                    },
+                    job_id=job_id,
+                    lease_token=lease_token,
+                )
+                state["final_response_projected"] = True
         elif event_type == "tool_execution_start":
             call_id = str(data.get("tool_call_id") or "")
             name = str(data.get("tool_name") or "tool")
@@ -6418,13 +6456,6 @@ class AgentTurnWorker:
                 for tool in agent.tools:
                     if getattr(tool, "name", "") == "scheduler":
                         attach_scheduler_to_tool(tool, scheduler_context)
-            self._bind_browser_pack(
-                agent,
-                loop=model.loop,
-                job_id=job_id,
-                thread_id=thread_id,
-                turn_id=turn_id,
-            )
             bridge.agents[thread_id] = agent
             agent._current_session_id = thread_id
             agent._current_request_id = turn_id

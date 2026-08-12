@@ -335,7 +335,7 @@ def test_usage_endpoint_fails_closed_for_missing_provider_usage(tmp_path) -> Non
             raise AssertionError("full-ledger reconciliation must not run")
 
         def tokens_available(self, _account_id: str) -> bool:
-            return True
+            raise RuntimeError("control plane unavailable")
 
         def project(self, _account_id: str, *, timezone_name: str):
             del timezone_name
@@ -354,7 +354,7 @@ def test_usage_endpoint_fails_closed_for_missing_provider_usage(tmp_path) -> Non
     assert response.json()["detail"] == "managed account usage is unavailable"
 
 
-def test_unsettled_account_usage_blocks_new_provider_admission(tmp_path) -> None:
+def test_unsettled_account_usage_does_not_block_new_provider_admission(tmp_path) -> None:
     provider = Provider()
     store = SQLiteGatewayStore(tmp_path / "gateway.db")
 
@@ -385,16 +385,15 @@ def test_unsettled_account_usage_blocks_new_provider_admission(tmp_path) -> None
         headers=headers(),
         json=request("usage-fail-1"),
     )
-    blocked = client.post(
+    second = client.post(
         "/api/v1/model/stream",
         headers=headers(),
         json=request("usage-fail-2"),
     )
 
     assert first.status_code == 200
-    assert blocked.status_code == 503
-    assert blocked.json()["detail"] == "managed usage settlement is pending"
-    assert provider.calls == 1
+    assert second.status_code == 200
+    assert provider.calls == 2
 
 
 def test_completed_request_replays_after_usage_exhausts_account_quota(
@@ -452,7 +451,7 @@ def test_completed_request_replays_after_usage_exhausts_account_quota(
     assert len(accountant.facts) == 1
 
 
-def test_completed_request_with_missing_usage_replays_while_new_work_fails_closed(
+def test_completed_request_with_missing_usage_replays_without_blocking_new_work(
     tmp_path,
 ) -> None:
     provider = Provider()
@@ -514,7 +513,7 @@ def test_completed_request_with_missing_usage_replays_while_new_work_fails_close
         headers=headers(),
         json=request("usage-missing-replay"),
     )
-    blocked = client.post(
+    next_request = client.post(
         "/api/v1/model/stream",
         headers=headers(),
         json=request("usage-missing-new-request"),
@@ -522,9 +521,8 @@ def test_completed_request_with_missing_usage_replays_while_new_work_fails_close
 
     assert replay.status_code == 200
     assert replay.headers["x-ecorex-replay"] == "true"
-    assert blocked.status_code == 503
-    assert blocked.json()["detail"] == "managed usage settlement is pending"
-    assert provider.calls == 0
+    assert next_request.status_code == 200
+    assert provider.calls == 1
 
 
 def test_cloud_gateway_auth_allowlist_persists_before_stream_and_replays(

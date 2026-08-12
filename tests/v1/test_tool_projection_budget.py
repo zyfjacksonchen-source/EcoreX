@@ -112,8 +112,8 @@ def test_gateway_request_enforces_visible_and_disclosed_boundaries() -> None:
     direct = [_descriptor(f"direct_{index}") for index in range(MAX_MODEL_VISIBLE_TOOLS)]
     assert len(_request(direct_tools=direct).direct_tools) == MAX_MODEL_VISIBLE_TOOLS
 
-    with pytest.raises(ValueError, match=f"at most {MAX_MODEL_VISIBLE_TOOLS}|count exceeds"):
-        _request(direct_tools=[*direct, _descriptor("direct_overflow")])
+    expanded = [*direct, _descriptor("direct_overflow")]
+    assert _request(direct_tools=expanded).direct_tools == expanded
 
     disclosed = [
         _descriptor(f"grant_{index}", exposure="deferred")
@@ -135,7 +135,7 @@ def test_gateway_request_enforces_visible_and_disclosed_boundaries() -> None:
         )
 
 
-def test_gateway_request_enforces_exact_descriptor_and_batch_utf8_budgets() -> None:
+def test_gateway_request_preserves_large_cow_tool_schemas() -> None:
     exact = _descriptor("exact_descriptor")
     base_size = len(canonical_tool_descriptor_bytes(exact))
     exact["spec"]["input_schema"]["description"] = "x" * (
@@ -146,8 +146,7 @@ def test_gateway_request_enforces_exact_descriptor_and_batch_utf8_budgets() -> N
 
     oversized = copy.deepcopy(exact)
     oversized["spec"]["input_schema"]["description"] += "x"
-    with pytest.raises(ValueError, match="descriptor exceeds"):
-        _request(direct_tools=[oversized])
+    assert _request(direct_tools=[oversized]).direct_tools == [oversized]
 
     large_descriptors = [
         _descriptor(f"large_{index}", schema_padding=90 * 1024)
@@ -161,11 +160,10 @@ def test_gateway_request_enforces_exact_descriptor_and_batch_utf8_budgets() -> N
         len(canonical_tool_schema_batch_bytes(large_descriptors))
         > MAX_TOOL_SCHEMA_BATCH_BYTES
     )
-    with pytest.raises(ValueError, match="catalog exceeds"):
-        _request(direct_tools=large_descriptors)
+    assert _request(direct_tools=large_descriptors).direct_tools == large_descriptors
 
 
-def test_provider_revalidates_budget_after_unvalidated_model_copy() -> None:
+def test_provider_preserves_large_cow_catalog_after_unvalidated_model_copy() -> None:
     provider = _provider()
     valid = _request()
     bypassed = valid.model_copy(
@@ -177,19 +175,19 @@ def test_provider_revalidates_budget_after_unvalidated_model_copy() -> None:
         }
     )
     try:
-        with pytest.raises(ResponsesProviderRejected, match="count budget"):
-            provider._payload(bypassed, _principal())
+        payload, _names = provider._payload(bypassed, _principal())
+        assert len(payload["tools"]) == MAX_MODEL_VISIBLE_TOOLS + 1
 
         oversized = _descriptor("provider_oversized")
         current = len(canonical_tool_descriptor_bytes(oversized))
         oversized["spec"]["input_schema"]["description"] = "x" * (
             MAX_TOOL_DESCRIPTOR_BYTES - current + 1
         )
-        with pytest.raises(ResponsesProviderRejected, match="byte budget"):
-            provider._payload(
-                valid.model_copy(update={"direct_tools": [oversized]}),
-                _principal(),
-            )
+        payload, _names = provider._payload(
+            valid.model_copy(update={"direct_tools": [oversized]}),
+            _principal(),
+        )
+        assert payload["tools"][0]["parameters"] == oversized["spec"]["input_schema"]
 
         batch_overflow = [
             _descriptor(f"provider_large_{index}", schema_padding=90 * 1024)
@@ -199,11 +197,13 @@ def test_provider_revalidates_budget_after_unvalidated_model_copy() -> None:
             len(canonical_tool_descriptor_bytes(item)) < MAX_TOOL_DESCRIPTOR_BYTES
             for item in batch_overflow
         )
-        with pytest.raises(ResponsesProviderRejected, match="byte budget"):
-            provider._payload(
-                valid.model_copy(update={"direct_tools": batch_overflow}),
-                _principal(),
-            )
+        payload, _names = provider._payload(
+            valid.model_copy(update={"direct_tools": batch_overflow}),
+            _principal(),
+        )
+        assert [tool["parameters"] for tool in payload["tools"]] == [
+            item["spec"]["input_schema"] for item in batch_overflow
+        ]
 
         disclosed_overflow = [
             _descriptor(f"provider_grant_{index}", exposure="deferred")

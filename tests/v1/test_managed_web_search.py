@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 import json
 import sqlite3
+import time
 
 import httpx
 from fastapi.testclient import TestClient
@@ -271,7 +272,9 @@ def test_managed_client_uses_login_session_without_exposing_it() -> None:
     assert SESSION_TOKEN not in requests[0].content.decode("utf-8")
 
 
-def test_gateway_search_settles_usage_and_audit_once_and_fails_closed(tmp_path) -> None:
+def test_gateway_search_settles_usage_and_audit_once_from_the_durable_sidecar(
+    tmp_path,
+) -> None:
     class Provider:
         async def search(self, request, principal):
             assert principal.account_id == "account-1"
@@ -326,6 +329,10 @@ def test_gateway_search_settles_usage_and_audit_once_and_fails_closed(tmp_path) 
             headers={"Authorization": f"Bearer {SESSION_TOKEN}"},
             json=request,
         )
+        deadline = time.monotonic() + 2
+        while repository.get_user("account-1").tokens_used != 13:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
     assert response.status_code == 200
     assert response.json()["results"][0]["url"].startswith("https://")
     assert repository.get_user("account-1").tokens_used == 13
@@ -346,7 +353,7 @@ def test_gateway_search_settles_usage_and_audit_once_and_fails_closed(tmp_path) 
         allowed_model_ids=frozenset({"ecorex-chat"}),
     )
     with TestClient(closed) as client:
-        unavailable = client.post(
+        unmanaged_usage = client.post(
             "/api/v1/web-search",
             headers={"Authorization": f"Bearer {SESSION_TOKEN}"},
             json={
@@ -355,5 +362,58 @@ def test_gateway_search_settles_usage_and_audit_once_and_fails_closed(tmp_path) 
                 "query": "CowAgent",
             },
         )
-    assert unavailable.status_code == 503
-    assert PROVIDER_TOKEN not in unavailable.text
+    assert unmanaged_usage.status_code == 200
+    assert PROVIDER_TOKEN not in unmanaged_usage.text
+    assert SQLiteGatewayStore(database).usage_settlement_counts()["pending"] == 1
+
+
+def test_gateway_search_keeps_a_successful_result_when_usage_settlement_fails(
+    tmp_path,
+) -> None:
+    class Provider:
+        async def search(self, request, principal):
+            del principal
+            return _response(request.query)
+
+        async def stream(self, request, principal):
+            del request, principal
+            if False:
+                yield None
+
+    class FailingAccountant:
+        def tokens_available(self, _account_id: str) -> bool:
+            raise RuntimeError("usage-sidecar-down")
+
+        def settle(self, _fact) -> None:
+            raise RuntimeError("usage-sidecar-down")
+
+        def reconcile(self, _facts) -> None:
+            return None
+
+        def project(self, *_args, **_kwargs):
+            raise RuntimeError("usage-sidecar-down")
+
+    database = tmp_path / "gateway.db"
+    GatewaySchemaManager(database).migrate()
+    store = SQLiteGatewayStore(database)
+    app = create_managed_gateway_app(
+        store,
+        authenticator=_Authenticator(),
+        provider=Provider(),
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+        usage_accountant=FailingAccountant(),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/web-search",
+            headers={"Authorization": f"Bearer {SESSION_TOKEN}"},
+            json={
+                "request_id": "search-sidecar-down",
+                "model_id": "ecorex-chat",
+                "query": "CowAgent",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["results"][0]["url"].startswith("https://")
+    assert store.usage_settlement_counts()["pending"] == 1

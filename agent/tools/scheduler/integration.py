@@ -21,6 +21,7 @@ from agent.tools.scheduler.delivery_target import (
 # Global scheduler service instance
 _scheduler_service = None
 _task_store = None
+_workspace_runtimes = {}
 # Module-level lock to guard idempotent initialization across threads
 _init_lock = threading.Lock()
 _SCHEDULER_RUN_REQUEST_ID_KEY = "_scheduler_run_request_id"
@@ -78,7 +79,7 @@ def _readiness_reason_summary(reason) -> dict:
     return summary if summary.get("hash") else {}
 
 
-def init_scheduler(agent_bridge) -> bool:
+def init_scheduler(agent_bridge, workspace_root=None) -> bool:
     """
     Initialize scheduler service (idempotent).
 
@@ -94,28 +95,34 @@ def init_scheduler(agent_bridge) -> bool:
     """
     global _scheduler_service, _task_store
 
-    # Fast path: already initialized and running
-    if _scheduler_service is not None and getattr(_scheduler_service, "running", False):
+    workspace_key = None
+    if workspace_root is not None:
+        workspace_key = os.path.abspath(expand_path(str(workspace_root)))
+        existing = _workspace_runtimes.get(workspace_key)
+        if existing is not None and getattr(existing[1], "running", False):
+            return True
+    elif _scheduler_service is not None and getattr(_scheduler_service, "running", False):
         return True
 
     with _init_lock:
         # Re-check under the lock to avoid races where multiple threads
         # passed the fast-path check before any of them acquired the lock.
-        if _scheduler_service is not None and getattr(_scheduler_service, "running", False):
+        if workspace_key is not None:
+            existing = _workspace_runtimes.get(workspace_key)
+            if existing is not None and getattr(existing[1], "running", False):
+                return True
+        elif _scheduler_service is not None and getattr(_scheduler_service, "running", False):
             return True
 
         try:
             from agent.tools.scheduler.task_store import TaskStore
             from agent.tools.scheduler.scheduler_service import SchedulerService
 
-            # Get workspace from config
-            workspace_root = expand_path(conf().get("agent_workspace", "~/cow"))
-            store_path = os.path.join(workspace_root, "scheduler", "tasks.json")
+            runtime_root = workspace_key or expand_path(conf().get("agent_workspace", "~/cow"))
+            store_path = os.path.join(runtime_root, "scheduler", "tasks.json")
 
-            # Create task store (reuse if already created)
-            if _task_store is None:
-                _task_store = TaskStore(store_path)
-                logger.debug(f"[Scheduler] Task store initialized: {store_path}")
+            task_store = TaskStore(store_path)
+            logger.debug(f"[Scheduler] Task store initialized: {store_path}")
 
             # Create execute callback. Returns True on success, False to ask
             # the scheduler to retry on the next tick (e.g. channel not yet
@@ -124,8 +131,13 @@ def init_scheduler(agent_bridge) -> bool:
                 return _execute_scheduled_task(task, agent_bridge)
 
             # Create scheduler service
-            _scheduler_service = SchedulerService(_task_store, execute_task_callback)
-            _scheduler_service.start()
+            scheduler_service = SchedulerService(task_store, execute_task_callback)
+            scheduler_service.start()
+            if workspace_key is not None:
+                _workspace_runtimes[workspace_key] = (task_store, scheduler_service)
+            else:
+                _task_store = task_store
+                _scheduler_service = scheduler_service
 
             logger.info("[Scheduler] Service initialized and started")
             return True
@@ -241,20 +253,24 @@ def _send_channel_reply(channel, reply: Reply, context: Context, channel_type: s
     return True
 
 
-def get_task_store():
+def get_task_store(workspace_root=None):
     """Get the global task store instance"""
+    if workspace_root is not None:
+        runtime = _workspace_runtimes.get(os.path.abspath(expand_path(str(workspace_root))))
+        return runtime[0] if runtime is not None else None
     return _task_store
 
 
-def get_scheduler_service():
+def get_scheduler_service(workspace_root=None):
     """Get the global scheduler service instance"""
+    if workspace_root is not None:
+        runtime = _workspace_runtimes.get(os.path.abspath(expand_path(str(workspace_root))))
+        return runtime[1] if runtime is not None else None
     return _scheduler_service
 
 
-def ensure_scheduler_runtime(agent_bridge=None) -> bool:
-    """Start the scheduler runtime when it has been explicitly enabled."""
-    if not conf().get("scheduler_enabled", False):
-        return False
+def ensure_scheduler_runtime(agent_bridge=None, workspace_root=None) -> bool:
+    """Start Cow's local durable scheduler for the requested workspace."""
     if agent_bridge is None:
         try:
             from bridge.bridge import Bridge
@@ -263,7 +279,7 @@ def ensure_scheduler_runtime(agent_bridge=None) -> bool:
         except Exception as exc:
             logger.warning(f"[Scheduler] Failed to resolve AgentBridge for scheduler init: {_body_summary(exc)}")
             return False
-    return init_scheduler(agent_bridge)
+    return init_scheduler(agent_bridge, workspace_root)
 
 
 def _scheduler_action(task: dict) -> dict:

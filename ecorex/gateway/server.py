@@ -564,6 +564,104 @@ class SQLiteGatewayStore:
         finally:
             connection.close()
 
+    def enqueue_usage_fact(
+        self,
+        fact: GatewayCompletedUsageFact,
+        principal: GatewayPrincipal,
+        *,
+        model_id: str,
+    ) -> None:
+        """Put a non-stream provider result on the existing usage outbox."""
+
+        if fact.account_id != principal.account_id:
+            raise GatewayStoreError("gateway usage account identity is invalid")
+        identity = {
+            "kind": "provider_usage",
+            "request_id": fact.request_id,
+            "account_id": fact.account_id,
+            "model_id": model_id,
+            "input_tokens": fact.input_tokens,
+            "output_tokens": fact.output_tokens,
+            "total_tokens": fact.total_tokens,
+            "provider_created_at": fact.provider_created_at.isoformat(),
+        }
+        fingerprint = hashlib.sha256(_canonical(identity)).hexdigest()
+        response_id = "usage_" + fingerprint[:32]
+        trace_id = "usage_" + hashlib.sha256(
+            fact.request_id.encode("utf-8")
+        ).hexdigest()[:32]
+        now = _utcnow()
+        lease_token = "gwusage_" + secrets.token_hex(24)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT account_id,organization_id,quota_period,request_fingerprint,"
+                "model_id,status FROM gateway_requests WHERE request_id=?",
+                (fact.request_id,),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["account_id"] != principal.account_id
+                    or existing["organization_id"] != principal.organization_id
+                    or existing["quota_period"] != principal.quota_period
+                    or existing["request_fingerprint"] != fingerprint
+                    or existing["model_id"] != model_id
+                    or existing["status"] != "completed"
+                ):
+                    raise GatewayRequestConflict(
+                        "gateway usage request identity was reused"
+                    )
+                connection.commit()
+                return
+            connection.execute(
+                "INSERT INTO gateway_requests("
+                "request_id,account_id,organization_id,quota_period,"
+                "request_fingerprint,model_id,trace_id,status,lease_token,"
+                "lease_expires_at,created_at,updated_at"
+                ") VALUES(?,?,?,?,?,?,?,'active',?,?,?,?)",
+                (
+                    fact.request_id,
+                    principal.account_id,
+                    principal.organization_id,
+                    principal.quota_period,
+                    fingerprint,
+                    model_id,
+                    trace_id,
+                    lease_token,
+                    _iso(now + timedelta(seconds=60)),
+                    _iso(now),
+                    _iso(now),
+                ),
+            )
+            event = GatewayEvent(
+                seq=1,
+                event_type=GatewayEventType.RESPONSE_COMPLETED,
+                response_id=response_id,
+                usage={
+                    "input_tokens": fact.input_tokens,
+                    "output_tokens": fact.output_tokens,
+                    "total_tokens": fact.total_tokens,
+                },
+            )
+            self._append_in_transaction(
+                connection, fact.request_id, lease_token, event, now
+            )
+            self._complete_in_transaction(
+                connection, fact.request_id, lease_token, event, now
+            )
+            connection.commit()
+        except GatewayStoreError:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        except (OSError, sqlite3.Error):
+            if connection.in_transaction:
+                connection.rollback()
+            raise GatewayStoreError("gateway durable state is unavailable") from None
+        finally:
+            connection.close()
+
     def bind_chat_model_attempt(
         self,
         request: ModelGatewayRequest,
@@ -785,6 +883,7 @@ class SQLiteGatewayStore:
         revision: ChatModelRevision,
         *,
         now: datetime | None = None,
+        consume: bool = True,
     ) -> DurableChatHandoff | None:
         outputs = [
             item
@@ -894,12 +993,17 @@ class SQLiteGatewayStore:
                 or request.model_id != revision.local_model_id
             ):
                 failure = GatewayRequestConflict("chat handoff configuration changed")
+            retrying_same_request = (
+                row["state"] == "consumed"
+                and row["consumed_by_request_id"] == request.request_id
+            )
             if failure is None and (
-                row["state"] != "available"
+                row["state"] not in {"available", "consumed"}
                 or row["tool_call_id"] != outputs[0].tool_call_id
+                or (row["state"] == "consumed" and not retrying_same_request)
             ):
                 failure = GatewayRequestConflict("chat handoff was already consumed")
-            if failure is None:
+            if failure is None and consume and not retrying_same_request:
                 updated = connection.execute(
                     "UPDATE gateway_chat_handoffs SET state='consumed',"
                     "consumed_by_request_id=?,consumed_at=? "
@@ -908,6 +1012,7 @@ class SQLiteGatewayStore:
                 )
                 if updated.rowcount != 1:
                     raise GatewayRequestConflict("chat handoff was already consumed")
+            if failure is None:
                 result = DurableChatHandoff(
                     response_id=str(row["response_id"]),
                     tool_call_id=str(row["tool_call_id"]),
@@ -2251,22 +2356,21 @@ def create_managed_gateway_app(
         elif body.model_id not in allowed_model_ids:
             raise HTTPException(status_code=403, detail="managed model is not allowed")
         search = getattr(provider, "search", None)
-        if not callable(search) or usage_accountant is None:
+        if not callable(search):
             raise HTTPException(
                 status_code=503,
                 detail="managed web search is unavailable",
             )
-        try:
-            available = await asyncio.to_thread(
-                usage_accountant.tokens_available,
-                current.account_id,
-            )
-        except Exception:
-            raise HTTPException(
-                status_code=503,
-                detail="managed usage settlement is unavailable",
-            ) from None
-        if not available:
+        available: bool | None = None
+        if usage_accountant is not None:
+            try:
+                available = await asyncio.to_thread(
+                    usage_accountant.tokens_available,
+                    current.account_id,
+                )
+            except Exception:
+                pass
+        if available is False:
             raise HTTPException(
                 status_code=429,
                 detail="managed token quota is exhausted",
@@ -2294,7 +2398,17 @@ def create_managed_gateway_app(
                 total_tokens=usage.total_tokens,
                 provider_created_at=result.provider_created_at,
             )
-            await asyncio.to_thread(usage_accountant.settle, fact)
+            try:
+                await asyncio.to_thread(
+                    store.enqueue_usage_fact,
+                    fact,
+                    current,
+                    model_id=body.model_id,
+                )
+            except Exception:
+                # Usage is a sidecar and cannot replace a successful Cow tool
+                # result with an accounting error.
+                pass
             return result
         except HTTPException:
             raise
@@ -2386,37 +2500,15 @@ def create_managed_gateway_app(
         elif body.model_id not in allowed_model_ids:
             raise HTTPException(status_code=403, detail="managed model is not allowed")
         if usage_accountant is not None:
+            available: bool | None = None
             try:
-                await settle_usage_outbox(
-                    account_id=current.account_id,
-                    maximum=64,
-                )
-                unsettled = await asyncio.to_thread(
-                    store.has_unsettled_usage,
-                    current.account_id,
-                )
                 available = await asyncio.to_thread(
                     usage_accountant.tokens_available,
                     current.account_id,
                 )
             except Exception:
-                replay_response = await completed_replay_response()
-                if replay_response is not None:
-                    return replay_response
-                raise HTTPException(
-                    status_code=503,
-                    detail="managed usage settlement is unavailable",
-                ) from None
-            if unsettled:
-                replay_response = await completed_replay_response()
-                if replay_response is not None:
-                    return replay_response
-                raise HTTPException(
-                    status_code=503,
-                    detail="managed usage settlement is pending",
-                    headers={"Retry-After": "1"},
-                )
-            if not available:
+                pass
+            if available is False:
                 replay_response = await completed_replay_response()
                 if replay_response is not None:
                     return replay_response
@@ -2537,24 +2629,6 @@ def create_managed_gateway_app(
                                 lease_token,
                                 event,
                             )
-                        if (
-                            is_terminal
-                            and usage_accountant is not None
-                            and event.event_type
-                            in {
-                                GatewayEventType.RESPONSE_COMPLETED,
-                                GatewayEventType.TOOL_CALL_REQUESTED,
-                            }
-                        ):
-                            try:
-                                await settle_usage_outbox(
-                                    request_id=body.request_id,
-                                    maximum=1,
-                                )
-                            except Exception:
-                                # The committed terminal remains a durable
-                                # outbox and is retried by the bounded worker.
-                                pass
                         # The provider's terminal claim is not authoritative until
                         # the event and request state commit atomically.
                         terminal = is_terminal

@@ -86,7 +86,7 @@ class AgentInitializer:
         tools = self._load_tools(workspace_root, memory_manager, memory_tools, session_id)
         
         # Initialize scheduler if needed
-        self._initialize_scheduler(tools, session_id)
+        self._initialize_scheduler(tools, workspace_root, session_id)
         
         # Load context files
         context_files = load_context_files(workspace_root)
@@ -617,56 +617,52 @@ class AgentInitializer:
         
         return tools
     
-    def _initialize_scheduler(self, tools: List, session_id: Optional[str] = None):
+    def _initialize_scheduler(
+        self,
+        tools: List,
+        workspace_root: str,
+        session_id: Optional[str] = None,
+    ):
         """Initialize scheduler service if needed.
 
         Serialize the check-and-set under a module-level lock so concurrent
         first-time session inits cannot each create a new SchedulerService
         (which would leak background scanning threads).
         """
-        from config import conf
-
         from agent.tools.scheduler.integration import (
             get_scheduler_service,
             get_task_store,
         )
 
-        task_store = get_task_store()
-        scheduler_service = get_scheduler_service()
-        if task_store is not None and scheduler_service is not None:
-            self.agent_bridge.scheduler_initialized = True
-
-        if (
-            not self.agent_bridge.scheduler_initialized
-            and not conf().get("scheduler_enabled", False)
-        ):
-            return
-
-        if not self.agent_bridge.scheduler_initialized:
+        task_store = get_task_store(workspace_root)
+        scheduler_service = get_scheduler_service(workspace_root)
+        if task_store is None or scheduler_service is None:
             with _scheduler_init_lock:
-                if not self.agent_bridge.scheduler_initialized:
+                task_store = get_task_store(workspace_root)
+                scheduler_service = get_scheduler_service(workspace_root)
+                if task_store is None or scheduler_service is None:
                     try:
                         from agent.tools.scheduler.integration import init_scheduler
-                        if init_scheduler(self.agent_bridge):
-                            self.agent_bridge.scheduler_initialized = True
+                        if init_scheduler(self.agent_bridge, workspace_root):
+                            task_store = get_task_store(workspace_root)
+                            scheduler_service = get_scheduler_service(workspace_root)
                             if session_id is None:
                                 logger.info("[AgentInitializer] Scheduler service initialized")
                     except Exception as e:
                         logger.warning(f"[AgentInitializer] Failed to initialize scheduler: {e}")
         
         # Inject scheduler dependencies
-        if self.agent_bridge.scheduler_initialized:
+        if task_store is not None and scheduler_service is not None:
+            self.agent_bridge.scheduler_initialized = True
             try:
                 from agent.tools import SchedulerTool
                 from config import conf
-                
-                task_store = get_task_store()
-                scheduler_service = get_scheduler_service()
                 
                 for tool in tools:
                     if isinstance(tool, SchedulerTool):
                         tool.task_store = task_store
                         tool.scheduler_service = scheduler_service
+                        tool.cwd = workspace_root
                         if not tool.config:
                             tool.config = {}
                         raw_ct = conf().get("channel_type", "unknown")

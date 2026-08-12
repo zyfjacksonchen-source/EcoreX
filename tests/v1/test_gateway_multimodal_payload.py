@@ -8,6 +8,8 @@ import pytest
 from pydantic import ValidationError
 
 from ecorex.gateway import (
+    GatewayAssistantMessageInput,
+    GatewayFunctionCallInput,
     GatewayFunctionCallOutputInput,
     GatewayImageInput,
     GatewayUserMessageInput,
@@ -71,6 +73,77 @@ def test_responses_payload_contains_runtime_attested_input_image() -> None:
     assert content[1]["type"] == "input_image"
     assert content[1]["image_url"].startswith("data:image/png;base64,")
     assert "artifact_image_1" not in content[1]["image_url"]
+
+
+def test_stateless_cow_tool_round_preserves_history_image_call_and_output() -> None:
+    policy = ecorex_chat_gateway_policy()
+    request = ModelGatewayRequest(
+        request_id="request_cow_stateless_1",
+        thread_id="thread_cow_stateless_1",
+        turn_id="turn_cow_stateless_1",
+        trace_id="trace_cow_stateless_1",
+        model_id=policy.local_model_id,
+        model_policy=policy,
+        input_items=[
+            GatewayUserMessageInput(
+                message_id="message_cow_user_1",
+                content="inspect this",
+                images=[_image()],
+            ),
+            GatewayAssistantMessageInput(
+                message_id="message_cow_assistant_1",
+                content="I will inspect it.",
+            ),
+            GatewayFunctionCallInput(
+                tool_call_id="call_cow_read_1",
+                tool_name="read",
+                arguments={"path": "MEMORY.md"},
+            ),
+            GatewayFunctionCallOutputInput(
+                tool_call_id="call_cow_read_1",
+                output="done",
+            ),
+        ],
+        config_snapshot_id="config_cow_stateless_1",
+        capability_snapshot_id="capability_cow_stateless_1",
+        permission_snapshot_id="permission_cow_stateless_1",
+    )
+    responses_fake = SimpleNamespace(
+        validate_request=lambda _request, _principal: None,
+        model_policies={request.model_id: request.model_policy},
+        model_mapping={request.model_id: request.model_policy.upstream_model_id},
+    )
+    chat_fake = SimpleNamespace(
+        model_mapping={request.model_id: request.model_policy.upstream_model_id}
+    )
+
+    responses, _names = ManagedHTTPSResponsesProvider._payload(
+        responses_fake, request, SimpleNamespace(account_id="account_1")
+    )
+    chat, _names = ManagedHTTPSChatCompletionsProvider._payload(
+        chat_fake, request, prior=None
+    )
+
+    assert "previous_response_id" not in responses
+    assert [item.get("type") for item in responses["input"]] == [
+        "message",
+        "message",
+        "function_call",
+        "function_call_output",
+    ]
+    assert responses["input"][0]["content"][1]["type"] == "input_image"
+    assert responses["input"][2]["arguments"] == '{"path":"MEMORY.md"}'
+    assert [message["role"] for message in chat["messages"]] == [
+        "user",
+        "assistant",
+        "assistant",
+        "tool",
+    ]
+    assert chat["messages"][0]["content"][1]["type"] == "image_url"
+    assert chat["messages"][2]["tool_calls"][0]["function"] == {
+        "name": "read",
+        "arguments": '{"path":"MEMORY.md"}',
+    }
 
 
 def test_responses_tool_continuation_orders_output_before_visual_evidence() -> None:

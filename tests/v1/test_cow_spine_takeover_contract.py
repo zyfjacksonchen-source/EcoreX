@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ast
+import base64
 import inspect
 from pathlib import Path
 import runpy
@@ -23,7 +24,7 @@ def test_cow_logger_stays_out_of_the_signed_runtime_payload(
     assert _runtime_log_path() == tmp_path / "run.log"
 
     monkeypatch.delenv("EMATE_DATA_DIR")
-    assert _runtime_log_path() == Path("run.log")
+    assert _runtime_log_path() is None
 
 
 def test_platform_python_closure_imports_the_real_cow_spine(
@@ -161,55 +162,19 @@ def test_actual_initializer_and_tool_manager_are_the_default_tool_contract(
             assert Path(tool.config["cwd"]) == tmp_path
 
 
-def test_cow_browser_tool_uses_the_stateful_verified_pack_handler() -> None:
-    from agent.tools.browser.browser_tool import BrowserTool
+def test_public_cow_worker_does_not_replace_the_cow_browser_executor(
+    tmp_path: Path,
+) -> None:
     from ecorex.runtime.worker import AgentTurnWorker
 
-    observed = []
-
-    async def exercise() -> None:
-        async def browser_pack(arguments, context):  # noqa: ANN001
-            observed.append((dict(arguments), context))
-            return {
-                "url": "about:blank",
-                "title": "Pack Browser",
-                "text": f"call-{len(observed)}",
-                "interactive": [],
-            }
-
-        worker = object.__new__(AgentTurnWorker)
-        worker.browser_handler = browser_pack
-        browser = BrowserTool()
-        agent = SimpleNamespace(tools=[browser])
-        worker._bind_browser_pack(
-            agent,
-            loop=asyncio.get_running_loop(),
-            job_id="job-browser",
-            thread_id="thread-browser",
-            turn_id="turn-browser",
-        )
-
-        navigate = await asyncio.to_thread(
-            browser.execute,
-            {"action": "navigate", "url": "about:blank"},
-        )
-        snapshot = await asyncio.to_thread(browser.execute, {"action": "snapshot"})
-
-        assert navigate.status == snapshot.status == "success"
-        assert navigate.result["text"] == "call-1"
-        assert snapshot.result["text"] == "call-2"
-
-    asyncio.run(exercise())
-
-    assert [arguments["action"] for arguments, _context in observed] == [
-        "navigate",
-        "snapshot",
-    ]
-    assert len({context.invocation_id for _arguments, context in observed}) == 2
-    assert all(
-        context.execution_scope.thread_id == "thread-browser"
-        for _arguments, context in observed
+    worker = AgentTurnWorker(
+        SimpleNamespace(database=SimpleNamespace(path=tmp_path / "runtime.db")),
+        gateway=SimpleNamespace(),
+        browser_handler=lambda *_args: None,
     )
+
+    assert not hasattr(worker, "browser_handler")
+    assert not hasattr(worker, "_bind_browser_pack")
 
 
 def test_cow_direct_tools_do_not_reenter_the_settings_permission_broker(
@@ -277,6 +242,18 @@ def test_cow_model_request_uses_the_real_tool_manager_contract(
         continuation = model._request(
             LLMRequest(
                 messages=[
+                    {"role": "user", "content": [{"type": "text", "text": "read"}]},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "call_contract",
+                                "name": "read",
+                                "input": {"path": "MEMORY.md"},
+                            }
+                        ],
+                    },
                     {
                         "role": "user",
                         "content": [
@@ -303,11 +280,272 @@ def test_cow_model_request_uses_the_real_tool_manager_contract(
     assert [entry["spec"]["input_schema"] for entry in request.direct_tools] == [
         tool.get_json_schema() for tool in tools
     ]
-    assert continuation.previous_response_id == "response_contract"
+    assert request.instructions == (
+        "You are the intelligent work Agent 小芯 inside the e-Mate Agent product.\n\ncow"
+    )
+    assert "tool_search" not in request.instructions
+    assert "repeat" not in request.instructions
+    assert continuation.previous_response_id is None
     assert [item.type for item in continuation.input_items or []] == [
+        "user_message",
+        "function_call",
         "function_call_output",
         "user_message",
     ]
+
+
+def test_cow_model_replays_the_complete_tool_round_without_provider_state() -> None:
+    from agent.protocol.models import LLMRequest
+    from ecorex.gateway import GatewayEvent, GatewayEventType
+    from ecorex.runtime.worker import _CowGatewayModel
+
+    class Gateway:
+        async def stream(self, _request):
+            yield GatewayEvent(
+                seq=1,
+                event_type=GatewayEventType.TOOL_CALL_REQUESTED,
+                response_id="response_edit",
+                tool_call_id="call_edit",
+                tool_name="edit",
+                arguments={"path": "MEMORY.md"},
+                usage={"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+            )
+
+    async def run() -> _CowGatewayModel:
+        model = _CowGatewayModel(
+            Gateway(),
+            asyncio.get_running_loop(),
+            thread_id="thread_contract",
+            turn_id="turn_contract",
+            model_id="ecorex-chat",
+        )
+        await asyncio.to_thread(
+            lambda: list(
+                model.call_stream(
+                    LLMRequest(messages=[], tools=[], system="cow")
+                )
+            )
+        )
+        return model
+
+    model = asyncio.run(run())
+
+    assert model.previous_response_id == "response_edit"
+    assert model.usage_events == [
+        ("response_edit", {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5})
+    ]
+    continuation = model._request(
+        LLMRequest(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "remember this"}],
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "call_edit",
+                            "name": "edit",
+                            "input": {"path": "MEMORY.md"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_edit",
+                            "content": "Successfully replaced text in MEMORY.md",
+                        }
+                    ],
+                }
+            ],
+            tools=[],
+            system="cow",
+        )
+    )
+    assert continuation.previous_response_id is None
+    assert [item.model_dump(mode="json") for item in continuation.input_items or []] == [
+        {
+            "type": "user_message",
+            "message_id": "turn_contract:cow:2:0",
+            "content": "remember this",
+            "images": [],
+        },
+        {
+            "type": "function_call",
+            "tool_call_id": "call_edit",
+            "tool_name": "edit",
+            "arguments": {"path": "MEMORY.md"},
+        },
+        {
+            "type": "function_call_output",
+            "tool_call_id": "call_edit",
+            "output": "Successfully replaced text in MEMORY.md",
+        }
+    ]
+
+
+def test_cow_terminal_fallback_is_projected_once_without_repeating_streamed_text() -> None:
+    from ecorex.protocol import ItemStatus
+    from ecorex.runtime.worker import AgentTurnWorker
+
+    class Kernel:
+        def __init__(self) -> None:
+            self.created = []
+            self.deltas = []
+
+        def create_item(self, **values):
+            self.created.append(values)
+            return SimpleNamespace(item_id=f"item-{len(self.created)}")
+
+        def append_message_delta(self, item_id, delta, **_values):
+            self.deltas.append((item_id, delta))
+
+        def transition_item(self, *_args, **_kwargs):
+            return None
+
+    worker = object.__new__(AgentTurnWorker)
+    worker.kernel = Kernel()
+    state = {"seq": 0, "message_item": None, "tools": {}, "errors": []}
+    scope = {"job_id": "job", "lease_token": "lease", "turn_id": "turn"}
+
+    worker._project_event(
+        {"type": "agent_end", "data": {"final_response": "fallback"}},
+        state=state,
+        **scope,
+    )
+    worker._project_event(
+        {"type": "agent_end", "data": {"final_response": "fallback"}},
+        state=state,
+        **scope,
+    )
+
+    visible = [
+        item for item in worker.kernel.created if item["content"].get("text")
+    ]
+    assert len(visible) == 1
+    assert visible[0]["status"] is ItemStatus.COMPLETED
+    assert visible[0]["content"]["text"] == "fallback"
+
+    worker.kernel.created.clear()
+    state = {"seq": 0, "message_item": None, "tools": {}, "errors": []}
+    for event in (
+        {"type": "message_start", "data": {}},
+        {"type": "message_update", "data": {"delta": "streamed"}},
+        {"type": "message_end", "data": {}},
+        {"type": "agent_end", "data": {"final_response": "streamed"}},
+    ):
+        worker._project_event(event, state=state, **scope)
+
+    assert len(worker.kernel.created) == 1
+    assert worker.kernel.deltas[-1][1] == "streamed"
+
+
+def test_cow_tool_catalog_is_not_rejected_at_the_legacy_sixty_four_tool_limit() -> None:
+    from agent.protocol.models import LLMRequest
+    from ecorex.gateway import MAX_TOOL_SCHEMA_BATCH_BYTES, canonical_tool_schema_batch_bytes
+    from ecorex.runtime.worker import _CowGatewayModel
+
+    loop = asyncio.new_event_loop()
+    try:
+        model = _CowGatewayModel(
+            SimpleNamespace(),
+            loop,
+            thread_id="thread_catalog",
+            turn_id="turn_catalog",
+            model_id="ecorex-chat",
+        )
+        tools = [
+            {
+                "name": f"mcp_tool_{index}",
+                "description": "MCP tool " + ("x" * 5000),
+                "input_schema": {"type": "object", "properties": {}},
+            }
+            for index in range(65)
+        ]
+        request = model._request(
+            LLMRequest(
+                messages=[{"role": "user", "content": "use MCP"}],
+                tools=tools,
+                system="cow",
+            )
+        )
+    finally:
+        loop.close()
+
+    assert len(request.direct_tools) == 65
+    assert len(canonical_tool_schema_batch_bytes(request.direct_tools)) > MAX_TOOL_SCHEMA_BATCH_BYTES
+
+
+def test_cow_vision_uses_the_authenticated_managed_gateway(
+    tmp_path: Path,
+) -> None:
+    from agent.tools.vision import Vision
+    from common import ecorex_tool_permissions as permissions
+    from ecorex.gateway import GatewayEvent, GatewayEventType
+    from ecorex.runtime.worker import _CowGatewayModel
+
+    image = tmp_path / "pixel.png"
+    image.write_bytes(
+        base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+    )
+
+    class Gateway:
+        def __init__(self) -> None:
+            self.requests = []
+
+        async def stream(self, request):
+            self.requests.append(request)
+            yield GatewayEvent(
+                seq=1,
+                event_type=GatewayEventType.OUTPUT_TEXT_DELTA,
+                response_id="response_vision",
+                delta="a pixel",
+            )
+            yield GatewayEvent(
+                seq=2,
+                event_type=GatewayEventType.RESPONSE_COMPLETED,
+                response_id="response_vision",
+                usage={"input_tokens": 2, "output_tokens": 2, "total_tokens": 4},
+            )
+
+    async def run():
+        gateway = Gateway()
+        model = _CowGatewayModel(
+            gateway,
+            asyncio.get_running_loop(),
+            thread_id="thread_vision",
+            turn_id="turn_vision",
+            model_id="ecorex-chat",
+        )
+        tool = Vision({"cwd": str(tmp_path)})
+        tool.model = model
+        token = permissions.bind_cow_direct_tools()
+        try:
+            result = await asyncio.to_thread(
+                tool.execute,
+                {"image": "pixel.png", "question": "What is shown?"},
+            )
+        finally:
+            permissions.reset_cow_direct_tools(token)
+        return result, gateway
+
+    result, gateway = asyncio.run(run())
+
+    assert result.status == "success"
+    assert result.result["content"] == "a pixel"
+    assert len(gateway.requests) == 1
+    assert gateway.requests[0].model_id == "ecorex-chat"
+    assert gateway.requests[0].instructions == (
+        "You are the intelligent work Agent 小芯 inside the e-Mate Agent product."
+    )
+    assert gateway.requests[0].input_items[0].images[0].mime_type == "image/png"
 
 
 def test_real_cow_agent_stream_runs_through_the_managed_gateway(

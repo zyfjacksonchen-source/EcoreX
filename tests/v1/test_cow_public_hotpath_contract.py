@@ -141,7 +141,8 @@ def test_public_cow_worker_sends_initial_and_steer_images_to_gateway(
         for item in gateway.requests[1].ordered_input_items()
         if isinstance(item, GatewayUserMessageInput)
     ]
-    assert len(initial_messages) == len(steer_messages) == 1
+    assert len(initial_messages) == 1
+    assert len(steer_messages) == 2
     assert [image.attachment_id for image in initial_messages[0].images] == [
         initial_image.attachment_id
     ]
@@ -149,9 +150,12 @@ def test_public_cow_worker_sends_initial_and_steer_images_to_gateway(
         initial_image.sha256
     ]
     assert [image.attachment_id for image in steer_messages[0].images] == [
+        initial_image.attachment_id
+    ]
+    assert [image.attachment_id for image in steer_messages[1].images] == [
         steer_image.attachment_id
     ]
-    assert [image.source_sha256 for image in steer_messages[0].images] == [
+    assert [image.source_sha256 for image in steer_messages[1].images] == [
         steer_image.sha256
     ]
 
@@ -254,11 +258,11 @@ def test_public_cow_worker_materializes_steer_file_and_redirects_pending_read(
                     if isinstance(item, GatewayUserMessageInput)
                 )
                 steer_paths = re.findall(r"\[File: ([^\]]+)\]", text)
-                assert len(steer_paths) == 1
-                materialized = Path(steer_paths[0])
+                assert len(steer_paths) == 2
+                materialized = Path(steer_paths[-1])
                 assert materialized.is_relative_to(workspace)
                 assert materialized.stat().st_mode & 0o222 == 0
-                self.paths.extend(steer_paths)
+                self.paths.append(steer_paths[-1])
                 yield GatewayEvent(
                     seq=1,
                     event_type="tool_call.requested",
@@ -439,7 +443,9 @@ def test_public_parent_turn_runs_subagent_through_same_managed_gateway(
                     delta="child result",
                 )
                 child_done.set()
-            elif request.previous_response_id is None:
+            elif sum(
+                ":subagent-" not in item.request_id for item in self.requests
+            ) == 1:
                 yield GatewayEvent(
                     seq=1,
                     event_type="tool_call.requested",
@@ -543,40 +549,35 @@ def test_cow_direct_context_reaches_image_batch_child_threads(monkeypatch) -> No
     assert observed == [permissions._COW_DIRECT_BROKER] * 2
 
 
-def test_official_scheduler_tool_service_and_store_are_one_runtime(
+def test_official_scheduler_is_default_and_isolated_per_workspace(
     tmp_path: Path, monkeypatch,
 ) -> None:
     from agent.tools.scheduler import integration
 
-    store = TaskStore(str(tmp_path / "scheduler" / "tasks.json"))
-    observed: list[str] = []
-    service = SchedulerService(store, lambda task: observed.append(task["id"]) or True)
-    integration.bind_scheduler_runtime(store, service)
     bridge = SimpleNamespace(scheduler_initialized=False)
-    tools = [SchedulerTool()]
+    workspaces = [tmp_path / "project-a", tmp_path / "project-b"]
+    tools = [[SchedulerTool()], [SchedulerTool()]]
+    monkeypatch.setattr(integration, "conf", lambda: {"scheduler_enabled": False})
 
-    AgentInitializer(SimpleNamespace(), bridge)._initialize_scheduler(
-        tools, "cow-hotpath-scheduler"
-    )
+    initializer = AgentInitializer(SimpleNamespace(), bridge)
+    for workspace, workspace_tools in zip(workspaces, tools):
+        initializer._initialize_scheduler(
+            workspace_tools, str(workspace), "cow-hotpath-scheduler"
+        )
 
-    assert bridge.scheduler_initialized is True
-    assert tools[0].task_store is store
-    assert tools[0].scheduler_service is service
-    due = (datetime.now() - timedelta(seconds=1)).isoformat()
-    store.add_task(
-        {
-            "id": "due-task",
-            "name": "due",
-            "enabled": True,
-            "schedule": {"type": "once", "run_at": due},
-            "action": {"type": "send_message", "content": "done"},
-            "next_run_at": due,
-        }
-    )
-    service._check_and_execute_tasks()
-    assert observed == ["due-task"]
-    assert store.get_task("due-task") is None
-    integration.bind_scheduler_runtime(None, None)
+    try:
+        assert tools[0][0].task_store is not None
+        assert tools[1][0].task_store is not None
+        assert tools[0][0].task_store is not tools[1][0].task_store
+        assert tools[0][0].scheduler_service.running is True
+        assert tools[1][0].scheduler_service.running is True
+        assert Path(tools[0][0].task_store.store_path) == workspaces[0] / "scheduler" / "tasks.json"
+        assert Path(tools[1][0].task_store.store_path) == workspaces[1] / "scheduler" / "tasks.json"
+        assert tools[0][0].execute({"action": "list"}).status == "success"
+        assert tools[1][0].execute({"action": "list"}).status == "success"
+    finally:
+        tools[0][0].scheduler_service.stop()
+        tools[1][0].scheduler_service.stop()
 
 
 def test_public_worker_passes_channel_delivery_context_to_scheduler(

@@ -31,14 +31,12 @@ from ecorex.managed_model_policy import (
 
 from .models import (
     MAX_DISCLOSED_WORKING_SET,
-    MAX_MODEL_VISIBLE_TOOLS,
-    MAX_TOOL_DESCRIPTOR_BYTES,
-    MAX_TOOL_SCHEMA_BATCH_BYTES,
     TOOL_PROJECTION_BUDGET_VERSION,
     GatewayEvent,
     GatewayEventType,
     GatewayAssistantMessageInput,
     GatewayFunctionCallOutputInput,
+    GatewayFunctionCallInput,
     GatewayModelPolicy,
     GatewayUserMessageInput,
     GatewayWebSearchRequest,
@@ -648,9 +646,26 @@ class ManagedHTTPSResponsesProvider:
     ) -> tuple[dict[str, Any], dict[str, str]]:
         self.validate_request(request, principal)
         policy = self.model_policies[request.model_id]
+        provider_tools, tool_name_mapping = _provider_tools(
+            request.direct_tools,
+            disclosed_tool_ids=frozenset(request.disclosed_tool_ids),
+        )
+        provider_names = {
+            tool_id: provider_name
+            for provider_name, tool_id in tool_name_mapping.items()
+        }
         input_value: list[dict[str, Any]] = []
         for item in request.ordered_input_items():
-            if isinstance(item, GatewayFunctionCallOutputInput):
+            if isinstance(item, GatewayFunctionCallInput):
+                input_value.append(
+                    {
+                        "type": "function_call",
+                        "call_id": item.tool_call_id,
+                        "name": provider_names.get(item.tool_name, item.tool_name),
+                        "arguments": item.provider_arguments(),
+                    }
+                )
+            elif isinstance(item, GatewayFunctionCallOutputInput):
                 input_value.append(
                     {
                         "type": "function_call_output",
@@ -688,10 +703,6 @@ class ManagedHTTPSResponsesProvider:
                 )
             else:  # pragma: no cover - closed Pydantic union defense
                 raise ResponsesProviderRejected("managed model input is invalid")
-        provider_tools, tool_name_mapping = _provider_tools(
-            request.direct_tools,
-            disclosed_tool_ids=frozenset(request.disclosed_tool_ids),
-        )
         tool_schema_bytes = (
             len(_canonical(request.direct_tools)) if request.direct_tools else 0
         )
@@ -1215,32 +1226,18 @@ def _provider_tools(
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """Project trusted EcoreX descriptors into the only allowed tool shape."""
 
-    # Pydantic validates the local Gateway request, but this provider boundary
-    # deliberately repeats the limits.  ``model_copy(update=...)`` and future
-    # alternate transports must not be able to bypass the network fence.
-    if len(descriptors) > MAX_MODEL_VISIBLE_TOOLS:
-        raise ResponsesProviderRejected(
-            "managed tool projection exceeds its count budget"
-        )
+    # ``model_copy(update=...)`` and alternate transports still reach this
+    # boundary, so reject non-JSON descriptors without imposing a second tool
+    # catalog budget on Cow's ToolManager.
     if len(disclosed_tool_ids) > MAX_DISCLOSED_WORKING_SET:
         raise ResponsesProviderRejected(
             "managed disclosed tool projection exceeds its count budget"
         )
     try:
-        if any(
-            len(_canonical(descriptor)) > MAX_TOOL_DESCRIPTOR_BYTES
-            for descriptor in descriptors
-        ):
-            raise ResponsesProviderRejected(
-                "managed tool descriptor exceeds its byte budget"
-            )
-        batch_bytes = len(_canonical(descriptors)) if descriptors else 0
+        if descriptors:
+            _canonical(descriptors)
     except (TypeError, ValueError, UnicodeEncodeError):
         raise ResponsesProviderRejected("managed tool descriptor is invalid") from None
-    if batch_bytes > MAX_TOOL_SCHEMA_BATCH_BYTES:
-        raise ResponsesProviderRejected(
-            "managed tool projection exceeds its byte budget"
-        )
 
     provider_tools: list[dict[str, Any]] = []
     names: dict[str, str] = {}

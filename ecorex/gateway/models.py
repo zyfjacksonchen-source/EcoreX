@@ -28,9 +28,8 @@ _MAX_JSON_DEPTH = 20
 _MAX_JSON_NODES = 50_000
 _MAX_JSON_STRING = 1_000_000
 
-# First-party tools are a single model-facing working set, matching the
-# CowAgent desktop runtime.  The byte budget remains the hard boundary for
-# provider requests; use the provider's 64-tool envelope for built-ins and MCP.
+# Retained for the retired legacy projection path. Cow's live ToolManager owns
+# model-facing tool selection; the Gateway does not impose a second schema budget.
 TOOL_PROJECTION_BUDGET_VERSION = "1.0.0"
 MAX_MODEL_VISIBLE_TOOLS = 64
 MAX_DISCLOSED_WORKING_SET = 12
@@ -126,8 +125,6 @@ def validate_tool_projection_budget(
 ) -> int:
     """Validate the bounded model-visible working set and return its byte size."""
 
-    if len(descriptors) > MAX_MODEL_VISIBLE_TOOLS:
-        raise ValueError("model-visible tool count exceeds the product budget")
     if len(disclosed_tool_ids) > MAX_DISCLOSED_WORKING_SET:
         raise ValueError("disclosed tool working set exceeds the product budget")
     projected_ids: list[str] = []
@@ -139,16 +136,11 @@ def validate_tool_projection_budget(
         if not isinstance(tool_id, str):
             raise ValueError("managed tool descriptor identity is invalid")
         projected_ids.append(tool_id)
-        if len(canonical_tool_descriptor_bytes(descriptor)) > MAX_TOOL_DESCRIPTOR_BYTES:
-            raise ValueError("managed tool descriptor exceeds the product byte budget")
     if len(projected_ids) != len(set(projected_ids)):
         raise ValueError("model-visible tool IDs must be unique")
     if not set(disclosed_tool_ids) <= set(projected_ids):
         raise ValueError("disclosed tool projection is incomplete")
-    total = len(canonical_tool_schema_batch_bytes(descriptors))
-    if total > MAX_TOOL_SCHEMA_BATCH_BYTES:
-        raise ValueError("managed tool catalog exceeds the product byte budget")
-    return total
+    return len(canonical_tool_schema_batch_bytes(descriptors))
 
 
 class GatewayModel(BaseModel):
@@ -381,10 +373,36 @@ class GatewayFunctionCallOutputInput(GatewayModel):
         )
 
 
+class GatewayFunctionCallInput(GatewayModel):
+    """One assistant-authored Cow tool call replayed with its result."""
+
+    type: Literal["function_call"] = "function_call"
+    tool_call_id: str = Field(min_length=1, max_length=256)
+    tool_name: str = Field(min_length=1, max_length=128)
+    arguments: dict[str, Any]
+
+    @model_validator(mode="after")
+    def validate_call(self) -> "GatewayFunctionCallInput":
+        _validate_id(self.tool_call_id, "tool_call_id")
+        _validate_id(self.tool_name, "tool_name")
+        _validate_json_value(self.arguments, "tool arguments")
+        return self
+
+    def provider_arguments(self) -> str:
+        return json.dumps(
+            self.arguments,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+
+
 GatewayInputItem = Annotated[
     (
         GatewayUserMessageInput
         | GatewayAssistantMessageInput
+        | GatewayFunctionCallInput
         | GatewayFunctionCallOutputInput
     ),
     Field(discriminator="type"),
@@ -473,7 +491,6 @@ class ModelGatewayRequest(GatewayModel):
     permission_snapshot_id: str = Field(min_length=1, max_length=256)
     direct_tools: list[dict[str, Any]] = Field(
         default_factory=list,
-        max_length=MAX_MODEL_VISIBLE_TOOLS,
     )
     deferred_tool_ids: list[str] = Field(default_factory=list, max_length=1024)
     disclosed_tool_ids: list[str] = Field(
@@ -532,15 +549,14 @@ class ModelGatewayRequest(GatewayModel):
                     "typed input items cannot be combined with compatibility input fields"
                 )
             message_ids: list[str] = []
+            typed_call_ids: list[str] = []
             typed_output_ids: list[str] = []
-            message_seen = False
             total_message_characters = 0
             total_image_bytes = 0
             for item in self.input_items:
                 if isinstance(
                     item, (GatewayUserMessageInput, GatewayAssistantMessageInput)
                 ):
-                    message_seen = True
                     message_ids.append(item.message_id)
                     total_message_characters += len(item.content)
                     if isinstance(item, GatewayUserMessageInput):
@@ -548,17 +564,17 @@ class ModelGatewayRequest(GatewayModel):
                             len(base64.b64decode(image.data_base64, validate=True))
                             for image in item.images
                         )
+                elif isinstance(item, GatewayFunctionCallInput):
+                    typed_call_ids.append(item.tool_call_id)
                 else:
-                    if message_seen:
-                        raise ValueError(
-                            "function call outputs must precede conversation messages"
-                        )
                     typed_output_ids.append(item.tool_call_id)
             if len(message_ids) != len(set(message_ids)):
                 raise ValueError("user message IDs must be unique")
             if len(typed_output_ids) != len(set(typed_output_ids)):
                 raise ValueError("tool output IDs must be unique")
-            if set(message_ids) & set(typed_output_ids):
+            if len(typed_call_ids) != len(set(typed_call_ids)):
+                raise ValueError("tool call IDs must be unique")
+            if set(message_ids) & (set(typed_call_ids) | set(typed_output_ids)):
                 raise ValueError("gateway input item IDs must be unique")
             if len(typed_output_ids) > 128:
                 raise ValueError("too many function call outputs")
@@ -580,8 +596,12 @@ class ModelGatewayRequest(GatewayModel):
             )
             if serialized_input_bytes > MAX_GATEWAY_SERIALIZED_INPUT_BYTES:
                 raise ValueError("gateway serialized input is oversized")
-            if typed_output_ids and self.previous_response_id is None:
-                raise ValueError("tool outputs require a previous response")
+            if (
+                typed_output_ids
+                and self.previous_response_id is None
+                and not set(typed_output_ids) <= set(typed_call_ids)
+            ):
+                raise ValueError("tool outputs require their function calls")
             # Image bytes have dedicated count, size, MIME and digest checks
             # above.  Redact their bounded base64 representation before the
             # generic JSON guard, whose per-string ceiling is intended for
