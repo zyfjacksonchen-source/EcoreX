@@ -196,21 +196,30 @@ class MemoryStorage:
                 pass
             self.conn = None
 
-        suffix = f".corrupt-{int(time.time())}"
-        for path in (
-            self.db_path,
-            Path(f"{self.db_path}-wal"),
-            Path(f"{self.db_path}-shm"),
-        ):
-            if not path.exists():
-                continue
-            try:
-                os.replace(str(path), f"{path}{suffix}")
-            except OSError as e:
-                logger.error(f"[MemoryStorage] Failed to quarantine {path}: {e}")
+        backup = Path(f"{self.db_path}.corrupt-{time.time_ns()}")
+        moves = [
+            (self.db_path, backup),
+            (Path(f"{self.db_path}-wal"), Path(f"{backup}-wal")),
+            (Path(f"{self.db_path}-shm"), Path(f"{backup}-shm")),
+        ]
+        moved = []
+        try:
+            for source, destination in moves:
+                if source.exists():
+                    os.replace(source, destination)
+                    moved.append((source, destination))
+        except OSError:
+            for source, destination in reversed(moved):
+                try:
+                    os.replace(destination, source)
+                except OSError:
+                    logger.exception(
+                        "[MemoryStorage] Failed to roll back quarantine move %s", source
+                    )
+            raise
 
         logger.error(
-            f"[MemoryStorage] Corrupt database moved to {self.db_path}{suffix} and "
+            f"[MemoryStorage] Corrupt database moved to {backup} and "
             f"replaced by an empty one. Conversation history can be recovered from "
             f"the quarantined copy."
         )

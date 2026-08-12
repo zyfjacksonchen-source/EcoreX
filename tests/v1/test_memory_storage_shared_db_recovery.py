@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -8,7 +10,7 @@ from agent.memory.conversation_store import ConversationStore
 from agent.memory.storage import MemoryChunk, MemoryStorage
 
 
-def test_fts_damage_rebuild_preserves_shared_conversation_rows(tmp_path, monkeypatch):
+def test_fts_damage_rebuild_preserves_shared_conversation_rows(tmp_path):
     db_path = tmp_path / "index.db"
     ConversationStore(db_path).append_messages(
         "shared-session",
@@ -35,57 +37,18 @@ def test_fts_damage_rebuild_preserves_shared_conversation_rows(tmp_path, monkeyp
     )
     storage.close()
 
-    original_connect = sqlite3.connect
-    with original_connect(db_path) as conn:
+    with sqlite3.connect(db_path) as conn:
         conversation_rows = conn.execute(
             "SELECT session_id, CAST(content AS BLOB) FROM messages ORDER BY seq"
         ).fetchall()
-        conn.execute(
-            "DELETE FROM chunks_fts WHERE rowid = "
-            "(SELECT rowid FROM chunks WHERE id = 'memory-1')"
-        )
-        with pytest.raises(sqlite3.DatabaseError, match="malformed"):
-            conn.execute(
-                "INSERT INTO chunks_fts(chunks_fts, rank) "
-                "VALUES('integrity-check', 1)"
-            )
+        conn.execute("DELETE FROM chunks_fts_data")
+        conn.commit()
+        assert "fts5" in conn.execute("PRAGMA integrity_check").fetchone()[0]
 
-    class _IntegrityCursor:
-        row = ("database disk image is malformed in fts5 table chunks_fts",)
+    repaired = MemoryStorage(db_path)
+    repaired.close()
 
-        def fetchone(self):
-            return self.row
-
-        def fetchall(self):
-            return [self.row]
-
-    class _ConnectionProxy:
-        def __init__(self, conn):
-            object.__setattr__(self, "_conn", conn)
-
-        def __setattr__(self, name, value):
-            setattr(self._conn, name, value)
-
-        def execute(self, sql, *args, **kwargs):
-            if sql.strip().lower() == "pragma integrity_check":
-                return _IntegrityCursor()
-            return self._conn.execute(sql, *args, **kwargs)
-
-        def __getattr__(self, name):
-            return getattr(self._conn, name)
-
-    def connect(database, *args, **kwargs):
-        conn = original_connect(database, *args, **kwargs)
-        if str(database) == str(db_path):
-            return _ConnectionProxy(conn)
-        return conn
-
-    with monkeypatch.context() as patcher:
-        patcher.setattr(sqlite3, "connect", connect)
-        repaired = MemoryStorage(db_path)
-        repaired.close()
-
-    with original_connect(db_path) as conn:
+    with sqlite3.connect(db_path) as conn:
         assert conn.execute(
             "SELECT session_id, CAST(content AS BLOB) FROM messages ORDER BY seq"
         ).fetchall() == conversation_rows
@@ -107,12 +70,70 @@ def test_unreadable_database_is_quarantined_instead_of_deleted(tmp_path):
     storage.close()
 
     quarantined = list(tmp_path.glob("index.db.corrupt-*"))
-    assert len(quarantined) == 1
-    assert quarantined[0].read_bytes() == original_bytes
+    backups = [path for path in quarantined if not path.name.endswith(("-wal", "-shm"))]
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == original_bytes
     with sqlite3.connect(db_path) as conn:
         assert conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chunks'"
         ).fetchone() == (1,)
+
+
+def test_quarantine_keeps_sqlite_sidecars_paired_with_backup(tmp_path):
+    db_path = tmp_path / "index.db"
+    originals = {
+        db_path: b"database",
+        Path(f"{db_path}-wal"): b"uncheckpointed-history",
+        Path(f"{db_path}-shm"): b"shared-memory-state",
+    }
+    for path, content in originals.items():
+        path.write_bytes(content)
+
+    storage = MemoryStorage.__new__(MemoryStorage)
+    storage.db_path = db_path
+    storage.conn = None
+    storage._quarantine_and_recreate()
+    storage.conn.close()
+
+    backups = [
+        path
+        for path in tmp_path.glob("index.db.corrupt-*")
+        if not path.name.endswith(("-wal", "-shm"))
+    ]
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == originals[db_path]
+    assert Path(f"{backups[0]}-wal").read_bytes() == originals[Path(f"{db_path}-wal")]
+    assert Path(f"{backups[0]}-shm").read_bytes() == originals[Path(f"{db_path}-shm")]
+
+
+def test_failed_quarantine_move_restores_original_set(tmp_path, monkeypatch):
+    db_path = tmp_path / "index.db"
+    originals = {
+        db_path: b"database",
+        Path(f"{db_path}-wal"): b"wal",
+        Path(f"{db_path}-shm"): b"shm",
+    }
+    for path, content in originals.items():
+        path.write_bytes(content)
+
+    storage = MemoryStorage.__new__(MemoryStorage)
+    storage.db_path = db_path
+    storage.conn = None
+    original_replace = os.replace
+
+    def fail_wal(source, destination):
+        if str(source).endswith("-wal"):
+            raise OSError("simulated move failure")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_wal)
+
+    with pytest.raises(OSError, match="simulated move failure"):
+        storage._quarantine_and_recreate()
+
+    for path, content in originals.items():
+        assert path.read_bytes() == content
+    assert not list(tmp_path.glob("index.db.corrupt-*"))
 
 
 @pytest.mark.parametrize("message", ["database is locked", "disk I/O error"])
