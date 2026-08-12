@@ -31,7 +31,6 @@ from ecorex.managed_model_policy import (
 
 from .models import (
     MAX_DISCLOSED_WORKING_SET,
-    MAX_MODEL_VISIBLE_TOOLS,
     MAX_TOOL_DESCRIPTOR_BYTES,
     MAX_TOOL_SCHEMA_BATCH_BYTES,
     TOOL_PROJECTION_BUDGET_VERSION,
@@ -1232,10 +1231,6 @@ def _provider_tools(
     # Pydantic validates the local Gateway request, but this provider boundary
     # deliberately repeats the limits.  ``model_copy(update=...)`` and future
     # alternate transports must not be able to bypass the network fence.
-    if len(descriptors) > MAX_MODEL_VISIBLE_TOOLS:
-        raise ResponsesProviderRejected(
-            "managed tool projection exceeds its count budget"
-        )
     if len(disclosed_tool_ids) > MAX_DISCLOSED_WORKING_SET:
         raise ResponsesProviderRejected(
             "managed disclosed tool projection exceeds its count budget"

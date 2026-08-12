@@ -28,9 +28,8 @@ _MAX_JSON_DEPTH = 20
 _MAX_JSON_NODES = 50_000
 _MAX_JSON_STRING = 1_000_000
 
-# First-party tools are a single model-facing working set, matching the
-# CowAgent desktop runtime.  The byte budget remains the hard boundary for
-# provider requests; use the provider's 64-tool envelope for built-ins and MCP.
+# Retained for the retired legacy projection path. Cow's live ToolManager owns
+# model-facing tool selection; the Gateway only enforces serialized byte bounds.
 TOOL_PROJECTION_BUDGET_VERSION = "1.0.0"
 MAX_MODEL_VISIBLE_TOOLS = 64
 MAX_DISCLOSED_WORKING_SET = 12
@@ -126,8 +125,6 @@ def validate_tool_projection_budget(
 ) -> int:
     """Validate the bounded model-visible working set and return its byte size."""
 
-    if len(descriptors) > MAX_MODEL_VISIBLE_TOOLS:
-        raise ValueError("model-visible tool count exceeds the product budget")
     if len(disclosed_tool_ids) > MAX_DISCLOSED_WORKING_SET:
         raise ValueError("disclosed tool working set exceeds the product budget")
     projected_ids: list[str] = []
@@ -499,7 +496,6 @@ class ModelGatewayRequest(GatewayModel):
     permission_snapshot_id: str = Field(min_length=1, max_length=256)
     direct_tools: list[dict[str, Any]] = Field(
         default_factory=list,
-        max_length=MAX_MODEL_VISIBLE_TOOLS,
     )
     deferred_tool_ids: list[str] = Field(default_factory=list, max_length=1024)
     disclosed_tool_ids: list[str] = Field(

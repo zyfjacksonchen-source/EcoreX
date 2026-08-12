@@ -419,6 +419,96 @@ def test_cow_model_replays_the_complete_tool_round_without_provider_state() -> N
     ]
 
 
+def test_cow_terminal_fallback_is_projected_once_without_repeating_streamed_text() -> None:
+    from ecorex.protocol import ItemStatus
+    from ecorex.runtime.worker import AgentTurnWorker
+
+    class Kernel:
+        def __init__(self) -> None:
+            self.created = []
+            self.deltas = []
+
+        def create_item(self, **values):
+            self.created.append(values)
+            return SimpleNamespace(item_id=f"item-{len(self.created)}")
+
+        def append_message_delta(self, item_id, delta, **_values):
+            self.deltas.append((item_id, delta))
+
+        def transition_item(self, *_args, **_kwargs):
+            return None
+
+    worker = object.__new__(AgentTurnWorker)
+    worker.kernel = Kernel()
+    state = {"seq": 0, "message_item": None, "tools": {}, "errors": []}
+    scope = {"job_id": "job", "lease_token": "lease", "turn_id": "turn"}
+
+    worker._project_event(
+        {"type": "agent_end", "data": {"final_response": "fallback"}},
+        state=state,
+        **scope,
+    )
+    worker._project_event(
+        {"type": "agent_end", "data": {"final_response": "fallback"}},
+        state=state,
+        **scope,
+    )
+
+    visible = [
+        item for item in worker.kernel.created if item["content"].get("text")
+    ]
+    assert len(visible) == 1
+    assert visible[0]["status"] is ItemStatus.COMPLETED
+    assert visible[0]["content"]["text"] == "fallback"
+
+    worker.kernel.created.clear()
+    state = {"seq": 0, "message_item": None, "tools": {}, "errors": []}
+    for event in (
+        {"type": "message_start", "data": {}},
+        {"type": "message_update", "data": {"delta": "streamed"}},
+        {"type": "message_end", "data": {}},
+        {"type": "agent_end", "data": {"final_response": "streamed"}},
+    ):
+        worker._project_event(event, state=state, **scope)
+
+    assert len(worker.kernel.created) == 1
+    assert worker.kernel.deltas[-1][1] == "streamed"
+
+
+def test_cow_tool_catalog_is_not_rejected_at_the_legacy_sixty_four_tool_limit() -> None:
+    from agent.protocol.models import LLMRequest
+    from ecorex.runtime.worker import _CowGatewayModel
+
+    loop = asyncio.new_event_loop()
+    try:
+        model = _CowGatewayModel(
+            SimpleNamespace(),
+            loop,
+            thread_id="thread_catalog",
+            turn_id="turn_catalog",
+            model_id="ecorex-chat",
+        )
+        tools = [
+            {
+                "name": f"mcp_tool_{index}",
+                "description": "MCP tool",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+            for index in range(65)
+        ]
+        request = model._request(
+            LLMRequest(
+                messages=[{"role": "user", "content": "use MCP"}],
+                tools=tools,
+                system="cow",
+            )
+        )
+    finally:
+        loop.close()
+
+    assert len(request.direct_tools) == 65
+
+
 def test_real_cow_agent_stream_runs_through_the_managed_gateway(
     tmp_path: Path, monkeypatch,
 ) -> None:

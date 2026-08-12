@@ -6158,6 +6158,7 @@ class AgentTurnWorker:
                 )
             delta = str(data.get("delta") or "")
             if delta:
+                state["assistant_text_emitted"] = True
                 self.kernel.append_message_delta(
                     state["message_item"],
                     delta,
@@ -6174,6 +6175,26 @@ class AgentTurnWorker:
                     lease_token=lease_token,
                 )
                 state["message_item"] = None
+        elif event_type == "agent_end":
+            final_response = str(data.get("final_response") or "").strip()
+            if (
+                final_response
+                and not state.get("assistant_text_emitted")
+                and not state.get("final_response_projected")
+            ):
+                self.kernel.create_item(
+                    turn_id=turn_id,
+                    kind=ItemKind.MESSAGE,
+                    status=ItemStatus.COMPLETED,
+                    content={
+                        "role": "assistant",
+                        "text": final_response,
+                        "executor": "cow-2.1.5",
+                    },
+                    job_id=job_id,
+                    lease_token=lease_token,
+                )
+                state["final_response_projected"] = True
         elif event_type == "tool_execution_start":
             call_id = str(data.get("tool_call_id") or "")
             name = str(data.get("tool_name") or "tool")
