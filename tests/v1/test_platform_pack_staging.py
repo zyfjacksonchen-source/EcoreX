@@ -568,7 +568,12 @@ def test_browser_stage_gate_probes_the_packaged_cow_navigate_path(
     stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
     gate = stager["_browser_gates"]
     globals_ = gate.__globals__
-    assert "playwright" not in globals_["_RUNTIME_DISTRIBUTIONS"]
+    assert {"greenlet", "playwright", "pyee"} <= set(
+        globals_["_RUNTIME_DISTRIBUTIONS"]
+    )
+    assert "from playwright.sync_api import sync_playwright" in stager[
+        "_pack_python_probe_command"
+    ](Path("pack-python"))[-1]
     pack = tmp_path / "browser-pack"
     pack.mkdir()
     zipapp = tmp_path / "browser.pyz"

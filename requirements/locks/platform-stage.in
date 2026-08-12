@@ -1,10 +1,7 @@
 -r runtime.in
 
-# Browser Capability Pack build dependency. This preserves the existing stage
-# version; it is not part of the local Runtime Core dependency closure.
-playwright==1.52.0
-greenlet==3.4.0
-pyee==13.0.1
+# The Browser Capability Pack reuses the Cow Runtime's pinned Playwright
+# closure from runtime.in.
 
 # OCR Capability Pack. The model and native wheel closure are copied into the
 # signed pack and never installed into Runtime Core on the user machine.

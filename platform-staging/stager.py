@@ -2667,8 +2667,9 @@ try:
  from bridge.agent_initializer import AgentInitializer
  from agent.tools.search_files.search_files import SearchFiles
  from agent.tools.tool_manager import ToolManager
+ from playwright.sync_api import sync_playwright
  import regex
- assert AgentInitializer and SearchFiles and ToolManager and regex
+ assert AgentInitializer and SearchFiles and ToolManager and sync_playwright and regex
 except BaseException:
  print('__ECOREX_PACK_PROBE_COW_SPINE_FAILED__')
  raise SystemExit(87)

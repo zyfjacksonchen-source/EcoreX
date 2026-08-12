@@ -177,6 +177,90 @@ def test_public_cow_worker_does_not_replace_the_cow_browser_executor(
     assert not hasattr(worker, "_bind_browser_pack")
 
 
+def test_cow_browser_success_is_stateful_and_projects_completed(
+    monkeypatch,
+) -> None:
+    from agent.tools.browser.browser_tool import BrowserTool
+    from ecorex.protocol import ItemStatus
+    from ecorex.runtime.worker import AgentTurnWorker
+
+    class Browser:
+        url = ""
+
+        def navigate(self, url, **_kwargs):
+            self.url = url
+            return {"url": url, "title": "Example Domain", "status": 200}
+
+        def snapshot(self, **_kwargs):
+            assert self.url == "https://example.com"
+            return "Example Domain\nexample.com"
+
+    class Kernel:
+        def __init__(self):
+            self.items = {}
+
+        def create_item(self, **values):
+            item_id = f"item-{len(self.items) + 1}"
+            self.items[item_id] = values
+            return SimpleNamespace(item_id=item_id)
+
+        def complete_tool_item(self, item_id, activity, **_kwargs):
+            self.items[item_id]["status"] = ItemStatus.COMPLETED
+            self.items[item_id]["content"] = activity.model_dump(mode="json")
+
+        def transition_item(self, *_args, **_kwargs):
+            raise AssertionError("successful BrowserTool result projected as failed")
+
+    browser = Browser()
+    tool = BrowserTool()
+    monkeypatch.setattr(tool, "_get_service", lambda: browser)
+    worker = object.__new__(AgentTurnWorker)
+    worker.kernel = Kernel()
+    state = {"seq": 0, "message_item": None, "tools": {}, "errors": []}
+    scope = {"job_id": "job", "lease_token": "lease", "turn_id": "turn"}
+
+    for call_id, arguments in (
+        ("navigate", {"action": "navigate", "url": "https://example.com"}),
+        ("snapshot", {"action": "snapshot"}),
+    ):
+        result = tool.execute(arguments)
+        assert result.status == "success"
+        worker._project_event(
+            {
+                "type": "tool_execution_start",
+                "data": {
+                    "tool_call_id": call_id,
+                    "tool_name": "browser",
+                    "arguments": arguments,
+                },
+            },
+            state=state,
+            **scope,
+        )
+        worker._project_event(
+            {
+                "type": "tool_execution_end",
+                "data": {
+                    "tool_call_id": call_id,
+                    "tool_name": "browser",
+                    "status": result.status,
+                    "result": result.result,
+                },
+            },
+            state=state,
+            **scope,
+        )
+
+    assert [item["status"] for item in worker.kernel.items.values()] == [
+        ItemStatus.COMPLETED,
+        ItemStatus.COMPLETED,
+    ]
+    assert all(
+        item["content"]["status"] == "completed"
+        for item in worker.kernel.items.values()
+    )
+
+
 def test_cow_direct_tools_do_not_reenter_the_settings_permission_broker(
     tmp_path: Path, monkeypatch,
 ) -> None:
