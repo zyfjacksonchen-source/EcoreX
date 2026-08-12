@@ -141,7 +141,8 @@ def test_public_cow_worker_sends_initial_and_steer_images_to_gateway(
         for item in gateway.requests[1].ordered_input_items()
         if isinstance(item, GatewayUserMessageInput)
     ]
-    assert len(initial_messages) == len(steer_messages) == 1
+    assert len(initial_messages) == 1
+    assert len(steer_messages) == 2
     assert [image.attachment_id for image in initial_messages[0].images] == [
         initial_image.attachment_id
     ]
@@ -149,9 +150,12 @@ def test_public_cow_worker_sends_initial_and_steer_images_to_gateway(
         initial_image.sha256
     ]
     assert [image.attachment_id for image in steer_messages[0].images] == [
+        initial_image.attachment_id
+    ]
+    assert [image.attachment_id for image in steer_messages[1].images] == [
         steer_image.attachment_id
     ]
-    assert [image.source_sha256 for image in steer_messages[0].images] == [
+    assert [image.source_sha256 for image in steer_messages[1].images] == [
         steer_image.sha256
     ]
 
@@ -254,11 +258,11 @@ def test_public_cow_worker_materializes_steer_file_and_redirects_pending_read(
                     if isinstance(item, GatewayUserMessageInput)
                 )
                 steer_paths = re.findall(r"\[File: ([^\]]+)\]", text)
-                assert len(steer_paths) == 1
-                materialized = Path(steer_paths[0])
+                assert len(steer_paths) == 2
+                materialized = Path(steer_paths[-1])
                 assert materialized.is_relative_to(workspace)
                 assert materialized.stat().st_mode & 0o222 == 0
-                self.paths.extend(steer_paths)
+                self.paths.append(steer_paths[-1])
                 yield GatewayEvent(
                     seq=1,
                     event_type="tool_call.requested",
@@ -439,7 +443,9 @@ def test_public_parent_turn_runs_subagent_through_same_managed_gateway(
                     delta="child result",
                 )
                 child_done.set()
-            elif request.previous_response_id is None:
+            elif sum(
+                ":subagent-" not in item.request_id for item in self.requests
+            ) == 1:
                 yield GatewayEvent(
                     seq=1,
                     event_type="tool_call.requested",

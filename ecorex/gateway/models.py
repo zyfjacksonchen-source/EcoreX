@@ -381,10 +381,36 @@ class GatewayFunctionCallOutputInput(GatewayModel):
         )
 
 
+class GatewayFunctionCallInput(GatewayModel):
+    """One assistant-authored Cow tool call replayed with its result."""
+
+    type: Literal["function_call"] = "function_call"
+    tool_call_id: str = Field(min_length=1, max_length=256)
+    tool_name: str = Field(min_length=1, max_length=128)
+    arguments: dict[str, Any]
+
+    @model_validator(mode="after")
+    def validate_call(self) -> "GatewayFunctionCallInput":
+        _validate_id(self.tool_call_id, "tool_call_id")
+        _validate_id(self.tool_name, "tool_name")
+        _validate_json_value(self.arguments, "tool arguments")
+        return self
+
+    def provider_arguments(self) -> str:
+        return json.dumps(
+            self.arguments,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+
+
 GatewayInputItem = Annotated[
     (
         GatewayUserMessageInput
         | GatewayAssistantMessageInput
+        | GatewayFunctionCallInput
         | GatewayFunctionCallOutputInput
     ),
     Field(discriminator="type"),
@@ -532,15 +558,14 @@ class ModelGatewayRequest(GatewayModel):
                     "typed input items cannot be combined with compatibility input fields"
                 )
             message_ids: list[str] = []
+            typed_call_ids: list[str] = []
             typed_output_ids: list[str] = []
-            message_seen = False
             total_message_characters = 0
             total_image_bytes = 0
             for item in self.input_items:
                 if isinstance(
                     item, (GatewayUserMessageInput, GatewayAssistantMessageInput)
                 ):
-                    message_seen = True
                     message_ids.append(item.message_id)
                     total_message_characters += len(item.content)
                     if isinstance(item, GatewayUserMessageInput):
@@ -548,17 +573,17 @@ class ModelGatewayRequest(GatewayModel):
                             len(base64.b64decode(image.data_base64, validate=True))
                             for image in item.images
                         )
+                elif isinstance(item, GatewayFunctionCallInput):
+                    typed_call_ids.append(item.tool_call_id)
                 else:
-                    if message_seen:
-                        raise ValueError(
-                            "function call outputs must precede conversation messages"
-                        )
                     typed_output_ids.append(item.tool_call_id)
             if len(message_ids) != len(set(message_ids)):
                 raise ValueError("user message IDs must be unique")
             if len(typed_output_ids) != len(set(typed_output_ids)):
                 raise ValueError("tool output IDs must be unique")
-            if set(message_ids) & set(typed_output_ids):
+            if len(typed_call_ids) != len(set(typed_call_ids)):
+                raise ValueError("tool call IDs must be unique")
+            if set(message_ids) & (set(typed_call_ids) | set(typed_output_ids)):
                 raise ValueError("gateway input item IDs must be unique")
             if len(typed_output_ids) > 128:
                 raise ValueError("too many function call outputs")
@@ -580,8 +605,12 @@ class ModelGatewayRequest(GatewayModel):
             )
             if serialized_input_bytes > MAX_GATEWAY_SERIALIZED_INPUT_BYTES:
                 raise ValueError("gateway serialized input is oversized")
-            if typed_output_ids and self.previous_response_id is None:
-                raise ValueError("tool outputs require a previous response")
+            if (
+                typed_output_ids
+                and self.previous_response_id is None
+                and not set(typed_output_ids) <= set(typed_call_ids)
+            ):
+                raise ValueError("tool outputs require their function calls")
             # Image bytes have dedicated count, size, MIME and digest checks
             # above.  Redact their bounded base64 representation before the
             # generic JSON guard, whose per-string ceiling is intended for

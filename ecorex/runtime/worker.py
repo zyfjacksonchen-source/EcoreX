@@ -46,6 +46,7 @@ from ecorex.gateway import (
     GatewayEvent,
     GatewayEventType,
     GatewayAssistantMessageInput,
+    GatewayFunctionCallInput,
     GatewayFunctionCallOutputInput,
     GatewayImageInput,
     GatewayModelPolicy,
@@ -5439,24 +5440,15 @@ class _CowGatewayModel:
     def _image_assignments(
         self, messages: list[dict[str, Any]]
     ) -> dict[int, list[GatewayImageInput]]:
-        last_assistant = max(
-            (
-                index
-                for index, message in enumerate(messages)
-                if message.get("role") == "assistant"
-            ),
-            default=-1,
-        )
         candidates = [
             (index, self._text(message.get("content")))
             for index, message in enumerate(messages)
-            if index > last_assistant and message.get("role") == "user"
+            if message.get("role") == "user"
         ]
         assignments: dict[int, list[GatewayImageInput]] = {}
         with self._user_images_lock:
             cursor = 0
-            while self._user_images:
-                bound_text, images = self._user_images[0]
+            for bound_text, images in self._user_images:
                 matched = next(
                     (
                         offset
@@ -5466,10 +5458,9 @@ class _CowGatewayModel:
                     None,
                 )
                 if matched is None:
-                    break
+                    continue
                 message_index = candidates[matched][0]
                 assignments[message_index] = images
-                self._user_images.popleft()
                 cursor = matched + 1
         return assignments
 
@@ -5488,53 +5479,64 @@ class _CowGatewayModel:
         )
 
     def _inputs(self, messages: list[dict[str, Any]]) -> list[Any]:
-        if self.previous_response_id:
-            continuation: list[Any] = []
-            latest = messages[-1:]
-            image_assignments = self._image_assignments(latest)
-            for message_index, message in enumerate(latest):
-                content = message.get("content")
-                if not isinstance(content, list):
-                    content = [{"type": "text", "text": content}]
-                for block_index, block in enumerate(content):
-                    if not isinstance(block, dict):
-                        continue
-                    if block.get("type") == "tool_result":
-                        call_id = str(block.get("tool_use_id") or "").strip()
-                        if call_id:
-                            continuation.append(
-                                GatewayFunctionCallOutputInput(
-                                    tool_call_id=call_id,
-                                    output=block.get("content", ""),
-                                )
-                            )
-                    elif block.get("type") == "text":
-                        text = str(block.get("text") or "").strip()
-                        if text:
-                            continuation.append(
-                                GatewayUserMessageInput(
-                                    message_id=(
-                                        f"{self.request_scope}:cow:{self._round}:"
-                                        f"{message_index}:{block_index}"
-                                    ),
-                                    content=text,
-                                    images=image_assignments.get(message_index, []),
-                                )
-                            )
-            return continuation
-
         inputs: list[Any] = []
+        seen_calls: set[str] = set()
+        seen_outputs: set[str] = set()
         image_assignments = self._image_assignments(messages)
         for index, message in enumerate(messages):
-            text = self._text(message.get("content"))
-            if not text:
-                continue
+            role = message.get("role")
+            content = message.get("content")
+            blocks = (
+                content
+                if isinstance(content, list)
+                else [{"type": "text", "text": content}]
+            )
+            text_parts: list[str] = []
+            assistant_calls: list[GatewayFunctionCallInput] = []
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type == "text":
+                    text = str(block.get("text") or "").strip()
+                    if text:
+                        text_parts.append(text)
+                elif role == "assistant" and block_type == "tool_use":
+                    call_id = str(block.get("id") or "").strip()
+                    tool_name = str(block.get("name") or "").strip()
+                    arguments = block.get("input")
+                    if (
+                        call_id
+                        and call_id not in seen_calls
+                        and tool_name
+                        and isinstance(arguments, dict)
+                    ):
+                        seen_calls.add(call_id)
+                        assistant_calls.append(
+                            GatewayFunctionCallInput(
+                                tool_call_id=call_id,
+                                tool_name=tool_name,
+                                arguments=arguments,
+                            )
+                        )
+                elif role == "user" and block_type == "tool_result":
+                    call_id = str(block.get("tool_use_id") or "").strip()
+                    if call_id and call_id not in seen_outputs:
+                        seen_outputs.add(call_id)
+                        inputs.append(
+                            GatewayFunctionCallOutputInput(
+                                tool_call_id=call_id,
+                                output=block.get("content", ""),
+                            )
+                        )
+            text = "\n".join(text_parts)
             identity = f"{self.request_scope}:cow:{self._round}:{index}"
-            if message.get("role") == "assistant":
+            if role == "assistant" and text:
                 inputs.append(
                     GatewayAssistantMessageInput(message_id=identity, content=text)
                 )
-            elif message.get("role") == "user":
+            inputs.extend(assistant_calls)
+            if role == "user" and text:
                 inputs.append(
                     GatewayUserMessageInput(
                         message_id=identity,
@@ -5604,7 +5606,7 @@ class _CowGatewayModel:
             capability_snapshot_id="cow_tools_2.1.5",
             permission_snapshot_id="cow_local_2.1.5",
             direct_tools=self._tools(getattr(request, "tools", None)),
-            previous_response_id=self.previous_response_id,
+            previous_response_id=None,
         )
 
     async def _produce(self, request: ModelGatewayRequest, output: Any, end: object) -> None:

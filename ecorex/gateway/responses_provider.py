@@ -39,6 +39,7 @@ from .models import (
     GatewayEventType,
     GatewayAssistantMessageInput,
     GatewayFunctionCallOutputInput,
+    GatewayFunctionCallInput,
     GatewayModelPolicy,
     GatewayUserMessageInput,
     GatewayWebSearchRequest,
@@ -648,9 +649,26 @@ class ManagedHTTPSResponsesProvider:
     ) -> tuple[dict[str, Any], dict[str, str]]:
         self.validate_request(request, principal)
         policy = self.model_policies[request.model_id]
+        provider_tools, tool_name_mapping = _provider_tools(
+            request.direct_tools,
+            disclosed_tool_ids=frozenset(request.disclosed_tool_ids),
+        )
+        provider_names = {
+            tool_id: provider_name
+            for provider_name, tool_id in tool_name_mapping.items()
+        }
         input_value: list[dict[str, Any]] = []
         for item in request.ordered_input_items():
-            if isinstance(item, GatewayFunctionCallOutputInput):
+            if isinstance(item, GatewayFunctionCallInput):
+                input_value.append(
+                    {
+                        "type": "function_call",
+                        "call_id": item.tool_call_id,
+                        "name": provider_names.get(item.tool_name, item.tool_name),
+                        "arguments": item.provider_arguments(),
+                    }
+                )
+            elif isinstance(item, GatewayFunctionCallOutputInput):
                 input_value.append(
                     {
                         "type": "function_call_output",
@@ -688,10 +706,6 @@ class ManagedHTTPSResponsesProvider:
                 )
             else:  # pragma: no cover - closed Pydantic union defense
                 raise ResponsesProviderRejected("managed model input is invalid")
-        provider_tools, tool_name_mapping = _provider_tools(
-            request.direct_tools,
-            disclosed_tool_ids=frozenset(request.disclosed_tool_ids),
-        )
         tool_schema_bytes = (
             len(_canonical(request.direct_tools)) if request.direct_tools else 0
         )

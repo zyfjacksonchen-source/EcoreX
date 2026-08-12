@@ -785,6 +785,7 @@ class SQLiteGatewayStore:
         revision: ChatModelRevision,
         *,
         now: datetime | None = None,
+        consume: bool = True,
     ) -> DurableChatHandoff | None:
         outputs = [
             item
@@ -894,12 +895,17 @@ class SQLiteGatewayStore:
                 or request.model_id != revision.local_model_id
             ):
                 failure = GatewayRequestConflict("chat handoff configuration changed")
+            retrying_same_request = (
+                row["state"] == "consumed"
+                and row["consumed_by_request_id"] == request.request_id
+            )
             if failure is None and (
-                row["state"] != "available"
+                row["state"] not in {"available", "consumed"}
                 or row["tool_call_id"] != outputs[0].tool_call_id
+                or (row["state"] == "consumed" and not retrying_same_request)
             ):
                 failure = GatewayRequestConflict("chat handoff was already consumed")
-            if failure is None:
+            if failure is None and consume and not retrying_same_request:
                 updated = connection.execute(
                     "UPDATE gateway_chat_handoffs SET state='consumed',"
                     "consumed_by_request_id=?,consumed_at=? "
@@ -908,6 +914,7 @@ class SQLiteGatewayStore:
                 )
                 if updated.rowcount != 1:
                     raise GatewayRequestConflict("chat handoff was already consumed")
+            if failure is None:
                 result = DurableChatHandoff(
                     response_id=str(row["response_id"]),
                     tool_call_id=str(row["tool_call_id"]),

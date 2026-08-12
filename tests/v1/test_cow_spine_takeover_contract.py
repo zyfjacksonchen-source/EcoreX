@@ -277,6 +277,18 @@ def test_cow_model_request_uses_the_real_tool_manager_contract(
         continuation = model._request(
             LLMRequest(
                 messages=[
+                    {"role": "user", "content": [{"type": "text", "text": "read"}]},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "call_contract",
+                                "name": "read",
+                                "input": {"path": "MEMORY.md"},
+                            }
+                        ],
+                    },
                     {
                         "role": "user",
                         "content": [
@@ -303,14 +315,16 @@ def test_cow_model_request_uses_the_real_tool_manager_contract(
     assert [entry["spec"]["input_schema"] for entry in request.direct_tools] == [
         tool.get_json_schema() for tool in tools
     ]
-    assert continuation.previous_response_id == "response_contract"
+    assert continuation.previous_response_id is None
     assert [item.type for item in continuation.input_items or []] == [
+        "user_message",
+        "function_call",
         "function_call_output",
         "user_message",
     ]
 
 
-def test_cow_model_keeps_tool_response_id_for_the_result_continuation() -> None:
+def test_cow_model_replays_the_complete_tool_round_without_provider_state() -> None:
     from agent.protocol.models import LLMRequest
     from ecorex.gateway import GatewayEvent, GatewayEventType
     from ecorex.runtime.worker import _CowGatewayModel
@@ -355,6 +369,21 @@ def test_cow_model_keeps_tool_response_id_for_the_result_continuation() -> None:
             messages=[
                 {
                     "role": "user",
+                    "content": [{"type": "text", "text": "remember this"}],
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "call_edit",
+                            "name": "edit",
+                            "input": {"path": "MEMORY.md"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
                     "content": [
                         {
                             "type": "tool_result",
@@ -368,8 +397,20 @@ def test_cow_model_keeps_tool_response_id_for_the_result_continuation() -> None:
             system="cow",
         )
     )
-    assert continuation.previous_response_id == "response_edit"
+    assert continuation.previous_response_id is None
     assert [item.model_dump(mode="json") for item in continuation.input_items or []] == [
+        {
+            "type": "user_message",
+            "message_id": "turn_contract:cow:2:0",
+            "content": "remember this",
+            "images": [],
+        },
+        {
+            "type": "function_call",
+            "tool_call_id": "call_edit",
+            "tool_name": "edit",
+            "arguments": {"path": "MEMORY.md"},
+        },
         {
             "type": "function_call_output",
             "tool_call_id": "call_edit",

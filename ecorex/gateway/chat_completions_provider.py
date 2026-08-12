@@ -17,6 +17,7 @@ from .models import (
     GatewayEvent,
     GatewayEventType,
     GatewayFunctionCallOutputInput,
+    GatewayFunctionCallInput,
     GatewayModelPolicy,
     GatewayUserMessageInput,
     ModelGatewayRequest,
@@ -134,10 +135,15 @@ class ManagedHTTPSChatCompletionsProvider:
             self._model_revision,
             ttl_seconds=self.handoff_ttl_seconds,
         )
-        prior = await asyncio.to_thread(
-            self._handoff_authority.consume_chat_handoff,
-            request,
-            self._model_revision,
+        prior = (
+            await asyncio.to_thread(
+                self._handoff_authority.consume_chat_handoff,
+                request,
+                self._model_revision,
+                consume=False,
+            )
+            if request.previous_response_id is not None
+            else None
         )
         payload, names = self._payload(request, prior=prior)
         encoded = _canonical(payload)
@@ -186,15 +192,18 @@ class ManagedHTTPSChatCompletionsProvider:
                         if data == b"[DONE]":
                             terminal = parser.finish_stream()
                             if terminal is not None:
+                                await self._commit_handoff(request, prior, terminal)
                                 await self._stage_handoff(request, parser, terminal)
                                 yield terminal
                             break
                         for event in parser.feed_stream(_decode_object(data)):
+                            await self._commit_handoff(request, prior, event)
                             await self._stage_handoff(request, parser, event)
                             yield event
                 else:
                     body = await self._bounded_body(response)
                     for event in parser.feed_response(_decode_object(body)):
+                        await self._commit_handoff(request, prior, event)
                         await self._stage_handoff(request, parser, event)
                         yield event
                 if not parser.terminal:
@@ -283,6 +292,7 @@ class ManagedHTTPSChatCompletionsProvider:
             request.direct_tools,
             disclosed_tool_ids=frozenset(request.disclosed_tool_ids),
         )
+        provider_names = {tool_id: name for name, tool_id in names.items()}
         messages: list[dict[str, Any]] = []
         if request.instructions is not None:
             messages.append({"role": "developer", "content": request.instructions})
@@ -311,6 +321,25 @@ class ManagedHTTPSChatCompletionsProvider:
                 messages.append({"role": "user", "content": content})
             elif isinstance(item, GatewayAssistantMessageInput):
                 messages.append({"role": "assistant", "content": item.content})
+            elif isinstance(item, GatewayFunctionCallInput):
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": item.tool_call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": provider_names.get(
+                                        item.tool_name, item.tool_name
+                                    ),
+                                    "arguments": item.provider_arguments(),
+                                },
+                            }
+                        ],
+                    }
+                )
             elif isinstance(item, GatewayFunctionCallOutputInput):
                 messages.append(
                     {
@@ -369,6 +398,22 @@ class ManagedHTTPSChatCompletionsProvider:
             provider_tool_name=function.get("name"),
             arguments_json=_canonical(event.arguments).decode("utf-8"),
         )
+
+    async def _commit_handoff(
+        self,
+        request: ModelGatewayRequest,
+        prior: DurableChatHandoff | None,
+        event: GatewayEvent,
+    ) -> None:
+        if prior is not None and event.event_type in {
+            GatewayEventType.RESPONSE_COMPLETED,
+            GatewayEventType.TOOL_CALL_REQUESTED,
+        }:
+            await asyncio.to_thread(
+                self._handoff_authority.consume_chat_handoff,
+                request,
+                self._model_revision,
+            )
 
     def _credential(self) -> str:
         try:

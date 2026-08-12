@@ -116,12 +116,15 @@ def test_chat_handoff_survives_restart_and_is_consumed_once(tmp_path) -> None:
         tool_call_id=event.tool_call_id,
     )
     restarted.reserve(target, principal(), lease_seconds=60)
+    preview = restarted.consume_chat_handoff(target, revision(), consume=False)
     handoff = restarted.consume_chat_handoff(target, revision())
     assert handoff is not None
+    assert preview == handoff
     assert handoff.assistant_message()["tool_calls"][0]["function"] == {
         "name": "read_document",
         "arguments": '{"path":"report.docx"}',
     }
+    assert restarted.consume_chat_handoff(target, revision()) == handoff
 
     second = request(
         "second-target",

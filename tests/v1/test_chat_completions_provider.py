@@ -11,13 +11,17 @@ from ecorex.gateway.chat_completions_provider import (
     ManagedHTTPSChatCompletionsProvider,
     _ChatCompletionParser,
 )
-from ecorex.gateway.handoff import ChatModelRevision
+from ecorex.gateway.handoff import ChatModelRevision, DurableChatHandoff
 from ecorex.gateway.models import (
     GatewayEventType,
+    GatewayFunctionCallOutputInput,
     ModelGatewayRequest,
     ecorex_chat_gateway_policy,
 )
-from ecorex.gateway.responses_provider import ResponsesProviderProtocolError
+from ecorex.gateway.responses_provider import (
+    ResponsesProviderProtocolError,
+    ResponsesProviderUnavailable,
+)
 from ecorex.gateway.server import GatewayPrincipal
 
 
@@ -307,4 +311,109 @@ def test_provider_stages_handoff_before_exposing_tool_terminal() -> None:
         "output_tokens": 3,
         "total_tokens": 12,
     }
-    assert calls == ["bind", "consume", "post", "stage"]
+    assert calls == ["bind", "post", "stage"]
+
+
+def test_chat_handoff_is_not_consumed_until_provider_connects() -> None:
+    calls: list[object] = []
+
+    class Authority:
+        def bind_chat_model_attempt(self, *_args, **_kwargs):
+            calls.append("bind")
+
+        def consume_chat_handoff(self, *_args, **kwargs):
+            calls.append(("consume", kwargs.get("consume", True)))
+            return DurableChatHandoff(
+                response_id="chatcmpl_source",
+                tool_call_id="call_1",
+                provider_tool_name="fetch_document",
+                arguments_json='{"document_id":"doc-1"}',
+            )
+
+        def stage_chat_handoff(self, *_args, **_kwargs):
+            raise AssertionError("text completion must not stage a handoff")
+
+    attempts = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        calls.append("post")
+        if attempts == 1:
+            raise httpx.ConnectError("transient connect failure")
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/json"},
+            json={
+                "id": "chatcmpl_retry",
+                "model": "deepseek-v4-flash",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "done"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    policy = ecorex_chat_gateway_policy("ecorex-deepseek-v4-pro")
+    request = ModelGatewayRequest(
+        request_id="provider-tool-retry",
+        thread_id="thread-1",
+        turn_id="turn-1",
+        trace_id="trace-1",
+        model_id=policy.local_model_id,
+        model_policy=policy,
+        input_items=[
+            GatewayFunctionCallOutputInput(tool_call_id="call_1", output="done")
+        ],
+        previous_response_id="chatcmpl_source",
+        config_snapshot_id="config-1",
+        capability_snapshot_id="capability-1",
+        permission_snapshot_id="permission-1",
+    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = ManagedHTTPSChatCompletionsProvider(
+        origin="https://deepseek.ecorex.invalid",
+        allowed_origins=frozenset({"https://deepseek.ecorex.invalid"}),
+        model_mapping={policy.local_model_id: "deepseek-v4-flash"},
+        model_policies={policy.local_model_id: policy},
+        bearer_token=lambda: "provider-secret-value",
+        handoff_authority=Authority(),
+        model_revision=ChatModelRevision(
+            config_id="model-deepseek",
+            revision=7,
+            local_model_id=policy.local_model_id,
+            upstream_model_id="deepseek-v4-flash",
+            provider_protocol="openai_compatible_chat",
+            provider_origin_preset="deepseek_chat",
+        ),
+        client=client,
+    )
+    principal = GatewayPrincipal(
+        subject="member-1",
+        account_id="account-1",
+        allowed_model_ids=frozenset({policy.local_model_id}),
+        quota_period="2026-07",
+        request_limit=10,
+    )
+
+    async def collect():
+        return [event async for event in provider.stream(request, principal)]
+
+    with pytest.raises(ResponsesProviderUnavailable):
+        asyncio.run(collect())
+    events = asyncio.run(collect())
+    asyncio.run(client.aclose())
+
+    assert events[-1].event_type is GatewayEventType.RESPONSE_COMPLETED
+    assert calls == [
+        "bind",
+        ("consume", False),
+        "post",
+        "bind",
+        ("consume", False),
+        "post",
+        ("consume", True),
+    ]
