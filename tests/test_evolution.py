@@ -667,7 +667,9 @@ def _verify_undo():
         bid = create_backup(ws, [mem])
         mem.write_text("CORRUPTED", encoding="utf-8")
         from agent.tools.evolution_undo import EvolutionUndoTool
-        r = EvolutionUndoTool().execute({"backup_id": bid})
+        tool = EvolutionUndoTool()
+        tool.context = type("AgentContext", (), {"workspace_dir": str(ws)})()
+        r = tool.execute({"backup_id": bid})
         restored = mem.read_text()
         if r.status == "success" and "大锤" in restored:
             print("  PASS  undo restores pre-evolution state")
