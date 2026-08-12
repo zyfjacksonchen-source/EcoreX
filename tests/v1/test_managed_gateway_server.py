@@ -852,6 +852,48 @@ def test_provider_failure_and_protocol_gap_are_redacted_terminal_facts(
     assert provider.secret not in gap.text
 
 
+def test_gateway_keeps_idle_stream_alive_without_persisting_heartbeats(
+    tmp_path, monkeypatch
+) -> None:
+    class SlowFirstEventProvider(Provider):
+        async def stream(self, request, principal):
+            self.calls += 1
+            self.requests.append(request)
+            assert principal.account_id == "account-1"
+            await asyncio.sleep(0.04)
+            yield GatewayEvent(
+                seq=1,
+                event_type=GatewayEventType.RESPONSE_COMPLETED,
+                response_id="response-slow-first-event",
+                usage={"input_tokens": 1, "output_tokens": 1},
+            )
+
+    monkeypatch.setattr(gateway_server, "_STREAM_KEEPALIVE_SECONDS", 0.01)
+    provider = SlowFirstEventProvider()
+    store = SQLiteGatewayStore(tmp_path / "gateway.db")
+    app = create_managed_gateway_app(
+        store,
+        authenticator=Authenticator(),
+        provider=provider,
+        allowed_model_ids=frozenset({"ecorex-chat"}),
+    )
+
+    response = TestClient(app).post(
+        "/api/v1/model/stream",
+        headers=headers(),
+        json=request("slow-first-event"),
+    )
+
+    assert response.status_code == 200
+    assert response.content.startswith(b"\n")
+    assert [item["event_type"] for item in events(response)] == [
+        "response.completed"
+    ]
+    assert [item.event_type for item in store.events("slow-first-event")] == [
+        GatewayEventType.RESPONSE_COMPLETED
+    ]
+
+
 def test_provider_protocol_failure_has_a_safe_recovery_category(tmp_path) -> None:
     class ProtocolFailureProvider(Provider):
         async def stream(self, request, principal):
