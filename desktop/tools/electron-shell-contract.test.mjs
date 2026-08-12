@@ -53,6 +53,17 @@ test("desktop loads the existing loopback Runtime and never packages a second re
   assert.match(main, /if \(runtimeRestart\) return runtimeRestart/);
   assert.match(main, /buttons: \["重试", "退出"\]/);
   assert.match(main, /src", "v1", "assets", "emate-logo\.png"/);
+  assert.match(main, /titleBarStyle: "hiddenInset"/);
+  assert.match(main, /trafficLightPosition: \{ x: 14, y: 18 \}/);
+  assert.match(main, /if \(process\.platform === "win32"\)/);
+  assert.match(main, /titleBarOverlay: \{ color: "#1c1c1e", symbolColor: "#c7c7cc", height: 48 \}/);
+  assert.match(main, /webContents\.on\("context-menu"/);
+  assert.match(main, /backgroundColor: "#171719"/);
+  assert.match(main, /copyImageAt\(params\.x, params\.y\)/);
+  assert.match(main, /label: "复制链接地址"/);
+  assert.match(main, /label: "保存并复制文件路径"/);
+  assert.match(main, /event\.sender !== mainWindow\?\.webContents/);
+  assert.match(main, /stat\.isFile\(\) && !stat\.isSymbolicLink\(\)/);
   assert.match(main, /<img class="logo" src="\$\{logo\}"/);
   assert.doesNotMatch(main, />ϟ</);
   assert.doesNotMatch(main, /loadFile\(/);
@@ -77,6 +88,9 @@ test("desktop loads the existing loopback Runtime and never packages a second re
   assert.match(staging, /stage-direct-runtime\.py/);
   assert.match(staging, /release-manifest\.json/);
   assert.match(preload, /contextBridge\.exposeInMainWorld\("eMateDesktop"/);
+  assert.match(preload, /data-emate-artifact-id/);
+  assert.match(preload, /onCopyArtifactPath/);
+  assert.match(preload, /copyMaterializedPath/);
   assert.doesNotMatch(preload, /require\(["']\.\//u);
   const pkg = JSON.parse(await load("package.json"));
   assert.equal(pkg.build.files.some((entry) => entry.includes("renderer")), false);

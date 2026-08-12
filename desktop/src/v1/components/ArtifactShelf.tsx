@@ -312,6 +312,9 @@ export function ImageArtifactGallery({
           return (
             <article
               className="ex-image-gallery-slide"
+              data-emate-artifact-id={artifact?.artifact_id}
+              data-emate-artifact-revision={artifact?.revision_id}
+              data-emate-artifact-name={artifact?.display_name}
               data-preview-artifact-id={canPreview ? artifact?.artifact_id : undefined}
               data-artifact-status={slot.kind === "failed" ? "failed" : artifact?.status}
               data-image-batch-task-id={slot.kind === "failed" ? slot.taskId : undefined}
@@ -432,6 +435,9 @@ export function ArtifactShelf({
           return (
             <article
               className={`ex-artifact ${media ? "is-media" : "is-row"}`}
+              data-emate-artifact-id={artifact.artifact_id}
+              data-emate-artifact-revision={artifact.revision_id}
+              data-emate-artifact-name={artifact.display_name}
               data-preview-artifact-id={media && canPreview ? artifact.artifact_id : undefined}
               key={artifact.artifact_id}
             >

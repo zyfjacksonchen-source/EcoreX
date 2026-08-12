@@ -1,5 +1,46 @@
 # Design QA — authenticated artifact preview and image gallery
 
+## Native window and system context menu addendum
+
+- Source visual truth:
+  - `/Users/mac/.codex/attachments/05420805-986f-4fb9-98a1-cc63f3bcddab/codex-clipboard-ddecb157-393a-4dea-bd36-cb65853d4489.png`
+  - `/Users/mac/.codex/attachments/606fd341-e97b-451b-9734-374f53a060bd/codex-clipboard-90b1eba6-9a14-4f95-a7be-d9aa52aa0f8d.png`
+- Implementation screenshot: `/private/tmp/emate-native-window-smoke.Hj6E7N/product-native-window.png`
+- Combined comparison: `/private/tmp/emate-native-window-smoke.Hj6E7N/native-window-contact-sheet.png`
+- User-confirmed context-menu evidence: `/Users/mac/.codex/attachments/0fa118f8-ab35-49a3-9297-85b01ee9a907/codex-clipboard-4ec3ac2a-51b1-417c-993b-cfffc85e10f2.png`
+- Viewport: 1280 × 840 CSS px, device scale factor 1; source title-bar crops were normalized to 960 px wide in the combined comparison.
+- State: macOS, dark theme, authenticated artifact conversation; native traffic lights and artifact context menu visible in separate evidence captures.
+
+### Full-view comparison evidence
+
+- The Electron window uses native macOS traffic lights over the application canvas; the former light system title strip is absent.
+- The existing 48 px workspace header remains the sole product title row. Sidebar and workspace surfaces continue the existing e-Mate dark tokens to the top edge.
+- The left brand slot reuses `emate-logo.png` at a compact 112 × 26 px inside the 64 px sidebar header. The application icon remains the separately approved black/orange robot, but no robot avatar is used as window chrome.
+- Windows keeps Electron's native title-bar overlay and caption-button semantics; no renderer-drawn system buttons were added.
+
+### Focused-region and interaction evidence
+
+- Source and implementation top-edge crops were compared together in `native-window-contact-sheet.png`; the implementation preserves the native traffic-light cluster and removes the source's detached white strip.
+- The user-confirmed artifact screenshot shows the native menu items “复制”, “复制文件名”, and “保存并复制文件路径”.
+- Text selection keeps Electron's native copy role; images use `webContents.copyImageAt`; web links expose “复制链接地址”. Artifact paths are obtained only after authenticated Runtime materialization and main-process verification under Documents/Downloads `EcoreX`, rejecting symlinks.
+
+### Required fidelity surfaces
+
+- Fonts and typography: existing system UI font, title sizes, weights, ellipsis, and sidebar hierarchy are unchanged.
+- Spacing and layout rhythm: native traffic lights receive a dedicated 76 px left inset; e-Mate wordmark is 112 × 26 px; workspace 8 px inset, 16 px radius, and 48 px header remain unchanged.
+- Colors and tokens: startup and BrowserWindow backgrounds are `#171719`; renderer chrome continues the existing dark canvas/workspace/rule tokens, eliminating the white flash/title strip.
+- Image quality and asset fidelity: the exact repository `emate-logo.png` wordmark is reused for the title area; no SVG/CSS approximation and no `emate-mark.png` robot avatar is used there.
+- Copy and content: existing task titles and controls remain unchanged. Context-menu copy labels are native and concise.
+
+### Findings and comparison history
+
+- Initial P1: default Electron title bar produced a detached white strip above the dark application. Fixed with platform-native integrated chrome and a dark startup/window background.
+- Initial P1: the initial compact brand slot reused the robot mark. Fixed by retaining the approved robot only as the app icon and reusing the e-Mate wordmark in the title area.
+- Initial P1: renderer and main `context-menu` events could race. Fixed by deferring popup until the renderer target IPC arrives, with a same-tick fallback for ordinary text/image/link menus. User real-device evidence confirms the artifact entries appear.
+- P0/P1/P2 remaining: none.
+
+final result: passed
+
 ## Scope and references
 
 - Reference A: `/Users/mac/.codex/attachments/69d5fd1b-05d0-405b-9dc7-5f47098a5711/codex-clipboard-f9b649e4-3271-49ab-b6a8-725281911d8b.png`
