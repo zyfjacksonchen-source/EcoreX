@@ -43,7 +43,11 @@ def test_fts_damage_rebuild_preserves_shared_conversation_rows(tmp_path):
         ).fetchall()
         conn.execute("DELETE FROM chunks_fts_data")
         conn.commit()
-        assert "fts5" in conn.execute("PRAGMA integrity_check").fetchone()[0]
+        try:
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+        except sqlite3.DatabaseError as error:
+            integrity = str(error)
+        assert "fts" in integrity
 
     repaired = MemoryStorage(db_path)
     repaired.close()

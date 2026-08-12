@@ -55,6 +55,11 @@ def _is_corruption_error(exc: BaseException) -> bool:
     return any(marker in msg for marker in _CORRUPTION_MARKERS)
 
 
+def _is_fts5_damage(text: str) -> bool:
+    lowered = text.lower()
+    return "fts5" in lowered or "chunks_fts" in lowered
+
+
 def _split_fts5_damage(report: str) -> tuple[list[str], list[str]]:
     """Split an integrity_check report into FTS5 findings and everything else.
 
@@ -68,7 +73,7 @@ def _split_fts5_damage(report: str) -> tuple[list[str], list[str]]:
         line = line.strip()
         if not line:
             continue
-        (fts5 if "fts5" in line.lower() else other).append(line)
+        (fts5 if _is_fts5_damage(line) else other).append(line)
     return fts5, other
 
 
@@ -153,7 +158,7 @@ class MemoryStorage:
             rows = self.conn.execute("PRAGMA integrity_check").fetchall()
             report = "\n".join(str(r[0]) for r in rows).strip()
         except sqlite3.DatabaseError as e:
-            if not _is_corruption_error(e):
+            if not (_is_corruption_error(e) or _is_fts5_damage(str(e))):
                 logger.warning(f"[MemoryStorage] Integrity check skipped: {e}")
                 return
             report = str(e)
@@ -482,7 +487,25 @@ class MemoryStorage:
         self.conn.execute("DROP TRIGGER IF EXISTS chunks_ai")
         self.conn.execute("DROP TRIGGER IF EXISTS chunks_ad")
         self.conn.execute("DROP TRIGGER IF EXISTS chunks_au")
-        self.conn.execute("DROP TABLE IF EXISTS chunks_fts")
+        try:
+            self.conn.execute("DROP TABLE IF EXISTS chunks_fts")
+        except sqlite3.DatabaseError as error:
+            if not _is_fts5_damage(str(error)):
+                raise
+            # Some SQLite builds cannot instantiate a damaged FTS vtable even
+            # to DROP it. writable_schema makes DROP remove only that derived
+            # vtable and its shadow tables; chunks and conversation rows stay
+            # untouched and the canonical FTS schema is recreated below.
+            self.conn.execute("PRAGMA writable_schema=ON")
+            try:
+                self.conn.execute(
+                    "DELETE FROM sqlite_schema WHERE name = 'chunks_fts' "
+                    "OR name GLOB 'chunks_fts_*'"
+                )
+            finally:
+                self.conn.execute("PRAGMA writable_schema=RESET")
+            version = int(self.conn.execute("PRAGMA schema_version").fetchone()[0])
+            self.conn.execute(f"PRAGMA schema_version = {version + 1}")
         self._create_fts5_objects()
         self.conn.commit()
 
@@ -499,8 +522,7 @@ class MemoryStorage:
             ).fetchone()
             return False
         except sqlite3.DatabaseError as e:
-            msg = str(e).lower()
-            return "malformed" in msg or "corrupt" in msg
+            return _is_corruption_error(e) or _is_fts5_damage(str(e))
         except Exception:
             # Any other error (e.g. table missing) is handled by the
             # state-inconsistent path; treat as healthy here.
