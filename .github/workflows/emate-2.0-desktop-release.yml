@@ -268,10 +268,20 @@ jobs:
           from pathlib import Path
           import subprocess, sys
           release = Path("desktop/release")
-          roots = [path for path in (release / "win-unpacked",) if path.exists()]
-          roots.extend(sorted(release.glob("mac*/*.app")))
+          roots = []
+          windows = release / "win-unpacked"
+          if windows.is_dir():
+              roots.extend((windows / "e-Mate.exe", windows / "resources/app.asar"))
+          for app in sorted(release.glob("mac*/*.app")):
+              roots.extend((
+                  app / "Contents/Info.plist",
+                  app / "Contents/MacOS/e-Mate",
+                  app / "Contents/Resources/app.asar",
+              ))
           if not roots:
               raise SystemExit("unpacked desktop product missing")
+          if any(not path.is_file() for path in roots):
+              raise SystemExit("unpacked desktop product surface incomplete")
           subprocess.run(
               [sys.executable, "scripts/check-emate-brand.py", "--allow-contained-symlinks", *map(str, roots)],
               check=True,

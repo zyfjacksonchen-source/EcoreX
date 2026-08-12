@@ -618,6 +618,12 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
     assert "scripts/prepare-emate-desktop-feed.py" in workflow
     assert "--unsigned-manual" in workflow
     assert "tests/v1/test_runtime_composition.py" not in workflow
+    assert 'const roots = ["electron", "src", "dist", "package.json"]' in (
+        ROOT / "desktop" / "tools" / "check-electron-brand.mjs"
+    ).read_text(encoding="utf-8")
+    assert 'windows / "resources/app.asar"' in workflow
+    assert 'app / "Contents/Resources/app.asar"' in workflow
+    assert "roots.extend(sorted(release.glob" not in workflow
     assert (
         "--nginx-config deploy/e-mate/nginx/update-feed-unsigned-manual.conf"
         in workflow
