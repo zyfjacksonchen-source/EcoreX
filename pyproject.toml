@@ -67,9 +67,12 @@ ecorex-gateway = "ecorex.gateway.production:main"
 ecorex-gateway-schema = "ecorex.gateway.schema:main"
 ecorex-share-schema = "ecorex.control_plane.share_schema:main"
 
+[tool.setuptools]
+py-modules = ["config"]
+
 [tool.setuptools.packages.find]
-include = ["ecorex*"]
-exclude = ["cli*", "agent*", "channel*", "desktop*", "tests*"]
+include = ["ecorex*", "agent*", "bridge*", "models*", "channel*", "plugins*", "common*", "voice*", "translate*", "cli*"]
+exclude = ["desktop*", "tests*"]
 
 [tool.setuptools.package-data]
 "ecorex.control_plane.admin_web" = ["static/*"]
