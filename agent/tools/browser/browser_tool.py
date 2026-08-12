@@ -1,35 +1,36 @@
 """
 Browser tool - Control a Chromium browser for web navigation and interaction.
 
-Uses Playwright as the CDP client. Browser instance is lazily started on first
+Uses Playwright under the hood. Browser instance is lazily started on first
 use, reused across tool calls within the same session, and cleaned up via
 close().
 
 Launch modes (configured under `tools.browser` in config.json):
-  - cdp (default for EcoreX): attach to or auto-launch Chrome/Edge through
-    the Chrome DevTools Protocol. This is the first priority so real browser
-    behavior is used before Playwright-managed Chromium fallback.
-    CDP sessions are persistent by default: the DevTools client is kept alive
-    across quiet periods and reconnects automatically when the socket becomes
-    stale.
-  - persistent: Chromium runs with a persistent user_data_dir
+  - persistent (default): Chromium runs with a persistent user_data_dir
     (default `~/.cow/browser_profile`), so cookies and login state survive
     across runs. The user only needs to log in once.
+  - cdp: When `cdp_endpoint` is set, attach to an externally launched Chrome
+    via the Chrome DevTools Protocol. Lets the agent reuse the user's real
+    browser (with all logins / extensions / true fingerprints).
   - fresh: Set `persistent` to false to fall back to a clean context every run.
 """
 
+import ipaddress
 import json
 import os
+import socket
 from typing import Dict, Any, Optional
+from urllib.parse import urlparse
 
 from agent.tools.base_tool import BaseTool, ToolResult
-from agent.tools.browser.browser_automation_service import (
-    DEFAULT_CDP_ENDPOINT,
-    DEFAULT_CDP_USER_DATA_DIR,
-    cdp_is_reachable,
-)
 from agent.tools.browser.browser_service import BrowserService
 from common.log import logger
+
+
+# Cloud-metadata endpoints worth blocking even though they are not link-local.
+# (169.254.169.254 — AWS/GCP/Azure IMDS — is already covered by is_link_local;
+# fd00:ec2::254 is the AWS IPv6 IMDS address.)
+_CLOUD_METADATA_IPS = frozenset({ipaddress.ip_address("fd00:ec2::254")})
 
 
 class BrowserTool(BaseTool):
@@ -38,15 +39,11 @@ class BrowserTool(BaseTool):
     name: str = "browser"
     description: str = (
         "Control a browser to navigate web pages, interact with elements, and extract content. "
-        "EcoreX uses CDP first: it attaches to or auto-launches the user's Chrome/Edge at "
-        "http://127.0.0.1:9222, then falls back to a Playwright-managed browser if configured. "
         "Actions: navigate, snapshot, click, fill, select, scroll, screenshot, wait, back, forward, "
         "get_text, press, evaluate.\n\n"
         "Workflow: navigate (auto-includes snapshot with element refs) → click/fill/select by ref → snapshot to verify.\n\n"
         "Use snapshot as the primary way to read pages. Use screenshot + send to show key results to the user. "
         "For login/CAPTCHA/authorization etc., screenshot and ask the user for help. "
-        "After the user says login/authorization is complete, continue with this browser tool directly; "
-        "do not read external Codex/Chrome plugin SKILL.md files and do not probe the CDP port through bash. "
         "Login state is persisted across sessions (cookies / localStorage are kept in a "
         "user profile directory), so once the user logs in to a site, the agent can keep "
         "using it without logging in again."
@@ -115,105 +112,112 @@ class BrowserTool(BaseTool):
     _shared_service: Optional[BrowserService] = None
 
     def __init__(self, config: dict = None):
-        self.config = self._browser_config(config or {})
+        self.config = config or {}
         self.cwd = self.config.get("cwd", os.getcwd())
         self._service: Optional[BrowserService] = None
-
-    @staticmethod
-    def _browser_config(config: dict) -> dict:
-        merged: Dict[str, Any] = {}
-        try:
-            from config import conf
-
-            tools_config = conf().get("tools") or {}
-            browser_config = tools_config.get("browser") if isinstance(tools_config, dict) else None
-            if isinstance(browser_config, dict):
-                merged.update(browser_config)
-        except Exception as exc:
-            logger.debug(f"[Browser] Unable to read global browser config: {exc}")
-        merged.update(config or {})
-        merged.setdefault("cdp_endpoint", DEFAULT_CDP_ENDPOINT)
-        merged.setdefault("cdp_auto_launch", True)
-        merged.setdefault("cdp_fallback", True)
-        merged.setdefault("persistent", True)
-        merged.setdefault("cdp_persist_session", True)
-        merged.setdefault("cdp_keepalive_interval", 60)
-        merged.setdefault("idle_timeout", 0)
-        merged.setdefault("cdp_user_data_dir", DEFAULT_CDP_USER_DATA_DIR)
-        return merged
 
     def _get_service(self) -> BrowserService:
         """Get or create the browser service, sharing across copies."""
         if self._service is not None:
-            if (
-                getattr(self._service, "_ecorex_read_only_cdp_only", False)
-                and not getattr(self, "_read_only_existing_cdp_only", False)
-            ):
-                self._service = None
-            elif not getattr(self._service, "_alive", False) and getattr(self._service, "_thread", None) is not None:
-                if BrowserTool._shared_service is self._service:
-                    BrowserTool._shared_service = None
-                self._service = None
-            else:
-                return self._service
+            return self._service
 
         # Reuse shared service across tool copies within the same session
         if BrowserTool._shared_service is not None:
-            shared = BrowserTool._shared_service
-            if not getattr(shared, "_alive", False) and getattr(shared, "_thread", None) is not None:
-                BrowserTool._shared_service = None
-            else:
-                self._service = shared
-                return self._service
+            self._service = BrowserTool._shared_service
+            return self._service
 
-        service_config = dict(self.config)
-        read_only_cdp_only = bool(getattr(self, "_read_only_existing_cdp_only", False))
-        if read_only_cdp_only:
-            service_config["cdp_auto_launch"] = False
-            service_config["cdp_fallback"] = False
-        self._service = BrowserService(service_config)
-        if read_only_cdp_only:
-            setattr(self._service, "_ecorex_read_only_cdp_only", True)
-        if not read_only_cdp_only:
-            BrowserTool._shared_service = self._service
+        self._service = BrowserService(self.config)
+        BrowserTool._shared_service = self._service
         return self._service
 
-    def _current_cancel_event(self):
-        return getattr(self, "cancel_event", None)
+    def _allow_private_targets(self) -> bool:
+        """Whether the link-local / cloud-metadata guard is disabled.
 
-    def _read_only_start_blocker(self, action: str) -> str:
-        self._read_only_existing_cdp_only = False
+        Defaults to False (guard active). Loopback and RFC1918/LAN targets are
+        always reachable so local dev servers work out of the box; this opt-out
+        only lifts the remaining block on link-local / cloud-metadata targets,
+        for an operator who deliberately needs them, by setting
+        ``allow_private_targets: true`` under ``tools.browser`` in config.json.
+        """
+        return bool(self.config.get("allow_private_targets", False))
+
+    @staticmethod
+    def _validate_url_safe(url: str) -> None:
+        """Reject URLs that target link-local / cloud-metadata addresses (SSRF guard).
+
+        Resolves the hostname to its IP address(es) and blocks any that are
+        link-local (169.254.0.0/16 — which includes the 169.254.169.254
+        cloud-metadata endpoint — and IPv6 fe80::/10) or a known IPv6
+        cloud-metadata address. Also rejects URLs with no host, non-HTTP(S)
+        schemes, or hosts that fail DNS resolution.
+
+        Loopback and RFC1918/LAN targets are intentionally left reachable:
+        unlike the vision/web_fetch tools, the browser legitimately opens local
+        pages (a dev server on ``localhost`` / ``127.0.0.1`` / a LAN IP), so a
+        blanket "block all internal" policy would break that core workflow.
+
+        Raises:
+            ValueError: if the URL targets a disallowed address.
+        """
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(f"Unsupported URL scheme: {parsed.scheme}")
+
+        hostname = parsed.hostname
+        if not hostname:
+            raise ValueError("URL has no hostname")
+
         try:
-            from common.ecorex_tool_permissions import get_tool_permission_broker
+            # Resolve all addresses for the hostname.
+            addr_infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        except socket.gaierror:
+            raise ValueError(f"Cannot resolve hostname: {hostname}")
 
-            if not get_tool_permission_broker().is_read_only():
-                return ""
-        except Exception:
-            return ""
-        if action not in {"snapshot", "get_text"}:
-            return "Current read-only mode blocks browser actions that can navigate, interact, capture files, or start a browser."
-        shared = BrowserTool._shared_service
-        if shared is not None and getattr(shared, "_alive", False):
-            return ""
-        endpoint = str(self.config.get("cdp_endpoint") or DEFAULT_CDP_ENDPOINT)
-        if cdp_is_reachable(endpoint):
-            self._read_only_existing_cdp_only = True
-            return ""
-        return (
-            "Current read-only mode can only inspect an already-open browser/CDP session. "
-            "Switch to smart-ask or full-access before starting browser automation."
-        )
+        for family, _, _, _, sockaddr in addr_infos:
+            ip_str = sockaddr[0]
+            ip = ipaddress.ip_address(ip_str)
+            # Block only the high-risk targets — link-local (incl. the
+            # 169.254.169.254 cloud-metadata endpoint) and the IPv6 metadata
+            # address. Loopback and RFC1918/LAN stay reachable for local dev.
+            if ip.is_link_local or ip in _CLOUD_METADATA_IPS:
+                raise ValueError(
+                    f"URL resolves to a link-local / cloud-metadata address "
+                    f"({ip_str}), request blocked for security"
+                )
 
-    def _snapshot_suffix(self, service: BrowserService, limit: int = 6000) -> str:
-        """Return a compact page snapshot after state-changing actions."""
+    def _check_engine_ready(self) -> Optional[ToolResult]:
+        """Return an actionable onboarding message if no browser engine is ready.
+
+        Returns None when a system Chrome/Edge or a downloaded Chromium is
+        available (so the tool can proceed). Otherwise returns a ToolResult with
+        clear guidance so the agent asks the user to enable the browser instead
+        of surfacing a raw Playwright launch error. CDP mode is exempt (the
+        endpoint is external and validated at connect time).
+        """
+        if self.config.get("cdp_endpoint"):
+            return None
         try:
-            snapshot = service.snapshot(cancel_event=self._current_cancel_event())
-            if len(snapshot) > limit:
-                snapshot = snapshot[:limit] + f"\n... [snapshot truncated, {len(snapshot)} chars total] ..."
-            return f"\n\n--- Page Snapshot After Action ---\n{snapshot}"
+            from agent.tools.browser.browser_env import capability_summary
+            summary = capability_summary(self.config)
         except Exception as e:
-            logger.debug(f"[Browser] Snapshot after action failed: {e}")
-            return "\n\n--- Page Snapshot After Action ---\n(snapshot unavailable; call snapshot if needed)"
+            logger.debug(f"[Browser] capability probe failed: {e}")
+            return None
+
+        if summary.get("ready"):
+            return None
+
+        # Desktop clients (dev or packaged) have no `cow` CLI — onboard via the
+        # in-chat `/install-browser` command. Source / web / server installs use
+        # the `cow install-browser` terminal command.
+        install_hint = (
+            "reply `/install-browser`" if summary.get("is_desktop")
+            else "run `cow install-browser` in a terminal"
+        )
+        return ToolResult.fail(
+            f"Browser tool not ready. Ask the user to {install_hint} (installs a browser engine; "
+            "skipped automatically if Google Chrome is already installed). "
+            "Do not retry until the user confirms."
+        )
 
     def execute(self, args: Dict[str, Any]) -> ToolResult:
         action = args.get("action", "").strip().lower()
@@ -224,9 +228,13 @@ class BrowserTool(BaseTool):
         if not handler:
             valid = ", ".join(sorted(self._ACTION_MAP.keys()))
             return ToolResult.fail(f"Unknown action '{action}'. Valid actions: {valid}")
-        read_only_blocker = self._read_only_start_blocker(action)
-        if read_only_blocker:
-            return ToolResult.fail(f"Browser blocked ({action}): {read_only_blocker}")
+
+        # Preflight: on desktop the playwright package is bundled but the browser
+        # binary may be missing; return actionable onboarding instead of a cryptic
+        # launch failure.
+        not_ready = self._check_engine_ready()
+        if not_ready is not None:
+            return not_ready
 
         try:
             return handler(self, args)
@@ -245,13 +253,23 @@ class BrowserTool(BaseTool):
         # Only auto-prepend https:// for bare hosts; preserve file://, about:, data:, etc.
         if "://" not in url and not url.startswith(("about:", "data:")):
             url = "https://" + url
+        # SSRF guard: for http(s) targets, reject hosts that resolve to
+        # link-local / cloud-metadata addresses before the browser navigates
+        # (and then auto-snapshots the page back to the model). Loopback and
+        # RFC1918/LAN are allowed so local dev servers work. Non-HTTP schemes
+        # (about:/data:/file:/chrome:) are not network-egress targets here.
+        if url.split(":", 1)[0].lower() in ("http", "https") and not self._allow_private_targets():
+            try:
+                self._validate_url_safe(url)
+            except ValueError as e:
+                return ToolResult.fail(f"Error: {e}")
         timeout = args.get("timeout", 30000)
         service = self._get_service()
-        result = service.navigate(url, timeout=timeout, cancel_event=self._current_cancel_event())
+        result = service.navigate(url, timeout=timeout)
         if "error" in result:
             return ToolResult.fail(result["error"])
         # Auto-snapshot after navigation so the agent gets page content in one call
-        snapshot_text = service.snapshot(cancel_event=self._current_cancel_event())
+        snapshot_text = service.snapshot()
         return ToolResult.success(
             f"Navigated to: {result['url']}\nTitle: {result['title']}\nStatus: {result['status']}\n\n"
             f"--- Page Snapshot ---\n{snapshot_text}"
@@ -259,18 +277,17 @@ class BrowserTool(BaseTool):
 
     def _do_snapshot(self, args: Dict[str, Any]) -> ToolResult:
         selector = args.get("selector")
-        text = self._get_service().snapshot(selector=selector, cancel_event=self._current_cancel_event())
+        text = self._get_service().snapshot(selector=selector)
         return ToolResult.success(text)
 
     def _do_click(self, args: Dict[str, Any]) -> ToolResult:
         ref = args.get("ref")
         selector = args.get("selector")
         timeout = args.get("timeout", 5000)
-        service = self._get_service()
-        result = service.click(ref=ref, selector=selector, timeout=timeout, cancel_event=self._current_cancel_event())
+        result = self._get_service().click(ref=ref, selector=selector, timeout=timeout)
         if "error" in result:
             return ToolResult.fail(result["error"])
-        return ToolResult.success(f"Clicked successfully.{self._snapshot_suffix(service)}")
+        return ToolResult.success(f"Clicked successfully. Use 'snapshot' to see updated page.")
 
     def _do_fill(self, args: Dict[str, Any]) -> ToolResult:
         text = args.get("text", "")
@@ -279,7 +296,7 @@ class BrowserTool(BaseTool):
         timeout = args.get("timeout", 5000)
         if not text and text != "":
             return ToolResult.fail("Error: 'text' is required for fill action")
-        result = self._get_service().fill(text, ref=ref, selector=selector, timeout=timeout, cancel_event=self._current_cancel_event())
+        result = self._get_service().fill(text, ref=ref, selector=selector, timeout=timeout)
         if "error" in result:
             return ToolResult.fail(result["error"])
         return ToolResult.success(f"Filled text into element. Use 'snapshot' to verify.")
@@ -291,7 +308,7 @@ class BrowserTool(BaseTool):
         timeout = args.get("timeout", 5000)
         if not value:
             return ToolResult.fail("Error: 'value' is required for select action")
-        result = self._get_service().select(value, ref=ref, selector=selector, timeout=timeout, cancel_event=self._current_cancel_event())
+        result = self._get_service().select(value, ref=ref, selector=selector, timeout=timeout)
         if "error" in result:
             return ToolResult.fail(result["error"])
         return ToolResult.success(f"Selected option '{value}'.")
@@ -301,7 +318,7 @@ class BrowserTool(BaseTool):
         amount = args.get("timeout", 500)  # reuse timeout field or default
         if "amount" in args:
             amount = args["amount"]
-        result = self._get_service().scroll(direction=direction, amount=amount, cancel_event=self._current_cancel_event())
+        result = self._get_service().scroll(direction=direction, amount=amount)
         if "error" in result:
             return ToolResult.fail(result["error"])
         pos = f"scrollY={result.get('scrollY', '?')}/{result.get('scrollHeight', '?')}"
@@ -309,26 +326,25 @@ class BrowserTool(BaseTool):
 
     def _do_screenshot(self, args: Dict[str, Any]) -> ToolResult:
         full_page = args.get("full_page", False)
-        filepath = self._get_service().screenshot(full_page=full_page, cwd=self.cwd, cancel_event=self._current_cancel_event())
+        filepath = self._get_service().screenshot(full_page=full_page, cwd=self.cwd)
         return ToolResult.success(f"Screenshot saved to: {filepath}")
 
     def _do_wait(self, args: Dict[str, Any]) -> ToolResult:
         selector = args.get("selector")
         timeout = args.get("timeout", 5000)
-        service = self._get_service()
-        result = service.wait(selector=selector, timeout=timeout, cancel_event=self._current_cancel_event())
+        result = self._get_service().wait(selector=selector, timeout=timeout)
         if "error" in result:
             return ToolResult.fail(result["error"])
-        return ToolResult.success(f"Wait completed.{self._snapshot_suffix(service)}")
+        return ToolResult.success(f"Wait completed.")
 
     def _do_back(self, args: Dict[str, Any]) -> ToolResult:
-        result = self._get_service().go_back(cancel_event=self._current_cancel_event())
+        result = self._get_service().go_back()
         if "error" in result:
             return ToolResult.fail(result["error"])
         return ToolResult.success(f"Navigated back to: {result['url']}")
 
     def _do_forward(self, args: Dict[str, Any]) -> ToolResult:
-        result = self._get_service().go_forward(cancel_event=self._current_cancel_event())
+        result = self._get_service().go_forward()
         if "error" in result:
             return ToolResult.fail(result["error"])
         return ToolResult.success(f"Navigated forward to: {result['url']}")
@@ -337,7 +353,7 @@ class BrowserTool(BaseTool):
         selector = args.get("selector", "").strip()
         if not selector:
             return ToolResult.fail("Error: 'selector' is required for get_text action")
-        result = self._get_service().get_text(selector, cancel_event=self._current_cancel_event())
+        result = self._get_service().get_text(selector)
         if "error" in result:
             return ToolResult.fail(result["error"])
         return ToolResult.success(result["text"])
@@ -346,17 +362,16 @@ class BrowserTool(BaseTool):
         key = args.get("key", "").strip()
         if not key:
             return ToolResult.fail("Error: 'key' is required for press action")
-        service = self._get_service()
-        result = service.press(key, cancel_event=self._current_cancel_event())
+        result = self._get_service().press(key)
         if "error" in result:
             return ToolResult.fail(result["error"])
-        return ToolResult.success(f"Pressed key: {key}.{self._snapshot_suffix(service)}")
+        return ToolResult.success(f"Pressed key: {key}")
 
     def _do_evaluate(self, args: Dict[str, Any]) -> ToolResult:
         script = args.get("script", "").strip()
         if not script:
             return ToolResult.fail("Error: 'script' is required for evaluate action")
-        result = self._get_service().evaluate(script, cancel_event=self._current_cancel_event())
+        result = self._get_service().evaluate(script)
         if "error" in result:
             return ToolResult.fail(result["error"])
         val = result.get("result")

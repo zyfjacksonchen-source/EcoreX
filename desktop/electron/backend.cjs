@@ -31,6 +31,9 @@ function packagedRuntimeSpec(resourcesPath, dataDir, port, targetPlatform = proc
       environment: {
         ...process.env,
         ECOREX_BOOTSTRAPPED: "1",
+        COW_DATA_DIR: dataDir,
+        COW_DESKTOP: "1",
+        PLAYWRIGHT_BROWSERS_PATH: path.join(dataDir, "ms-playwright"),
         EMATE_DESKTOP: "1",
         EMATE_PACKAGED_RUNTIME: "1",
         EMATE_DATA_DIR: dataDir,

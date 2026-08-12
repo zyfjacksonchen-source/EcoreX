@@ -514,7 +514,7 @@ def _install_locked_runtime_overlay(
                 str(runtime_lock),
             ),
             cwd=source,
-            timeout=300,
+            timeout=900,
             code="manual_webui_runtime_overlay_install_failed",
         )
         destination = _runtime_site_packages(core, platform)
@@ -651,52 +651,6 @@ def _replace_builtin_skills(core: Path, source: Path) -> None:
         target = core / path.relative_to(source)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
-
-
-def _replace_browser_pack_source(pack: Path, source: Path) -> None:
-    runtime_members = {"browser-runtime.json", "browser-runtime.zip"}
-    if any(not (pack / name).is_file() for name in runtime_members):
-        _fail("manual_webui_browser_pack_invalid")
-    for path in pack.iterdir():
-        if path.name in runtime_members:
-            continue
-        if path.is_dir():
-            shutil.rmtree(path)
-        else:
-            path.unlink()
-    browser_source = source / "release" / "capability-packs" / "browser"
-    for path in _tracked_source_files(source, "release/capability-packs/browser"):
-        target = pack / path.relative_to(browser_source)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, target)
-    protocol = _tracked_source_files(
-        source,
-        "release/capability-packs/common/ecorex_pack_protocol.py",
-    )
-    if len(protocol) != 1:
-        _fail("manual_webui_browser_pack_invalid")
-    shutil.copy2(protocol[0], pack / protocol[0].name)
-    expected = {
-        "schema_version": 1,
-        "protocol": "ecorex-stdio-tool-v1",
-        "pack_id": "browser",
-        "runtime_api_version": "1.0.0",
-        "tools": list(PACK_TOOLS["browser"]),
-    }
-    descriptor = pack / "ecorex-pack.json"
-    try:
-        if json.loads(descriptor.read_text(encoding="utf-8")) != expected:
-            _fail("manual_webui_browser_pack_invalid")
-        descriptor.write_bytes(
-            json.dumps(
-                expected,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        )
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        _fail("manual_webui_browser_pack_invalid")
 
 
 def _runtime_config(
@@ -849,8 +803,6 @@ def _prepare_stages(
                 ],
                 pack,
             )
-            if pack_id == "browser":
-                _replace_browser_pack_source(pack, source)
             packs[pack_id] = pack
         targets[(platform, architecture)] = {"core": core, **packs}
     return targets
@@ -1077,9 +1029,7 @@ def _build_release(
                     ArtifactKind.CAPABILITY_PACK,
                     platform,
                     architecture,
-                    executable_paths=("__main__.py",)
-                    if pack_id == "browser"
-                    else (),
+                    executable_paths=(),
                     pack_id=pack_id,
                     pack_tool_ids=tuple(PACK_TOOLS[pack_id]),
                     pack_service_ids=tuple(PACK_SERVICES[pack_id]),

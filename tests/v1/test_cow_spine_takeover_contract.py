@@ -177,6 +177,21 @@ def test_public_cow_worker_does_not_replace_the_cow_browser_executor(
     assert not hasattr(worker, "_bind_browser_pack")
 
 
+def test_browser_runtime_matches_the_cow_desktop_contract(tmp_path: Path, monkeypatch) -> None:
+    from agent.tools.browser import browser_env
+    from agent.tools.browser.browser_tool import BrowserTool
+
+    monkeypatch.setenv("COW_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("COW_DESKTOP", "1")
+    monkeypatch.setattr(browser_env, "detect_system_chrome", lambda: None)
+    tool = BrowserTool()
+
+    assert tool.config.get("cdp_endpoint") is None
+    assert browser_env.browsers_download_dir() == str(tmp_path / "ms-playwright")
+    assert tool._check_engine_ready().status == "error"
+    assert "/install-browser" in tool._check_engine_ready().result
+
+
 def test_cow_browser_success_is_stateful_and_projects_completed(
     monkeypatch,
 ) -> None:
@@ -213,6 +228,7 @@ def test_cow_browser_success_is_stateful_and_projects_completed(
 
     browser = Browser()
     tool = BrowserTool()
+    monkeypatch.setattr(tool, "_check_engine_ready", lambda: None)
     monkeypatch.setattr(tool, "_get_service", lambda: browser)
     worker = object.__new__(AgentTurnWorker)
     worker.kernel = Kernel()

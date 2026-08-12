@@ -195,7 +195,7 @@ def test_manual_webui_runtime_config_rebuilds_exact_cow_pack_projection(
                 f"macos-arm64-{__version__}.json"
             ),
         }
-        for pack_id in ("browser", "channels", "image", "ocr", "office")
+        for pack_id in ("channels", "image", "ocr", "office")
     ]
 
 
@@ -295,10 +295,11 @@ def test_manual_webui_core_package_shape_matches_bootstrap_bounds(
 
     builder["_verify_release_core_bounds"](built)
     assert 62_034_702 <= builder["MAX_CORE_ARCHIVE_BYTES"]
-    assert 166_490_214 <= builder["MAX_CORE_EXPANDED_BYTES"]
+    # Cow desktop ships Playwright's SDK/driver in Core, not a Browser Pack.
+    assert 300 * 1024 * 1024 <= builder["MAX_CORE_EXPANDED_BYTES"]
     go_source = (ROOT / "platform-staging/bootstrap/main.go").read_text()
     assert "maxCoreArchiveBytes  = 150 * 1024 * 1024" in go_source
-    assert "maxCoreExpandedBytes = 256 * 1024 * 1024" in go_source
+    assert "maxCoreExpandedBytes = 384 * 1024 * 1024" in go_source
 
     function_globals = builder["_verify_release_core_bounds"].__globals__
     archive_limit = function_globals["MAX_CORE_ARCHIVE_BYTES"]
@@ -473,7 +474,7 @@ def test_manual_webui_core_contains_exact_tracked_builtin_skills(tmp_path: Path)
     assert (core / "skills" / "office-presentations" / "SKILL.md").is_file()
 
 
-def test_manual_webui_rebuilds_browser_pack_from_current_cow_source(
+def retired_legacy_manual_webui_rebuilds_browser_pack_from_current_cow_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
