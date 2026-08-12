@@ -2325,9 +2325,13 @@ def create_app(
             execute_scheduled_task,
         )
         scheduler_service.execute_callback = scheduler_lifecycle.execute_from_scheduler
-        bind_scheduler_runtime(scheduler_handler.task_store, scheduler_service)
+        bind_scheduler_runtime(
+            scheduler_handler.task_store,
+            scheduler_service,
+            settings.workspace_root,
+        )
     else:
-        bind_scheduler_runtime(None, None)
+        bind_scheduler_runtime(None, None, settings.workspace_root)
     app.state.scheduler_service = scheduler_service
     gateway_lifecycle = (
         _AsyncResourceCloser(settings.model_gateway)

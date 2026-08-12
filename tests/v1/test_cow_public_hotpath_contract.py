@@ -580,6 +580,83 @@ def test_official_scheduler_is_default_and_isolated_per_workspace(
         tools[1][0].scheduler_service.stop()
 
 
+def test_product_scheduler_binding_is_reused_by_cow_initializer(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from agent.tools.scheduler import integration
+
+    workspace = tmp_path / "workspace"
+    store = TaskStore(str(workspace / "scheduler" / "tasks.json"))
+    service = SchedulerService(store, lambda _task: True)
+    integration.bind_scheduler_runtime(store, service, workspace)
+
+    def fail_if_initialized(*_args, **_kwargs):
+        raise AssertionError("started a second scheduler")
+
+    monkeypatch.setattr(
+        integration,
+        "init_scheduler",
+        fail_if_initialized,
+    )
+    tool = SchedulerTool({"channel_type": "web"})
+
+    try:
+        AgentInitializer(SimpleNamespace(), SimpleNamespace(scheduler_initialized=False))._initialize_scheduler(
+            [tool], str(workspace), "cow-scheduler-singleton"
+        )
+        assert tool.task_store is store
+        assert tool.scheduler_service is service
+        assert integration.get_task_store(workspace) is store
+        assert integration.get_scheduler_service(workspace) is service
+    finally:
+        integration.bind_scheduler_runtime(None, None, workspace)
+
+
+def test_scheduler_executes_without_legacy_permission_broker(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from agent.tools.scheduler import integration
+    from bridge.context import Context
+    from common import ecorex_tool_permissions as permissions
+
+    monkeypatch.setattr(
+        permissions,
+        "get_tool_permission_broker",
+        lambda: (_ for _ in ()).throw(AssertionError("legacy broker consulted")),
+    )
+    store = TaskStore(str(tmp_path / "scheduler" / "tasks.json"))
+    tool = SchedulerTool({"channel_type": "web"})
+    tool.task_store = store
+    tool.current_context = Context(
+        kwargs={
+            "thread_id": "thread-1",
+            "session_id": "session-1",
+            "receiver": "receiver-1",
+        }
+    )
+    created = tool.execute(
+        {
+            "action": "create",
+            "name": "direct Cow scheduler",
+            "message": "run once",
+            "schedule_type": "once",
+            "schedule_value": "+5m",
+        }
+    )
+    assert created.status == "success"
+
+    executed = []
+    monkeypatch.setattr(integration, "_is_channel_ready", lambda *_args: True)
+    monkeypatch.setattr(
+        integration,
+        "_execute_send_message",
+        lambda task, _bridge: executed.append(task["id"]) or True,
+    )
+    task = store.list_tasks()[0]
+    assert integration._execute_scheduled_task(task, SimpleNamespace()) is True
+    assert executed == [task["id"]]
+
+
 def test_public_worker_passes_channel_delivery_context_to_scheduler(
     tmp_path: Path, monkeypatch,
 ) -> None:

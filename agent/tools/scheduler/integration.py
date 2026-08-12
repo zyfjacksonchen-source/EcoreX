@@ -27,13 +27,25 @@ _init_lock = threading.Lock()
 _SCHEDULER_RUN_REQUEST_ID_KEY = "_scheduler_run_request_id"
 
 
-def bind_scheduler_runtime(task_store, scheduler_service) -> None:
+def _workspace_key(workspace_root) -> Optional[str]:
+    if workspace_root is None:
+        return None
+    return os.path.abspath(expand_path(str(workspace_root)))
+
+
+def bind_scheduler_runtime(task_store, scheduler_service, workspace_root=None) -> None:
     """Bind the product's single Cow scheduler runtime for model tools."""
 
     global _task_store, _scheduler_service
     with _init_lock:
         _task_store = task_store
         _scheduler_service = scheduler_service
+        workspace_key = _workspace_key(workspace_root)
+        if workspace_key is not None:
+            if task_store is None or scheduler_service is None:
+                _workspace_runtimes.pop(workspace_key, None)
+            else:
+                _workspace_runtimes[workspace_key] = (task_store, scheduler_service)
 
 
 def _summary_hash(value) -> str:
@@ -97,7 +109,7 @@ def init_scheduler(agent_bridge, workspace_root=None) -> bool:
 
     workspace_key = None
     if workspace_root is not None:
-        workspace_key = os.path.abspath(expand_path(str(workspace_root)))
+        workspace_key = _workspace_key(workspace_root)
         existing = _workspace_runtimes.get(workspace_key)
         if existing is not None and getattr(existing[1], "running", False):
             return True
@@ -256,7 +268,7 @@ def _send_channel_reply(channel, reply: Reply, context: Context, channel_type: s
 def get_task_store(workspace_root=None):
     """Get the global task store instance"""
     if workspace_root is not None:
-        runtime = _workspace_runtimes.get(os.path.abspath(expand_path(str(workspace_root))))
+        runtime = _workspace_runtimes.get(_workspace_key(workspace_root))
         return runtime[0] if runtime is not None else None
     return _task_store
 
@@ -264,7 +276,7 @@ def get_task_store(workspace_root=None):
 def get_scheduler_service(workspace_root=None):
     """Get the global scheduler service instance"""
     if workspace_root is not None:
-        runtime = _workspace_runtimes.get(os.path.abspath(expand_path(str(workspace_root))))
+        runtime = _workspace_runtimes.get(_workspace_key(workspace_root))
         return runtime[1] if runtime is not None else None
     return _scheduler_service
 
@@ -485,20 +497,6 @@ def _execute_scheduled_task(task: dict, agent_bridge) -> bool:
     _mark_scheduler_run_created(task, request_id)
 
     try:
-        _mark_scheduler_run_phase(request_id, "authorizing", status="running")
-        if not _authorize_scheduled_execution(task):
-            if _scheduler_run_was_cancelled(cancel_event):
-                _mark_scheduler_run_cancelled(request_id)
-                return True
-            _mark_scheduler_run_terminal(
-                request_id,
-                "failed",
-                reason="scheduler_permission_denied",
-                error_code="SCHEDULER_PERMISSION_DENIED",
-                error_message="Background scheduler execution was blocked by the permission boundary.",
-            )
-            return True
-
         if _scheduler_run_was_cancelled(cancel_event):
             _mark_scheduler_run_cancelled(request_id)
             return True
@@ -568,101 +566,6 @@ def _execute_scheduled_task(task: dict, agent_bridge) -> bool:
             get_cancel_registry().unregister(request_id)
         except Exception:
             pass
-
-
-def _authorize_scheduled_execution(task: dict) -> bool:
-    """Fail closed for background scheduler work that cannot ask the UI."""
-    def normalize_decision(decision: Any) -> dict:
-        if isinstance(decision, dict) and decision.get("allowed") in {True, False}:
-            return decision
-        return {"allowed": False, "reason": "Permission broker returned an invalid authorization decision."}
-
-    try:
-        from common.ecorex_tool_permissions import get_tool_permission_broker
-
-        broker = get_tool_permission_broker()
-        action = task.get("action", {}) if isinstance(task, dict) else {}
-        auth_args = {
-            "action": "execute",
-            "task_id": task.get("id") if isinstance(task, dict) else "",
-            "name": task.get("name") if isinstance(task, dict) else "",
-            "action_type": action.get("type") if isinstance(action, dict) else "",
-        }
-        capability_authorize = getattr(broker, "authorize_capability", None)
-        decision = None
-        if callable(capability_authorize):
-            candidate = capability_authorize(
-                "scheduler",
-                "execute",
-                arguments=auth_args,
-                metadata={"source": "scheduler_background"},
-            )
-            decision = normalize_decision(candidate)
-        if decision is None:
-            noninteractive = getattr(broker, "authorize_noninteractive", None)
-            if callable(noninteractive):
-                candidate = noninteractive("scheduler", auth_args)
-                if isinstance(candidate, dict):
-                    decision = normalize_decision(candidate)
-        if decision is None:
-            decision = {"allowed": False, "reason": "Permission broker returned an invalid authorization decision."}
-        if decision.get("allowed") is True:
-            return True
-        logger.warning(
-            f"[Scheduler] Task {task.get('id') if isinstance(task, dict) else '<unknown>'} "
-            f"blocked by permission boundary: {_body_summary(decision.get('reason'))}"
-        )
-        return False
-    except Exception as e:
-        logger.warning(f"[Scheduler] Permission broker unavailable; scheduled execution blocked: {_body_summary(e)}")
-        return False
-
-
-def _authorize_scheduled_tool_call(tool, tool_name: str, tool_params: dict, task: dict) -> bool:
-    """Authorize a concrete tool invoked by a scheduled task."""
-    def normalize_decision(decision: Any) -> dict:
-        if isinstance(decision, dict) and decision.get("allowed") in {True, False}:
-            return decision
-        return {"allowed": False, "reason": "Permission broker returned an invalid authorization decision."}
-
-    try:
-        from agent.protocol.agent_stream import AgentStreamExecutor
-        from common.ecorex_tool_permissions import get_tool_permission_broker
-
-        proxy_name, proxy_args = AgentStreamExecutor._permission_proxy_for_tool(
-            tool,
-            tool_name,
-            tool_params if isinstance(tool_params, dict) else {},
-        )
-        broker = get_tool_permission_broker()
-        capability_authorize = getattr(broker, "authorize_capability", None)
-        decision = None
-        if callable(capability_authorize):
-            candidate = capability_authorize(
-                proxy_name,
-                str((proxy_args or {}).get("action") or ""),
-                arguments=proxy_args,
-                metadata={"source": "scheduler_background_tool_call"},
-            )
-            decision = normalize_decision(candidate)
-        if decision is None:
-            noninteractive = getattr(broker, "authorize_noninteractive", None)
-            if callable(noninteractive):
-                candidate = noninteractive(proxy_name, proxy_args)
-                if isinstance(candidate, dict):
-                    decision = normalize_decision(candidate)
-        if decision is None:
-            decision = {"allowed": False, "reason": "Permission broker returned an invalid authorization decision."}
-        if decision.get("allowed") is True:
-            return True
-        logger.warning(
-            f"[Scheduler] Task {task.get('id') if isinstance(task, dict) else '<unknown>'} "
-            f"tool_call {tool_name!r} blocked by permission boundary: {_body_summary(decision.get('reason'))}"
-        )
-        return False
-    except Exception as e:
-        logger.warning(f"[Scheduler] Permission broker unavailable; scheduled tool_call blocked: {_body_summary(e)}")
-        return False
 
 
 def _remember_delivered_output(
@@ -953,15 +856,6 @@ def _execute_tool_call(task: dict, agent_bridge) -> bool:
                 "scheduler_tool_not_found",
                 "SCHEDULER_TOOL_NOT_FOUND",
                 f"Tool '{tool_name}' was not found.",
-            )
-            return True
-
-        if not _authorize_scheduled_tool_call(tool, tool_name, tool_params, task):
-            _mark_scheduler_task_failed(
-                task,
-                "scheduler_tool_permission_denied",
-                "SCHEDULER_TOOL_PERMISSION_DENIED",
-                f"Tool '{tool_name}' was blocked by the permission boundary.",
             )
             return True
 
