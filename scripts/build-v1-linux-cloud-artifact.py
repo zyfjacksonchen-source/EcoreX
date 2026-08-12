@@ -16,12 +16,21 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ecorex.deployment.cloud_artifact_builder import (  # noqa: E402
-    CloudArtifactPipelineError,
-    attach_detached_cloud_signature,
-    build_linux_cloud_artifact,
-    finalize_operator_waived_unsigned_artifact,
-)
+try:
+    from ecorex.deployment.cloud_artifact_builder import (  # noqa: E402
+        CloudArtifactPipelineError,
+        attach_detached_cloud_signature,
+        build_linux_cloud_artifact,
+        finalize_operator_waived_unsigned_artifact,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "cryptography" and not str(exc.name).startswith("cryptography."):
+        raise
+    raise SystemExit(
+        "cloud_builder_dependencies_missing: use the Python 3.11.9 builder venv "
+        "prepared by "
+        "'python scripts/install-v1-python-profile.py --profile cloud'"
+    ) from None
 
 
 def _parser() -> argparse.ArgumentParser:
