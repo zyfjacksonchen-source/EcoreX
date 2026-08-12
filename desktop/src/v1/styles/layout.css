@@ -777,6 +777,8 @@ textarea {
 }
 
 .ex-header-title h1 {
+  min-width: 0;
+  max-width: min(32rem, 50vw);
   margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1211,6 +1213,10 @@ textarea {
   .ex-workspace-header {
     min-height: 56px;
     padding-inline: var(--space-2);
+  }
+
+  .ex-header-title h1 {
+    max-width: min(20rem, 52vw);
   }
 
   .ex-permission-badge {
