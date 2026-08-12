@@ -369,6 +369,17 @@ class GatewayFunctionCallOutputInput(GatewayModel):
         _validate_json_value(self.output, "tool output")
         return self
 
+    def provider_output(self) -> str:
+        if isinstance(self.output, str):
+            return self.output
+        return json.dumps(
+            self.output,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+
 
 GatewayInputItem = Annotated[
     (

@@ -316,13 +316,7 @@ class ManagedHTTPSChatCompletionsProvider:
                     {
                         "role": "tool",
                         "tool_call_id": item.tool_call_id,
-                        "content": json.dumps(
-                            item.output,
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                            allow_nan=False,
-                        ),
+                        "content": item.provider_output(),
                     }
                 )
         projected = [

@@ -655,13 +655,7 @@ class ManagedHTTPSResponsesProvider:
                     {
                         "type": "function_call_output",
                         "call_id": item.tool_call_id,
-                        "output": json.dumps(
-                            item.output,
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                            allow_nan=False,
-                        ),
+                        "output": item.provider_output(),
                     }
                 )
             elif isinstance(item, GatewayUserMessageInput):

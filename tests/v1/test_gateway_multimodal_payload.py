@@ -124,6 +124,57 @@ def test_responses_tool_continuation_orders_output_before_visual_evidence() -> N
     )
 
 
+def test_responses_tool_continuation_preserves_cow_text_output() -> None:
+    policy = ecorex_chat_gateway_policy()
+    request = ModelGatewayRequest(
+        request_id="request_cow_tool_output_1",
+        thread_id="thread_cow_tool_output_1",
+        turn_id="turn_cow_tool_output_1",
+        trace_id="trace_cow_tool_output_1",
+        model_id=policy.local_model_id,
+        model_policy=policy,
+        input_items=[
+            GatewayFunctionCallOutputInput(
+                tool_call_id="call_cow_edit_1",
+                output='{"message":"Successfully replaced text in MEMORY.md"}',
+            )
+        ],
+        previous_response_id="response_requested_cow_edit_1",
+        config_snapshot_id="config_cow_tool_output_1",
+        capability_snapshot_id="capability_cow_tool_output_1",
+        permission_snapshot_id="permission_cow_tool_output_1",
+    )
+    fake = SimpleNamespace(
+        validate_request=lambda _request, _principal: None,
+        model_policies={request.model_id: request.model_policy},
+        model_mapping={request.model_id: request.model_policy.upstream_model_id},
+    )
+
+    payload, _names = ManagedHTTPSResponsesProvider._payload(
+        fake, request, SimpleNamespace(account_id="account_1")
+    )
+
+    assert payload["input"][0]["output"] == (
+        '{"message":"Successfully replaced text in MEMORY.md"}'
+    )
+    chat_payload, _names = ManagedHTTPSChatCompletionsProvider._payload(
+        SimpleNamespace(
+            model_mapping={request.model_id: request.model_policy.upstream_model_id}
+        ),
+        request,
+        prior=SimpleNamespace(
+            assistant_message=lambda: {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [],
+            }
+        ),
+    )
+    assert chat_payload["messages"][-1]["content"] == (
+        '{"message":"Successfully replaced text in MEMORY.md"}'
+    )
+
+
 def test_chat_completions_payload_contains_compatible_image_url_part() -> None:
     request = _request()
     fake = SimpleNamespace(
