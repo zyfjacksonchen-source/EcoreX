@@ -815,25 +815,31 @@ def _prepare_stages(
             "amd64": "x64",
         }.get(host_platform.machine().casefold())
         if sys.platform == "darwin" and platform == "macos" and architecture == host_architecture:
-            _run(
-                (
-                    str(interpreter),
-                    "-I",
-                    "-B",
-                    "-c",
-                    "import ecorex.bootstrap.install_local, "
-                    "ecorex.integration.dependency_pack_process, lark_channel, qrcode; "
-                    "from agent.tools.tool_manager import ToolManager; "
-                    "from bridge.agent_initializer import AgentInitializer; "
-                    "from ecorex.runtime.worker import AgentTurnWorker; "
-                    "from ecorex.connectors.weixin import _qr_png_data_url; "
-                    "assert ToolManager and AgentInitializer and AgentTurnWorker; "
-                    "assert _qr_png_data_url('https://weixin.qq.com/q/emate').startswith('data:image/png;base64,')",
-                ),
-                cwd=core,
-                timeout=30,
-                code="manual_webui_product_import_probe_failed",
-            )
+            with tempfile.TemporaryDirectory(
+                prefix="product-import-probe-", dir=target_root
+            ) as probe_data:
+                environment = dict(os.environ)
+                environment["EMATE_DATA_DIR"] = probe_data
+                _run(
+                    (
+                        str(interpreter),
+                        "-I",
+                        "-B",
+                        "-c",
+                        "import ecorex.bootstrap.install_local, "
+                        "ecorex.integration.dependency_pack_process, lark_channel, qrcode; "
+                        "from agent.tools.tool_manager import ToolManager; "
+                        "from bridge.agent_initializer import AgentInitializer; "
+                        "from ecorex.runtime.worker import AgentTurnWorker; "
+                        "from ecorex.connectors.weixin import _qr_png_data_url; "
+                        "assert ToolManager and AgentInitializer and AgentTurnWorker; "
+                        "assert _qr_png_data_url('https://weixin.qq.com/q/emate').startswith('data:image/png;base64,')",
+                    ),
+                    cwd=core,
+                    environment=environment,
+                    timeout=120,
+                    code="manual_webui_product_import_probe_failed",
+                )
         packs: dict[str, Path] = {}
         for pack_id in sorted(PACK_TOOLS):
             pack = target_root / "packs" / pack_id

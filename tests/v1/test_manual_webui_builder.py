@@ -408,6 +408,68 @@ def test_manual_webui_product_overlay_contains_the_cow_runtime_spine(
     assert probe.returncode == 0, probe.stderr
 
 
+def test_manual_webui_product_probe_isolated_from_signed_core(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    builder = _builder()
+    function_globals = builder["_prepare_stages"].__globals__
+    monkeypatch.setitem(function_globals, "TARGETS", (("macos", "arm64"),))
+    monkeypatch.setitem(function_globals, "PACK_TOOLS", {})
+    for name in (
+        "_install_locked_runtime_overlay",
+        "_install_cow_runtime_overlay",
+        "_replace_product_imports",
+        "_replace_builtin_skills",
+        "_runtime_config",
+    ):
+        monkeypatch.setitem(function_globals, name, lambda *args, **kwargs: None)
+    monkeypatch.setitem(
+        function_globals, "build_pack_python_manifest", lambda *args, **kwargs: b"{}"
+    )
+    monkeypatch.setitem(
+        function_globals,
+        "resolve_pack_python",
+        lambda *args, **kwargs: (Path(sys.executable), None),
+    )
+
+    python_zip = tmp_path / "python311.zip"
+    with zipfile.ZipFile(python_zip, "w"):
+        pass
+    core_archive = tmp_path / "core.zip"
+    with zipfile.ZipFile(core_archive, "w") as archive:
+        member = zipfile.ZipInfo("bin/python311.zip", builder["FIXED_TIME"])
+        member.create_system = 3
+        member.external_attr = (0o100644) << 16
+        archive.writestr(member, python_zip.read_bytes())
+
+    calls: list[tuple[Path, Path, int]] = []
+
+    def fake_run(command, **kwargs):  # noqa: ANN001
+        data_dir = Path(kwargs["environment"]["EMATE_DATA_DIR"])
+        assert data_dir.is_dir()
+        (data_dir / "run.log").write_text("probe", encoding="utf-8")
+        calls.append((Path(kwargs["cwd"]), data_dir, kwargs["timeout"]))
+        return b""
+
+    monkeypatch.setitem(function_globals, "_run", fake_run)
+    stage_root = tmp_path / "stages"
+    builder["_prepare_stages"](
+        ROOT,
+        {"core-macos-arm64": core_archive},
+        stage_root,
+        {},
+    )
+
+    core = stage_root / "macos-arm64" / "core"
+    assert len(calls) == 1
+    assert calls[0][0] == core
+    assert calls[0][1].parent == core.parent
+    assert calls[0][2] == 120
+    assert not calls[0][1].exists()
+    assert not (core / "run.log").exists()
+
+
 def test_manual_webui_core_contains_exact_tracked_builtin_skills(tmp_path: Path) -> None:
     builder = _builder()
     core = tmp_path / "core"
