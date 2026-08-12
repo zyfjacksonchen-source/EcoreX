@@ -7,12 +7,45 @@ const net = require("node:net");
 const path = require("node:path");
 
 const DEFAULT_RUNTIME_PORT = 8765;
+const SAFE_RUNTIME_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SHA256 = /^[a-f0-9]{64}$/;
+
+function runtimeIdentity(runtimeRoot) {
+  try {
+    const markerPath = path.join(runtimeRoot, ".slot.json");
+    const metadata = fs.lstatSync(markerPath);
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size < 1 || metadata.size > 256 * 1024) return null;
+    const marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+    const identity = {
+      release_id: marker.release_id,
+      build_digest: marker.build_digest,
+      artifact_id: marker.artifact_id,
+      artifact_sha256: marker.artifact_sha256,
+      payload_digest: marker.payload_digest,
+    };
+    return (
+      SAFE_RUNTIME_ID.test(identity.release_id)
+      && SHA256.test(identity.build_digest)
+      && SAFE_RUNTIME_ID.test(identity.artifact_id)
+      && SHA256.test(identity.artifact_sha256)
+      && SHA256.test(identity.payload_digest)
+    ) ? identity : null;
+  } catch {
+    return null;
+  }
+}
+
+function sameRuntimeIdentity(left, right) {
+  return Boolean(left && right && Object.keys(left).every((key) => left[key] === right[key]));
+}
 
 function packagedRuntimeSpec(resourcesPath, dataDir, port, targetPlatform = process.platform) {
   try {
     const runtimeRoot = path.join(resourcesPath, "runtime");
     const payload = path.join(runtimeRoot, "payload");
     const command = path.join(payload, "bin", targetPlatform === "win32" ? "ecorex.exe" : "ecorex");
+    const identity = runtimeIdentity(runtimeRoot);
+    if (!identity) return null;
     for (const directory of [runtimeRoot, payload]) {
       const metadata = fs.lstatSync(directory);
       if (!metadata.isDirectory() || metadata.isSymbolicLink()) return null;
@@ -45,6 +78,7 @@ function packagedRuntimeSpec(resourcesPath, dataDir, port, targetPlatform = proc
       },
       windowsHide: true,
       detached: targetPlatform !== "win32",
+      runtimeIdentity: identity,
     };
   } catch {
     return null;
@@ -56,38 +90,75 @@ function developmentPython() {
   return process.platform === "win32" ? "python" : "python3";
 }
 
-function issueRuntimeOwnerReceipt(dataDir) {
+function issueRuntimeOwnerReceipt(dataDir, pid, identity, nonce = crypto.randomBytes(32).toString("base64url")) {
+  if (!Number.isSafeInteger(pid) || pid < 1 || !sameRuntimeIdentity(identity, runtimeIdentityValue(identity))) {
+    throw new Error("Runtime owner receipt is invalid.");
+  }
+  if (!/^[A-Za-z0-9_-]{43}$/.test(nonce)) throw new Error("Runtime owner nonce is invalid.");
   const directory = path.join(dataDir, "bootstrap");
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const receiptPath = path.join(directory, "runtime-owner.json");
   const temporary = `${receiptPath}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`;
-  const nonce = crypto.randomBytes(32).toString("base64url");
-  fs.writeFileSync(temporary, JSON.stringify({ schema_version: 1, nonce }), { mode: 0o600 });
+  fs.writeFileSync(temporary, JSON.stringify({
+    schema_version: 2,
+    nonce,
+    pid,
+    runtime_identity: identity,
+  }), { mode: 0o600 });
   fs.renameSync(temporary, receiptPath);
   return nonce;
 }
 
-function runtimeOwnerNonce(dataDir) {
+function runtimeIdentityValue(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const identity = {
+    release_id: value.release_id,
+    build_digest: value.build_digest,
+    artifact_id: value.artifact_id,
+    artifact_sha256: value.artifact_sha256,
+    payload_digest: value.payload_digest,
+  };
+  return (
+    Object.keys(value).length === 5
+    && SAFE_RUNTIME_ID.test(identity.release_id)
+    && SHA256.test(identity.build_digest)
+    && SAFE_RUNTIME_ID.test(identity.artifact_id)
+    && SHA256.test(identity.artifact_sha256)
+    && SHA256.test(identity.payload_digest)
+  ) ? identity : null;
+}
+
+function runtimeOwnerReceipt(dataDir) {
   try {
     const receiptPath = path.join(dataDir, "bootstrap", "runtime-owner.json");
     const metadata = fs.lstatSync(receiptPath);
-    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 1024) return null;
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 2048) return null;
     const value = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
-    return value.schema_version === 1 && /^[A-Za-z0-9_-]{43}$/.test(value.nonce)
-      ? value.nonce
-      : null;
+    const identity = runtimeIdentityValue(value.runtime_identity);
+    return (
+      value.schema_version === 2
+      && /^[A-Za-z0-9_-]{43}$/.test(value.nonce)
+      && Number.isSafeInteger(value.pid)
+      && value.pid > 0
+      && identity
+    ) ? { nonce: value.nonce, pid: value.pid, runtime_identity: identity } : null;
   } catch {
     return null;
   }
 }
 
-function runtimeResponds(port, dataDir) {
+function runtimeOwnerNonce(dataDir) {
+  return runtimeOwnerReceipt(dataDir)?.nonce ?? null;
+}
+
+function probeRuntimeOwner(port, dataDir) {
   return new Promise((resolve) => {
-    const nonce = runtimeOwnerNonce(dataDir);
-    if (!nonce) {
-      resolve(false);
+    const receipt = runtimeOwnerReceipt(dataDir);
+    if (!receipt) {
+      resolve(null);
       return;
     }
+    const { nonce } = receipt;
     const challenge = crypto.randomBytes(32).toString("base64url");
     const expected = crypto.createHmac("sha256", Buffer.from(nonce, "base64url"))
       .update("e-mate.runtime-owner.v1\0", "ascii")
@@ -99,7 +170,7 @@ function runtimeResponds(port, dataDir) {
       if (settled) return;
       settled = true;
       clearTimeout(deadline);
-      resolve(accepted);
+      resolve(accepted ? receipt : null);
     };
     const request = http.get({
       hostname: "127.0.0.1",
@@ -124,6 +195,11 @@ function runtimeResponds(port, dataDir) {
     }, 1_500);
     request.once("error", () => finish(false));
   });
+}
+
+async function runtimeResponds(port, dataDir, identity = null) {
+  const receipt = await probeRuntimeOwner(port, dataDir);
+  return Boolean(receipt && (!identity || sameRuntimeIdentity(receipt.runtime_identity, identity)));
 }
 
 function loopbackPortOccupied(port) {
@@ -153,21 +229,28 @@ function runtimeTerminationSpec(pid, force, targetPlatform = process.platform, s
   return { pid: -pid, signal: force ? "SIGKILL" : "SIGTERM" };
 }
 
-function terminateRuntimeProcess(child, force = false) {
-  const termination = runtimeTerminationSpec(child.pid, force);
+function terminateRuntimeProcess(pid, force = false) {
+  const termination = runtimeTerminationSpec(pid, force);
   if (!termination) return;
   if (termination.command) {
-    const killer = spawn(termination.command, termination.args, { stdio: "ignore", windowsHide: true });
-    killer.once("error", () => {
-      try { child.kill(force ? "SIGKILL" : "SIGTERM"); } catch { /* The exact child already exited. */ }
-    });
+    spawn(termination.command, termination.args, { stdio: "ignore", windowsHide: true }).once("error", () => {});
     return;
   }
-  try {
-    process.kill(termination.pid, termination.signal);
-  } catch {
-    try { child.kill(termination.signal); } catch { /* The exact child already exited. */ }
-  }
+  try { process.kill(termination.pid, termination.signal); } catch { /* The exact process group already exited. */ }
+}
+
+async function stopRuntimePid(pid, port) {
+  const waitForRelease = async (attempts) => {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (!await loopbackPortOccupied(port)) return true;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return false;
+  };
+  terminateRuntimeProcess(pid);
+  if (await waitForRelease(50)) return;
+  terminateRuntimeProcess(pid, true);
+  if (!await waitForRelease(10)) throw new Error(`e-Mate Runtime did not release loopback port ${port}.`);
 }
 
 class BackendManager extends EventEmitter {
@@ -178,6 +261,7 @@ class BackendManager extends EventEmitter {
     this.dataDir = dataDir;
     this.port = port;
     this.child = null;
+    this.runtimePid = null;
     this.starting = null;
   }
 
@@ -211,6 +295,9 @@ class BackendManager extends EventEmitter {
       if (!isVerifiedPayload) {
         throw new Error("Development Runtime must be launched through the signed e-Mate Bootstrap.");
       }
+      const runtimeRoot = path.dirname(payload);
+      const identity = runtimeIdentity(runtimeRoot);
+      if (!identity) throw new Error("Development Runtime identity is invalid.");
       spec = {
         command: developmentPython(),
         args: ["-m", "ecorex.server.cli", "serve", "--host", "127.0.0.1", "--port", String(this.port)],
@@ -218,19 +305,24 @@ class BackendManager extends EventEmitter {
         environment: { ...process.env, PYTHONUNBUFFERED: "1" },
         windowsHide: true,
         detached: process.platform !== "win32",
+        runtimeIdentity: identity,
       };
     }
 
-    if (await runtimeResponds(this.port, this.dataDir)) {
-      this.emit("ready", this.origin);
-      return this.origin;
+    const existing = await probeRuntimeOwner(this.port, this.dataDir);
+    if (existing) {
+      if (sameRuntimeIdentity(existing.runtime_identity, spec.runtimeIdentity)) {
+        this.runtimePid = existing.pid;
+        this.emit("ready", this.origin);
+        return this.origin;
+      }
+      await stopRuntimePid(existing.pid, this.port);
     }
     if (await loopbackPortOccupied(this.port)) {
       throw new Error(`Loopback port ${this.port} is occupied by a process not owned by e-Mate.`);
     }
-    if (this.packaged) {
-      spec.environment.ECOREX_RUNTIME_OWNER_NONCE = issueRuntimeOwnerReceipt(this.dataDir);
-    }
+    const ownerNonce = crypto.randomBytes(32).toString("base64url");
+    spec.environment.ECOREX_RUNTIME_OWNER_NONCE = ownerNonce;
 
     const child = spawn(spec.command, spec.args, {
       cwd: spec.cwd,
@@ -239,7 +331,6 @@ class BackendManager extends EventEmitter {
       windowsHide: spec.windowsHide,
       detached: spec.detached,
     });
-    this.child = child;
     let startupFailure = null;
     child.once("error", () => {
       startupFailure = new Error("e-Mate Runtime could not be launched.");
@@ -249,9 +340,15 @@ class BackendManager extends EventEmitter {
       startupFailure = new Error(`e-Mate Runtime stopped during startup (${code ?? "terminated"}).`);
       this.emit("exit", code);
     });
+    if (!Number.isSafeInteger(child.pid) || child.pid < 1) {
+      throw new Error("e-Mate Runtime could not be launched.");
+    }
+    this.child = child;
+    this.runtimePid = child.pid;
+    issueRuntimeOwnerReceipt(this.dataDir, child.pid, spec.runtimeIdentity, ownerNonce);
 
     while (!startupFailure) {
-      if (await runtimeResponds(this.port, this.dataDir)) {
+      if (await runtimeResponds(this.port, this.dataDir, spec.runtimeIdentity)) {
         this.emit("ready", this.origin);
         return this.origin;
       }
@@ -265,27 +362,17 @@ class BackendManager extends EventEmitter {
     return this.start();
   }
 
-  stop() {
+  async stop() {
     const child = this.child;
     this.child = null;
-    if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-    return new Promise((resolve) => {
-      let settled = false;
-      let timer = null;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        if (timer) clearTimeout(timer);
-        resolve();
-      };
-      child.once("exit", finish);
-      terminateRuntimeProcess(child);
-      timer = setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) terminateRuntimeProcess(child, true);
-        setTimeout(finish, 1_000).unref();
-      }, 5_000);
-      timer.unref();
-    });
+    const pid = this.runtimePid;
+    this.runtimePid = null;
+    if (!pid) return;
+    if (!child) {
+      const receipt = await probeRuntimeOwner(this.port, this.dataDir);
+      if (!receipt || receipt.pid !== pid) return;
+    }
+    await stopRuntimePid(pid, this.port);
   }
 }
 
@@ -294,7 +381,9 @@ module.exports = {
   DEFAULT_RUNTIME_PORT,
   issueRuntimeOwnerReceipt,
   packagedRuntimeSpec,
+  runtimeIdentity,
   runtimeOwnerNonce,
+  runtimeOwnerReceipt,
   runtimeResponds,
   runtimeTerminationSpec,
 };

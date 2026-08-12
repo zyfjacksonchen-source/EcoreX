@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { link, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
@@ -16,6 +17,85 @@ const productVersion = async () => (await readFile(
   path.resolve(desktop, "../ecorex/_version.py"),
   "utf8",
 )).match(/__version__ = "([^"]+)"/)?.[1];
+
+const runtimeIdentity = (digit = "a") => ({
+  release_id: `release-test-${digit}`,
+  build_digest: digit.repeat(64),
+  artifact_id: `core-test-${digit}`,
+  artifact_sha256: digit.repeat(64),
+  payload_digest: digit.repeat(64),
+});
+
+const ownedRuntimeProgram = String.raw`
+const crypto = require("node:crypto");
+const http = require("node:http");
+const nonce = process.env.TEST_RUNTIME_NONCE || process.env.ECOREX_RUNTIME_OWNER_NONCE;
+const portArgument = process.argv.indexOf("--port");
+const port = Number(process.env.TEST_RUNTIME_PORT || process.argv[portArgument + 1]);
+const server = http.createServer((request, response) => {
+  if (process.env.TEST_RUNTIME_UNKNOWN === "1") {
+    response.writeHead(404);
+    response.end();
+    return;
+  }
+  const challenge = request.headers["x-ecorex-owner-challenge"];
+  const proof = crypto.createHmac("sha256", Buffer.from(nonce, "base64url"))
+    .update("e-mate.runtime-owner.v1\0", "ascii")
+    .update(challenge, "ascii")
+    .digest("base64url");
+  response.writeHead(204, { "X-EcoreX-Runtime-Owner": proof });
+  response.end();
+});
+server.listen(port, "127.0.0.1", () => console.log(server.address().port));
+process.on("SIGTERM", () => server.close(() => process.exit(0)));
+`;
+
+const startOwnedRuntime = (nonce, { port = 0, unknown = false } = {}) => new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, ["-e", ownedRuntimeProgram], {
+    detached: true,
+    env: {
+      ...process.env,
+      TEST_RUNTIME_NONCE: nonce,
+      TEST_RUNTIME_PORT: String(port),
+      TEST_RUNTIME_UNKNOWN: unknown ? "1" : "0",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  child.once("error", reject);
+  child.once("exit", (code) => reject(new Error(`test Runtime exited early (${code}): ${stderr}`)));
+  child.stdout.setEncoding("utf8");
+  child.stdout.once("data", (value) => resolve({ child, port: Number(value.trim()) }));
+});
+
+const stopTestRuntime = async (child) => {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  try { child.kill("SIGKILL"); } catch { return; }
+  await exited;
+};
+
+const loopbackPortOpen = (port) => new Promise((resolve) => {
+  const socket = net.connect({ host: "127.0.0.1", port });
+  socket.once("connect", () => { socket.destroy(); resolve(true); });
+  socket.once("error", () => resolve(false));
+});
+
+const stageTestRuntime = async (resources, identity) => {
+  const runtime = path.join(resources, "runtime");
+  const payload = path.join(runtime, "payload");
+  const command = path.join(payload, "bin", process.platform === "win32" ? "ecorex.exe" : "ecorex");
+  await mkdir(path.dirname(command), { recursive: true });
+  await link(process.execPath, command);
+  await Promise.all([
+    writeFile(path.join(payload, "serve"), ownedRuntimeProgram),
+    writeFile(path.join(runtime, ".slot.json"), JSON.stringify(identity)),
+    writeFile(path.join(runtime, "release-manifest.json"), "{}"),
+  ]);
+  return runtime;
+};
 
 test("desktop identity and unsigned release targets are explicit", async () => {
   const pkg = JSON.parse(await load("package.json"));
@@ -107,11 +187,7 @@ test("desktop loads the existing loopback Runtime and never packages a second re
 test("loopback owner proof never discloses its secret to an untrusted listener", async () => {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "emate-owner-proof-"));
   const nonce = Buffer.alloc(32, 7).toString("base64url");
-  await mkdir(path.join(dataDir, "bootstrap"));
-  await writeFile(
-    path.join(dataDir, "bootstrap", "runtime-owner.json"),
-    JSON.stringify({ schema_version: 1, nonce }),
-  );
+  backendContract.issueRuntimeOwnerReceipt(dataDir, process.pid, runtimeIdentity(), nonce);
   const listen = async (server) => {
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     return server.address().port;
@@ -179,44 +255,61 @@ test("desktop adopts an exact crash-left Runtime before rotating its owner recei
   const root = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-adopt-"));
   const resources = path.join(root, "resources");
   const dataDir = path.join(root, "data");
-  const runtime = path.join(resources, "runtime");
+  const identity = runtimeIdentity();
   const nonce = Buffer.alloc(32, 11).toString("base64url");
-  const server = http.createServer((request, response) => {
-    const challenge = request.headers["x-ecorex-owner-challenge"];
-    const proof = createHmac("sha256", Buffer.from(nonce, "base64url"))
-      .update("e-mate.runtime-owner.v1\0", "ascii")
-      .update(challenge, "ascii")
-      .digest("base64url");
-    response.writeHead(204, { "X-EcoreX-Runtime-Owner": proof });
-    response.end();
-  });
+  let owned;
   try {
-    await mkdir(path.join(runtime, "payload", "bin"), { recursive: true });
-    await mkdir(path.join(dataDir, "bootstrap"), { recursive: true });
-    await Promise.all([
-      writeFile(path.join(runtime, "payload", "bin", "ecorex"), "not launched"),
-      writeFile(path.join(runtime, ".slot.json"), "{}"),
-      writeFile(path.join(runtime, "release-manifest.json"), "{}"),
-      writeFile(
-        path.join(dataDir, "bootstrap", "runtime-owner.json"),
-        JSON.stringify({ schema_version: 1, nonce }),
-      ),
-    ]);
-    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const port = server.address().port;
+    await stageTestRuntime(resources, identity);
+    owned = await startOwnedRuntime(nonce);
+    backendContract.issueRuntimeOwnerReceipt(dataDir, owned.child.pid, identity, nonce);
     const backend = new backendContract.BackendManager({
       packaged: true,
       resourcesPath: resources,
       dataDir,
-      port,
+      port: owned.port,
     });
 
-    assert.equal(await backend.start(), `http://127.0.0.1:${port}`);
+    assert.equal(await backend.start(), `http://127.0.0.1:${owned.port}`);
     assert.equal(backend.child, null);
     assert.equal(backendContract.runtimeOwnerNonce(dataDir), nonce);
     await backend.stop();
+    assert.equal(await loopbackPortOpen(owned.port), false);
   } finally {
-    if (server.listening) await new Promise((resolve) => server.close(resolve));
+    await stopTestRuntime(owned?.child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("desktop replaces an owned Runtime only when its immutable identity changed", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-replace-"));
+  const resources = path.join(root, "resources");
+  const dataDir = path.join(root, "data");
+  const oldIdentity = runtimeIdentity("a");
+  const newIdentity = runtimeIdentity("b");
+  const nonce = Buffer.alloc(32, 12).toString("base64url");
+  let oldRuntime;
+  let backend;
+  try {
+    await stageTestRuntime(resources, newIdentity);
+    oldRuntime = await startOwnedRuntime(nonce);
+    backendContract.issueRuntimeOwnerReceipt(dataDir, oldRuntime.child.pid, oldIdentity, nonce);
+    backend = new backendContract.BackendManager({
+      packaged: true,
+      resourcesPath: resources,
+      dataDir,
+      port: oldRuntime.port,
+    });
+
+    assert.equal(await backend.start(), `http://127.0.0.1:${oldRuntime.port}`);
+    const receipt = backendContract.runtimeOwnerReceipt(dataDir);
+    assert.deepEqual(receipt.runtime_identity, newIdentity);
+    assert.notEqual(receipt.pid, oldRuntime.child.pid);
+    assert.equal(await backendContract.runtimeResponds(oldRuntime.port, dataDir, newIdentity), true);
+    await backend.stop();
+    assert.equal(await loopbackPortOpen(oldRuntime.port), false);
+  } finally {
+    await backend?.stop().catch(() => {});
+    await stopTestRuntime(oldRuntime?.child);
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -225,40 +318,88 @@ test("desktop never rotates a receipt or kills an unknown loopback listener", as
   const root = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-unknown-"));
   const resources = path.join(root, "resources");
   const dataDir = path.join(root, "data");
-  const runtime = path.join(resources, "runtime");
+  const identity = runtimeIdentity();
   const nonce = Buffer.alloc(32, 13).toString("base64url");
-  let requests = 0;
-  const server = http.createServer((_request, response) => {
-    requests += 1;
-    response.writeHead(404);
-    response.end();
-  });
+  let unknown;
   try {
-    await mkdir(path.join(runtime, "payload", "bin"), { recursive: true });
-    await mkdir(path.join(dataDir, "bootstrap"), { recursive: true });
-    await Promise.all([
-      writeFile(path.join(runtime, "payload", "bin", "ecorex"), "not launched"),
-      writeFile(path.join(runtime, ".slot.json"), "{}"),
-      writeFile(path.join(runtime, "release-manifest.json"), "{}"),
-      writeFile(
-        path.join(dataDir, "bootstrap", "runtime-owner.json"),
-        JSON.stringify({ schema_version: 1, nonce }),
-      ),
-    ]);
-    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await stageTestRuntime(resources, identity);
+    unknown = await startOwnedRuntime(nonce, { unknown: true });
+    backendContract.issueRuntimeOwnerReceipt(dataDir, unknown.child.pid, identity, nonce);
+    const receiptPath = path.join(dataDir, "bootstrap", "runtime-owner.json");
+    const receipt = await readFile(receiptPath, "utf8");
     const backend = new backendContract.BackendManager({
       packaged: true,
       resourcesPath: resources,
       dataDir,
-      port: server.address().port,
+      port: unknown.port,
     });
 
     await assert.rejects(backend.start(), /not owned by e-Mate/);
-    assert.equal(backendContract.runtimeOwnerNonce(dataDir), nonce);
-    assert.equal(server.listening, true);
-    assert.ok(requests >= 1);
+    assert.equal(await readFile(receiptPath, "utf8"), receipt);
+    assert.equal(await loopbackPortOpen(unknown.port), true);
   } finally {
-    if (server.listening) await new Promise((resolve) => server.close(resolve));
+    await stopTestRuntime(unknown?.child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Runtime spawn errors reject without an unhandled error race", async (context) => {
+  if (process.platform === "win32") {
+    context.skip("POSIX executable permissions are not portable to Windows");
+    return;
+  }
+  const root = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-spawn-error-"));
+  const resources = path.join(root, "resources");
+  const dataDir = path.join(root, "data");
+  const runtime = path.join(resources, "runtime");
+  const command = path.join(runtime, "payload", "bin", "ecorex");
+  try {
+    await mkdir(path.dirname(command), { recursive: true });
+    await Promise.all([
+      writeFile(command, "not executable", { mode: 0o600 }),
+      writeFile(path.join(runtime, ".slot.json"), JSON.stringify(runtimeIdentity())),
+      writeFile(path.join(runtime, "release-manifest.json"), "{}"),
+    ]);
+    const backend = new backendContract.BackendManager({
+      packaged: true,
+      resourcesPath: resources,
+      dataDir,
+      port: 0,
+    });
+
+    await assert.rejects(backend.start(), /could not be launched/);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(backendContract.runtimeOwnerReceipt(dataDir), null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("legacy owner receipts are neither adopted nor killed", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-legacy-owner-"));
+  const resources = path.join(root, "resources");
+  const dataDir = path.join(root, "data");
+  const nonce = Buffer.alloc(32, 14).toString("base64url");
+  let legacy;
+  try {
+    await stageTestRuntime(resources, runtimeIdentity());
+    legacy = await startOwnedRuntime(nonce);
+    await mkdir(path.join(dataDir, "bootstrap"), { recursive: true });
+    await writeFile(
+      path.join(dataDir, "bootstrap", "runtime-owner.json"),
+      JSON.stringify({ schema_version: 1, nonce }),
+    );
+    const backend = new backendContract.BackendManager({
+      packaged: true,
+      resourcesPath: resources,
+      dataDir,
+      port: legacy.port,
+    });
+
+    await assert.rejects(backend.start(), /not owned by e-Mate/);
+    assert.equal(await loopbackPortOpen(legacy.port), true);
+  } finally {
+    await stopTestRuntime(legacy?.child);
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -268,12 +409,13 @@ test("packaged desktop directly launches the immutable Runtime on macOS and Wind
   const resources = path.join(root, "resources");
   const dataDir = path.join(root, "data");
   const runtime = path.join(resources, "runtime");
+  const identity = runtimeIdentity();
   try {
     await mkdir(path.join(runtime, "payload", "bin"), { recursive: true });
     await Promise.all([
       writeFile(path.join(runtime, "payload", "bin", "ecorex"), "mac runtime"),
       writeFile(path.join(runtime, "payload", "bin", "ecorex.exe"), "windows runtime"),
-      writeFile(path.join(runtime, ".slot.json"), "{}"),
+      writeFile(path.join(runtime, ".slot.json"), JSON.stringify(identity)),
       writeFile(path.join(runtime, "release-manifest.json"), "{}"),
     ]);
 
@@ -288,6 +430,7 @@ test("packaged desktop directly launches the immutable Runtime on macOS and Wind
     assert.equal(mac.environment.EMATE_PACKAGED_RUNTIME, "1");
     assert.equal(mac.windowsHide, true);
     assert.equal(mac.detached, true);
+    assert.deepEqual(mac.runtimeIdentity, identity);
 
     const windows = backendContract.packagedRuntimeSpec(resources, dataDir, 9988, "win32");
     assert.equal(windows.command, path.join(runtime, "payload", "bin", "ecorex.exe"));
@@ -297,10 +440,16 @@ test("packaged desktop directly launches the immutable Runtime on macOS and Wind
     assert.equal(windows.environment.PLAYWRIGHT_BROWSERS_PATH, path.join(dataDir, "ms-playwright"));
     assert.equal(windows.windowsHide, true);
     assert.equal(windows.detached, false);
+    assert.deepEqual(windows.runtimeIdentity, identity);
 
-    const nonce = backendContract.issueRuntimeOwnerReceipt(dataDir);
+    const nonce = backendContract.issueRuntimeOwnerReceipt(dataDir, 4312, identity);
     assert.match(nonce, /^[A-Za-z0-9_-]{43}$/);
     assert.equal(backendContract.runtimeOwnerNonce(dataDir), nonce);
+    assert.deepEqual(backendContract.runtimeOwnerReceipt(dataDir), {
+      nonce,
+      pid: 4312,
+      runtime_identity: identity,
+    });
     assert.equal(await readdir(dataDir).then((items) => items.includes("slots")), false);
 
     await rm(path.join(runtime, ".slot.json"));
