@@ -5,7 +5,7 @@ import threading
 
 from common.log import logger
 from agent.protocol.models import LLMRequest, LLMModel
-from agent.protocol.agent_stream import AgentStreamExecutor
+from agent.protocol.agent_stream import AgentStreamExecutor, new_messages_since_user_query
 from agent.protocol.result import AgentAction, AgentActionType, ToolResult, AgentResult
 from agent.tools.base_tool import BaseTool, ToolStage
 
@@ -461,13 +461,17 @@ class Agent:
         try:
             response = executor.run_stream(user_message)
         except Exception:
-            # If executor cleared its messages (context overflow / message format error),
-            # sync that back to the Agent's own message list so the next request
-            # starts fresh instead of hitting the same overflow forever.
-            if len(executor.messages) == 0:
-                with self.messages_lock:
-                    self.messages.clear()
-                    logger.info("[Agent] Cleared Agent message history after executor recovery")
+            # Preserve completed tool facts even when a later model call fails.
+            with self.messages_lock:
+                self.messages = list(executor.messages)
+                self._last_run_new_messages = new_messages_since_user_query(
+                    executor.messages, original_length, user_message
+                )
+                current_ids = [id(message) for message in executor.messages]
+                self._last_run_context_compacted = (
+                    current_ids[:original_length] != original_message_ids
+                )
+            self.stream_executor = executor
             raise
 
         # Sync executor's messages back to agent (thread-safe).
@@ -478,12 +482,9 @@ class Agent:
             current_ids = [id(message) for message in executor.messages]
             prefix_ids = current_ids[:original_length]
             self._last_run_context_compacted = prefix_ids != original_message_ids
-            original_ids = set(original_message_ids)
-            self._last_run_new_messages = [
-                message
-                for message in executor.messages
-                if id(message) not in original_ids
-            ]
+            self._last_run_new_messages = new_messages_since_user_query(
+                executor.messages, original_length, user_message
+            )
         
         # Store executor reference for agent_bridge to access files_to_send
         self.stream_executor = executor
