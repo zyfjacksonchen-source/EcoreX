@@ -5403,6 +5403,18 @@ class _CowGatewayModel:
         self._user_images_lock = threading.Lock()
         self._round = 0
 
+    @property
+    def bot(self) -> "_CowGatewayModel":
+        return self
+
+    @property
+    def supports_vision(self) -> bool:
+        return True
+
+    @property
+    def managed_gateway(self) -> bool:
+        return True
+
     def fork(self, scope: str) -> "_CowGatewayModel":
         return _CowGatewayModel(
             self.gateway,
@@ -5687,6 +5699,91 @@ class _CowGatewayModel:
             if choices:
                 text += str(choices[0].get("delta", {}).get("content") or "")
         return {"choices": [{"message": {"content": text}}]}
+
+    def call_vision(
+        self,
+        *,
+        image_url: str,
+        question: str,
+        model: str | None = None,
+        max_tokens: int | None = None,
+    ) -> dict[str, Any]:
+        """Run Cow Vision through this turn's authenticated managed Gateway."""
+
+        del model, max_tokens
+        try:
+            header, data_base64 = image_url.split(",", 1)
+            if not header.startswith("data:image/") or not header.endswith(";base64"):
+                raise ValueError
+            mime_type = header[5:-7]
+            image_bytes = base64.b64decode(data_base64, validate=True)
+        except (ValueError, TypeError):
+            raise ValueError("vision image must be a valid base64 image data URL") from None
+        digest = hashlib.sha256(image_bytes).hexdigest()
+        self._round += 1
+        gateway_request = ModelGatewayRequest(
+            request_id=f"cow_{self.request_scope}_vision_{self._round}",
+            thread_id=self.thread_id,
+            turn_id=self.turn_id,
+            trace_id=f"trace_{self.turn_id}",
+            model_id=self.model,
+            model_policy=GatewayModelPolicy.model_validate(
+                ecorex_chat_gateway_policy(self.model).model_dump(mode="json")
+            ),
+            instructions=_EMATE_MODEL_INSTRUCTIONS,
+            input_items=[
+                GatewayUserMessageInput(
+                    message_id=f"{self.request_scope}:vision:{self._round}",
+                    content=question.strip() or "Describe this image.",
+                    images=[
+                        GatewayImageInput(
+                            attachment_id=f"vision_{digest[:24]}",
+                            revision_id=f"vision_revision_{digest[:24]}",
+                            mime_type=mime_type,
+                            data_base64=data_base64,
+                            sha256=digest,
+                            source_sha256=digest,
+                        )
+                    ],
+                )
+            ],
+            config_snapshot_id="cow_config_2.1.5",
+            capability_snapshot_id="cow_tools_2.1.5",
+            permission_snapshot_id="cow_local_2.1.5",
+            direct_tools=[],
+            previous_response_id=None,
+        )
+        from queue import Queue
+
+        output: Queue[Any] = Queue()
+        end = object()
+        future = asyncio.run_coroutine_threadsafe(
+            self._produce(gateway_request, output, end), self.loop
+        )
+        text = ""
+        usage: dict[str, int] = {}
+        while True:
+            event = output.get()
+            if event is end:
+                break
+            if isinstance(event, BaseException):
+                raise event
+            if event.event_type is GatewayEventType.OUTPUT_TEXT_DELTA:
+                text += str(event.delta or "")
+            elif event.event_type is GatewayEventType.RESPONSE_FAILED:
+                raise _GatewayResponseFailure(
+                    event.error_code or event.error_message or "vision_gateway_failed",
+                    retryable=False,
+                )
+            elif event.event_type is GatewayEventType.RESPONSE_COMPLETED:
+                usage = event.usage or {}
+                self.last_usage = event.usage
+                if event.usage is not None:
+                    self.usage_events.append((event.response_id, event.usage))
+        future.result()
+        if not text:
+            raise _GatewayResponseFailure("vision_gateway_empty_response", retryable=False)
+        return {"content": text, "model": self.model, "usage": usage}
 
 
 class _CowAgentBridge:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ast
+import base64
 import inspect
 from pathlib import Path
 import runpy
@@ -476,6 +477,70 @@ def test_cow_tool_catalog_is_not_rejected_at_the_legacy_sixty_four_tool_limit() 
         loop.close()
 
     assert len(request.direct_tools) == 65
+
+
+def test_cow_vision_uses_the_authenticated_managed_gateway(
+    tmp_path: Path,
+) -> None:
+    from agent.tools.vision import Vision
+    from common import ecorex_tool_permissions as permissions
+    from ecorex.gateway import GatewayEvent, GatewayEventType
+    from ecorex.runtime.worker import _CowGatewayModel
+
+    image = tmp_path / "pixel.png"
+    image.write_bytes(
+        base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+    )
+
+    class Gateway:
+        def __init__(self) -> None:
+            self.requests = []
+
+        async def stream(self, request):
+            self.requests.append(request)
+            yield GatewayEvent(
+                seq=1,
+                event_type=GatewayEventType.OUTPUT_TEXT_DELTA,
+                response_id="response_vision",
+                delta="a pixel",
+            )
+            yield GatewayEvent(
+                seq=2,
+                event_type=GatewayEventType.RESPONSE_COMPLETED,
+                response_id="response_vision",
+                usage={"input_tokens": 2, "output_tokens": 2, "total_tokens": 4},
+            )
+
+    async def run():
+        gateway = Gateway()
+        model = _CowGatewayModel(
+            gateway,
+            asyncio.get_running_loop(),
+            thread_id="thread_vision",
+            turn_id="turn_vision",
+            model_id="ecorex-chat",
+        )
+        tool = Vision({"cwd": str(tmp_path)})
+        tool.model = model
+        token = permissions.bind_cow_direct_tools()
+        try:
+            result = await asyncio.to_thread(
+                tool.execute,
+                {"image": "pixel.png", "question": "What is shown?"},
+            )
+        finally:
+            permissions.reset_cow_direct_tools(token)
+        return result, gateway
+
+    result, gateway = asyncio.run(run())
+
+    assert result.status == "success"
+    assert result.result["content"] == "a pixel"
+    assert len(gateway.requests) == 1
+    assert gateway.requests[0].model_id == "ecorex-chat"
+    assert gateway.requests[0].input_items[0].images[0].mime_type == "image/png"
 
 
 def test_real_cow_agent_stream_runs_through_the_managed_gateway(

@@ -302,6 +302,14 @@ class Vision(BaseTool):
         Providers that share the same display name as the preferred provider
         are de-duplicated to avoid retrying the same endpoint twice.
         """
+        try:
+            main_bot = self.model.bot
+        except Exception:
+            main_bot = None
+        if getattr(main_bot, "managed_gateway", False):
+            managed = self._build_main_model_provider()
+            return [managed] if managed is not None else []
+
         user_model = self._resolve_user_vision_model()
         user_provider = self._resolve_user_vision_provider()
         providers: List[VisionProvider] = []
