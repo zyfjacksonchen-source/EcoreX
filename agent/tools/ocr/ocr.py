@@ -9,9 +9,10 @@ import re
 import sys
 import tempfile
 import time
+from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from agent.tools.base_tool import BaseTool, ToolResult
 from common.log import logger
@@ -34,6 +35,17 @@ _DEFAULT_TIMEOUT_SECONDS = 2.0
 _PREPROCESS_TARGET_LONG_EDGE = 960
 _RAPIDOCR_DET_LIMIT_SIDE_LEN = 736
 _RAPIDOCR_ENGINES: Dict[str, Any] = {}
+_RUNTIME_ARTIFACT_RESOLVER: ContextVar[Optional[Callable[[str], Optional[str]]]] = (
+    ContextVar("cow_ocr_runtime_artifact_resolver", default=None)
+)
+
+
+def bind_runtime_artifact_resolver(resolver: Callable[[str], Optional[str]]):
+    return _RUNTIME_ARTIFACT_RESOLVER.set(resolver)
+
+
+def reset_runtime_artifact_resolver(token: Any) -> None:
+    _RUNTIME_ARTIFACT_RESOLVER.reset(token)
 
 
 def _ocr_executor() -> ToolExecutionEnvironment:
@@ -402,6 +414,9 @@ class OcrTool(BaseTool):
         }
         if image:
             try:
+                resolver = _RUNTIME_ARTIFACT_RESOLVER.get()
+                if resolver is not None:
+                    image = resolver(image) or image
                 image_bytes, source = _image_bytes_from_source(image, cwd=self.cwd)
                 ocr_payload = _local_ocr(image_bytes, _safe_timeout(args.get("timeout")))
                 text_value = str(ocr_payload.get("text") or "")
@@ -419,6 +434,12 @@ class OcrTool(BaseTool):
                     "latencyMs": int((time.monotonic() - started) * 1000),
                     "cacheHit": False,
                 }
+            if ocr_payload.get("status") in {"error", "unavailable"}:
+                return ToolResult.fail({
+                    "status": "error",
+                    "ocr": self._public_ocr_metadata(ocr_payload),
+                    "totalLatencyMs": int((time.monotonic() - started) * 1000),
+                })
         if action == "extract_urls":
             return ToolResult.success({
                 "status": "success",

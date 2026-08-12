@@ -16,10 +16,12 @@ import hashlib
 from html import escape
 import json
 import math
+import os
 from pathlib import Path
 import threading
 import time
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from ecorex.capabilities import (
     ApprovalRequiredError,
@@ -6239,6 +6241,87 @@ class AgentTurnWorker:
         return hashlib.sha256(encoded).hexdigest()
 
     @staticmethod
+    def _runtime_artifact_id(value: str) -> str | None:
+        parsed = urlsplit(str(value or "").strip())
+        if parsed.query or parsed.fragment:
+            return None
+        if parsed.scheme or parsed.netloc:
+            if (
+                parsed.scheme.casefold() not in {"http", "https"}
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+            ):
+                return None
+        parts = parsed.path.split("/")
+        if (
+            len(parts) != 6
+            or parts[1:4] != ["api", "v1", "artifacts"]
+            or parts[5] != "preview"
+        ):
+            return None
+        artifact_id = parts[4]
+        if (
+            not artifact_id.startswith("art_")
+            or not artifact_id[4:].isalnum()
+            or len(artifact_id) > 128
+        ):
+            return None
+        return artifact_id
+
+    def _materialize_ocr_artifact(
+        self,
+        source: str,
+        *,
+        thread_id: str,
+        turn_id: str,
+    ) -> str | None:
+        artifact_id = self._runtime_artifact_id(source)
+        if artifact_id is None:
+            return None
+        if self.input_attachments is None:
+            raise ConflictError("Runtime artifact materialization is unavailable")
+        from ecorex.artifacts import ArtifactFamily
+        from ecorex.artifacts.actions import ArtifactExportMaterializer
+        from ecorex.artifacts.identity import sanitize_display_filename
+
+        service = self.input_attachments.artifacts
+        account_id = self.input_attachments.account_id
+        projection = service.get_user_artifact(artifact_id, account_id=account_id)
+        scope = service.get_artifact_scope(artifact_id)
+        if scope.account_id != account_id or scope.thread_id != thread_id:
+            raise CapabilityDeniedError("artifact is not bound to this thread")
+        if (
+            projection.family is not ArtifactFamily.IMAGE
+            or not projection.mime_type.startswith("image/")
+        ):
+            raise ToolArgumentsValidationError("artifact is not an image")
+        root = (
+            service.root
+            / "tool-materializations"
+            / hashlib.sha256(
+                f"{thread_id}\0{turn_id}".encode("utf-8")
+            ).hexdigest()[:16]
+            / projection.revision_id
+        )
+        materializer = ArtifactExportMaterializer(service, root)
+        path = root / sanitize_display_filename(projection.display_name)
+        if path.exists() or path.is_symlink():
+            if (
+                path.is_symlink()
+                or not path.is_file()
+                or hashlib.sha256(path.read_bytes()).hexdigest() != projection.sha256
+            ):
+                raise ConflictError("materialized artifact changed")
+        else:
+            path, _content = materializer.materialize(
+                projection,
+                account_id=account_id,
+            )
+        os.chmod(path, 0o400)
+        return str(path)
+
+    @staticmethod
     def _tool_effects(name: str) -> tuple[list[str], str]:
         if name in {"write", "edit", "send", "env_config", "scheduler"}:
             return ["write"], "high"
@@ -6509,10 +6592,21 @@ class AgentTurnWorker:
             bind_managed_web_search_executor,
             reset_managed_web_search_executor,
         )
+        from agent.tools.ocr.ocr import (
+            bind_runtime_artifact_resolver,
+            reset_runtime_artifact_resolver,
+        )
 
         bridge = self._cow_bridge
         model_token = bridge.bind_model(model)
         tool_token = bind_cow_direct_tools()
+        ocr_artifact_token = bind_runtime_artifact_resolver(
+            lambda source: self._materialize_ocr_artifact(
+                source,
+                thread_id=thread_id,
+                turn_id=turn_id,
+            )
+        )
         image_token = (
             bind_managed_image_executor(managed_image_executor)
             if managed_image_executor is not None
@@ -6607,6 +6701,7 @@ class AgentTurnWorker:
                 reset_managed_image_executor(image_token)
             if web_search_token is not None:
                 reset_managed_web_search_executor(web_search_token)
+            reset_runtime_artifact_resolver(ocr_artifact_token)
             reset_managed_subagent_reply(subagent_token)
             reset_cow_direct_tools(tool_token)
             bridge.reset_model(model_token)

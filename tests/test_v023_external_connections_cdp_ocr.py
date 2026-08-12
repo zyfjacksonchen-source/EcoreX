@@ -384,7 +384,7 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         with self.assertLogs("log", level="WARNING") as logs:
             result = OcrTool().execute({"action": "extract_urls", "image": dangerous})
 
-        self.assertEqual(result.status, "success")
+        self.assertEqual(result.status, "error")
         ocr = result.result["ocr"]
         self.assertEqual(ocr["status"], "error")
         self.assertNotIn("error", ocr)
