@@ -21,7 +21,6 @@ from ecorex.integration.pack_verification import verify_product_capability_pack 
 from ecorex.update import (  # noqa: E402
     Ed25519SignatureVerifier,
     ReleaseManifest,
-    SlotStore,
     verify_artifact_file,
     verify_manifest_signature,
 )
@@ -30,6 +29,12 @@ from ecorex.update.pack_install import (  # noqa: E402
     PreparedPackSet,
     resolve_release_pack_set,
     verify_prepared_pack_set,
+)
+from ecorex.update.storage import (  # noqa: E402
+    UnsafePackage,
+    _extract_zip_safely,
+    _package_payload_digest,
+    _payload_tree_digest,
 )
 
 
@@ -108,19 +113,33 @@ def stage(
             pack_content_verifier=verify_product_capability_pack,
         )
 
-        store = SlotStore(temporary / "install")
         slot_id = _slot_id(manifest, core)
-        slot = store.stage(
-            core_path,
-            slot_id=slot_id,
-            manifest=manifest,
-            artifact=core,
-            payload_enricher=prepared.payload_enricher,
-        )
         bundle = temporary / "bundle"
-        bundle.mkdir()
-        os.replace(slot / "payload", bundle / "payload")
-        marker = json.loads((slot / ".slot.json").read_text(encoding="utf-8"))
+        payload = bundle / "payload"
+        payload.mkdir(parents=True)
+        _extract_zip_safely(
+            core_path,
+            payload,
+            max_members=50_000,
+            max_unpacked_bytes=2 * 1024 * 1024 * 1024,
+        )
+        core_payload_digest = _payload_tree_digest(payload)
+        expected_core_digest = _package_payload_digest(core_path, core)
+        if core_payload_digest != expected_core_digest:
+            raise UnsafePackage("extracted Core payload does not match the release package")
+        supplemental = dict(prepared.payload_enricher(payload))
+        marker = {
+            "slot_id": slot_id,
+            "release_id": manifest.release_id,
+            "version": manifest.version,
+            "build_digest": manifest.build_digest,
+            "artifact_id": core.artifact_id,
+            "artifact_sha256": core.sha256,
+            "channel": manifest.channel.value,
+            "core_payload_digest": expected_core_digest,
+            "supplemental": supplemental,
+            "payload_digest": _payload_tree_digest(payload),
+        }
         marker["created_at"] = json.loads(manifest_bytes)["created_at"]
         (bundle / ".slot.json").write_text(
             json.dumps(marker, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
