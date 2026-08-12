@@ -3,35 +3,44 @@ const { EventEmitter } = require("node:events");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
-const os = require("node:os");
 const path = require("node:path");
 
 const DEFAULT_RUNTIME_PORT = 8765;
 
-function packagedBackendPath(resourcesPath) {
-  const executable = process.platform === "win32" ? "emate-backend.exe" : "emate-backend";
-  const candidates = [
-    path.join(resourcesPath, "runtime", "bin", executable),
-    path.join(resourcesPath, "runtime", executable),
-  ];
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
-}
-
-function packagedReleasePath(resourcesPath) {
+function packagedRuntimeSpec(resourcesPath, dataDir, port, targetPlatform = process.platform) {
   try {
     const runtimeRoot = path.join(resourcesPath, "runtime");
-    const pointerPath = path.join(runtimeRoot, "current-release");
-    const pointerMetadata = fs.lstatSync(pointerPath);
-    if (!pointerMetadata.isFile() || pointerMetadata.isSymbolicLink() || pointerMetadata.size > 64) return null;
-    const pointer = fs.readFileSync(pointerPath, "utf8");
-    if (!/^release-stable-[0-9a-f]{24}\n$/.test(pointer)) return null;
-    const releaseDir = path.join(runtimeRoot, "releases", pointer.slice(0, -1));
-    const releaseMetadata = fs.lstatSync(releaseDir);
-    const manifestMetadata = fs.lstatSync(path.join(releaseDir, "release-manifest.json"));
-    return releaseMetadata.isDirectory() && !releaseMetadata.isSymbolicLink()
-      && manifestMetadata.isFile() && !manifestMetadata.isSymbolicLink()
-      ? releaseDir
-      : null;
+    const payload = path.join(runtimeRoot, "payload");
+    const command = path.join(payload, "bin", targetPlatform === "win32" ? "ecorex.exe" : "ecorex");
+    for (const directory of [runtimeRoot, payload]) {
+      const metadata = fs.lstatSync(directory);
+      if (!metadata.isDirectory() || metadata.isSymbolicLink()) return null;
+    }
+    for (const file of [
+      command,
+      path.join(runtimeRoot, ".slot.json"),
+      path.join(runtimeRoot, "release-manifest.json"),
+    ]) {
+      const metadata = fs.lstatSync(file);
+      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size < 1) return null;
+    }
+    return {
+      command,
+      args: ["serve", "--host", "127.0.0.1", "--port", String(port)],
+      cwd: payload,
+      environment: {
+        ...process.env,
+        ECOREX_BOOTSTRAPPED: "1",
+        EMATE_DESKTOP: "1",
+        EMATE_PACKAGED_RUNTIME: "1",
+        EMATE_DATA_DIR: dataDir,
+        PYTHONDONTWRITEBYTECODE: "1",
+        PYTHONNOUSERSITE: "1",
+        PYTHONTZPATH: "",
+        PYTHONUNBUFFERED: "1",
+      },
+      windowsHide: true,
+    };
   } catch {
     return null;
   }
@@ -42,73 +51,15 @@ function developmentPython() {
   return process.platform === "win32" ? "python" : "python3";
 }
 
-function installedSlotExists(dataDir) {
-  try {
-    const pointerPath = path.join(dataDir, "slot-pointers.json");
-    const metadata = fs.lstatSync(pointerPath);
-    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 16 * 1024) return false;
-    const value = JSON.parse(fs.readFileSync(pointerPath, "utf8"));
-    return typeof value.current === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.current);
-  } catch {
-    return false;
-  }
-}
-
-function installedReleaseMatches(dataDir, releaseDir) {
-  try {
-    const safeId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-    const pointerPath = path.join(dataDir, "slot-pointers.json");
-    const pointerMetadata = fs.lstatSync(pointerPath);
-    const manifestPath = path.join(releaseDir, "release-manifest.json");
-    const manifestMetadata = fs.lstatSync(manifestPath);
-    if (
-      !pointerMetadata.isFile() || pointerMetadata.isSymbolicLink() || pointerMetadata.size > 16 * 1024
-      || !manifestMetadata.isFile() || manifestMetadata.isSymbolicLink() || manifestMetadata.size > 1024 * 1024
-    ) return false;
-    const pointers = JSON.parse(fs.readFileSync(pointerPath, "utf8"));
-    if (
-      !pointers || typeof pointers !== "object" || Array.isArray(pointers)
-      || Object.keys(pointers).some((key) => !["current", "previous", "known_good"].includes(key))
-      || typeof pointers.current !== "string"
-      || !safeId.test(pointers.current)
-      || !Array.isArray(pointers.known_good)
-      || pointers.known_good.length < 1
-      || pointers.known_good.length > 3
-      || new Set(pointers.known_good).size !== pointers.known_good.length
-      || pointers.known_good.some((slotId) => typeof slotId !== "string" || !safeId.test(slotId))
-      || !pointers.known_good.includes(pointers.current)
-      || (
-        pointers.previous !== undefined
-        && pointers.previous !== null
-        && (typeof pointers.previous !== "string" || !safeId.test(pointers.previous))
-      )
-    ) return false;
-    const slotPath = path.join(dataDir, "slots", pointers.current, ".slot.json");
-    const pythonPath = process.platform === "win32"
-      ? path.join(dataDir, "slots", pointers.current, "payload", "bin", "pack-python", "python.exe")
-      : path.join(dataDir, "slots", pointers.current, "payload", "bin", "pack-python", "bin", "python3");
-    const slotMetadata = fs.lstatSync(slotPath);
-    const pythonMetadata = fs.lstatSync(pythonPath);
-    if (
-      !slotMetadata.isFile() || slotMetadata.isSymbolicLink() || slotMetadata.size > 64 * 1024
-      || !pythonMetadata.isFile() || pythonMetadata.isSymbolicLink() || pythonMetadata.size < 1
-    ) return false;
-    const slot = JSON.parse(fs.readFileSync(slotPath, "utf8"));
-    const release = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    return (
-      typeof release.release_id === "string"
-      && /^release-stable-[0-9a-f]{24}$/.test(release.release_id)
-      && typeof release.version === "string"
-      && /^[0-9]+\.[0-9]+\.[0-9]+$/.test(release.version)
-      && typeof release.build_digest === "string"
-      && /^[0-9a-f]{64}$/.test(release.build_digest)
-      && slot.release_id === release.release_id
-      && slot.version === release.version
-      && slot.build_digest === release.build_digest
-    );
-  } catch {
-    return false;
-  }
+function issueRuntimeOwnerReceipt(dataDir) {
+  const directory = path.join(dataDir, "bootstrap");
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const receiptPath = path.join(directory, "runtime-owner.json");
+  const temporary = `${receiptPath}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`;
+  const nonce = crypto.randomBytes(32).toString("base64url");
+  fs.writeFileSync(temporary, JSON.stringify({ schema_version: 1, nonce }), { mode: 0o600 });
+  fs.renameSync(temporary, receiptPath);
+  return nonce;
 }
 
 function runtimeOwnerNonce(dataDir) {
@@ -199,33 +150,11 @@ class BackendManager extends EventEmitter {
   async #start() {
     fs.mkdirSync(this.dataDir, { recursive: true, mode: 0o700 });
 
-    let command;
-    let args;
-    let cwd;
+    let spec;
     if (this.packaged) {
-      command = packagedBackendPath(this.resourcesPath);
-      if (!command) throw new Error("The packaged e-Mate Bootstrap is missing.");
-      const releaseDir = packagedReleasePath(this.resourcesPath);
-      if (!releaseDir) {
-        throw new Error("The packaged e-Mate release seed is missing.");
-      }
-      if (installedReleaseMatches(this.dataDir, releaseDir)) {
-        args = ["--launch-installed", "--install-root", this.dataDir, "--no-open"];
-      } else {
-        args = ["--local-release", releaseDir, "--install-root", this.dataDir, "--no-open"];
-      }
-      cwd = this.dataDir;
-    } else if (process.env.EMATE_DEV_BOOTSTRAP) {
-      command = path.resolve(process.env.EMATE_DEV_BOOTSTRAP);
-      if (!fs.existsSync(command)) throw new Error("EMATE_DEV_BOOTSTRAP is unavailable.");
-      const releaseDir = process.env.EMATE_DEV_RELEASE_DIR;
-      args = installedSlotExists(this.dataDir)
-        ? ["--launch-installed", "--install-root", this.dataDir, "--no-open"]
-        : ["--local-release", path.resolve(releaseDir || ""), "--install-root", this.dataDir, "--no-open"];
-      if (!installedSlotExists(this.dataDir) && (!releaseDir || !fs.existsSync(path.join(releaseDir, "release-manifest.json")))) {
-        throw new Error("EMATE_DEV_RELEASE_DIR must contain a signed release.");
-      }
-      cwd = this.dataDir;
+      spec = packagedRuntimeSpec(this.resourcesPath, this.dataDir, this.port);
+      if (!spec) throw new Error("The packaged e-Mate Runtime is missing.");
+      spec.environment.ECOREX_RUNTIME_OWNER_NONCE = issueRuntimeOwnerReceipt(this.dataDir);
     } else {
       const payload = process.cwd();
       const isVerifiedPayload = process.env.ECOREX_BOOTSTRAPPED === "1"
@@ -234,16 +163,20 @@ class BackendManager extends EventEmitter {
       if (!isVerifiedPayload) {
         throw new Error("Development Runtime must be launched through the signed e-Mate Bootstrap.");
       }
-      command = developmentPython();
-      args = ["-m", "ecorex.server.cli", "serve", "--host", "127.0.0.1", "--port", String(this.port)];
-      cwd = payload;
+      spec = {
+        command: developmentPython(),
+        args: ["-m", "ecorex.server.cli", "serve", "--host", "127.0.0.1", "--port", String(this.port)],
+        cwd: payload,
+        environment: { ...process.env, PYTHONUNBUFFERED: "1" },
+        windowsHide: true,
+      };
     }
 
-    const child = spawn(command, args, {
-      cwd,
-      env: { ...process.env, PYTHONUNBUFFERED: "1" },
+    const child = spawn(spec.command, spec.args, {
+      cwd: spec.cwd,
+      env: spec.environment,
       stdio: "ignore",
-      windowsHide: true,
+      windowsHide: spec.windowsHide,
     });
     this.child = child;
     let startupFailure = null;
@@ -252,7 +185,7 @@ class BackendManager extends EventEmitter {
     });
     child.once("exit", (code) => {
       if (this.child === child) this.child = null;
-      startupFailure = new Error(`e-Mate Bootstrap stopped during startup (${code ?? "terminated"}).`);
+      startupFailure = new Error(`e-Mate Runtime stopped during startup (${code ?? "terminated"}).`);
       this.emit("exit", code);
     });
 
@@ -298,10 +231,8 @@ class BackendManager extends EventEmitter {
 module.exports = {
   BackendManager,
   DEFAULT_RUNTIME_PORT,
-  installedReleaseMatches,
-  installedSlotExists,
-  packagedBackendPath,
-  packagedReleasePath,
+  issueRuntimeOwnerReceipt,
+  packagedRuntimeSpec,
   runtimeOwnerNonce,
   runtimeResponds,
 };

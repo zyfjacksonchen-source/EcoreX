@@ -1895,6 +1895,75 @@ def test_tampered_config_and_non_loopback_endpoint_fail_closed(tmp_path: Path) -
         _loader(product, vault)(host="0.0.0.0", port=8765)
 
 
+def test_packaged_desktop_runtime_uses_app_payload_and_writable_data_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ecorex.server.config as product_config_module
+
+    product = _stage_product(tmp_path / "staged")
+    runtime_root = tmp_path / "app" / "runtime"
+    shutil.copytree(product["payload"], runtime_root / "payload")
+    shutil.copy2(product["slot_path"] / ".slot.json", runtime_root / ".slot.json")
+    shutil.copy2(
+        product["slot_path"] / "release-manifest.json",
+        runtime_root / "release-manifest.json",
+    )
+    data_root = tmp_path / "data"
+
+    class UnexpectedSlotVerifier:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("packaged Runtime must not verify an installed slot")
+
+    monkeypatch.setattr(
+        product_config_module,
+        "CurrentSlotVerifier",
+        UnexpectedSlotVerifier,
+    )
+    monkeypatch.setattr(
+        product_config_module,
+        "_build_update",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("packaged Runtime must not compose the slot updater")
+        ),
+    )
+
+    composition = load_product_runtime(
+        payload_root=runtime_root / "payload",
+        environment={
+            "EMATE_PACKAGED_RUNTIME": "1",
+            "EMATE_DATA_DIR": str(data_root),
+        },
+        vault_factory=InMemoryCredentialVault,
+        host_platform=product["platform"],
+        host_architecture=product["architecture"],
+    )
+    try:
+        assert composition.install_root == data_root.resolve()
+        assert composition.slot.slot_path == runtime_root.resolve()
+        assert composition.slot.payload_root == (runtime_root / "payload").resolve()
+        assert composition.server_settings.database_path == (
+            data_root / "state" / "runtime.sqlite3"
+        )
+        assert composition.server_settings.workspace_roots == (
+            (data_root / "workspace").resolve(),
+        )
+        assert composition.update is None
+        assert composition.server_settings.first_install_registration_recorder is None
+        assert composition.server_settings.first_install_runtime_ready_recorder is None
+    finally:
+        composition.close_unstarted()
+
+    with pytest.raises(ProductRuntimeTrustError, match="slot layout"):
+        load_product_runtime(
+            payload_root=runtime_root / "payload",
+            environment={"ECOREX_BOOTSTRAPPED": "1"},
+            vault_factory=InMemoryCredentialVault,
+            host_platform=product["platform"],
+            host_architecture=product["architecture"],
+        )
+
+
 def test_invalid_release_signature_fails_before_session_or_network_use(
     tmp_path: Path,
 ) -> None:

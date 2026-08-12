@@ -1,20 +1,17 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { copyFile, cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import backendContract from "../electron/backend.cjs";
 import updateContract from "../electron/update-contract.cjs";
 
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const load = (relative) => readFile(path.join(desktop, relative), "utf8");
-const run = promisify(execFile);
 const productVersion = async () => (await readFile(
   path.resolve(desktop, "../ecorex/_version.py"),
   "utf8",
@@ -56,23 +53,25 @@ test("desktop loads the existing loopback Runtime and never packages a second re
   assert.doesNotMatch(main, />ϟ</);
   assert.doesNotMatch(main, /loadFile\(/);
   assert.match(backend, /-m", "ecorex\.server\.cli", "serve"/);
-  assert.match(backend, /emate-backend/);
+  assert.match(backend, /ecorex\.exe/);
   assert.match(backend, /127\.0\.0\.1/);
-  assert.match(backend, /--local-release/);
-  assert.match(backend, /--launch-installed/);
-  assert.match(backend, /--no-open/);
+  assert.match(backend, /packagedRuntimeSpec/);
+  assert.match(backend, /EMATE_PACKAGED_RUNTIME: "1"/);
+  assert.match(backend, /EMATE_DATA_DIR: dataDir/);
+  assert.match(backend, /ECOREX_RUNTIME_OWNER_NONCE/);
+  assert.doesNotMatch(backend, /--local-release/);
+  assert.doesNotMatch(backend, /--launch-installed/);
+  assert.doesNotMatch(backend, /installedReleaseMatches/);
   assert.match(backend, /runtime-owner\.json/);
   assert.match(backend, /x-ecorex-runtime-owner/);
   assert.match(backend, /ECOREX_BOOTSTRAPPED === "1"/);
-  assert.match(backend, /startupFailure = new Error\(`e-Mate Bootstrap stopped during startup/);
+  assert.match(backend, /startupFailure = new Error\(`e-Mate Runtime stopped during startup/);
   assert.doesNotMatch(backend, /if \(code !== 0\) startupFailure/);
   assert.match(backend, /while \(!startupFailure\)/);
   assert.doesNotMatch(backend, /Date\.now\(\) \+ 5 \* 60_000/);
   assert.doesNotMatch(backend, /exited before the Runtime became ready/);
-  assert.match(staging, /ecorex-bootstrap/);
+  assert.match(staging, /stage-direct-runtime\.py/);
   assert.match(staging, /release-manifest\.json/);
-  assert.match(staging, /release-metadata\.json/);
-  assert.match(staging, /sbom\.cdx\.json/);
   assert.match(preload, /contextBridge\.exposeInMainWorld\("eMateDesktop"/);
   assert.doesNotMatch(preload, /require\(["']\.\//u);
   const pkg = JSON.parse(await load("package.json"));
@@ -151,121 +150,41 @@ test("loopback owner proof never discloses its secret to an untrusted listener",
   }
 });
 
-test("packaged desktop installs a different signed Runtime release before launch", async () => {
-  const dataDir = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-current-"));
-  const releaseDir = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-seed-"));
-  const slotId = "r-current";
-  const identity = {
-    release_id: "release-stable-" + "a".repeat(24),
-    version: "2.0.1",
-    build_digest: "b".repeat(64),
-  };
-  try {
-    const pythonPath = process.platform === "win32"
-      ? path.join(dataDir, "slots", slotId, "payload", "bin", "pack-python", "python.exe")
-      : path.join(dataDir, "slots", slotId, "payload", "bin", "pack-python", "bin", "python3");
-    await mkdir(path.dirname(pythonPath), { recursive: true });
-    await writeFile(pythonPath, "runtime");
-    await writeFile(path.join(dataDir, "slot-pointers.json"), JSON.stringify({
-      current: slotId,
-      known_good: [slotId],
-    }));
-    await writeFile(path.join(dataDir, "slots", slotId, ".slot.json"), JSON.stringify(identity));
-    await writeFile(path.join(releaseDir, "release-manifest.json"), JSON.stringify(identity));
-    assert.equal(backendContract.installedReleaseMatches(dataDir, releaseDir), true);
-
-    await writeFile(path.join(dataDir, "slot-pointers.json"), JSON.stringify({
-      current: slotId,
-      previous: null,
-      known_good: [slotId],
-      unexpected: true,
-    }));
-    assert.equal(backendContract.installedReleaseMatches(dataDir, releaseDir), false);
-    await writeFile(path.join(dataDir, "slot-pointers.json"), JSON.stringify({
-      current: slotId,
-      previous: null,
-    }));
-    assert.equal(backendContract.installedReleaseMatches(dataDir, releaseDir), false);
-    await writeFile(path.join(dataDir, "slot-pointers.json"), JSON.stringify({
-      current: slotId,
-      previous: null,
-      known_good: [slotId],
-    }));
-
-    await writeFile(path.join(releaseDir, "release-manifest.json"), JSON.stringify({
-      ...identity,
-      version: "2.0.2",
-    }));
-    assert.equal(backendContract.installedReleaseMatches(dataDir, releaseDir), false);
-  } finally {
-    await Promise.all([
-      rm(dataDir, { recursive: true, force: true }),
-      rm(releaseDir, { recursive: true, force: true }),
-    ]);
-  }
-});
-
-test("Windows in-place upgrades select a clean release identity namespace", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-upgrade-"));
-  const isolatedDesktop = path.join(root, "desktop");
-  const bootstrap = path.join(root, "bootstrap");
-  const release = path.join(root, "release");
-  const resources = path.join(root, "installed", "resources");
+test("packaged desktop directly launches the immutable Runtime on macOS and Windows", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-direct-"));
+  const resources = path.join(root, "resources");
+  const dataDir = path.join(root, "data");
   const runtime = path.join(resources, "runtime");
-  const releaseId = `release-stable-${"c".repeat(24)}`;
   try {
+    await mkdir(path.join(runtime, "payload", "bin"), { recursive: true });
     await Promise.all([
-      mkdir(path.join(isolatedDesktop, "tools"), { recursive: true }),
-      mkdir(path.join(bootstrap, "bin"), { recursive: true }),
-      mkdir(release, { recursive: true }),
-      mkdir(path.join(runtime, "release"), { recursive: true }),
+      writeFile(path.join(runtime, "payload", "bin", "ecorex"), "mac runtime"),
+      writeFile(path.join(runtime, "payload", "bin", "ecorex.exe"), "windows runtime"),
+      writeFile(path.join(runtime, ".slot.json"), "{}"),
+      writeFile(path.join(runtime, "release-manifest.json"), "{}"),
     ]);
-    await Promise.all([
-      copyFile(
-        path.join(desktop, "tools", "stage-electron-runtime.mjs"),
-        path.join(isolatedDesktop, "tools", "stage-electron-runtime.mjs"),
-      ),
-      writeFile(path.join(bootstrap, "bin", "ecorex-bootstrap.exe"), "bootstrap"),
-      writeFile(path.join(bootstrap, "bin", "ecorex-sandbox-host.exe"), "sandbox"),
-      writeFile(path.join(bootstrap, "bootstrap-config.json"), "{}"),
-      writeFile(path.join(release, "core.zip"), "current"),
-      writeFile(path.join(release, "release-manifest.json"), JSON.stringify({
-        release_id: releaseId,
-        artifacts: [{
-          platform: "windows",
-          architecture: "x64",
-          file_name: "core.zip",
-        }],
-      })),
-      writeFile(path.join(runtime, "release", "release-manifest.json"), "legacy"),
-      writeFile(path.join(runtime, "release", "stale-2.0.1.zip"), "stale"),
-    ]);
-    await run(process.execPath, [
-      path.join(isolatedDesktop, "tools", "stage-electron-runtime.mjs"),
-      "--platform", "windows",
-      "--arch", "x64",
-    ], {
-      env: {
-        ...process.env,
-        EMATE_BOOTSTRAP_DIR_WINDOWS_X64: bootstrap,
-        EMATE_RELEASE_DIR: release,
-      },
-    });
-    for (const name of await readdir(path.join(isolatedDesktop, "runtime-bundle"))) {
-      await cp(
-        path.join(isolatedDesktop, "runtime-bundle", name),
-        path.join(runtime, name),
-        { recursive: true, force: true },
-      );
-    }
 
-    const selected = backendContract.packagedReleasePath(resources);
-    assert.equal(selected, path.join(runtime, "releases", releaseId));
-    assert.deepEqual((await readdir(selected)).sort(), ["core.zip", "release-manifest.json"]);
-    assert.equal(await readFile(path.join(runtime, "release", "stale-2.0.1.zip"), "utf8"), "stale");
+    const mac = backendContract.packagedRuntimeSpec(resources, dataDir, 8765, "darwin");
+    assert.equal(mac.command, path.join(runtime, "payload", "bin", "ecorex"));
+    assert.deepEqual(mac.args, ["serve", "--host", "127.0.0.1", "--port", "8765"]);
+    assert.equal(mac.cwd, path.join(runtime, "payload"));
+    assert.equal(mac.environment.EMATE_DATA_DIR, dataDir);
+    assert.equal(mac.environment.EMATE_PACKAGED_RUNTIME, "1");
+    assert.equal(mac.windowsHide, true);
 
-    await writeFile(path.join(runtime, "current-release"), "../release\n");
-    assert.equal(backendContract.packagedReleasePath(resources), null);
+    const windows = backendContract.packagedRuntimeSpec(resources, dataDir, 9988, "win32");
+    assert.equal(windows.command, path.join(runtime, "payload", "bin", "ecorex.exe"));
+    assert.deepEqual(windows.args, ["serve", "--host", "127.0.0.1", "--port", "9988"]);
+    assert.equal(windows.environment.EMATE_DATA_DIR, dataDir);
+    assert.equal(windows.windowsHide, true);
+
+    const nonce = backendContract.issueRuntimeOwnerReceipt(dataDir);
+    assert.match(nonce, /^[A-Za-z0-9_-]{43}$/);
+    assert.equal(backendContract.runtimeOwnerNonce(dataDir), nonce);
+    assert.equal(await readdir(dataDir).then((items) => items.includes("slots")), false);
+
+    await rm(path.join(runtime, ".slot.json"));
+    assert.equal(backendContract.packagedRuntimeSpec(resources, dataDir, 8765, "darwin"), null);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

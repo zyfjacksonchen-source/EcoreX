@@ -105,9 +105,11 @@ from ecorex.update import (
     ActivationIntentError,
     ActivationLaunchContext,
     Ed25519SignatureVerifier,
+    MAX_MANIFEST_BYTES,
     ProductUpdateComposition,
     ProductUpdateSettings,
     ProvisionalActivationController,
+    ReleaseManifest,
     ReleaseChannel,
     SlotStore,
     VerificationError,
@@ -740,7 +742,7 @@ class ProductRuntimeComposition:
     trace_exporter: ManagedOTLPHTTPTraceExporter | None
     connector_adapters: Mapping[str, ManagedConnectorGatewayAdapter]
     capability_packs: CapabilityPackRuntime
-    update: ProductUpdateComposition
+    update: ProductUpdateComposition | None
     server_settings: ProductServerSettings
     _cleanup: _ProductCompositionCleanup = field(repr=False, compare=False)
 
@@ -793,14 +795,18 @@ def load_product_runtime(
     host_platform: str | None = None,
     host_architecture: str | None = None,
 ) -> ProductRuntimeComposition | ActivationProbeComposition:
-    """Load and compose one product Runtime from the Bootstrap-selected slot.
+    """Load and compose one admitted product Runtime.
 
     ``vault_factory`` and target overrides are dependency seams for platform
     conformance tests.  The production CLI never exposes them as arguments.
     """
 
     source_environment = os.environ if environment is None else environment
-    if source_environment.get("ECOREX_BOOTSTRAPPED") != "1":
+    packaged_value = source_environment.get("EMATE_PACKAGED_RUNTIME")
+    if packaged_value not in {None, "1"}:
+        raise ProductRuntimeTrustError("Packaged Runtime authority is invalid")
+    packaged_runtime = packaged_value == "1"
+    if not packaged_runtime and source_environment.get("ECOREX_BOOTSTRAPPED") != "1":
         raise ProductRuntimeTrustError(
             "Product Runtime must be launched by the signed Bootstrap"
         )
@@ -839,19 +845,28 @@ def load_product_runtime(
         ) from None
     payload = _discover_payload_root(payload_root)
     slot_path = payload.parent
-    slots_dir = slot_path.parent
-    install_root = slots_dir.parent
-    if slot_path.name.startswith(".") or slots_dir.name != "slots":
-        raise ProductRuntimeTrustError("Runtime payload is outside the slot layout")
-    _require_real_directory_tree(install_root)
-    _require_real_directory_tree(payload, stop=install_root)
+    if packaged_runtime:
+        if slot_path.name != "runtime":
+            raise ProductRuntimeTrustError(
+                "Packaged Runtime payload is outside the application layout"
+            )
+        immutable_root = slot_path
+        _require_real_directory_tree(payload, stop=immutable_root)
+    else:
+        slots_dir = slot_path.parent
+        install_root = slots_dir.parent
+        if slot_path.name.startswith(".") or slots_dir.name != "slots":
+            raise ProductRuntimeTrustError("Runtime payload is outside the slot layout")
+        _require_real_directory_tree(install_root)
+        _require_real_directory_tree(payload, stop=install_root)
+        immutable_root = install_root
 
     config_path = payload / RUNTIME_CONFIG_FILE_NAME
     config_payload = _read_stable_file(
         config_path,
         max_bytes=MAX_RUNTIME_CONFIG_BYTES,
         label="Runtime configuration",
-        stop=install_root,
+        stop=immutable_root,
     )
     try:
         config = ProductRuntimeConfig.from_bytes(config_payload)
@@ -876,45 +891,61 @@ def load_product_runtime(
         raise ProductRuntimeTrustError(
             "Provisional activation environment is invalid"
         ) from None
-    activation_controller = ProvisionalActivationController(
-        install_root,
-        verifier=release_verifier,
-        host_platform=host_platform,
-        host_architecture=host_architecture,
-        pack_content_verifier=verify_product_capability_pack,
-    )
-    provisional = None
-    try:
-        if activation_launch is None:
-            selected = CurrentSlotVerifier(
-                SlotStore(install_root),
-                verifier=release_verifier,
-                host_platform=host_platform,
-                host_architecture=host_architecture,
-                pack_content_verifier=verify_product_capability_pack,
-            ).verify_current()
-        else:
-            provisional = activation_controller.ensure_pending_current(
-                activation_launch.transaction_id
+    if packaged_runtime:
+        if activation_launch is not None:
+            raise ProductRuntimeTrustError(
+                "Packaged Runtime cannot enter provisional activation"
             )
-            if provisional is None:
-                raise ActivationIntentError("provisional activation intent is missing")
-            selected = VerifiedRuntimeSlot(
-                slot_id=provisional.intent.slot_id,
-                slot_path=provisional.slot_path,
-                payload_root=provisional.payload_root,
-                manifest=provisional.manifest,
-                artifact=provisional.artifact,
-            )
-    except Exception:
-        raise ProductRuntimeTrustError(
-            "Runtime slot verification did not succeed"
-        ) from None
-    if selected.slot_path != slot_path.resolve(strict=True):
-        raise ProductRuntimeTrustError(
-            "Runtime process is not executing from the active slot"
+        install_root = _packaged_data_root(source_environment, config)
+        selected = _load_packaged_runtime_slot(
+            slot_path,
+            payload,
+            config=config,
+            platform=host_platform,
+            architecture=host_architecture,
         )
-    _verify_runtime_identity(config, selected, release_verifier)
+        activation_controller = None
+        provisional = None
+    else:
+        activation_controller = ProvisionalActivationController(
+            install_root,
+            verifier=release_verifier,
+            host_platform=host_platform,
+            host_architecture=host_architecture,
+            pack_content_verifier=verify_product_capability_pack,
+        )
+        provisional = None
+        try:
+            if activation_launch is None:
+                selected = CurrentSlotVerifier(
+                    SlotStore(install_root),
+                    verifier=release_verifier,
+                    host_platform=host_platform,
+                    host_architecture=host_architecture,
+                    pack_content_verifier=verify_product_capability_pack,
+                ).verify_current()
+            else:
+                provisional = activation_controller.ensure_pending_current(
+                    activation_launch.transaction_id
+                )
+                if provisional is None:
+                    raise ActivationIntentError("provisional activation intent is missing")
+                selected = VerifiedRuntimeSlot(
+                    slot_id=provisional.intent.slot_id,
+                    slot_path=provisional.slot_path,
+                    payload_root=provisional.payload_root,
+                    manifest=provisional.manifest,
+                    artifact=provisional.artifact,
+                )
+        except Exception:
+            raise ProductRuntimeTrustError(
+                "Runtime slot verification did not succeed"
+            ) from None
+        if selected.slot_path != slot_path.resolve(strict=True):
+            raise ProductRuntimeTrustError(
+                "Runtime process is not executing from the active slot"
+            )
+        _verify_runtime_identity(config, selected, release_verifier)
 
     database_path = _resolve_writable_file(
         install_root,
@@ -940,7 +971,7 @@ def load_product_runtime(
         for relative in config.paths.workspace_roots
     )
     sandbox_security: WindowsSandboxSlotSecurity | None = None
-    if host_platform == "windows":
+    if host_platform == "windows" and not packaged_runtime:
         security_marker = (
             SlotStore(install_root).marker(selected.slot_id).get("security_provision")
         )
@@ -965,17 +996,18 @@ def load_product_runtime(
     # Verify the entire exact Web allowlist before constructing any network
     # client. create_product_app repeats this check at the final handoff, which
     # also fences a mutation between composition and ASGI construction.
-    try:
-        load_verified_web_bundle(
-            web_root=web_root,
-            release_manifest_path=selected.slot_path / "release-manifest.json",
-            web_manifest_path=web_manifest,
-            trusted_public_keys=config.release_public_keys,
-        )
-    except Exception:
-        raise ProductRuntimeTrustError(
-            "Signed Web bundle verification did not succeed"
-        ) from None
+    if not packaged_runtime:
+        try:
+            load_verified_web_bundle(
+                web_root=web_root,
+                release_manifest_path=selected.slot_path / "release-manifest.json",
+                web_manifest_path=web_manifest,
+                trusted_public_keys=config.release_public_keys,
+            )
+        except Exception:
+            raise ProductRuntimeTrustError(
+                "Signed Web bundle verification did not succeed"
+            ) from None
 
     if activation_launch is not None:
         assert provisional is not None
@@ -1104,7 +1136,8 @@ def load_product_runtime(
     # and migrate live storage. No rollback path is permitted beyond it. The
     # exact plan has already passed against a CoW snapshot above.
     try:
-        activation_controller.mark_data_barrier_crossed(selected.slot_id)
+        if activation_controller is not None:
+            activation_controller.mark_data_barrier_crossed(selected.slot_id)
     except Exception:
         # Pointer, journal, receipt, signature and filesystem failures are all
         # trust-boundary failures here.  None may fall through as a generic
@@ -1206,7 +1239,7 @@ def load_product_runtime(
         )
 
         composition_stage = "update_runtime"
-        update = _build_update(
+        update = None if packaged_runtime else _build_update(
             config,
             database_path=database_path,
             install_root=install_root,
@@ -1219,13 +1252,14 @@ def load_product_runtime(
             initialize=False,
             create_storage=False,
         )
-        # Desktop updates are owned by Electron. The legacy graph remains
-        # constructible for release tooling and supplies first-install receipt
-        # methods here, but its network transports must not survive Product
-        # composition or become a second feed/downloader.
-        _close_unstarted_resources(
-            (update.signal_source, update.feed, update.fetcher)
-        )
+        if update is not None:
+            # Desktop updates are owned by Electron. The legacy graph remains
+            # constructible for release tooling and supplies first-install receipt
+            # methods here, but its network transports must not survive Product
+            # composition or become a second feed/downloader.
+            _close_unstarted_resources(
+                (update.signal_source, update.feed, update.fetcher)
+            )
         composition_stage = "model_gateway"
         gateway = ManagedModelGatewayClient(
             config.gateway.endpoint,
@@ -1319,11 +1353,13 @@ def load_product_runtime(
             session_reload_requester=reload_callback,
             first_install_registration_recorder=(
                 None
-                if acceptance_preview
+                if acceptance_preview or update is None
                 else update.coordinator.record_registration_authority
             ),
             first_install_runtime_ready_recorder=(
-                None if acceptance_preview else update.coordinator.mark_runtime_ready
+                None
+                if acceptance_preview or update is None
+                else update.coordinator.mark_runtime_ready
             ),
             model_gateway=gateway,
             image_orchestration_client=image_orchestration_client,
@@ -1895,6 +1931,95 @@ def _discover_payload_root(value: str | os.PathLike[str] | None) -> Path:
             "Runtime payload root is outside the slot layout"
         )
     return absolute
+
+
+def _packaged_data_root(
+    environment: Mapping[str, str],
+    config: ProductRuntimeConfig,
+) -> Path:
+    raw = environment.get("EMATE_DATA_DIR")
+    if not isinstance(raw, str) or not raw or not Path(raw).is_absolute():
+        raise ProductRuntimeTrustError("Packaged Runtime data root is invalid")
+    root = Path(os.path.abspath(raw))
+    try:
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _require_real_directory_tree(root)
+        relatives = (config.paths.database, *config.paths.workspace_roots)
+        for relative in relatives:
+            _validate_relative(relative, "Runtime writable path")
+        (root / PurePosixPath(config.paths.database).parent).mkdir(
+            mode=0o700, parents=True, exist_ok=True
+        )
+        for relative in config.paths.workspace_roots:
+            root.joinpath(*PurePosixPath(relative).parts).mkdir(
+                mode=0o700, parents=True, exist_ok=True
+            )
+        _require_real_directory_tree(root)
+    except ProductRuntimeConfigurationError:
+        raise
+    except OSError:
+        raise ProductRuntimeTrustError(
+            "Packaged Runtime data root is unavailable"
+        ) from None
+    return root.resolve(strict=True)
+
+
+def _load_packaged_runtime_slot(
+    runtime_root: Path,
+    payload: Path,
+    *,
+    config: ProductRuntimeConfig,
+    platform: str,
+    architecture: str,
+) -> VerifiedRuntimeSlot:
+    try:
+        manifest = ReleaseManifest.from_json(
+            _read_stable_file(
+                runtime_root / "release-manifest.json",
+                max_bytes=MAX_MANIFEST_BYTES,
+                label="Runtime release manifest",
+                stop=runtime_root,
+            )
+        )
+        marker_raw = json.loads(
+            _read_stable_file(
+                runtime_root / ".slot.json",
+                max_bytes=256 * 1024,
+                label="Runtime build receipt",
+                stop=runtime_root,
+            )
+        )
+        if not isinstance(marker_raw, Mapping):
+            raise ValueError
+        artifact = manifest.artifact(f"core-{platform}-{architecture}")
+        slot_id = marker_raw.get("slot_id")
+        expected = {
+            "release_id": manifest.release_id,
+            "version": manifest.version,
+            "build_digest": manifest.build_digest,
+            "artifact_id": artifact.artifact_id,
+            "artifact_sha256": artifact.sha256,
+        }
+        if (
+            not isinstance(slot_id, str)
+            or _SAFE_ID.fullmatch(slot_id) is None
+            or any(marker_raw.get(key) != value for key, value in expected.items())
+            or config.identity.version != manifest.version
+            or config.identity.platform != artifact.platform
+            or config.identity.architecture != artifact.architecture
+        ):
+            raise ValueError
+    except Exception:
+        raise ProductRuntimeTrustError(
+            "Packaged Runtime identity is invalid"
+        ) from None
+    return VerifiedRuntimeSlot(
+        slot_id=slot_id,
+        slot_path=runtime_root.resolve(strict=True),
+        payload_root=payload.resolve(strict=True),
+        manifest=manifest,
+        artifact=artifact,
+    )
 
 
 def _host_target() -> tuple[str, str]:
