@@ -638,7 +638,7 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
     for required_gate in (
         "tests/v1/test_public_download_site.py",
         "tests/v1/test_emate_feed_deploy.py",
-        "test_product_composes_message_channels_with_the_agent_runtime",
+        "test_product_composes_native_cow_channels_with_the_agent_runtime",
         "npm run typecheck",
         "npm run test:v1",
         "npx playwright install chromium",
