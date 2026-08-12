@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from ecorex import __version__
 
 VERSION = __version__
-USAGE_PROJECTION_VERSION = "e-mate-2.0-usage-1"
+USAGE_PROJECTION_VERSION = "e-mate-2.0-usage-2"
 DB_PATH = "/srv/ecorex-agent-admin/data/ecorex-admin.sqlite3"
 CONTROL_PLANE_DB_PATH = os.environ.get(
     "ECOREX_CONTROL_PLANE_DATABASE_PATH",
@@ -986,12 +986,21 @@ def build_payload(start: datetime, end: datetime) -> dict:
     gateway_request_ids = set(gateway_requests_by_id)
     def task_key_for_request(request_id: str) -> str:
         request = gateway_requests_by_id.get(request_id, {})
-        turn_id = str(request.get("turn_id") or "").strip()
-        return f"turn:{turn_id}" if turn_id else f"request:{request_id}"
+        scope = tuple(
+            str(request.get(field) or "").strip()
+            for field in ("organization_id", "account_id", "thread_id", "turn_id")
+        )
+        return (
+            "turn:" + json.dumps(scope, ensure_ascii=False, separators=(",", ":"))
+            if all(scope)
+            else f"request:{request_id}"
+        )
 
     def task_id_for_request(request_id: str) -> str:
         task_key = task_key_for_request(request_id)
-        return task_key.removeprefix("turn:") if task_key.startswith("turn:") else request_id
+        if task_key.startswith("turn:"):
+            return str(gateway_requests_by_id[request_id]["turn_id"])
+        return request_id
 
     merged_usage: dict[tuple[str, str], dict] = {}
     legacy_request_ids: set[str] = set()
@@ -1522,14 +1531,14 @@ def build_payload(start: datetime, end: datetime) -> dict:
                 "estimatedRecords": 0,
                 "models": Counter(),
                 "sources": Counter(),
-                "requestIds": set(),
+                "taskKeys": set(),
                 "unlinkedRecords": 0,
             },
         )
         bucket["records"] += 1
         request_id = str(row.get("_request_id") or "").strip()
         if request_id:
-            bucket["requestIds"].add(request_id)
+            bucket["taskKeys"].add(task_key_for_request(request_id))
         else:
             bucket["unlinkedRecords"] += 1
         for field in (
@@ -1576,7 +1585,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
             total_tokens = int(usage.get("totalTokens", 0))
             usage_records = int(usage.get("records", 0))
             usage_tasks = (
-                len(usage.get("requestIds", set()))
+                len(usage.get("taskKeys", set()))
                 + int(usage.get("unlinkedRecords", 0))
             )
             remarks = []

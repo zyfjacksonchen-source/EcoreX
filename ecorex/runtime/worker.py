@@ -90,7 +90,7 @@ _CUMULATIVE_MODEL_TOKENS: ContextVar[int] = ContextVar(
     default=0,
 )
 
-_EMATE_IDENTITY_INSTRUCTION = (
+EMATE_IDENTITY_INSTRUCTION = (
     "You are the intelligent work Agent 小芯 inside the e-Mate Agent product."
 )
 _GATEWAY_INSTRUCTION_LIMIT = 131_072
@@ -2263,7 +2263,7 @@ class LegacyAgentTurnWorker:
             or not instructions.strip()
             or len(instructions.encode("utf-8"))
             > _GATEWAY_INSTRUCTION_LIMIT
-            - len(_EMATE_IDENTITY_INSTRUCTION.encode("utf-8"))
+            - len(EMATE_IDENTITY_INSTRUCTION.encode("utf-8"))
             - len("\n\n".encode("utf-8"))
             - reserved_instruction_bytes
             or not isinstance(instruction_sha256, str)
@@ -2354,7 +2354,7 @@ class LegacyAgentTurnWorker:
         gateway_instructions = "\n\n".join(
             value
             for value in (
-                _EMATE_IDENTITY_INSTRUCTION,
+                EMATE_IDENTITY_INSTRUCTION,
                 workspace_instructions,
                 workflow_instructions,
             )
@@ -5588,7 +5588,7 @@ class _CowGatewayModel:
         instructions = "\n\n".join(
             part
             for part in (
-                _EMATE_IDENTITY_INSTRUCTION,
+                EMATE_IDENTITY_INSTRUCTION,
                 str(getattr(request, "system", "") or "").strip(),
             )
             if part
@@ -5734,7 +5734,7 @@ class _CowGatewayModel:
             model_policy=GatewayModelPolicy.model_validate(
                 ecorex_chat_gateway_policy(self.model).model_dump(mode="json")
             ),
-            instructions=_EMATE_IDENTITY_INSTRUCTION,
+            instructions=EMATE_IDENTITY_INSTRUCTION,
             input_items=[
                 GatewayUserMessageInput(
                     message_id=f"{self.request_scope}:vision:{self._round}",

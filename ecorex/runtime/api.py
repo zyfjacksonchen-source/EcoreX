@@ -64,6 +64,7 @@ from ecorex.connectors import (
 from ecorex.connectors.channel_catalog import normalize_channel_name
 from ecorex.gateway import (
     GatewayAccountUsageProjection,
+    GatewayModelPolicy,
     ManagedModelGatewayClient,
     ModelGateway,
 )
@@ -243,7 +244,7 @@ from .permissions import PermissionAuthority
 from .shutdown import stop_service_phases_isolated
 from .supervisor import AgentWorkerSupervisor
 from .usage import UsageProjectionService
-from .worker import AgentTurnWorker
+from .worker import AgentTurnWorker, EMATE_IDENTITY_INSTRUCTION
 from .composition import (
     RuntimeComposition,
     project_connector_catalog,
@@ -4017,16 +4018,47 @@ def create_app(
         "/api/v1/threads/{thread_id}/generate_title",
         response_model=ThreadProjection,
     )
-    def generate_thread_title(thread_id: str) -> ThreadProjection:
+    async def generate_thread_title(thread_id: str) -> ThreadProjection:
         context = kernel.automatic_title_context(thread_id)
         if context is None:
             return kernel.get_thread(thread_id)
-        from agent.chat.session_service import generate_session_title
-
-        title = generate_session_title(
-            context["user_message"],
-            context["assistant_reply"],
+        from agent.chat.session_service import (
+            generate_managed_session_title,
+            generate_session_title,
         )
+
+        title = generate_session_title(context["user_message"], context["assistant_reply"])
+        try:
+            model = current_runtime_model_catalog().get(context["agent_model_id"])
+            if settings.model_gateway is not None and model.model_policy is not None:
+                title = await generate_managed_session_title(
+                    context["user_message"],
+                    context["assistant_reply"],
+                    gateway=settings.model_gateway,
+                    thread_id=thread_id,
+                    turn_id=context["turn_id"],
+                    model_id=model.model_id,
+                    model_policy=GatewayModelPolicy.model_validate(
+                        model.model_policy.to_dict()
+                    ),
+                    identity_instruction=EMATE_IDENTITY_INSTRUCTION,
+                    config_snapshot_id=context.get(
+                        "config_snapshot_id", "title_config_v1"
+                    ),
+                    capability_snapshot_id=context.get(
+                        "capability_snapshot_id", "title_capabilities_v1"
+                    ),
+                    permission_snapshot_id=context.get(
+                        "permission_snapshot_id", "title_permissions_v1"
+                    ),
+                    model_catalog_snapshot_id=context.get(
+                        "model_catalog_snapshot_id"
+                    ),
+                )
+        except Exception:
+            # Title generation is auxiliary: keep the deterministic local title,
+            # never fail over to an unbound model provider.
+            pass
         return kernel.apply_generated_thread_title(thread_id, title)
 
     @app.post(

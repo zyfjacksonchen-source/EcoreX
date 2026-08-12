@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from ecorex.gateway import GatewayEvent, GatewayEventType
 from ecorex.protocol import CreateThreadRequest, CreateTurnRequest, ItemKind, ItemStatus, TurnStatus
 from ecorex.runtime import RuntimeKernel, create_app
 from ecorex.runtime.api import RuntimeSettings
@@ -78,6 +79,8 @@ def test_first_exchange_summary_replaces_safe_temporary_title_and_persists(tmp_p
     assert kernel.automatic_title_context(thread.thread_id) == {
         "user_message": prompt,
         "assistant_reply": "已完成三项上下文事实记忆。",
+        "turn_id": created.turn.turn_id,
+        "agent_model_id": "ecorex-chat",
     }
 
     summarized = kernel.apply_generated_thread_title(
@@ -105,22 +108,59 @@ def test_manual_title_is_authoritative_and_failed_generation_uses_short_fallback
     assert len(fallback.title) <= 30
 
 
-def test_runtime_generate_title_route_uses_completed_exchange(tmp_path, monkeypatch):
+def test_runtime_generate_title_uses_same_gateway_without_tools_and_manual_rename_wins(
+    tmp_path,
+    monkeypatch,
+):
+    path = tmp_path / "runtime.db"
+    kernel = RuntimeKernel(path)
+    thread_id, turn_id = _complete_first_exchange(
+        kernel,
+        "评审客户访谈",
+        "访谈重点是交付周期。",
+    )
+
+    class TitleGateway:
+        def __init__(self) -> None:
+            self.requests = []
+
+        async def stream(self, request):
+            self.requests.append(request)
+            kernel.rename_thread(
+                thread_id,
+                "人工确认标题",
+                client_request_id="rename-during-title-generation",
+            )
+            yield GatewayEvent(
+                seq=1,
+                event_type=GatewayEventType.OUTPUT_TEXT_DELTA,
+                response_id="response-title",
+                delta="客户访谈交付摘要",
+            )
+            yield GatewayEvent(
+                seq=2,
+                event_type=GatewayEventType.RESPONSE_COMPLETED,
+                response_id="response-title",
+                usage={"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
+            )
+
+    gateway = TitleGateway()
     settings = RuntimeSettings(
-        database_path=tmp_path / "runtime.db",
+        database_path=path,
         runtime_bearer_token="r" * 32,
         csrf_token="c" * 32,
         webui_origins=("http://testserver",),
+        model_gateway=gateway,
+        allow_unmanaged_model_gateway_for_testing=True,
+        close_model_gateway_on_shutdown=False,
     )
-    kernel = RuntimeKernel(settings.database_path)
-    thread_id, _ = _complete_first_exchange(kernel, "评审客户访谈", "访谈重点是交付周期。")
-    captured: dict[str, str] = {}
+    legacy_calls = []
 
-    def fake_generate(user_message: str, assistant_reply: str = "", **_kwargs) -> str:
-        captured.update(user_message=user_message, assistant_reply=assistant_reply)
-        return "客户访谈交付摘要"
+    def forbidden_legacy_bot(*_args, **_kwargs):
+        legacy_calls.append(True)
+        raise AssertionError("automatic title must not use Bridge bot/provider")
 
-    monkeypatch.setattr("agent.chat.session_service.generate_session_title", fake_generate)
+    monkeypatch.setattr("bridge.bridge.Bridge", forbidden_legacy_bot)
     client = TestClient(create_app(settings=settings))
     response = client.post(
         f"/api/v1/threads/{thread_id}/generate_title",
@@ -131,8 +171,23 @@ def test_runtime_generate_title_route_uses_completed_exchange(tmp_path, monkeypa
         },
     )
     assert response.status_code == 200
-    assert response.json()["title"] == "客户访谈交付摘要"
-    assert captured == {
-        "user_message": "评审客户访谈",
-        "assistant_reply": "访谈重点是交付周期。",
-    }
+    assert response.json()["title"] == "人工确认标题"
+    assert legacy_calls == []
+    assert len(gateway.requests) == 1
+    request = gateway.requests[0]
+    assert (request.thread_id, request.turn_id, request.model_id) == (
+        thread_id,
+        turn_id,
+        "ecorex-chat",
+    )
+    assert request.instructions == (
+        "You are the intelligent work Agent 小芯 inside the e-Mate Agent product."
+    )
+    assert request.direct_tools == []
+    assert request.deferred_tool_ids == []
+    assert request.disclosed_tool_ids == []
+    assert request.suppressed_tool_ids == []
+    assert len(request.input_items or []) == 1
+    title_prompt = request.input_items[0].content
+    assert "评审客户访谈" in title_prompt
+    assert "访谈重点是交付周期。" in title_prompt

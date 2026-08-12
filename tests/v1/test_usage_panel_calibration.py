@@ -699,6 +699,112 @@ def test_gateway_model_rounds_roll_up_to_one_cow_turn(tmp_path, monkeypatch) -> 
     assert payload["kpis"]["successRate"] == 0
 
 
+def test_gateway_task_key_is_tenant_account_thread_and_turn_scoped(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "gateway-task-scope.sqlite3"
+    _database(str(database))
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        DELETE FROM sync_events;
+        DELETE FROM usage_events;
+        CREATE TABLE gateway_requests(
+            request_id TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL,
+            organization_id TEXT,
+            model_id TEXT NOT NULL,
+            trace_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            terminal_event_type TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE gateway_model_attempts(
+            request_id TEXT PRIMARY KEY,
+            upstream_model_id TEXT NOT NULL,
+            reasoning_effort TEXT,
+            thread_id TEXT,
+            turn_id TEXT
+        );
+        CREATE TABLE gateway_events(
+            request_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(request_id, seq)
+        );
+        """
+    )
+    scopes = [
+        ("scope-a-round-1", "shared@example.test", "org-a", "thread-1", "turn-1", 3),
+        ("scope-a-round-2", "shared@example.test", "org-a", "thread-1", "turn-1", 4),
+        ("scope-b", "shared@example.test", "org-b", "thread-1", "turn-1", 11),
+        ("scope-c", "other@example.test", "org-a", "thread-1", "turn-1", 13),
+        ("scope-d", "shared@example.test", "org-a", "thread-2", "turn-1", 17),
+        ("scope-e", "shared@example.test", "org-a", "thread-1", "turn-2", 19),
+    ]
+    for offset, (request_id, account_id, organization_id, thread_id, turn_id, tokens) in enumerate(scopes):
+        minute = offset + 1
+        created = f"2026-07-18T10:{minute:02d}:00+08:00"
+        connection.execute(
+            "INSERT INTO gateway_requests VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                request_id,
+                account_id,
+                organization_id,
+                "gpt-5.6-sol",
+                f"trace-{request_id}",
+                "completed",
+                "response.completed",
+                created,
+                created,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO gateway_model_attempts VALUES(?,?,?,?,?)",
+            (request_id, "gpt-5.6-sol", "high", thread_id, turn_id),
+        )
+        connection.execute(
+            "INSERT INTO gateway_events VALUES(?,?,?,?)",
+            (
+                request_id,
+                1,
+                json.dumps(
+                    {
+                        "event_type": "response.completed",
+                        "usage": {
+                            "input_tokens": tokens,
+                            "output_tokens": 0,
+                            "total_tokens": tokens,
+                        },
+                    }
+                ),
+                created,
+            ),
+        )
+    connection.commit()
+    connection.close()
+    _use_database(monkeypatch, str(database))
+
+    payload = usage_panel_service.build_payload(
+        datetime(2026, 7, 18, tzinfo=TZ),
+        datetime(2026, 7, 19, tzinfo=TZ),
+    )
+
+    assert len(payload["tasks"]) == 5
+    assert sorted(task["totalTokens"] for task in payload["tasks"]) == [
+        7,
+        11,
+        13,
+        17,
+        19,
+    ]
+    assert payload["kpis"]["tasks"] == 5
+    assert payload["kpis"]["tokenUsageTasks"] == 5
+
+
 def test_composer_calendar_uses_only_settled_gateway_chat_facts(
     tmp_path,
     monkeypatch,

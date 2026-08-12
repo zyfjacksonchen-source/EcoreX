@@ -479,7 +479,7 @@ class RuntimeKernel:
         ).fetchone()
 
     def automatic_title_context(self, thread_id: str) -> dict[str, str] | None:
-        """Return Cow-style first-exchange text only after that exchange completes."""
+        """Return Cow-style title input and its frozen Turn authority."""
 
         with self.database.reader() as connection:
             turn = self._automatic_title_turn(connection, thread_id)
@@ -499,10 +499,22 @@ class RuntimeKernel:
                     assistant_parts.append(text)
             if not assistant_parts:
                 return None
-            return {
+            context = {
                 "user_message": str(turn["input_text"] or ""),
                 "assistant_reply": "\n".join(assistant_parts),
+                "turn_id": str(turn["turn_id"]),
+                "agent_model_id": str(turn["agent_model_id"]),
             }
+            batch = connection.execute(
+                "SELECT config_snapshot_id, capability_snapshot_id, "
+                "permission_snapshot_id, model_catalog_snapshot_id "
+                "FROM turn_execution_batches WHERE turn_id = ? "
+                "ORDER BY first_revision_ordinal DESC LIMIT 1",
+                (turn["turn_id"],),
+            ).fetchone()
+            if batch is not None:
+                context.update({key: str(batch[key]) for key in batch.keys()})
+            return context
 
     def apply_generated_thread_title(
         self,
