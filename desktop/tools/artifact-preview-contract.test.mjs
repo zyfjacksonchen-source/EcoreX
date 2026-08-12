@@ -34,6 +34,18 @@ const cspStyleSingleton = await readFile(
   new URL("../src/v1/vendor/cspStyleSingleton.ts", import.meta.url),
   "utf-8",
 );
+const app = await readFile(
+  new URL("../src/v1/AppV1.tsx", import.meta.url),
+  "utf-8",
+);
+const runtimeClient = await readFile(
+  new URL("../src/v1/api/runtimeClient.ts", import.meta.url),
+  "utf-8",
+);
+const markdown = await readFile(
+  new URL("../src/v1/components/OfficeMarkdown.tsx", import.meta.url),
+  "utf-8",
+);
 
 test("clicking the Artifact card opens preview without a separate magnifier affordance", () => {
   assert.match(shelf, /className="ex-artifact-primary"[\s\S]*onClick=\{\(\) => onAction\?\.\(artifact, "preview"\)\}/u);
@@ -121,4 +133,41 @@ test("preview failures are visible, retryable in place, and corrupt images leave
 test("the dialog exposes only backend-authorized artifact actions", () => {
   assert.match(preview, /artifact\.actions\.includes\("preview"\)/u);
   assert.match(preview, /artifact\?\.actions\.includes\("download"\)/u);
+});
+
+test("image cards use the authenticated in-app preview path and never an external open action", () => {
+  const gallery = shelf.slice(
+    shelf.indexOf("export function ImageArtifactGallery"),
+    shelf.indexOf("export function ArtifactShelf"),
+  );
+  assert.match(gallery, /onClick=\{\(\) => onAction\(artifact, "preview"\)\}/u);
+  assert.doesNotMatch(gallery, /onAction\(artifact, "open"\)/u);
+  assert.match(app, /action === "preview"[\s\S]*setPreviewArtifact\(artifact\)/u);
+  assert.match(runtimeClient, /artifactBlob\([\s\S]*this\.headers\(false\)/u);
+});
+
+test("the Codex-style batch gallery stays compact and shows complete images", () => {
+  assert.match(shelf, /data-gallery-count=\{count <= 4 \? count : undefined\}/u);
+  assert.match(shelf, /aria-label=\{`图片画廊，第 \$\{activeIndex \+ 1\} 张，共 \$\{count\} 张`\}/u);
+  assert.match(shelf, /"ArrowLeft"/u);
+  assert.match(shelf, /"ArrowRight"/u);
+  assert.match(shelf, /aria-live="polite"/u);
+  assert.match(shelf, /previewableArtifacts\.slice\(0, 4\)\.forEach\(onPreviewVisible\)/u);
+  const imageRule = features.match(/\.ex-image-gallery-media > img\s*\{([^}]*)\}/u)?.[1] ?? "";
+  assert.match(imageRule, /object-fit:\s*contain/u);
+  assert.doesNotMatch(imageRule, /object-fit:\s*cover/u);
+  assert.match(features, /\.ex-image-gallery-track\[data-gallery-count="4"\][\s\S]*repeat\(4,/u);
+  assert.doesNotMatch(features, /\.ex-image-gallery-slide\s*\{[\s\S]*flex:\s*0 0 100%/u);
+});
+
+test("private artifact links are not rendered as external Markdown links", () => {
+  assert.match(markdown, /isPrivateArtifactUrl/u);
+  assert.match(markdown, /\/api\/v1\/artifacts\//u);
+  assert.match(markdown, /if \(isPrivateArtifactUrl\(url\)\) return "";/u);
+});
+
+test("non-previewable files keep Cow-compatible local open and reveal actions", () => {
+  assert.match(app, /runtime\.performArtifactExternalAction\(artifact, action\)/u);
+  assert.match(runtimeClient, /artifactExternalAction\([\s\S]*action: "open" \| "reveal"/u);
+  assert.doesNotMatch(runtimeClient, /openExternal/u);
 });

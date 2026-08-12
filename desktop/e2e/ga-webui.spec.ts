@@ -1502,7 +1502,7 @@ test("a durable partial image batch survives refresh as one accessible gallery",
   const failedSlot = guardedPage.locator('[data-image-batch-task-id="image-batch-task-ga-1"]');
   await expect(failedSlot).toHaveAttribute("data-artifact-status", "failed");
   await expect(failedSlot).toContainText("生成失败");
-  await expect(guardedPage.getByRole("button", { name: "打开：批次图片_01.png" })).toBeVisible();
+  await expect(guardedPage.getByRole("button", { name: "打开：批次图片_01.png" })).toHaveCount(0);
   await expect(guardedPage.getByRole("button", { name: "下载：批次图片_01.png" })).toBeVisible();
 
   await guardedPage.getByRole("button", { name: "下一张图片" }).click();
@@ -1512,7 +1512,8 @@ test("a durable partial image batch survives refresh as one accessible gallery",
   await expect(gallery).toHaveAttribute("aria-label", "图片画廊，第 3 张，共 3 张");
   await expect(guardedPage.getByRole("button", { name: "下一张图片" })).toBeDisabled();
 
-  await gallery.evaluate((element) => element.scrollTo({ left: 0, behavior: "auto" }));
+  await guardedPage.getByRole("button", { name: "上一张图片" }).click();
+  await guardedPage.getByRole("button", { name: "上一张图片" }).click();
   await expect(gallery).toHaveAttribute("aria-label", "图片画廊，第 1 张，共 3 张");
   await guardedPage.getByRole("button", { name: "预览图片：批次图片_01.png" }).click();
   await expect(guardedPage.getByRole("dialog", { name: "批次图片_01.png" })).toBeVisible();

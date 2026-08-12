@@ -225,12 +225,23 @@ export function ImageArtifactGallery({
   const trackRef = useRef<HTMLDivElement>(null);
   const count = slots.length;
   useEffect(() => setActiveIndex((index) => Math.min(index, count - 1)), [count]);
-  const activeArtifact = slots[activeIndex]?.kind === "artifact"
-    ? slots[activeIndex].artifact
-    : null;
+  const previewableArtifacts = slots.flatMap((slot) => (
+    slot.kind === "artifact" && slot.artifact.actions.includes("preview")
+      ? [slot.artifact]
+      : []
+  ));
+  const previewIdentity = previewableArtifacts
+    .map((artifact) => `${artifact.artifact_id}:${artifact.revision_id}`)
+    .join("|");
   useEffect(() => {
-    if (activeArtifact?.actions.includes("preview")) onPreviewVisible(activeArtifact);
-  }, [activeArtifact?.artifact_id, activeArtifact?.revision_id, onPreviewVisible]);
+    previewableArtifacts.slice(0, 4).forEach(onPreviewVisible);
+    const activeArtifact = slots[activeIndex]?.kind === "artifact"
+      ? slots[activeIndex].artifact
+      : null;
+    if (activeIndex >= 4 && activeArtifact?.actions.includes("preview")) {
+      onPreviewVisible(activeArtifact);
+    }
+  }, [activeIndex, onPreviewVisible, previewIdentity]);
   const goTo = (index: number) => {
     const target = Math.max(0, Math.min(count - 1, index));
     const track = trackRef.current;
@@ -249,7 +260,7 @@ export function ImageArtifactGallery({
   };
   const syncActiveSlide = () => {
     const track = trackRef.current;
-    if (!track) return;
+    if (!track || track.scrollWidth <= track.clientWidth) return;
     const slides = [...track.children] as HTMLElement[];
     const nearest = slides.reduce((best, slide, index) => (
       Math.abs(slide.offsetLeft - track.offsetLeft - track.scrollLeft)
@@ -266,6 +277,7 @@ export function ImageArtifactGallery({
       <div
         ref={trackRef}
         className="ex-image-gallery-track"
+        data-gallery-count={count <= 4 ? count : undefined}
         role="region"
         tabIndex={0}
         aria-label={`图片画廊，第 ${activeIndex + 1} 张，共 ${count} 张`}
@@ -320,11 +332,6 @@ export function ImageArtifactGallery({
                 <span><strong>{displayName}</strong><small>{slot.kind === "failed" ? "生成失败" : artifact?.status === "pending" ? "正在生成" : ready ? "已完成" : artifact?.status === "failed" ? "生成失败" : "不可用"}</small></span>
                 {artifact && ready ? (
                   <div role="group" aria-label={`图片操作：${artifact.display_name}`}>
-                    {artifact.actions.includes("open") ? (
-                      <IconButton label={`打开：${artifact.display_name}`} onClick={() => onAction(artifact, "open")}>
-                        <ExternalLink aria-hidden="true" />
-                      </IconButton>
-                    ) : null}
                     {artifact.actions.includes("download") ? (
                       <IconButton label={`下载：${artifact.display_name}`} onClick={() => onAction(artifact, "download")}>
                         <Download aria-hidden="true" />
@@ -333,18 +340,20 @@ export function ImageArtifactGallery({
                   </div>
                 ) : null}
               </div>
+              {index === activeIndex && count > 1 ? (
+                <div className="ex-image-gallery-navigation">
+                  <IconButton label="上一张图片" disabled={activeIndex === 0} onClick={() => goTo(activeIndex - 1)}>
+                    <ChevronLeft aria-hidden="true" />
+                  </IconButton>
+                  <span aria-live="polite" aria-atomic="true">{activeIndex + 1} / {count}</span>
+                  <IconButton label="下一张图片" disabled={activeIndex === count - 1} onClick={() => goTo(activeIndex + 1)}>
+                    <ChevronRight aria-hidden="true" />
+                  </IconButton>
+                </div>
+              ) : null}
             </article>
           );
         })}
-      </div>
-      <div className="ex-image-gallery-navigation">
-        <IconButton label="上一张图片" disabled={activeIndex === 0} onClick={() => goTo(activeIndex - 1)}>
-          <ChevronLeft aria-hidden="true" />
-        </IconButton>
-        <span aria-live="polite" aria-atomic="true">{activeIndex + 1} / {count}</span>
-        <IconButton label="下一张图片" disabled={activeIndex === count - 1} onClick={() => goTo(activeIndex + 1)}>
-          <ChevronRight aria-hidden="true" />
-        </IconButton>
       </div>
       </div>
     </section>

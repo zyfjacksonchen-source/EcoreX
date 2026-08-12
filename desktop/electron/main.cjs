@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { BackendManager, runtimeResponds } = require("./backend.cjs");
+const { externalHttpUrl } = require("./navigation-policy.cjs");
 const { readRuntimeBearerToken, TaskNotificationMonitor } = require("./task-notifications.cjs");
 const { initDesktopUpdater } = require("./updater.cjs");
 
@@ -157,12 +158,8 @@ function createWindow(runtimeOrigin) {
     if (url !== runtimeOrigin && !url.startsWith(`${runtimeOrigin}/`)) event.preventDefault();
   });
   window.webContents.setWindowOpenHandler(({ url }) => {
-    try {
-      const protocol = new URL(url).protocol;
-      if (protocol === "https:" || protocol === "http:") void shell.openExternal(url);
-    } catch {
-      // Invalid external URLs stay closed.
-    }
+    const externalUrl = externalHttpUrl(url, runtimeOrigin);
+    if (externalUrl) void shell.openExternal(externalUrl);
     return { action: "deny" };
   });
   window.webContents.on("did-fail-load", (_event, code, description) => {
