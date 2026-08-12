@@ -296,6 +296,7 @@ def test_cow_model_request_uses_the_real_tool_manager_contract(
     finally:
         loop.close()
 
+    assert len(request.direct_tools) == len(schemas) > 16
     assert [entry["spec"]["tool_id"] for entry in request.direct_tools] == [
         tool.name for tool in tools
     ]
