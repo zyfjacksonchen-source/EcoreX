@@ -2179,7 +2179,6 @@ def create_app(
                 workspace_root=settings.workspace_root,
                 workspace_root_resolver=settings.workspace_root_resolver,
                 mcp_oauth_redirect_uri=mcp_oauth_redirect_uri,
-                browser_handler=settings.capability_handlers.get("browser"),
                 max_model_rounds=settings.agent_max_model_rounds,
                 token_budget=settings.agent_token_budget,
                 finalization_reserve=settings.agent_finalization_reserve,

@@ -91,22 +91,8 @@ _CUMULATIVE_MODEL_TOKENS: ContextVar[int] = ContextVar(
     default=0,
 )
 
-_EMATE_MODEL_INSTRUCTIONS = (
-    "You are the intelligent work Agent 小芯 inside the e-Mate Agent product. Maintain this "
-    "identity without repeating an introduction. Only when the user explicitly asks who you "
-    "are or asks for an introduction, say '我是智能体小芯，来自 e-Mate Agent'. Do not add "
-    "this self-introduction to ordinary greetings, task replies, follow-up turns, or tool "
-    "results. Do not claim to be e-Mate, Claude, Codex, ChatGPT, or the underlying model. "
-    "Use a professional and rigorous tone by default. Do not prepend 同学 or another fixed form "
-    "of address to ordinary replies unless the user explicitly asks for it. When asked what you can do, explain only "
-    "capabilities actually available in the current request, such as analysis, research, "
-    "writing, files, code, data, images, office work, tools, connectors, or scheduled tasks. "
-    "Reply in the user's language. Treat tool failures as evidence: adjust the plan, "
-    "parameters, or safe tool choice instead of blindly repeating the same call. "
-    "Never repeat an already completed side-effecting tool call. Every tool present in the "
-    "request is directly callable; use it without searching for it again. tool_search is only "
-    "for installed extensions that are absent from the current tool list. Treat an empty "
-    "search result as a completed fact and do not repeat an equivalent search."
+_EMATE_IDENTITY_INSTRUCTION = (
+    "You are the intelligent work Agent 小芯 inside the e-Mate Agent product."
 )
 _GATEWAY_INSTRUCTION_LIMIT = 131_072
 _COW_WORKSPACE_CONTEXT_LIMIT = 64 * 1024
@@ -2294,7 +2280,7 @@ class LegacyAgentTurnWorker:
             or not instructions.strip()
             or len(instructions.encode("utf-8"))
             > _GATEWAY_INSTRUCTION_LIMIT
-            - len(_EMATE_MODEL_INSTRUCTIONS.encode("utf-8"))
+            - len(_EMATE_IDENTITY_INSTRUCTION.encode("utf-8"))
             - len("\n\n".encode("utf-8"))
             - reserved_instruction_bytes
             or not isinstance(instruction_sha256, str)
@@ -2385,7 +2371,7 @@ class LegacyAgentTurnWorker:
         gateway_instructions = "\n\n".join(
             value
             for value in (
-                _EMATE_MODEL_INSTRUCTIONS,
+                _EMATE_IDENTITY_INSTRUCTION,
                 workspace_instructions,
                 workflow_instructions,
             )
@@ -5586,7 +5572,7 @@ class _CowGatewayModel:
         instructions = "\n\n".join(
             part
             for part in (
-                _EMATE_MODEL_INSTRUCTIONS,
+                _EMATE_IDENTITY_INSTRUCTION,
                 str(getattr(request, "system", "") or "").strip(),
             )
             if part
@@ -5751,7 +5737,6 @@ class AgentTurnWorker:
         workspace_root: str | Path | None = None,
         workspace_root_resolver: Callable[[ToolExecutionScope | None], tuple[Path, ...]]
         | None = None,
-        browser_handler: Callable[..., Any] | None = None,
         mcp_oauth_redirect_uri: str | None = None,
         **_ignored: Any,
     ) -> None:
@@ -5774,7 +5759,6 @@ class AgentTurnWorker:
             else kernel.database.path.parent / "workspace"
         )
         self.workspace_root_resolver = workspace_root_resolver
-        self.browser_handler = browser_handler
         self.mcp_oauth_redirect_uri = mcp_oauth_redirect_uri
         self._cancel_events: dict[str, threading.Event] = {}
         self._cow_bridge = _CowAgentBridge()
@@ -5791,59 +5775,6 @@ class AgentTurnWorker:
             event.set()
         self._cancel_events.clear()
         self._cow_bridge.agents.clear()
-        close_browser = getattr(self.browser_handler, "aclose", None)
-        if callable(close_browser):
-            await close_browser()
-
-    def _bind_browser_pack(
-        self,
-        agent: Any,
-        *,
-        loop: asyncio.AbstractEventLoop,
-        job_id: str,
-        thread_id: str,
-        turn_id: str,
-    ) -> None:
-        """Route Cow's browser schema through the verified stateful Browser Pack."""
-
-        if self.browser_handler is None:
-            return
-        browser = next(
-            (tool for tool in agent.tools if getattr(tool, "name", None) == "browser"),
-            None,
-        )
-        if browser is None:
-            raise RuntimeError("verified browser pack has no Cow browser tool")
-
-        from agent.tools.base_tool import ToolResult
-
-        def execute(arguments: dict[str, Any]) -> ToolResult:
-            context = ToolInvocationContext(
-                invocation_id=f"{turn_id}:cow:browser:{time.monotonic_ns()}",
-                capability_snapshot_id="cow-direct-browser",
-                policy_snapshot_id="cow-direct-tools",
-                tool_id="browser",
-                idempotency_key=None,
-                approved=True,
-                effective_sandbox=SandboxLevel.DANGER_FULL_ACCESS,
-                execution_scope=ToolExecutionScope(
-                    job_id=job_id,
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                    execution_batch_id=f"cow_{turn_id}",
-                ),
-            )
-            try:
-                future = asyncio.run_coroutine_threadsafe(
-                    self.browser_handler(arguments, context), loop
-                )
-                return ToolResult.success(future.result())
-            except Exception as error:
-                return ToolResult.fail(
-                    getattr(error, "code", None) or error.__class__.__name__.casefold()
-                )
-
-        browser.execute = execute
 
     def _workspace(
         self,
@@ -6445,13 +6376,6 @@ class AgentTurnWorker:
                 for tool in agent.tools:
                     if getattr(tool, "name", "") == "scheduler":
                         attach_scheduler_to_tool(tool, scheduler_context)
-            self._bind_browser_pack(
-                agent,
-                loop=model.loop,
-                job_id=job_id,
-                thread_id=thread_id,
-                turn_id=turn_id,
-            )
             bridge.agents[thread_id] = agent
             agent._current_session_id = thread_id
             agent._current_request_id = turn_id
