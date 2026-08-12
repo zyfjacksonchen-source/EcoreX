@@ -23,7 +23,7 @@ def test_cow_logger_stays_out_of_the_signed_runtime_payload(
     assert _runtime_log_path() == tmp_path / "run.log"
 
     monkeypatch.delenv("EMATE_DATA_DIR")
-    assert _runtime_log_path() == Path("run.log")
+    assert _runtime_log_path() is None
 
 
 def test_platform_python_closure_imports_the_real_cow_spine(
