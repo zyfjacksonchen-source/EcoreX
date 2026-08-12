@@ -380,6 +380,12 @@ def test_product_composition_verifies_shared_pack_python_once_per_startup(
     first_startup = create_production_pack_adapter_resolver()
     assert set(first_startup(pack, (workspace,), payload)) == {"web_fetch"}
     assert set(first_startup(pack, (workspace,), payload)) == {"web_fetch"}
+    shared_resolver = getattr(
+        first_startup, "_resolve_pack_python_for_composition"
+    )
+    assert shared_resolver(
+        payload, platform="windows", architecture="x64"
+    )[0] == interpreter
     assert calls == 1
 
     # Cache lifetime is exactly one composition. A restart gets a new
@@ -387,6 +393,30 @@ def test_product_composition_verifies_shared_pack_python_once_per_startup(
     second_startup = create_production_pack_adapter_resolver()
     assert set(second_startup(pack, (workspace,), payload)) == {"web_fetch"}
     assert calls == 2
+
+
+def test_dependency_pack_services_reuse_the_composition_interpreter(
+    tmp_path: Path,
+) -> None:
+    from ecorex.server.config import _resolve_composition_pack_python
+
+    expected = (tmp_path / "python.exe", object())
+
+    def resolver(*_args, **_kwargs):
+        return {}
+
+    setattr(
+        resolver,
+        "_resolve_pack_python_for_composition",
+        lambda *_args, **_kwargs: expected,
+    )
+
+    assert _resolve_composition_pack_python(
+        resolver,
+        tmp_path,
+        platform="windows",
+        architecture="x64",
+    ) == expected
 
 
 def test_product_resolver_injects_the_slot_owned_windows_sandbox_helper(

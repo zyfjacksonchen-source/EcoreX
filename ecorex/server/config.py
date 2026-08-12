@@ -54,7 +54,7 @@ from ecorex.integration.dependency_pack_process import (
     PackOfficeServiceAdapter,
     VerifiedDependencyPackProcessAdapter,
 )
-from ecorex.integration.pack_python import resolve_pack_python
+from ecorex.integration.pack_python import PackPythonIdentity, resolve_pack_python
 from ecorex.connectors import (
     CredentialVault,
     EphemeralEncryptedCredentialVault,
@@ -782,6 +782,21 @@ def _production_reload_requester() -> DelayedRestartRequester:
     return DelayedRestartRequester(exit_code=RUNTIME_RELOAD_EXIT_CODE)
 
 
+def _resolve_composition_pack_python(
+    resolver: PackAdapterResolver | None,
+    payload: Path,
+    *,
+    platform: str,
+    architecture: str,
+) -> tuple[Path, PackPythonIdentity]:
+    pack_python_resolver = getattr(
+        resolver, "_resolve_pack_python_for_composition", resolve_pack_python
+    )
+    return pack_python_resolver(
+        payload, platform=platform, architecture=architecture
+    )
+
+
 def load_product_runtime(
     *,
     payload_root: str | os.PathLike[str] | None = None,
@@ -1188,7 +1203,8 @@ def load_product_runtime(
     try:
         composition_stage = "dependency_pack_services"
         if {"ocr", "office"}.issubset(pack_runtime.installed_pack_ids):
-            pack_python, pack_python_identity = resolve_pack_python(
+            pack_python, pack_python_identity = _resolve_composition_pack_python(
+                pack_adapter_resolver,
                 payload,
                 platform=host_platform,
                 architecture=host_architecture,
