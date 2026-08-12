@@ -180,6 +180,12 @@ test("GA harness exposes managed bootstrap, strict CSRF, state reset, and unique
   );
   assert.equal(authenticated.models.image[0].model_id, "gpt-image-2");
   assert.equal(authenticated.models.image[0].model_policy, null);
+  const generatedTitle = await fetch(`${harness.url}/api/v1/threads/thread-ga/generate_title`, {
+    method: "POST",
+    headers: MUTATION_HEADERS,
+  });
+  assert.equal(generatedTitle.status, 200);
+  assert.equal((await generatedTitle.json()).thread.thread_id, "thread-ga");
   assert.equal(authenticated.extensions.contract_version, "1.0");
   assert.equal(authenticated.extensions.items.length, 3);
   const mentions = await fetch(`${harness.url}/api/v1/capability-mentions`).then((response) => response.json());
