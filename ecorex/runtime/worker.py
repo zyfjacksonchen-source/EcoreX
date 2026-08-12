@@ -41,7 +41,6 @@ from ecorex.gateway import (
     MAX_DISCLOSED_WORKING_SET,
     MAX_MODEL_VISIBLE_TOOLS,
     MAX_TOOL_DESCRIPTOR_BYTES,
-    MAX_TOOL_SCHEMA_BATCH_BYTES,
     TOOL_PROJECTION_BUDGET_VERSION,
     GatewayEvent,
     GatewayEventType,
@@ -1968,15 +1967,6 @@ class LegacyAgentTurnWorker:
                     "tool_projection_descriptor_budget_exceeded",
                     retryable=False,
                 )
-            candidate_batch = [*descriptors, descriptor]
-            if (
-                len(canonical_tool_schema_batch_bytes(candidate_batch))
-                > MAX_TOOL_SCHEMA_BATCH_BYTES
-            ):
-                raise _GatewayResponseFailure(
-                    "tool_projection_schema_budget_exceeded",
-                    retryable=False,
-                )
             descriptors.append(descriptor)
             direct_ids.append(decision.tool_id)
 
@@ -2006,13 +1996,6 @@ class LegacyAgentTurnWorker:
                 suppressed_ids.append(tool_id)
                 continue
             if descriptor_bytes > MAX_TOOL_DESCRIPTOR_BYTES:
-                suppressed_ids.append(tool_id)
-                continue
-            candidate_batch = [*descriptors, descriptor]
-            if (
-                len(canonical_tool_schema_batch_bytes(candidate_batch))
-                > MAX_TOOL_SCHEMA_BATCH_BYTES
-            ):
                 suppressed_ids.append(tool_id)
                 continue
             descriptors.append(descriptor)

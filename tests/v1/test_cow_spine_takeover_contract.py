@@ -447,6 +447,7 @@ def test_cow_terminal_fallback_is_projected_once_without_repeating_streamed_text
 
 def test_cow_tool_catalog_is_not_rejected_at_the_legacy_sixty_four_tool_limit() -> None:
     from agent.protocol.models import LLMRequest
+    from ecorex.gateway import MAX_TOOL_SCHEMA_BATCH_BYTES, canonical_tool_schema_batch_bytes
     from ecorex.runtime.worker import _CowGatewayModel
 
     loop = asyncio.new_event_loop()
@@ -461,7 +462,7 @@ def test_cow_tool_catalog_is_not_rejected_at_the_legacy_sixty_four_tool_limit() 
         tools = [
             {
                 "name": f"mcp_tool_{index}",
-                "description": "MCP tool",
+                "description": "MCP tool " + ("x" * 5000),
                 "input_schema": {"type": "object", "properties": {}},
             }
             for index in range(65)
@@ -477,6 +478,7 @@ def test_cow_tool_catalog_is_not_rejected_at_the_legacy_sixty_four_tool_limit() 
         loop.close()
 
     assert len(request.direct_tools) == 65
+    assert len(canonical_tool_schema_batch_bytes(request.direct_tools)) > MAX_TOOL_SCHEMA_BATCH_BYTES
 
 
 def test_cow_vision_uses_the_authenticated_managed_gateway(
