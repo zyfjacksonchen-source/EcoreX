@@ -27,17 +27,15 @@ def _cow_imports(source: str) -> tuple[str, ...]:
     return tuple(sorted(imported))
 
 
-def test_python_product_distribution_stages_cow_runtime_separately() -> None:
+def test_python_product_distribution_contains_the_cow_runtime() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     discovery = project["tool"]["setuptools"]["packages"]["find"]
-    assert discovery["include"] == ["ecorex*"]
-    assert set(discovery["exclude"]) >= {
-        "cli*",
-        "agent*",
-        "channel*",
-        "desktop*",
-        "tests*",
-    }
+    assert {f"{root}*" for root in set(COW_RUNTIME_SOURCE_ROOTS) - {"skills"}} <= set(
+        discovery["include"]
+    )
+    assert "ecorex*" in discovery["include"]
+    assert set(discovery["exclude"]) == {"desktop*", "tests*"}
+    assert project["tool"]["setuptools"]["py-modules"] == ["config"]
     assert project["tool"]["setuptools"]["package-data"] == {
         "ecorex.control_plane.admin_web": ["static/*"],
         "ecorex.control_plane": ["seed_skills/official-writing/*"],

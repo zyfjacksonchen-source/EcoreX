@@ -685,7 +685,8 @@ def _verify_runtime_tree(artifact: Path, source: Path) -> dict[str, Any]:
     python = artifact / "venv" / "bin" / "python3.11"
     probe = (
         "import importlib.resources, json, pathlib, sys; "
-        "import ecorex, ecorex.control_plane.production, ecorex.gateway.production, "
+        "import agent.tools.tool_manager, bridge.agent_initializer, config, ecorex, "
+        "ecorex.control_plane.production, ecorex.gateway.production, "
         "ecorex.image_orchestrator.production; "
         "asset=importlib.resources.files('ecorex.control_plane.admin_web').joinpath('static/index.html'); "
         "print(json.dumps({'version':ecorex.__version__,'prefix':sys.prefix,"
