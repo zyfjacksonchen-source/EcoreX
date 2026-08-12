@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tomllib
 
 from ecorex.pack_catalog import COW_RUNTIME_SOURCE_ROOTS
@@ -89,3 +92,24 @@ def test_cow_import_inventory_uses_syntax_not_identifier_substrings() -> None:
     assert _cow_imports("from agent.tools import ToolManager\n") == (
         "agent.tools",
     )
+
+
+def test_cow_import_does_not_write_without_a_desktop_data_root(tmp_path: Path) -> None:
+    environment = dict(os.environ)
+    environment.pop("EMATE_DATA_DIR", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            f"import sys; sys.path.insert(0, {str(ROOT)!r}); import config",
+        ],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    assert list(tmp_path.iterdir()) == []
