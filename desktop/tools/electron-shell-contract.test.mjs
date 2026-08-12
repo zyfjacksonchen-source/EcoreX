@@ -51,6 +51,10 @@ test("desktop loads the existing loopback Runtime and never packages a second re
   assert.match(main, /code === 86\) void restartRuntime\(\)/);
   assert.match(main, /await mainWindow\?\.loadURL\(startupPage\(\)\)/);
   assert.match(main, /if \(runtimeRestart\) return runtimeRestart/);
+  assert.match(main, /app\.on\("before-quit", \(event\) =>/);
+  assert.match(main, /event\.preventDefault\(\)/);
+  assert.match(main, /await backend\?\.stop\(\)/);
+  assert.match(main, /finally \{\s+shutdownComplete = true;\s+app\.quit\(\)/);
   assert.match(main, /buttons: \["重试", "退出"\]/);
   assert.match(main, /src", "v1", "assets", "emate-logo\.png"/);
   assert.match(main, /titleBarStyle: "hiddenInset"/);
@@ -171,6 +175,94 @@ test("loopback owner proof never discloses its secret to an untrusted listener",
   }
 });
 
+test("desktop adopts an exact crash-left Runtime before rotating its owner receipt", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-adopt-"));
+  const resources = path.join(root, "resources");
+  const dataDir = path.join(root, "data");
+  const runtime = path.join(resources, "runtime");
+  const nonce = Buffer.alloc(32, 11).toString("base64url");
+  const server = http.createServer((request, response) => {
+    const challenge = request.headers["x-ecorex-owner-challenge"];
+    const proof = createHmac("sha256", Buffer.from(nonce, "base64url"))
+      .update("e-mate.runtime-owner.v1\0", "ascii")
+      .update(challenge, "ascii")
+      .digest("base64url");
+    response.writeHead(204, { "X-EcoreX-Runtime-Owner": proof });
+    response.end();
+  });
+  try {
+    await mkdir(path.join(runtime, "payload", "bin"), { recursive: true });
+    await mkdir(path.join(dataDir, "bootstrap"), { recursive: true });
+    await Promise.all([
+      writeFile(path.join(runtime, "payload", "bin", "ecorex"), "not launched"),
+      writeFile(path.join(runtime, ".slot.json"), "{}"),
+      writeFile(path.join(runtime, "release-manifest.json"), "{}"),
+      writeFile(
+        path.join(dataDir, "bootstrap", "runtime-owner.json"),
+        JSON.stringify({ schema_version: 1, nonce }),
+      ),
+    ]);
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = server.address().port;
+    const backend = new backendContract.BackendManager({
+      packaged: true,
+      resourcesPath: resources,
+      dataDir,
+      port,
+    });
+
+    assert.equal(await backend.start(), `http://127.0.0.1:${port}`);
+    assert.equal(backend.child, null);
+    assert.equal(backendContract.runtimeOwnerNonce(dataDir), nonce);
+    await backend.stop();
+  } finally {
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("desktop never rotates a receipt or kills an unknown loopback listener", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-unknown-"));
+  const resources = path.join(root, "resources");
+  const dataDir = path.join(root, "data");
+  const runtime = path.join(resources, "runtime");
+  const nonce = Buffer.alloc(32, 13).toString("base64url");
+  let requests = 0;
+  const server = http.createServer((_request, response) => {
+    requests += 1;
+    response.writeHead(404);
+    response.end();
+  });
+  try {
+    await mkdir(path.join(runtime, "payload", "bin"), { recursive: true });
+    await mkdir(path.join(dataDir, "bootstrap"), { recursive: true });
+    await Promise.all([
+      writeFile(path.join(runtime, "payload", "bin", "ecorex"), "not launched"),
+      writeFile(path.join(runtime, ".slot.json"), "{}"),
+      writeFile(path.join(runtime, "release-manifest.json"), "{}"),
+      writeFile(
+        path.join(dataDir, "bootstrap", "runtime-owner.json"),
+        JSON.stringify({ schema_version: 1, nonce }),
+      ),
+    ]);
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const backend = new backendContract.BackendManager({
+      packaged: true,
+      resourcesPath: resources,
+      dataDir,
+      port: server.address().port,
+    });
+
+    await assert.rejects(backend.start(), /not owned by e-Mate/);
+    assert.equal(backendContract.runtimeOwnerNonce(dataDir), nonce);
+    assert.equal(server.listening, true);
+    assert.ok(requests >= 1);
+  } finally {
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("packaged desktop directly launches the immutable Runtime on macOS and Windows", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-direct-"));
   const resources = path.join(root, "resources");
@@ -195,6 +287,7 @@ test("packaged desktop directly launches the immutable Runtime on macOS and Wind
     assert.equal(mac.environment.PLAYWRIGHT_BROWSERS_PATH, path.join(dataDir, "ms-playwright"));
     assert.equal(mac.environment.EMATE_PACKAGED_RUNTIME, "1");
     assert.equal(mac.windowsHide, true);
+    assert.equal(mac.detached, true);
 
     const windows = backendContract.packagedRuntimeSpec(resources, dataDir, 9988, "win32");
     assert.equal(windows.command, path.join(runtime, "payload", "bin", "ecorex.exe"));
@@ -203,6 +296,7 @@ test("packaged desktop directly launches the immutable Runtime on macOS and Wind
     assert.equal(windows.environment.COW_DATA_DIR, dataDir);
     assert.equal(windows.environment.PLAYWRIGHT_BROWSERS_PATH, path.join(dataDir, "ms-playwright"));
     assert.equal(windows.windowsHide, true);
+    assert.equal(windows.detached, false);
 
     const nonce = backendContract.issueRuntimeOwnerReceipt(dataDir);
     assert.match(nonce, /^[A-Za-z0-9_-]{43}$/);
@@ -214,6 +308,26 @@ test("packaged desktop directly launches the immutable Runtime on macOS and Wind
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("Runtime shutdown targets the exact macOS process group and Windows process tree", () => {
+  assert.deepEqual(
+    backendContract.runtimeTerminationSpec(4312, false, "darwin"),
+    { pid: -4312, signal: "SIGTERM" },
+  );
+  assert.deepEqual(
+    backendContract.runtimeTerminationSpec(4312, true, "darwin"),
+    { pid: -4312, signal: "SIGKILL" },
+  );
+  assert.deepEqual(
+    backendContract.runtimeTerminationSpec(4312, false, "win32", "C:\\Windows"),
+    { command: path.join("C:\\Windows", "System32", "taskkill.exe"), args: ["/PID", "4312", "/T"] },
+  );
+  assert.deepEqual(
+    backendContract.runtimeTerminationSpec(4312, true, "win32", "C:\\Windows"),
+    { command: path.join("C:\\Windows", "System32", "taskkill.exe"), args: ["/PID", "4312", "/T", "/F"] },
+  );
+  assert.equal(backendContract.runtimeTerminationSpec(0, false, "win32"), null);
 });
 
 test("public download index parsing only offers newer stable releases", () => {

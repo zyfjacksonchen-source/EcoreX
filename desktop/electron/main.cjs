@@ -20,6 +20,8 @@ let updater = null;
 let taskNotifications = null;
 let quitting = false;
 let runtimeRestart = null;
+let shutdownComplete = false;
+let shutdown = null;
 const contextTargets = new WeakMap();
 
 const ARTIFACT_ID = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}$/;
@@ -413,13 +415,23 @@ app.on("activate", () => {
   }
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
+  if (shutdownComplete) return;
+  event.preventDefault();
+  if (shutdown) return;
   quitting = true;
   tray?.destroy();
   tray = null;
   taskNotifications?.stop();
   taskNotifications = null;
-  backend?.stop();
+  shutdown = (async () => {
+    try {
+      await backend?.stop();
+    } finally {
+      shutdownComplete = true;
+      app.quit();
+    }
+  })();
 });
 
 app.on("window-all-closed", () => {

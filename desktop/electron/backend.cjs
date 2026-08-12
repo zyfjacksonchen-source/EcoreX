@@ -3,6 +3,7 @@ const { EventEmitter } = require("node:events");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
+const net = require("node:net");
 const path = require("node:path");
 
 const DEFAULT_RUNTIME_PORT = 8765;
@@ -43,6 +44,7 @@ function packagedRuntimeSpec(resourcesPath, dataDir, port, targetPlatform = proc
         PYTHONUNBUFFERED: "1",
       },
       windowsHide: true,
+      detached: targetPlatform !== "win32",
     };
   } catch {
     return null;
@@ -124,6 +126,50 @@ function runtimeResponds(port, dataDir) {
   });
 }
 
+function loopbackPortOccupied(port) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: "127.0.0.1", port });
+    let settled = false;
+    const finish = (occupied) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(occupied);
+    };
+    socket.setTimeout(500, () => finish(false));
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+  });
+}
+
+function runtimeTerminationSpec(pid, force, targetPlatform = process.platform, systemRoot = process.env.SystemRoot) {
+  if (!Number.isSafeInteger(pid) || pid < 1) return null;
+  if (targetPlatform === "win32") {
+    return {
+      command: path.join(systemRoot || "C:\\Windows", "System32", "taskkill.exe"),
+      args: ["/PID", String(pid), "/T", ...(force ? ["/F"] : [])],
+    };
+  }
+  return { pid: -pid, signal: force ? "SIGKILL" : "SIGTERM" };
+}
+
+function terminateRuntimeProcess(child, force = false) {
+  const termination = runtimeTerminationSpec(child.pid, force);
+  if (!termination) return;
+  if (termination.command) {
+    const killer = spawn(termination.command, termination.args, { stdio: "ignore", windowsHide: true });
+    killer.once("error", () => {
+      try { child.kill(force ? "SIGKILL" : "SIGTERM"); } catch { /* The exact child already exited. */ }
+    });
+    return;
+  }
+  try {
+    process.kill(termination.pid, termination.signal);
+  } catch {
+    try { child.kill(termination.signal); } catch { /* The exact child already exited. */ }
+  }
+}
+
 class BackendManager extends EventEmitter {
   constructor({ packaged, resourcesPath, dataDir, port = DEFAULT_RUNTIME_PORT }) {
     super();
@@ -157,7 +203,6 @@ class BackendManager extends EventEmitter {
     if (this.packaged) {
       spec = packagedRuntimeSpec(this.resourcesPath, this.dataDir, this.port);
       if (!spec) throw new Error("The packaged e-Mate Runtime is missing.");
-      spec.environment.ECOREX_RUNTIME_OWNER_NONCE = issueRuntimeOwnerReceipt(this.dataDir);
     } else {
       const payload = process.cwd();
       const isVerifiedPayload = process.env.ECOREX_BOOTSTRAPPED === "1"
@@ -172,7 +217,19 @@ class BackendManager extends EventEmitter {
         cwd: payload,
         environment: { ...process.env, PYTHONUNBUFFERED: "1" },
         windowsHide: true,
+        detached: process.platform !== "win32",
       };
+    }
+
+    if (await runtimeResponds(this.port, this.dataDir)) {
+      this.emit("ready", this.origin);
+      return this.origin;
+    }
+    if (await loopbackPortOccupied(this.port)) {
+      throw new Error(`Loopback port ${this.port} is occupied by a process not owned by e-Mate.`);
+    }
+    if (this.packaged) {
+      spec.environment.ECOREX_RUNTIME_OWNER_NONCE = issueRuntimeOwnerReceipt(this.dataDir);
     }
 
     const child = spawn(spec.command, spec.args, {
@@ -180,6 +237,7 @@ class BackendManager extends EventEmitter {
       env: spec.environment,
       stdio: "ignore",
       windowsHide: spec.windowsHide,
+      detached: spec.detached,
     });
     this.child = child;
     let startupFailure = null;
@@ -221,9 +279,9 @@ class BackendManager extends EventEmitter {
         resolve();
       };
       child.once("exit", finish);
-      child.kill("SIGTERM");
+      terminateRuntimeProcess(child);
       timer = setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        if (child.exitCode === null && child.signalCode === null) terminateRuntimeProcess(child, true);
         setTimeout(finish, 1_000).unref();
       }, 5_000);
       timer.unref();
@@ -238,4 +296,5 @@ module.exports = {
   packagedRuntimeSpec,
   runtimeOwnerNonce,
   runtimeResponds,
+  runtimeTerminationSpec,
 };
