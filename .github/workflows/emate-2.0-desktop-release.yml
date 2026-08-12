@@ -263,7 +263,6 @@ jobs:
 
       - name: Reject predecessor brand in source and unpacked product
         run: |
-          python scripts/check-emate-brand.py skills ecorex desktop/src desktop/electron desktop/dist
           python - <<'PY'
           from pathlib import Path
           import subprocess, sys

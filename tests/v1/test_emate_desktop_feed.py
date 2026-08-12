@@ -623,6 +623,7 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
     ).read_text(encoding="utf-8")
     assert 'windows / "resources/app.asar"' in workflow
     assert 'app / "Contents/Resources/app.asar"' in workflow
+    assert "check-emate-brand.py skills ecorex" not in workflow
     assert "roots.extend(sorted(release.glob" not in workflow
     assert (
         "--nginx-config deploy/e-mate/nginx/update-feed-unsigned-manual.conf"
