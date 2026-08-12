@@ -5965,17 +5965,111 @@ class AgentTurnWorker:
         if thread is not None and thread.is_alive():
             thread.join()
 
+    def _turn_image_artifact_history(self, turn_id: str) -> list[dict[str, Any]]:
+        with self.kernel.database.reader() as connection:
+            rows = connection.execute(
+                "SELECT content_json FROM items WHERE turn_id = ? AND kind = ? "
+                "AND status = ? ORDER BY created_at, item_id",
+                (
+                    turn_id,
+                    ItemKind.ARTIFACT.value,
+                    ItemStatus.COMPLETED.value,
+                ),
+            ).fetchall()
+
+        records: list[tuple[int, str, int, dict[str, Any]]] = []
+        batch_first: dict[str, int] = {}
+        for sequence, row in enumerate(rows):
+            content = json_loads(row["content_json"], {})
+            artifact = content.get("artifact") if isinstance(content, dict) else None
+            preview = content.get("preview") if isinstance(content, dict) else None
+            if not isinstance(artifact, dict) or not isinstance(preview, dict):
+                continue
+            mime_type = str(
+                preview.get("mime_type") or artifact.get("mime_type") or ""
+            ).strip()
+            if artifact.get("family") != "image" and not mime_type.startswith("image/"):
+                continue
+            artifact_id = str(
+                preview.get("artifact_id") or artifact.get("artifact_id") or ""
+            ).strip()
+            url = str(preview.get("url") or "").strip()
+            if not url and artifact_id:
+                url = f"/api/v1/artifacts/{artifact_id}/preview"
+            if not url:
+                continue
+            image_batch = content.get("image_batch")
+            batch_id = str(
+                image_batch.get("batch_id")
+                if isinstance(image_batch, dict)
+                else ""
+            )
+            try:
+                batch_index = int(image_batch.get("index", 0))
+            except (TypeError, ValueError, AttributeError):
+                batch_index = 0
+            if batch_id:
+                batch_first[batch_id] = min(batch_first.get(batch_id, sequence), sequence)
+            records.append(
+                (
+                    sequence,
+                    batch_id,
+                    batch_index,
+                    {
+                        "id": artifact_id,
+                        "revision_id": str(
+                            preview.get("revision_id")
+                            or artifact.get("revision_id")
+                            or ""
+                        ),
+                        "url": url,
+                        "title": str(artifact.get("display_name") or "图片产物"),
+                        "type": mime_type or "image",
+                    },
+                )
+            )
+        records.sort(
+            key=lambda record: (
+                batch_first.get(record[1], record[0]),
+                record[2] if record[1] else 0,
+                record[0],
+            )
+        )
+        return [record[3] for record in records]
+
+    @staticmethod
+    def _attach_image_artifact_history(
+        messages: list[dict[str, Any]], artifacts: list[dict[str, Any]]
+    ) -> None:
+        if not artifacts:
+            return
+        target = next(
+            (message for message in reversed(messages) if message.get("role") == "assistant"),
+            None,
+        )
+        if target is None:
+            return
+        extras = target.get("extras") if isinstance(target.get("extras"), dict) else {}
+        target["extras"] = {**extras, "artifacts": artifacts}
+
     def _persist_cow_history(
         self,
         *,
         store: Any,
         session_id: str,
+        turn_id: str,
         agent: Any,
         channel_type: str,
         project_context: dict[str, str] | None,
     ) -> None:
-        new_messages = list(getattr(agent, "_last_run_new_messages", ()) or ())
+        new_messages = copy.deepcopy(
+            list(getattr(agent, "_last_run_new_messages", ()) or ())
+        )
         if new_messages:
+            self._attach_image_artifact_history(
+                new_messages,
+                self._turn_image_artifact_history(turn_id),
+            )
             store.append_messages(
                 session_id,
                 new_messages,
@@ -6481,6 +6575,7 @@ class AgentTurnWorker:
                 self._persist_cow_history(
                     store=conversation_store,
                     session_id=thread_id,
+                    turn_id=turn_id,
                     agent=agent,
                     channel_type=channel_type,
                     project_context=project_context,

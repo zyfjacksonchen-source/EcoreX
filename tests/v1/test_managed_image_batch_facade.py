@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+import hashlib
+import io
 from types import MethodType, SimpleNamespace
 
 import pytest
+from PIL import Image
 
 from agent.tools.imagegen.imagegen import ImageGenTool
 from ecorex.capabilities import (
@@ -15,11 +19,16 @@ from ecorex.capabilities import (
     builtin_capability_registry,
 )
 from ecorex.capabilities.schema import validate_schema_instance
-from ecorex.gateway import GatewayEvent
+from ecorex.gateway import GatewayAssistantMessageInput, GatewayEvent
 from ecorex.integration.image_tools import (
     ImageGenerationToolHandler,
     ImageToolError,
     RuntimeImageToolBackend,
+)
+from ecorex.integration.managed_image import (
+    ManagedImageDownloadedResult,
+    ManagedImageJob,
+    ManagedImageResultDescriptor,
 )
 from ecorex.protocol import CreateThreadRequest, CreateTurnRequest, ItemKind
 from ecorex.runtime import (
@@ -51,6 +60,12 @@ def _backend(max_parallel: int = 2) -> RuntimeImageToolBackend:
     backend._emit_batch_failure = lambda *_args: None
     backend._emit_batch_settled = lambda *_args: None
     return backend
+
+
+def _png(color: tuple[int, int, int]) -> bytes:
+    output = io.BytesIO()
+    Image.new("RGB", (32, 24), color).save(output, format="PNG")
+    return output.getvalue()
 
 
 def test_image_batch_is_bounded_ordered_idempotent_and_reports_partial_failure() -> None:
@@ -454,5 +469,176 @@ def test_real_worker_routes_one_batch_call_through_image_pool_and_public_facts(
         assert artifact_items[0].content["image_batch"]["batch_id"] == batch_id
         assert artifact_items[0].content["image_batch"]["index"] == 0
         await worker.close()
+
+    asyncio.run(scenario())
+
+
+def test_cow_next_turn_can_edit_prior_managed_image_artifact_in_batch_order(
+    tmp_path,
+) -> None:
+    first_image = _png((210, 40, 30))
+    second_image = _png((30, 80, 210))
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def execute(self, request, *, inputs=()):
+            self.calls.append((request, tuple(inputs)))
+            content = (
+                first_image
+                if request.prompt in {"first image", "edit the first image"}
+                else second_image
+            )
+            if request.prompt == "first image":
+                await asyncio.sleep(0.03)
+            digest = hashlib.sha256(content).hexdigest()
+            now = datetime.now(UTC)
+            job = ManagedImageJob(
+                job_id="imgjob_" + hashlib.sha256(
+                    request.client_request_id.encode("utf-8")
+                ).hexdigest()[:32],
+                operation=request.operation.value,
+                model_id=request.model_id,
+                status="completed",
+                attempt=1,
+                max_attempts=4,
+                created_at=now,
+                updated_at=now,
+                deadline=now + timedelta(minutes=5),
+                result=ManagedImageResultDescriptor(
+                    digest, len(content), "image/png"
+                ),
+                last_error_code=None,
+            )
+            return ManagedImageDownloadedResult(job, content)
+
+    class Gateway:
+        def __init__(self) -> None:
+            self.requests = []
+            self.expected_urls: list[str] = []
+
+        async def stream(self, request):
+            self.requests.append(request)
+            call = len(self.requests)
+            response_id = f"cow-image-history-{call}"
+            if call == 1:
+                yield GatewayEvent(
+                    seq=1,
+                    event_type="tool_call.requested",
+                    response_id=response_id,
+                    tool_call_id="generate-batch",
+                    tool_name="imagegen",
+                    arguments={
+                        "tasks": [
+                            {"prompt": "first image"},
+                            {"prompt": "second image"},
+                        ]
+                    },
+                )
+            elif call == 2:
+                yield GatewayEvent(
+                    seq=1,
+                    event_type="output_text.delta",
+                    response_id=response_id,
+                    delta="The two images are ready.",
+                )
+            elif call == 3:
+                history = "\n".join(
+                    item.content
+                    for item in request.ordered_input_items()
+                    if isinstance(item, GatewayAssistantMessageInput)
+                )
+                assert history.index(self.expected_urls[0]) < history.index(
+                    self.expected_urls[1]
+                )
+                yield GatewayEvent(
+                    seq=1,
+                    event_type="tool_call.requested",
+                    response_id=response_id,
+                    tool_call_id="edit-first",
+                    tool_name="imagegen",
+                    arguments={
+                        "prompt": "edit the first image",
+                        "image_url": self.expected_urls[0],
+                    },
+                )
+            else:
+                yield GatewayEvent(
+                    seq=1,
+                    event_type="output_text.delta",
+                    response_id=response_id,
+                    delta="The first image was edited.",
+                )
+            yield GatewayEvent(
+                seq=2,
+                event_type="response.completed",
+                response_id=response_id,
+                usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            )
+
+    async def scenario() -> None:
+        workspace = tmp_path / "workspace"
+        app = create_app(
+            settings=RuntimeSettings(
+                database_path=tmp_path / "runtime.db",
+                installed_capability_packs=frozenset({"image"}),
+                capability_handlers={"imagegen": ImageGenerationToolHandler()},
+            )
+        )
+        kernel = app.state.runtime
+        composition = app.state.runtime_composition
+        client = Client()
+        app.state.image_tool_backend.client = client
+        gateway = Gateway()
+        thread = kernel.create_thread(CreateThreadRequest(title="image history"))
+
+        def create_turn(text: str, message_id: str) -> None:
+            prepared = composition.prepare_turn(
+                CreateTurnRequest(
+                    input=text,
+                    agent_model_id="ecorex-chat",
+                    image_model_id="gpt-image-2",
+                    explicit_tool_ids=["imagegen"],
+                    client_message_id=message_id,
+                ),
+                thread_id=thread.thread_id,
+            )
+            kernel.create_turn(
+                thread.thread_id,
+                prepared.request,
+                snapshot_context=prepared.snapshot_context,
+            )
+
+        create_turn("generate two images", "image-history-generate")
+        first = await AgentTurnWorker(
+            kernel,
+            gateway=gateway,
+            capabilities=composition.capability_service,
+            workspace_root=workspace,
+        ).run_once("image-history-worker-1")
+        assert first.outcome is WorkerOutcome.COMPLETED
+
+        items = [
+            item
+            for item in kernel.projection(thread.thread_id).items
+            if item.kind is ItemKind.ARTIFACT
+        ]
+        assert [item.content["image_batch"]["index"] for item in items] == [1, 0]
+        gateway.expected_urls = [
+            item.content["preview"]["url"]
+            for item in sorted(items, key=lambda item: item.content["image_batch"]["index"])
+        ]
+
+        create_turn("edit the first image from the prior batch", "image-history-edit")
+        second = await AgentTurnWorker(
+            kernel,
+            gateway=gateway,
+            capabilities=composition.capability_service,
+            workspace_root=workspace,
+        ).run_once("image-history-worker-2")
+        assert second.outcome is WorkerOutcome.COMPLETED
+        assert client.calls[-1][0].operation.value == "retouch"
+        assert [asset.content for asset in client.calls[-1][1]] == [first_image]
 
     asyncio.run(scenario())
