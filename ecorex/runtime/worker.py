@@ -5643,6 +5643,10 @@ class _CowGatewayModel:
                 }
             elif event.event_type is GatewayEventType.TOOL_CALL_REQUESTED:
                 saw_tool = True
+                self.previous_response_id = event.response_id
+                self.last_usage = event.usage
+                if event.usage is not None:
+                    self.usage_events.append((event.response_id, event.usage))
                 yield {
                     "choices": [
                         {

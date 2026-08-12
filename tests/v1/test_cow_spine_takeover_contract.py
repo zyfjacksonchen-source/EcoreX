@@ -310,6 +310,74 @@ def test_cow_model_request_uses_the_real_tool_manager_contract(
     ]
 
 
+def test_cow_model_keeps_tool_response_id_for_the_result_continuation() -> None:
+    from agent.protocol.models import LLMRequest
+    from ecorex.gateway import GatewayEvent, GatewayEventType
+    from ecorex.runtime.worker import _CowGatewayModel
+
+    class Gateway:
+        async def stream(self, _request):
+            yield GatewayEvent(
+                seq=1,
+                event_type=GatewayEventType.TOOL_CALL_REQUESTED,
+                response_id="response_edit",
+                tool_call_id="call_edit",
+                tool_name="edit",
+                arguments={"path": "MEMORY.md"},
+                usage={"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+            )
+
+    async def run() -> _CowGatewayModel:
+        model = _CowGatewayModel(
+            Gateway(),
+            asyncio.get_running_loop(),
+            thread_id="thread_contract",
+            turn_id="turn_contract",
+            model_id="ecorex-chat",
+        )
+        await asyncio.to_thread(
+            lambda: list(
+                model.call_stream(
+                    LLMRequest(messages=[], tools=[], system="cow")
+                )
+            )
+        )
+        return model
+
+    model = asyncio.run(run())
+
+    assert model.previous_response_id == "response_edit"
+    assert model.usage_events == [
+        ("response_edit", {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5})
+    ]
+    continuation = model._request(
+        LLMRequest(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_edit",
+                            "content": "Successfully replaced text in MEMORY.md",
+                        }
+                    ],
+                }
+            ],
+            tools=[],
+            system="cow",
+        )
+    )
+    assert continuation.previous_response_id == "response_edit"
+    assert [item.model_dump(mode="json") for item in continuation.input_items or []] == [
+        {
+            "type": "function_call_output",
+            "tool_call_id": "call_edit",
+            "output": "Successfully replaced text in MEMORY.md",
+        }
+    ]
+
+
 def test_real_cow_agent_stream_runs_through_the_managed_gateway(
     tmp_path: Path, monkeypatch,
 ) -> None:
