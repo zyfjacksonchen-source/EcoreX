@@ -146,4 +146,3 @@ def _text(value: Any, maximum: int, *, empty: bool = False) -> str:
     if (not empty and not text) or len(text.encode("utf-8")) > maximum:
         raise OfficeAuthoringContractError("office_text_invalid")
     return text
-
