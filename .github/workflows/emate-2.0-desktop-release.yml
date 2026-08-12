@@ -94,6 +94,7 @@ jobs:
             tests/v1/test_mcp_oauth.py \
             tests/v1/test_cow_public_hotpath_contract.py \
             tests/v1/test_cow_history_attachment_subagent_lifecycle.py \
+            tests/v1/test_memory_storage_shared_db_recovery.py \
             tests/v1/test_cow_data_plane_admission.py \
             tests/v1/test_cow_spine_takeover_contract.py \
             tests/v1/test_usage_projection.py \

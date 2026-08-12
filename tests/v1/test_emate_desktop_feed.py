@@ -640,6 +640,7 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
         "tests/v1/test_public_download_site.py",
         "tests/v1/test_emate_feed_deploy.py",
         "tests/v1/test_cow_public_hotpath_contract.py",
+        "tests/v1/test_memory_storage_shared_db_recovery.py",
         "tests/v1/test_cow_data_plane_admission.py",
         "tests/v1/test_cow_spine_takeover_contract.py",
         "test_product_composes_native_cow_channels_with_the_agent_runtime",
