@@ -192,6 +192,94 @@ def test_browser_runtime_matches_the_cow_desktop_contract(tmp_path: Path, monkey
     assert "/install-browser" in tool._check_engine_ready().result
 
 
+def test_cow_browser_only_uses_cdp_when_the_user_configures_an_endpoint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from agent.tools.browser import browser_env
+    from agent.tools.browser.browser_service import BrowserService
+
+    monkeypatch.setattr(
+        browser_env,
+        "resolve_engine",
+        lambda _config: {
+            "mode": "system-chrome",
+            "channel": "chrome",
+            "path": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "has_playwright": True,
+            "reason": "test system Chrome",
+        },
+    )
+
+    default = BrowserService({"user_data_dir": str(tmp_path / "profile")})
+    explicit = BrowserService({"cdp_endpoint": "http://127.0.0.1:9222"})
+
+    assert default._launch_mode == "persistent"
+    assert default._channel == "chrome"
+    assert explicit._launch_mode == "cdp"
+
+
+def test_cow_browser_honours_the_packaged_playwright_browser_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from agent.tools.browser import browser_env
+
+    bundled = tmp_path / "runtime" / "payload" / "ms-playwright"
+    (bundled / "chromium_headless_shell-1169").mkdir(parents=True)
+    monkeypatch.setenv("COW_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(bundled))
+
+    assert browser_env.browsers_download_dir() == str(bundled)
+    assert browser_env.has_downloaded_chromium() is True
+
+
+def test_packaged_cow_browser_uses_its_relocatable_headless_shell(monkeypatch) -> None:
+    from agent.tools.browser import browser_env
+    from agent.tools.browser.browser_service import BrowserService
+
+    monkeypatch.setenv("EMATE_PACKAGED_RUNTIME", "1")
+    monkeypatch.setattr(
+        browser_env,
+        "resolve_engine",
+        lambda _config: {
+            "mode": "playwright-chromium",
+            "channel": None,
+            "path": None,
+            "has_playwright": True,
+            "reason": "test bundled Chromium",
+        },
+    )
+
+    service = BrowserService()
+
+    assert service._launch_mode == "persistent"
+    assert service._channel is None
+    assert service._headless is True
+
+
+def test_packaged_cow_browser_prefers_bundled_chromium_over_host_chrome(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from agent.tools.browser import browser_env
+
+    bundled = tmp_path / "ms-playwright"
+    (bundled / "chromium_headless_shell-1169").mkdir(parents=True)
+    monkeypatch.setenv("EMATE_PACKAGED_RUNTIME", "1")
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(bundled))
+    monkeypatch.setattr(
+        browser_env,
+        "detect_system_chrome",
+        lambda: {"channel": "chrome", "path": "/host/chrome"},
+    )
+    monkeypatch.setattr(browser_env, "has_playwright_package", lambda: True)
+
+    engine = browser_env.resolve_engine()
+
+    assert engine["mode"] == "playwright-chromium"
+
+
 def test_cow_browser_success_is_stateful_and_projects_completed(
     monkeypatch,
 ) -> None:

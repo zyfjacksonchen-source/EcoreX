@@ -52,7 +52,12 @@ def browsers_download_dir() -> str:
     the frozen desktop build self-contained and makes the download survive app
     updates. Set as PLAYWRIGHT_BROWSERS_PATH for both install and runtime.
     """
-    return os.path.join(get_data_root(), "ms-playwright")
+    configured = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    return (
+        os.path.expanduser(configured)
+        if configured
+        else os.path.join(get_data_root(), "ms-playwright")
+    )
 
 
 def apply_browsers_path_env() -> None:
@@ -190,7 +195,10 @@ def resolve_engine(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
 
     has_pw = has_playwright_package()
     engine_pref = str(config.get("engine", "auto")).strip().lower()
-    prefer_system = config.get("prefer_system_browser", True)
+    prefer_system = config.get(
+        "prefer_system_browser",
+        os.environ.get("EMATE_PACKAGED_RUNTIME") != "1",
+    )
 
     if not has_pw:
         return {

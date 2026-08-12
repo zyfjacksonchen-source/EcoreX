@@ -159,7 +159,7 @@ test("desktop loads the existing loopback Runtime and never packages a second re
   assert.match(backend, /EMATE_DATA_DIR: dataDir/);
   assert.match(backend, /COW_DATA_DIR: dataDir/);
   assert.match(backend, /COW_DESKTOP: "1"/);
-  assert.match(backend, /PLAYWRIGHT_BROWSERS_PATH: path\.join\(dataDir, "ms-playwright"\)/);
+  assert.match(backend, /PLAYWRIGHT_BROWSERS_PATH: path\.join\(payload, "ms-playwright"\)/);
   assert.match(backend, /ECOREX_RUNTIME_OWNER_NONCE/);
   assert.doesNotMatch(backend, /--local-release/);
   assert.doesNotMatch(backend, /--launch-installed/);
@@ -426,7 +426,7 @@ test("packaged desktop directly launches the immutable Runtime on macOS and Wind
     assert.equal(mac.environment.EMATE_DATA_DIR, dataDir);
     assert.equal(mac.environment.COW_DATA_DIR, dataDir);
     assert.equal(mac.environment.COW_DESKTOP, "1");
-    assert.equal(mac.environment.PLAYWRIGHT_BROWSERS_PATH, path.join(dataDir, "ms-playwright"));
+    assert.equal(mac.environment.PLAYWRIGHT_BROWSERS_PATH, path.join(runtime, "payload", "ms-playwright"));
     assert.equal(mac.environment.EMATE_PACKAGED_RUNTIME, "1");
     assert.equal(mac.windowsHide, true);
     assert.equal(mac.detached, true);
@@ -437,7 +437,7 @@ test("packaged desktop directly launches the immutable Runtime on macOS and Wind
     assert.deepEqual(windows.args, ["serve", "--host", "127.0.0.1", "--port", "9988"]);
     assert.equal(windows.environment.EMATE_DATA_DIR, dataDir);
     assert.equal(windows.environment.COW_DATA_DIR, dataDir);
-    assert.equal(windows.environment.PLAYWRIGHT_BROWSERS_PATH, path.join(dataDir, "ms-playwright"));
+    assert.equal(windows.environment.PLAYWRIGHT_BROWSERS_PATH, path.join(runtime, "payload", "ms-playwright"));
     assert.equal(windows.windowsHide, true);
     assert.equal(windows.detached, false);
     assert.deepEqual(windows.runtimeIdentity, identity);

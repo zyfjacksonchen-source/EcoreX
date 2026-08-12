@@ -401,6 +401,9 @@ def _load_base(
         f"capability-pack-{pack_id}-{platform}-{architecture}"
         for platform, architecture in TARGETS
         for pack_id in PACK_TOOLS
+    } | {
+        f"capability-pack-browser-{platform}-{architecture}"
+        for platform, architecture in TARGETS
     }
     for artifact_id in required:
         try:
@@ -653,6 +656,40 @@ def _replace_builtin_skills(core: Path, source: Path) -> None:
         shutil.copy2(path, target)
 
 
+def _install_bundled_browser_runtime(
+    core: Path,
+    predecessor_pack: Path,
+    root: Path,
+    *,
+    platform: str,
+) -> None:
+    """Move the verified Cow Browser payload into the single Core Runtime."""
+    pack = root / "browser-pack"
+    runtime = root / "browser-runtime"
+    _extract_archive(predecessor_pack, pack)
+    try:
+        descriptor = json.loads((pack / "browser-runtime.json").read_text(encoding="utf-8"))
+        archive = pack / "browser-runtime.zip"
+        if descriptor["archive_sha256"] != _sha256(archive):
+            _fail("manual_webui_browser_runtime_invalid")
+        _extract_archive(archive, runtime)
+        browser_roots = tuple((runtime / "browser").glob("chromium_headless_shell-*"))
+        if len(browser_roots) != 1 or not browser_roots[0].is_dir():
+            _fail("manual_webui_browser_runtime_invalid")
+        executable = {
+            "windows": browser_roots[0] / "chrome-win" / "headless_shell.exe",
+            "macos": browser_roots[0] / "chrome-mac" / "headless_shell",
+        }[platform]
+        if not executable.is_file():
+            _fail("manual_webui_browser_runtime_invalid")
+        destination = core / "ms-playwright"
+        if destination.exists():
+            _fail("manual_webui_browser_runtime_invalid")
+        shutil.copytree(runtime / "browser", destination)
+    except (KeyError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        _fail("manual_webui_browser_runtime_invalid")
+
+
 def _runtime_config(
     core: Path,
     *,
@@ -740,6 +777,12 @@ def _prepare_stages(
         _install_cow_runtime_overlay(
             source,
             core,
+            target_root,
+            platform=platform,
+        )
+        _install_bundled_browser_runtime(
+            core,
+            base_artifacts[f"capability-pack-browser-{platform}-{architecture}"],
             target_root,
             platform=platform,
         )
@@ -981,14 +1024,24 @@ def _sources() -> tuple[ReleaseSource, ...]:
     )
 
 
-def _core_executable_paths(platform: str) -> tuple[str, ...]:
+def _core_executable_paths(platform: str, core: Path | None = None) -> tuple[str, ...]:
     if platform == "windows":
-        return ("bin/ecorex.exe",)
-    return (
+        paths = ["bin/ecorex.exe"]
+    else:
+        paths = [
         "bin/ecorex",
         "bin/pack-python/bin/python3",
         "bin/pack-python/lib/python3.11/site-packages/playwright/driver/node",
-    )
+        ]
+    if core is not None:
+        browser = core / "ms-playwright"
+        for path in sorted(browser.rglob("*")):
+            if path.is_file() and (
+                platform == "windows" and path.suffix.casefold() == ".exe"
+                or platform != "windows" and path.stat().st_mode & stat.S_IXUSR
+            ):
+                paths.append(path.relative_to(core).as_posix())
+    return tuple(paths)
 
 
 def _build_release(
@@ -1010,7 +1063,7 @@ def _build_release(
                     ArtifactKind.CORE,
                     platform,
                     architecture,
-                    executable_paths=_core_executable_paths(platform),
+                    executable_paths=_core_executable_paths(platform, target["core"]),
                     product_runtime=True,
                 ),
                 ArtifactBuildInput(

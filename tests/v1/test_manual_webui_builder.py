@@ -93,6 +93,57 @@ def test_manual_webui_builder_preserves_predecessor_release_trust(
         builder["_load_predecessor_trust"](trust)
 
 
+@pytest.mark.parametrize(
+    ("platform", "executable"),
+    (
+        ("macos", "chrome-mac/headless_shell"),
+        ("windows", "chrome-win/headless_shell.exe"),
+    ),
+)
+def test_manual_webui_moves_verified_browser_runtime_into_core(
+    tmp_path: Path,
+    platform: str,
+    executable: str,
+) -> None:
+    builder = _builder()
+    browser_runtime = tmp_path / "browser-runtime.zip"
+    member = f"browser/chromium_headless_shell-1169/{executable}"
+    with zipfile.ZipFile(browser_runtime, "w") as archive:
+        info = zipfile.ZipInfo(member)
+        info.create_system = 3
+        info.external_attr = (stat.S_IFREG | 0o755) << 16
+        archive.writestr(info, b"browser")
+    predecessor_pack = tmp_path / "browser-pack.zip"
+    descriptor = json.dumps(
+        {"archive_sha256": hashlib.sha256(browser_runtime.read_bytes()).hexdigest()}
+    )
+    with zipfile.ZipFile(predecessor_pack, "w") as archive:
+        for name, payload in (
+            ("browser-runtime.json", descriptor.encode()),
+            ("browser-runtime.zip", browser_runtime.read_bytes()),
+        ):
+            info = zipfile.ZipInfo(name)
+            info.create_system = 3
+            info.external_attr = (stat.S_IFREG | 0o644) << 16
+            archive.writestr(info, payload)
+    core = tmp_path / "core"
+    core.mkdir()
+
+    builder["_install_bundled_browser_runtime"](
+        core,
+        predecessor_pack,
+        tmp_path / "stage",
+        platform=platform,
+    )
+
+    bundled = core / "ms-playwright" / "chromium_headless_shell-1169" / executable
+    assert bundled.read_bytes() == b"browser"
+    assert bundled.relative_to(core).as_posix() in builder["_core_executable_paths"](
+        platform,
+        core,
+    )
+
+
 def test_checked_in_predecessor_trust_covers_supported_v2_release_identities() -> None:
     keys, identity = _builder()["_load_predecessor_trust"](
         ROOT / "release" / "v1" / "desktop-predecessor-trust.json"
@@ -303,8 +354,8 @@ def test_manual_webui_core_package_shape_matches_bootstrap_bounds(
     # Cow desktop ships Playwright's SDK/driver in Core, not a Browser Pack.
     assert 300 * 1024 * 1024 <= builder["MAX_CORE_EXPANDED_BYTES"]
     go_source = (ROOT / "platform-staging/bootstrap/main.go").read_text()
-    assert "maxCoreArchiveBytes  = 150 * 1024 * 1024" in go_source
-    assert "maxCoreExpandedBytes = 384 * 1024 * 1024" in go_source
+    assert "maxCoreArchiveBytes  = 256 * 1024 * 1024" in go_source
+    assert "maxCoreExpandedBytes = 640 * 1024 * 1024" in go_source
 
     function_globals = builder["_verify_release_core_bounds"].__globals__
     archive_limit = function_globals["MAX_CORE_ARCHIVE_BYTES"]
@@ -470,6 +521,7 @@ def test_manual_webui_product_probe_isolated_from_signed_core(
     for name in (
         "_install_locked_runtime_overlay",
         "_install_cow_runtime_overlay",
+        "_install_bundled_browser_runtime",
         "_replace_product_imports",
         "_replace_builtin_skills",
         "_runtime_config",
@@ -507,7 +559,10 @@ def test_manual_webui_product_probe_isolated_from_signed_core(
     stage_root = tmp_path / "stages"
     builder["_prepare_stages"](
         ROOT,
-        {"core-macos-arm64": core_archive},
+        {
+            "core-macos-arm64": core_archive,
+            "capability-pack-browser-macos-arm64": core_archive,
+        },
         stage_root,
         {},
     )

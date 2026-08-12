@@ -329,14 +329,7 @@ class BrowserService:
         self._browser = None
         self._context = None
         self._page = None
-
-        # When we drive a system Chrome/Edge, we spawn it ourselves with a
-        # debugging port and attach over CDP (see chrome_launcher). This avoids
-        # the macOS Automation prompt + multi-second stall that
-        # chromium.launch(channel=...) incurs. Holds the child process owner.
         self._chrome_launcher = None
-        # Path to the system browser executable when using system-chrome mode.
-        self._system_exe: Optional[str] = None
 
         # Launch mode: one of "fresh" | "persistent" | "cdp".
         # - cdp: connect to an externally launched Chrome via CDP endpoint.
@@ -370,30 +363,20 @@ class BrowserService:
         # Resolve which browser engine to drive (system Chrome vs downloaded
         # Chromium). Deferred detection failures are surfaced at launch time.
         #
-        # For a system Chrome/Edge we DON'T use chromium.launch(channel=...):
-        # that "takes over" another app and triggers the macOS Automation
-        # prompt + a long stall. Instead we spawn the browser ourselves with a
-        # debugging port and attach over CDP (self._launch_mode = "system-cdp").
-        # `self._system_exe` is the browser executable; the persistent
-        # user_data_dir keeps login state across sessions.
         if self._launch_mode != "cdp":
             try:
                 from agent.tools.browser.browser_env import resolve_engine
                 engine = resolve_engine(self._config)
                 if engine["mode"] == "system-chrome":
                     self._channel = engine["channel"]
-                    self._system_exe = engine.get("path")
-                    # Only switch to spawn+CDP when we actually know the exe
-                    # path (macOS/Windows/Linux detection returns it). Persist
-                    # login state in a dedicated profile dir.
-                    if self._system_exe:
-                        self._launch_mode = "system-cdp"
-                        if not self._user_data_dir:
-                            self._user_data_dir = expand_path(_DEFAULT_USER_DATA_DIR)
-                    logger.info(f"[Browser] Engine resolved: {engine['reason']} "
-                                f"(spawn+CDP={bool(self._system_exe)})")
+                    logger.info(f"[Browser] Engine resolved: {engine['reason']}")
                 elif engine["mode"] == "playwright-chromium":
                     logger.info(f"[Browser] Engine resolved: {engine['reason']}")
+                    if (
+                        os.environ.get("EMATE_PACKAGED_RUNTIME") == "1"
+                        and "headless" not in self._config
+                    ):
+                        self._headless = True
                 else:
                     logger.info(f"[Browser] No ready engine yet: {engine['reason']}")
             except Exception as e:
@@ -542,8 +525,6 @@ class BrowserService:
 
         if self._launch_mode == "cdp":
             self._connect_cdp(viewport)
-        elif self._launch_mode == "system-cdp":
-            self._launch_system_cdp(launch_args, viewport)
         elif self._launch_mode == "persistent":
             self._launch_persistent(launch_args, viewport, user_agent)
         else:
@@ -717,20 +698,6 @@ class BrowserService:
                     self._browser.close()
             except Exception as e:
                 logger.debug(f"[Browser] cdp disconnect error: {e}")
-        elif self._launch_mode == "system-cdp":
-            # We own the spawned Chrome: detach the CDP client, then kill the
-            # process we started so it doesn't linger.
-            try:
-                if self._browser:
-                    self._browser.close()
-            except Exception as e:
-                logger.debug(f"[Browser] system-cdp disconnect error: {e}")
-            try:
-                if self._chrome_launcher:
-                    self._chrome_launcher.close()
-            except Exception as e:
-                logger.debug(f"[Browser] chrome launcher close error: {e}")
-            self._chrome_launcher = None
         else:
             for obj, label in [
                 (self._context, "context"),
