@@ -4592,10 +4592,15 @@ def test_office_pack_declares_formats_not_rendering() -> None:
     stager_source = (ROOT / "platform-staging" / "stager.py").read_text(
         encoding="utf-8"
     )
+    probe_source = (
+        ROOT / "platform-staging" / "probes" / "dependency_pack_probe.py"
+    ).read_text(encoding="utf-8")
 
     assert descriptor["adapter"] == "python-office-formats-v1"
     assert descriptor["services"] == ["office.formats"]
     assert "office-format-smoke" in stager_source
+    assert '"worker_create_edit"' in stager_source
+    assert "worker._office_edit(" in probe_source
     assert "office-runtime-smoke" not in stager_source
 
 

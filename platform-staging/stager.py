@@ -3383,6 +3383,11 @@ def _dependency_runtime_gates(
             str(ROOT / "platform-staging" / "probes" / "dependency_pack_probe.py"),
             pack_id,
             str(pack),
+            *(
+                (str(ROOT / "ecorex" / "integration" / "dependency_pack_worker.py"),)
+                if pack_id == "office"
+                else ()
+            ),
         ),
         cwd=pack,
         environment=_runtime_environment(),
@@ -3463,6 +3468,13 @@ def _validate_dependency_probe(pack_id: str, value: Mapping[str, Any]) -> None:
     elif pack_id == "office":
         if (
             result.get("round_trip") is not True
+            or result.get("worker_create_edit")
+            != {
+                "document": True,
+                "pdf": True,
+                "presentation": True,
+                "spreadsheet": True,
+            }
             or result.get("pdf_pages") != 1
             or any(
                 isinstance(result.get(field), bool)

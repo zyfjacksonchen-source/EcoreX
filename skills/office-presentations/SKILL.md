@@ -1,6 +1,6 @@
 ---
 name: office-presentations
-description: Create simple PPTX decks and inspect visible text and slide counts from existing e-Mate PPTX artifacts. Use for a new title-and-bullets deck or read-only review and summarization of a current same-thread presentation Artifact.
+description: Create, replacement-edit, and inspect simple PPTX decks through the verified Office Pack.
 mentionable: true
 mention-category: document
 user-invocable: true
@@ -15,25 +15,26 @@ metadata: {"default_enabled":true,"requires":{"modules":["pptx"]}}
 
 # Office Presentations
 
-The packaged e-Mate native facade supports two operations in the first release:
+The packaged Cow tool supports these operations through the verified Office Pack:
 
 - `create`: create a simple PPTX from bounded slide titles and bullets.
-- `inspect`: extract bounded visible shape text and the slide count from an existing e-Mate PPTX Artifact so the model can review or summarize it.
+- `edit`: write a new `-edited.pptx` from complete title/bullets slides after the source opens successfully. Set `output_path` explicitly to replace that exact path atomically.
+- `inspect`: extract bounded visible shape text and the slide count.
 
 ## Native calls
 
 Create with:
 
-`{"operation":"create","file_name":"deck.pptx","title":"...","slides":[{"title":"...","bullets":["..."]}]}`
+`{"action":"create","path":"deck.pptx","title":"...","slides":[{"title":"...","bullets":["..."]}]}`
 
-Inspect with the exact current Artifact identities:
+Edit with the same complete structured content and returned path:
 
-`{"operation":"inspect","artifact_id":"art_...","revision_id":"rev_..."}`
+`{"action":"edit","path":"deck.pptx","output_path":"deck-v2.pptx","title":"...","slides":[{"title":"...","bullets":["..."]}]}`
 
-Inspection accepts only a ready PPTX Artifact owned by the current account and created in the current thread. It reads immutable Artifact bytes, never caller-provided filesystem paths. Extracted text is not proof of layout, overlap, clipping, charts, images, or speaker-note fidelity.
+Inspect with `{"action":"inspect","path":"deck.pptx"}`.
 
-## First-release boundary
+Inspection resolves the supplied local path through the Cow file-access broker and opens it in the same verified Office Pack. Extracted text is not proof of layout, overlap, clipping, charts, images, or speaker-note fidelity.
 
-The native facade does not edit or restyle an existing deck, preserve its template, generate charts or visual assets, import Google Slides, render slides, detect overlap, or perform visual QA. Do not claim those actions succeeded. When one is requested, state that the packaged native operation is unavailable instead of presenting a newly created deck as an edit of the original.
+Replacement edit rewrites the complete simple title/bullets deck; it does not preserve templates, charts, or complex layout. Do not claim those unsupported properties survived.
 
 Created files receive structural-open validation only. Report that visual layout was not verified.

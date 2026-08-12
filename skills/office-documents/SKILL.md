@@ -1,6 +1,6 @@
 ---
 name: office-documents
-description: Create structurally valid DOCX files and inspect text and structure from existing e-Mate DOCX artifacts. Use for new Word-style reports or read-only review and summarization of a current same-thread DOCX artifact.
+description: Create, replacement-edit, and inspect structurally valid DOCX files through the verified Office Pack.
 mentionable: true
 mention-category: document
 user-invocable: true
@@ -15,25 +15,24 @@ metadata: {"default_enabled":true,"requires":{"modules":["docx"]}}
 
 # Office Documents
 
-The packaged e-Mate native facade supports two operations in the first release:
+The packaged Cow tool supports these operations through the verified Office Pack:
 
 - `create`: create a new, simple DOCX from a title and sections.
-- `inspect`: extract text plus paragraph/table counts from an existing e-Mate DOCX Artifact so the model can review or summarize it.
+- `edit`: write a new `-edited.docx` from complete title/sections content after the source opens successfully. Set `output_path` explicitly to replace that exact path atomically.
+- `inspect`: extract text plus paragraph/table counts from an existing DOCX.
 
 ## Native calls
 
-Create with:
+Create with `path`; edit the returned path with the same complete structured content:
 
-`{"operation":"create","file_name":"report.docx","title":"...","sections":[{"heading":"...","paragraphs":["..."]}]}`
+`{"action":"create","path":"report.docx","title":"...","sections":[{"heading":"...","paragraphs":["..."]}]}`
 
-Inspect with the exact current Artifact identities:
+`{"action":"edit","path":"report.docx","output_path":"report-v2.docx","title":"...","sections":[{"heading":"...","paragraphs":["..."]}]}`
 
-`{"operation":"inspect","artifact_id":"art_...","revision_id":"rev_..."}`
+Inspect with `{"action":"inspect","path":"report.docx"}`.
 
-Inspection accepts only a ready DOCX Artifact owned by the current account and created in the current thread. It reads immutable Artifact bytes, never caller-provided filesystem paths. The returned text is suitable for content review and summarization, but it is not evidence of page layout.
+Inspection resolves the supplied local path through the Cow file-access broker and opens it in the same verified Office Pack. The returned text is suitable for content review and summarization, but it is not evidence of page layout.
 
-## First-release boundary
-
-The native facade does not edit an existing DOCX, preserve formatting during rewrite, add comments or redlines, import Google Docs, render pages, or perform visual QA. Do not claim those actions succeeded. When one is requested, state that the packaged native operation is unavailable instead of presenting a newly created file as an edit of the original.
+Replacement edit rewrites the complete simple title/sections structure; it does not preserve complex formatting, comments, or redlines. Do not claim those unsupported properties survived.
 
 Created files receive structural-open validation only. Report that visual layout was not verified.

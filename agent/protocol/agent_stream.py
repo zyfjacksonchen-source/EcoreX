@@ -439,7 +439,14 @@ class AgentStreamExecutor:
                 logger.error(f"Event callback error: {e}")
 
     # Tools whose successful execution may have produced a user-facing file.
-    _ARTIFACT_TOOLS = ("write", "edit")
+    _ARTIFACT_TOOLS = (
+        "write",
+        "edit",
+        "office_documents",
+        "office_spreadsheets",
+        "office_presentations",
+        "office_pdf",
+    )
 
     def _maybe_emit_artifact(self, tool_call: dict, result: dict) -> None:
         """Report a file written by `write`/`edit` so clients can preview it."""

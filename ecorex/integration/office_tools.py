@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
 import json
-import math
-from pathlib import PurePath
 from typing import Any, Callable, Mapping
+
+from common.office_authoring_contract import (
+    OfficeAuthoringContractError,
+    validated_authoring_request,
+    validated_authoring_result,
+)
 
 from ecorex.artifacts import (
     ArtifactError,
@@ -308,86 +311,10 @@ def _validated_request(
     extension: str,
     parameters: Mapping[str, Any],
 ) -> tuple[dict[str, Any], str]:
-    if not isinstance(parameters, Mapping) or parameters.get("operation") != "create":
-        raise OfficeSkillError("office_create_parameters_invalid")
-    allowed = {
-        ArtifactFamily.DOCUMENT: {"operation", "file_name", "title", "sections"},
-        ArtifactFamily.PDF: {"operation", "file_name", "title", "sections"},
-        ArtifactFamily.PRESENTATION: {"operation", "file_name", "title", "slides"},
-        ArtifactFamily.SPREADSHEET: {"operation", "file_name", "title", "sheets"},
-    }[family]
-    if set(parameters) - allowed:
-        raise OfficeSkillError("office_create_parameters_invalid")
-    title = _bounded_text(parameters.get("title") or "e-Mate 办公产物", 512)
-    file_name = str(parameters.get("file_name") or f"{title}{extension}").strip()
-    if (
-        not file_name
-        or "/" in file_name
-        or "\\" in file_name
-        or PurePath(file_name).name != file_name
-        or not file_name.casefold().endswith(extension)
-        or len(file_name.encode("utf-8")) > 240
-    ):
-        raise OfficeSkillError("office_file_name_invalid")
-    payload: dict[str, Any] = {"title": title}
-    if family in {ArtifactFamily.DOCUMENT, ArtifactFamily.PDF}:
-        sections = parameters.get("sections")
-        if not isinstance(sections, list) or not 1 <= len(sections) <= 64:
-            raise OfficeSkillError("office_sections_invalid")
-        payload["sections"] = [
-            {
-                "heading": _bounded_text(section.get("heading") or "", 512, empty=True),
-                "paragraphs": [
-                    _bounded_text(value, 4096)
-                    for value in _bounded_list(section.get("paragraphs"), 128)
-                ],
-            }
-            for section in sections
-            if isinstance(section, Mapping)
-        ]
-        if len(payload["sections"]) != len(sections):
-            raise OfficeSkillError("office_sections_invalid")
-    elif family is ArtifactFamily.PRESENTATION:
-        slides = _bounded_list(parameters.get("slides"), 120)
-        payload["slides"] = [
-            {
-                "title": _bounded_text(slide.get("title"), 512),
-                "bullets": [
-                    _bounded_text(value, 2048)
-                    for value in _bounded_list(slide.get("bullets") or [], 32, empty=True)
-                ],
-            }
-            for slide in slides
-            if isinstance(slide, Mapping)
-        ]
-        if len(payload["slides"]) != len(slides):
-            raise OfficeSkillError("office_slides_invalid")
-    else:
-        sheets = _bounded_list(parameters.get("sheets"), 12)
-        normalized_sheets = []
-        for sheet in sheets:
-            if not isinstance(sheet, Mapping):
-                raise OfficeSkillError("office_sheets_invalid")
-            rows = _bounded_list(sheet.get("rows"), 500, empty=True)
-            normalized_rows = []
-            for row in rows:
-                if not isinstance(row, list) or len(row) > 50:
-                    raise OfficeSkillError("office_rows_invalid")
-                normalized_row = []
-                for value in row:
-                    if isinstance(value, float) and not math.isfinite(value):
-                        raise OfficeSkillError("office_cell_invalid")
-                    if value is not None and not isinstance(value, (str, int, float, bool)):
-                        raise OfficeSkillError("office_cell_invalid")
-                    if isinstance(value, str):
-                        value = _bounded_text(value, 4096, empty=True)
-                    normalized_row.append(value)
-                normalized_rows.append(normalized_row)
-            normalized_sheets.append(
-                {"name": _bounded_text(sheet.get("name"), 64), "rows": normalized_rows}
-            )
-        payload["sheets"] = normalized_sheets
-    return payload, file_name
+    try:
+        return validated_authoring_request(family.value, extension, parameters)
+    except OfficeAuthoringContractError as exc:
+        raise OfficeSkillError(str(exc)) from None
 
 
 def _validate_json_request(parameters: Mapping[str, Any]) -> None:
@@ -434,56 +361,15 @@ def _bounded_identifier(value: Any) -> str:
     return value
 
 
-def _bounded_list(value: Any, maximum: int, *, empty: bool = False) -> list[Any]:
-    if not isinstance(value, list) or len(value) > maximum or (not empty and not value):
-        raise OfficeSkillError("office_collection_invalid")
-    return value
-
-
-def _bounded_text(value: Any, maximum: int, *, empty: bool = False) -> str:
-    if not isinstance(value, str):
-        raise OfficeSkillError("office_text_invalid")
-    text = value.strip()
-    if (not empty and not text) or len(text.encode("utf-8")) > maximum:
-        raise OfficeSkillError("office_text_invalid")
-    return text
-
-
 def _validated_pack_result(
     family: ArtifactFamily,
     extension: str,
     result: Any,
 ) -> tuple[bytes, str, Mapping[str, Any]]:
-    if not isinstance(result, Mapping) or result.get("family") != family.value:
-        raise OfficeSkillError("office_pack_result_invalid")
-    if result.get("extension") != extension or not isinstance(result.get("validation"), Mapping):
-        raise OfficeSkillError("office_pack_result_invalid")
     try:
-        content = base64.b64decode(str(result.get("content_base64") or ""), validate=True)
-    except (ValueError, TypeError):
-        raise OfficeSkillError("office_pack_result_invalid") from None
-    if not 1 <= len(content) <= 5 * 1024 * 1024 or result.get("size_bytes") != len(content):
-        raise OfficeSkillError("office_pack_result_invalid")
-    if extension == ".pdf":
-        valid_signature = content.startswith(b"%PDF-")
-    else:
-        valid_signature = content.startswith(b"PK")
-    expected_mime_type = {
-        ArtifactFamily.DOCUMENT: (
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        ),
-        ArtifactFamily.SPREADSHEET: (
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ),
-        ArtifactFamily.PRESENTATION: (
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        ),
-        ArtifactFamily.PDF: "application/pdf",
-    }[family]
-    mime_type = result.get("mime_type")
-    if not valid_signature or mime_type != expected_mime_type:
-        raise OfficeSkillError("office_pack_result_invalid")
-    return content, expected_mime_type, dict(result["validation"])
+        return validated_authoring_result(family.value, extension, result)
+    except OfficeAuthoringContractError as exc:
+        raise OfficeSkillError(str(exc)) from None
 
 
 def _validated_read_result(

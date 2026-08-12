@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import tempfile
 import types
 from pathlib import Path
@@ -181,6 +182,134 @@ def test_v024_office_skill_tools_are_registered_and_probeable():
     assert result.status == "success"
     assert result.result["compatibilityId"] == "office-pdf"
     assert result.result["officialSkill"] == "pdf"
+
+
+def test_v024_public_cow_office_tools_create_edit_and_emit_artifacts(
+    tmp_path, monkeypatch
+):
+    from agent.protocol.agent_stream import AgentStreamExecutor
+    from agent.protocol import artifact as artifact_module
+    from agent.tools.office_artifacts.office_artifacts import bind_office_pack_service
+
+    cases = {
+        "office_documents": ("document", "report.docx", "sections"),
+        "office_spreadsheets": ("spreadsheet", "report.xlsx", "sheets"),
+        "office_presentations": ("presentation", "report.pptx", "slides"),
+        "office_pdf": ("pdf", "report.pdf", "sections"),
+    }
+
+    class Service:
+        def probe(self, *, timeout_seconds):
+            return {"provider": "python-office-formats-v1"}
+
+        def create(self, family, payload, *, timeout_seconds):
+            return self._result(family, payload["title"])
+
+        def edit(self, family, content, payload, *, timeout_seconds):
+            assert content
+            result = self._result(family, payload["title"])
+            result["validation"]["source_opened"] = True
+            return result
+
+        def read(self, family, content, *, timeout_seconds):
+            return {
+                "family": family,
+                "text": "edited",
+                "structure": {"opened": bool(content)},
+                "warnings": [],
+                "truncated": False,
+            }
+
+        @staticmethod
+        def _result(family, marker):
+            content = (
+                f"%PDF-1.4\n{marker}\n%%EOF".encode()
+                if family == "pdf"
+                else b"PK" + marker.encode()
+            )
+            mime = {
+                "document": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "spreadsheet": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "presentation": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                "pdf": "application/pdf",
+            }[family]
+            return {
+                "family": family,
+                "mime_type": mime,
+                "extension": {
+                    "document": ".docx",
+                    "spreadsheet": ".xlsx",
+                    "presentation": ".pptx",
+                    "pdf": ".pdf",
+                }[family],
+                "size_bytes": len(content),
+                "content_base64": base64.b64encode(content).decode(),
+                "validation": {"opened": True},
+            }
+
+    bind_office_pack_service(Service())
+    manager = _reset_tool_manager()
+    events = []
+    executor = AgentStreamExecutor(None, None, "", [], on_event=events.append)
+    monkeypatch.setattr(artifact_module, "get_workspace_root", lambda: str(tmp_path))
+    try:
+        for tool_name, (family, file_name, field) in cases.items():
+            tool = manager.create_tool(tool_name)
+            tool.apply_config({"cwd": str(tmp_path)})
+            content = {
+                "sections": [{"heading": "Summary", "paragraphs": ["v1"]}],
+                "sheets": [{"name": "Data", "rows": [["version", 1]]}],
+                "slides": [{"title": "Summary", "bullets": ["v1"]}],
+            }[field]
+            created = tool.execute(
+                {"action": "create", "path": file_name, "title": "v1", field: content}
+            )
+            assert created.status == "success"
+            assert created.result["operation"] == "create"
+            assert Path(created.result["path"]).is_file()
+            executor._maybe_emit_artifact(
+                {"name": tool_name, "arguments": {"path": file_name}},
+                {"status": "success", "result": created.result},
+            )
+            assert tool.execute({"action": "inspect", "path": file_name}).result[
+                "family"
+            ] == family
+            original = Path(created.result["path"]).read_bytes()
+
+            edited = tool.execute(
+                {"action": "edit", "path": file_name, "title": "v2", field: content}
+            )
+            assert edited.status == "success"
+            assert edited.result["operation"] == "edit"
+            assert edited.result["replacement_mode"] == "new-file"
+            assert edited.result["path"].endswith(f"-edited.{file_name.rsplit('.', 1)[1]}")
+            assert edited.result["validation"]["source_opened"] is True
+            assert Path(created.result["path"]).read_bytes() == original
+            assert tool.execute({"action": "inspect", "path": edited.result["path"]}).result[
+                "family"
+            ] == family
+
+            replaced = tool.execute(
+                {
+                    "action": "edit",
+                    "path": file_name,
+                    "output_path": file_name,
+                    "title": "v3",
+                    field: content,
+                }
+            )
+            assert replaced.status == "success"
+            assert replaced.result["replacement_mode"] == "atomic-in-place"
+            assert Path(replaced.result["path"]).read_bytes() != original
+
+        assert set(cases) <= set(AgentStreamExecutor._ARTIFACT_TOOLS)
+        artifacts = [event["data"] for event in events if event["type"] == "artifact"]
+        assert {artifact["file_name"] for artifact in artifacts} == {
+            file_name for _, file_name, _ in cases.values()
+        }
+        assert {artifact["kind"] for artifact in artifacts} == {"office", "pdf"}
+    finally:
+        bind_office_pack_service(None)
 
 
 def test_v024_agent_stream_selects_office_tools_for_office_intent():

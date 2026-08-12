@@ -123,7 +123,10 @@ class VerifiedDependencyPackProcessAdapter:
             # that startup bounded without turning a healthy first call into
             # a false timeout on slower Windows disks or antivirus scans.
             process_timeout = min(30.0, max(15.0, float(timeout_seconds) + 8.0))
-            office_read = self.pack.manifest.pack_id == "office" and operation == "read"
+            office_read = self.pack.manifest.pack_id == "office" and operation in {
+                "read",
+                "edit",
+            }
             worker = self._verified_worker()
             command = (
                 str(self.python_executable),
@@ -417,6 +420,13 @@ class PackOfficeServiceAdapter:
     def __init__(self, process: VerifiedDependencyPackProcessAdapter) -> None:
         self.process = process
 
+    def probe(self, *, timeout_seconds: float = 30.0) -> Mapping[str, Any]:
+        return self.process.invoke(
+            "probe",
+            {},
+            timeout_seconds=min(30.0, max(1.0, float(timeout_seconds))),
+        )
+
     def create(
         self,
         family: str,
@@ -446,6 +456,28 @@ class PackOfficeServiceAdapter:
         return self.process.invoke(
             "read",
             {
+                "family": family,
+                "content_base64": base64.b64encode(content).decode("ascii"),
+            },
+            timeout_seconds=min(30.0, max(1.0, float(timeout_seconds))),
+        )
+
+    def edit(
+        self,
+        family: str,
+        content: bytes,
+        payload: Mapping[str, Any],
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> Mapping[str, Any]:
+        if family not in {"document", "spreadsheet", "presentation", "pdf"}:
+            raise ValueError("Office family is unsupported")
+        if not isinstance(content, bytes) or not 1 <= len(content) <= 5 * 1024 * 1024:
+            raise ValueError("Office content is invalid")
+        return self.process.invoke(
+            "edit",
+            {
+                **dict(payload),
                 "family": family,
                 "content_base64": base64.b64encode(content).decode("ascii"),
             },

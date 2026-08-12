@@ -1943,6 +1943,17 @@ def create_app(
     )
     office_skill_backend = None
     office_service = settings.capability_pack_services.get("office.formats")
+    from agent.tools.office_artifacts.office_artifacts import bind_office_pack_service
+
+    bind_office_pack_service(
+        office_service
+        if office_service is not None
+        and all(
+            callable(getattr(office_service, name, None))
+            for name in ("probe", "create", "edit", "read")
+        )
+        else None
+    )
     if office_service is not None:
         office_skill_backend = RuntimeOfficeSkillBackend(
             service=office_service,

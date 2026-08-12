@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import importlib.util
 import json
 from pathlib import Path
 import sys
@@ -39,12 +40,18 @@ def _module_origins(names: tuple[str, ...], python_root: Path) -> dict[str, str]
     return origins
 
 
-def _office() -> dict[str, object]:
+def _office(worker_path: Path, python_root: Path) -> dict[str, object]:
     from docx import Document
     from openpyxl import Workbook, load_workbook
     from pptx import Presentation
     from pypdf import PdfReader
     from reportlab.pdfgen import canvas
+
+    spec = importlib.util.spec_from_file_location("ecorex_dependency_pack_worker", worker_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Office worker cannot be loaded")
+    worker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker)
 
     document_bytes = io.BytesIO()
     document = Document()
@@ -80,6 +87,66 @@ def _office() -> dict[str, object]:
         or page_count != 1
     ):
         raise RuntimeError("Office round-trip contract is invalid")
+    authoring_cases = {
+        "document": {
+            "title": "v1",
+            "sections": [{"heading": "Summary", "paragraphs": ["v1"]}],
+        },
+        "spreadsheet": {
+            "title": "v1",
+            "sheets": [{"name": "Data", "rows": [["version", 1]]}],
+        },
+        "presentation": {
+            "title": "v1",
+            "slides": [{"title": "Summary", "bullets": ["v1"]}],
+        },
+        "pdf": {
+            "title": "v1",
+            "sections": [{"heading": "Summary", "paragraphs": ["v1"]}],
+        },
+    }
+    edited = {}
+    for family, payload in authoring_cases.items():
+        created = worker._office_create({"family": family, **payload}, python_root)
+        edited_payload = {
+            "document": {
+                "title": "v2",
+                "sections": [{"heading": "Summary", "paragraphs": ["v2"]}],
+            },
+            "spreadsheet": {
+                "title": "v2",
+                "sheets": [{"name": "Data", "rows": [["version", "v2"]]}],
+            },
+            "presentation": {
+                "title": "v2",
+                "slides": [{"title": "Summary v2", "bullets": ["v2"]}],
+            },
+            "pdf": {
+                "title": "v2",
+                "sections": [{"heading": "Summary", "paragraphs": ["v2"]}],
+            },
+        }[family]
+        updated = worker._office_edit(
+            {
+                "family": family,
+                **edited_payload,
+                "content_base64": created["content_base64"],
+            },
+            python_root,
+        )
+        inspection = worker._office_read(
+            {
+                "family": family,
+                "content_base64": updated["content_base64"],
+            },
+            python_root,
+        )
+        if (
+            updated.get("validation", {}).get("source_opened") is not True
+            or "v2" not in inspection.get("text", "")
+        ):
+            raise RuntimeError("Office public worker edit contract is invalid")
+        edited[family] = True
     return {
         "document_bytes": len(document_bytes.getvalue()),
         "spreadsheet_bytes": len(workbook_bytes.getvalue()),
@@ -87,6 +154,7 @@ def _office() -> dict[str, object]:
         "pdf_bytes": len(pdf_bytes.getvalue()),
         "pdf_pages": page_count,
         "round_trip": True,
+        "worker_create_edit": edited,
     }
 
 
@@ -117,13 +185,19 @@ def _ocr() -> dict[str, object]:
 
 
 def main() -> int:
-    if len(sys.argv) != 3 or sys.argv[1] not in {"ocr", "office"}:
+    if len(sys.argv) not in {3, 4} or sys.argv[1] not in {"ocr", "office"}:
         return 64
     root = Path(sys.argv[2]).resolve(strict=True)
     python_root = (root / "runtime" / "python").resolve(strict=True)
     _activate_pack_runtime(python_root)
     pack_id = sys.argv[1]
-    result = _ocr() if pack_id == "ocr" else _office()
+    if pack_id == "office" and len(sys.argv) != 4:
+        return 64
+    result = (
+        _ocr()
+        if pack_id == "ocr"
+        else _office(Path(sys.argv[3]).resolve(strict=True), python_root)
+    )
     required_modules = (
         ("rapidocr_onnxruntime", "onnxruntime", "numpy", "PIL", "cv2", "pyclipper")
         if pack_id == "ocr"

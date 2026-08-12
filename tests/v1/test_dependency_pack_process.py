@@ -301,7 +301,13 @@ def test_office_service_adapter_uses_the_existing_verified_process_contract() ->
             return {"provider": "office"}
 
     process = Process()
-    result = PackOfficeServiceAdapter(process).create(
+    adapter = PackOfficeServiceAdapter(process)
+
+    result = adapter.probe(timeout_seconds=9.0)
+    assert result == {"provider": "office"}
+    assert process.call == ("probe", {}, 9.0)
+
+    result = adapter.create(
         "document",
         {"title": "Release notes", "sections": []},
         timeout_seconds=12.0,
@@ -314,7 +320,7 @@ def test_office_service_adapter_uses_the_existing_verified_process_contract() ->
         12.0,
     )
 
-    result = PackOfficeServiceAdapter(process).read(
+    result = adapter.read(
         "document",
         b"bounded-docx",
         timeout_seconds=10.0,
@@ -328,6 +334,25 @@ def test_office_service_adapter_uses_the_existing_verified_process_contract() ->
             "content_base64": "Ym91bmRlZC1kb2N4",
         },
         10.0,
+    )
+
+    result = adapter.edit(
+        "document",
+        b"bounded-docx",
+        {"title": "Revised", "sections": []},
+        timeout_seconds=11.0,
+    )
+
+    assert result == {"provider": "office"}
+    assert process.call == (
+        "edit",
+        {
+            "family": "document",
+            "content_base64": "Ym91bmRlZC1kb2N4",
+            "title": "Revised",
+            "sections": [],
+        },
+        11.0,
     )
 
 
