@@ -153,7 +153,6 @@ _WINDOWS_STAGE_KEYS = (
     "image",
     "ocr",
     "office",
-    "sandbox",
 )
 _PRODUCTION_TARGETS = (
     ("windows", "x64"),
@@ -1974,7 +1973,7 @@ def _build_release(
     created_at: datetime,
 ) -> Any:
     if set(packs) != set(PACK_TOOLS):
-        raise DrillError("the local Windows release requires all six product Packs")
+        raise DrillError("the local Windows release requires all five product Packs")
     return ReleaseBuilder(signer).build(
         ReleaseBuildSpec(
             channel=ReleaseChannel.STABLE,
@@ -2003,7 +2002,7 @@ def _build_release(
                         platform=TARGET_PLATFORM,
                         architecture=TARGET_ARCHITECTURE,
                         executable_paths=("__main__.py",)
-                        if pack_id in {"browser", "sandbox"}
+                        if pack_id == "browser"
                         else (),
                         pack_id=pack_id,
                         pack_tool_ids=tuple(PACK_TOOLS[pack_id]),

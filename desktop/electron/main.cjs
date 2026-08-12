@@ -17,6 +17,7 @@ let tray = null;
 let updater = null;
 let taskNotifications = null;
 let quitting = false;
+let runtimeRestart = null;
 
 function eMateIcon() {
   const iconPath = path.join(app.getAppPath(), "src", "v1", "assets", "emate-mark.png");
@@ -79,21 +80,28 @@ async function startBackendWithRetry(window) {
 }
 
 async function restartRuntime() {
-  try {
-    taskNotifications?.stop();
-    taskNotifications = null;
-    const runtimeOrigin = await backend.restart();
-    await mainWindow?.loadURL(runtimeOrigin);
-    await startTaskNotifications(runtimeOrigin);
-    return true;
-  } catch {
-    await dialog.showMessageBox(mainWindow ?? undefined, {
-      type: "error",
-      title: `${PRODUCT_NAME} Runtime`,
-      message: "Runtime 重启失败。",
-    });
-    return false;
-  }
+  if (runtimeRestart) return runtimeRestart;
+  runtimeRestart = (async () => {
+    try {
+      taskNotifications?.stop();
+      taskNotifications = null;
+      await mainWindow?.loadURL(startupPage());
+      const runtimeOrigin = await backend.restart();
+      await mainWindow?.loadURL(runtimeOrigin);
+      await startTaskNotifications(runtimeOrigin);
+      return true;
+    } catch {
+      await dialog.showMessageBox(mainWindow ?? undefined, {
+        type: "error",
+        title: `${PRODUCT_NAME} Runtime`,
+        message: "Runtime 重启失败。",
+      });
+      return false;
+    } finally {
+      runtimeRestart = null;
+    }
+  })();
+  return runtimeRestart;
 }
 
 async function openThreadFromNotification(threadId) {
@@ -221,6 +229,9 @@ function setupIpc() {
   ipcMain.handle("emate:restart-runtime", restartRuntime);
   ipcMain.handle("emate:check-for-updates", () => updater?.check(true));
   ipcMain.handle("emate:open-update-page", () => updater?.openPage());
+  ipcMain.handle("emate:download-update", () => updater?.download());
+  ipcMain.handle("emate:install-update", () => updater?.install());
+  ipcMain.handle("emate:desktop-update-status", () => updater?.status() ?? null);
 }
 
 async function launch() {
@@ -230,6 +241,9 @@ async function launch() {
     packaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     dataDir: DATA_DIR,
+  });
+  backend.on("exit", (code) => {
+    if (!quitting && code === 86) void restartRuntime();
   });
   const window = createWindow(backend.origin);
   await window.loadURL(startupPage());

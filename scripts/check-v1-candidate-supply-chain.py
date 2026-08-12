@@ -54,6 +54,9 @@ _LICENSE_OVERRIDES = {
     "websockets": "BSD-3-Clause",
 }
 _INACTIVE_MARKER_LICENSES = {
+    # audioop-lts backports CPython's audioop module for Python 3.13+ and keeps
+    # the upstream PSF license. Python 3.11 never installs this lock entry.
+    "audioop-lts": ("0.2.2", "PSF-2.0"),
     # colorama is present in the universal Runtime lock only for Windows. A
     # Linux/macOS release gate must still account for this exact reviewed lock
     # entry without treating arbitrary missing Runtime packages as licensed.

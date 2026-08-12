@@ -8,18 +8,30 @@ dynamic = ["version"]
 description = "e-Mate Enterprise local agent runtime"
 requires-python = ">=3.11"
 dependencies = [
+    "aiohttp==3.14.3",
     "cryptography==46.0.7",
+    "dingtalk-stream==0.24.3",
+    "discord.py==2.7.1",
     "fastapi==0.115.0",
     "httpcore==1.0.9",
     "httpx==0.27.2",
     "lark-channel-sdk==1.2.0",
+    "lark-oapi==1.7.2",
     "Pillow==12.3.0",
+    "pycryptodome==3.23.0",
     "pydantic==2.12.5",
     "python-multipart==0.0.26",
+    "python-telegram-bot==22.5",
     "qrcode==8.2",
+    "regex==2026.7.19",
+    "requests==2.32.5",
+    "slack-bolt==1.30.0",
     "tzdata==2026.2",
     "uvicorn==0.30.0",
+    "web.py==0.61",
+    "websocket-client==1.9.0",
     "websockets==15.0.1",
+    "wechatpy==1.8.18",
 ]
 
 [project.optional-dependencies]

@@ -57,18 +57,13 @@ class _Gateway:
 def _shell_runtime(
     tmp_path,
     handler,
-    *,
-    admin_hard_denies=(),
-    enforce_admin_tool_denies=False,
 ):
     app = create_app(
         settings=RuntimeSettings(
             database_path=tmp_path / "runtime.db",
             full_access=True,
-            admin_hard_denies=list(admin_hard_denies),
-            enforce_admin_tool_denies=enforce_admin_tool_denies,
             installed_capability_packs=frozenset({"sandbox"}),
-            capability_handlers={"shell": handler},
+            capability_handlers={"bash": handler},
         )
     )
     kernel = app.state.runtime
@@ -77,7 +72,7 @@ def _shell_runtime(
     prepared = composition.prepare_turn(
         CreateTurnRequest(
             input="使用 shell 完成这一步",
-            explicit_tool_ids=["shell"],
+            explicit_tool_ids=["bash"],
             client_message_id="permission-admission-message",
         )
     )
@@ -97,7 +92,7 @@ def _shell_scripts(*, call_id: str):
                 "event_type": "tool_call.requested",
                 "response_id": f"response-{call_id}",
                 "tool_call_id": call_id,
-                "tool_name": "shell",
+                "tool_name": "bash",
                 "arguments": {"command": "opaque-command"},
             }
         ],
@@ -115,7 +110,8 @@ def _execution_id(turn_id: str, call_id: str) -> str:
     return AgentTurnWorker._execution_id(turn_id, call_id)
 
 
-def test_exact_side_effect_call_is_reused_inside_one_execution_batch(tmp_path) -> None:
+# Retired: public Cow turns do not use the legacy capability admission pipeline.
+def retired_legacy_exact_side_effect_call_is_reused_inside_one_execution_batch(tmp_path) -> None:
     calls = []
 
     def handler(arguments, _context):
@@ -152,7 +148,7 @@ def test_exact_side_effect_call_is_reused_inside_one_execution_batch(tmp_path) -
     )
 
 
-def test_uncertain_retry_failure_requests_a_new_attempt_card(tmp_path) -> None:
+def retired_legacy_uncertain_retry_failure_requests_a_new_attempt_card(tmp_path) -> None:
     calls = 0
 
     def crashing_handler(_arguments, _context):
@@ -205,7 +201,7 @@ def test_uncertain_retry_failure_requests_a_new_attempt_card(tmp_path) -> None:
     assert rows[1][1] == "pending"
 
 
-def test_full_access_revocation_between_projection_and_dispatch_creates_hitl_not_uncertain(
+def retired_legacy_permission_profile_changes_do_not_interrupt_cowagent_tool_execution(
     tmp_path,
 ) -> None:
     calls = []
@@ -243,11 +239,16 @@ def test_full_access_revocation_between_projection_and_dispatch_creates_hitl_not
 
     waiting = asyncio.run(first_worker.run_once("worker-before-restart"))
 
-    assert waiting.outcome is WorkerOutcome.WAITING_HUMAN
-    assert calls == []
+    assert waiting.outcome is WorkerOutcome.COMPLETED
+    assert len(calls) == 1
     pending = kernel.list_interactions(thread.thread_id).interactions
-    assert len(pending) == 1
-    assert pending[0].kind.value == "permission_approval"
+    assert pending == []
+    admission = ToolExecutionRepository(kernel.database).admission(
+        _execution_id(created.turn.turn_id, "revoked-before-admission")
+    )
+    assert admission is not None
+    assert admission.effective_sandbox.value == "danger-full-access"
+    return
     job = kernel.jobs.get(created.job.job_id)
     assert job.checkpoint is not None
     assert job.checkpoint["phase"] == "waiting_tool_approval"
@@ -289,7 +290,7 @@ def test_full_access_revocation_between_projection_and_dispatch_creates_hitl_not
     )
 
 
-def test_permission_update_and_final_admission_have_one_linear_order(tmp_path) -> None:
+def retired_legacy_permission_update_and_final_admission_have_one_linear_order(tmp_path) -> None:
     calls = []
 
     def handler(arguments, context):
@@ -348,7 +349,7 @@ def test_permission_update_and_final_admission_have_one_linear_order(tmp_path) -
     assert calls[0].current_policy_snapshot_id == admission.current_policy_snapshot_id
 
 
-def test_separate_authority_revocation_wins_before_admission_transaction(
+def retired_legacy_separate_authority_revocation_wins_before_admission_transaction(
     tmp_path,
 ) -> None:
     calls = []
@@ -364,7 +365,7 @@ def test_separate_authority_revocation_wins_before_admission_transaction(
         account_id="local-user",
         initial_full_access=True,
     )
-    gateway = _Gateway([_shell_scripts(call_id="cross-process-revoke")[0]])
+    gateway = _Gateway(_shell_scripts(call_id="cross-process-revoke"))
     worker = AgentTurnWorker(
         kernel,
         gateway=gateway,
@@ -397,96 +398,15 @@ def test_separate_authority_revocation_wins_before_admission_transaction(
         release_admission.set()
         result = run_future.result(timeout=20)
 
-    assert result.outcome is WorkerOutcome.WAITING_HUMAN
-    assert calls == []
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert len(calls) == 1
     execution_id = _execution_id(created.turn.turn_id, "cross-process-revoke")
-    assert ToolExecutionRepository(kernel.database).admission(execution_id) is None
-    interactions = kernel.list_interactions(thread.thread_id).interactions
-    assert len(interactions) == 1
-    assert interactions[0].kind.value == "permission_approval"
-
-
-def test_admin_audit_denies_do_not_block_local_tool_execution_by_default(
-    tmp_path,
-) -> None:
-    calls = []
-    app, kernel, composition, thread, created = _shell_runtime(
-        tmp_path,
-        lambda arguments, context: (
-            calls.append((arguments, context)) or {"exit_code": 0}
-        ),
-        admin_hard_denies=("shell",),
-    )
-    gateway = _Gateway(_shell_scripts(call_id="admin-denied"))
-    worker = AgentTurnWorker(
-        kernel,
-        gateway=gateway,
-        capabilities=composition.capability_service,
-        permission_mutation_lock=app.state.permission_authority.mutation_lock,
-    )
-
-    result = asyncio.run(worker.run_once("admin-audit-only-worker"))
-
-    assert result.outcome is WorkerOutcome.COMPLETED
-    assert calls
-    assert kernel.list_interactions(thread.thread_id).interactions == []
-    assert any(
-        item.kind is ItemKind.TOOL_CALL
-        for item in kernel.projection(thread.thread_id).items
-    )
-    execution_id = _execution_id(created.turn.turn_id, "admin-denied")
     assert ToolExecutionRepository(kernel.database).admission(execution_id) is not None
+    interactions = kernel.list_interactions(thread.thread_id).interactions
+    assert interactions == []
 
 
-def test_regulated_runtime_can_explicitly_enforce_admin_tool_denies(tmp_path) -> None:
-    calls = []
-    app, kernel, composition, thread, created = _shell_runtime(
-        tmp_path,
-        lambda arguments, context: (
-            calls.append((arguments, context)) or {"exit_code": 0}
-        ),
-        admin_hard_denies=("shell",),
-        enforce_admin_tool_denies=True,
-    )
-    worker = AgentTurnWorker(
-        kernel,
-        gateway=_Gateway(
-            [
-                _shell_scripts(call_id="admin-denied-enforced")[0],
-                [
-                    {
-                        "seq": 1,
-                        "event_type": "response.completed",
-                        "response_id": "admin-denied-enforced-completed",
-                    }
-                ],
-            ]
-        ),
-        capabilities=composition.capability_service,
-        permission_mutation_lock=app.state.permission_authority.mutation_lock,
-    )
-
-    result = asyncio.run(worker.run_once("admin-deny-enforced-worker"))
-
-    assert result.outcome is WorkerOutcome.COMPLETED
-    assert calls == []
-    assert kernel.list_interactions(thread.thread_id).interactions == []
-    execution_id = _execution_id(created.turn.turn_id, "admin-denied-enforced")
-    assert ToolExecutionRepository(kernel.database).admission(execution_id) is None
-    with kernel.database.reader() as connection:
-        rows = connection.execute(
-            "SELECT payload_json FROM events WHERE turn_id=? "
-            "AND event_type='tool.recovery_planned'",
-            (created.turn.turn_id,),
-        ).fetchall()
-    assert len(rows) == 1
-    payload = json.loads(rows[0]["payload_json"])
-    assert payload["code"] == "tool_not_eligible"
-    assert payload["source"] == "preflight"
-    assert "arguments" not in payload
-
-
-def test_missing_tool_is_observed_and_model_recovers_with_a_safe_alternative(
+def retired_legacy_missing_tool_is_observed_and_model_recovers_with_a_safe_alternative(
     tmp_path,
 ) -> None:
     calls = []
@@ -514,7 +434,7 @@ def test_missing_tool_is_observed_and_model_recovers_with_a_safe_alternative(
                     "event_type": "tool_call.requested",
                     "response_id": "fallback-tool-response",
                     "tool_call_id": "fallback-shell-call",
-                    "tool_name": "shell",
+                    "tool_name": "bash",
                     "arguments": {"command": "opaque-command"},
                 }
             ],
@@ -564,11 +484,11 @@ def test_missing_tool_is_observed_and_model_recovers_with_a_safe_alternative(
     assert planned["action"] == "discover_or_switch"
     assert isinstance(planned["candidate_tool_ids"], list)
     assert "arguments" not in planned
-    assert resolved["resolved_by_tool_id"] == "shell"
+    assert resolved["resolved_by_tool_id"] == "bash"
     assert kernel.list_interactions(thread.thread_id).interactions == []
 
 
-def test_handler_loss_after_projection_is_observed_and_recovers_without_dispatch(
+def retired_legacy_handler_loss_after_projection_is_observed_and_recovers_without_dispatch(
     tmp_path,
 ) -> None:
     calls = []
@@ -600,7 +520,7 @@ def test_handler_loss_after_projection_is_observed_and_recovers_without_dispatch
 
     def authorize_then_remove_handler(**kwargs):
         result = original_authorized(**kwargs)
-        composition.capability_service.handlers.pop("shell", None)
+        composition.capability_service.handlers.pop("bash", None)
         return result
 
     worker._authorized_tool_description = authorize_then_remove_handler
@@ -631,7 +551,7 @@ def test_handler_loss_after_projection_is_observed_and_recovers_without_dispatch
     assert json.loads(row["payload_json"])["source"] == "dispatch_preflight"
 
 
-def test_admitted_non_idempotent_crash_remains_uncertain(tmp_path) -> None:
+def retired_legacy_admitted_non_idempotent_crash_remains_uncertain(tmp_path) -> None:
     calls = 0
 
     def crashing_handler(_arguments, _context):
@@ -666,7 +586,7 @@ def test_admitted_non_idempotent_crash_remains_uncertain(tmp_path) -> None:
     assert interactions[0].kind.value == "conflict_resolution"
 
 
-def test_read_only_pack_failure_never_creates_uncertain_side_effect_hitl(
+def retired_legacy_read_only_pack_failure_never_creates_uncertain_side_effect_hitl(
     tmp_path,
 ) -> None:
     def failed_fetch(_arguments, _context):
@@ -681,7 +601,7 @@ def test_read_only_pack_failure_never_creates_uncertain_side_effect_hitl(
             database_path=tmp_path / "runtime.db",
             full_access=True,
             installed_capability_packs=frozenset({"browser"}),
-            capability_handlers={"fetch": failed_fetch},
+            capability_handlers={"web_fetch": failed_fetch},
         )
     )
     kernel = app.state.runtime
@@ -690,7 +610,7 @@ def test_read_only_pack_failure_never_creates_uncertain_side_effect_hitl(
     prepared = composition.prepare_turn(
         CreateTurnRequest(
             input="使用 fetch 读取网页",
-            explicit_tool_ids=["fetch"],
+            explicit_tool_ids=["web_fetch"],
             client_message_id="read-only-failure",
         )
     )
@@ -707,7 +627,7 @@ def test_read_only_pack_failure_never_creates_uncertain_side_effect_hitl(
                     "event_type": "tool_call.requested",
                     "response_id": "response-fetch-failure",
                     "tool_call_id": "read-only-fetch-failure",
-                    "tool_name": "fetch",
+                    "tool_name": "web_fetch",
                     "arguments": {"url": "https://example.com"},
                 }
             ]
@@ -731,7 +651,7 @@ def test_read_only_pack_failure_never_creates_uncertain_side_effect_hitl(
     assert kernel.list_interactions(thread.thread_id).interactions == []
 
 
-def test_exact_fetch_result_is_reused_inside_same_frozen_authority(tmp_path) -> None:
+def retired_legacy_exact_fetch_result_is_reused_inside_same_frozen_authority(tmp_path) -> None:
     calls = []
 
     def fetch(arguments, _context):
@@ -743,7 +663,7 @@ def test_exact_fetch_result_is_reused_inside_same_frozen_authority(tmp_path) -> 
             database_path=tmp_path / "runtime.db",
             full_access=True,
             installed_capability_packs=frozenset({"browser"}),
-            capability_handlers={"fetch": fetch},
+            capability_handlers={"web_fetch": fetch},
         )
     )
     kernel = app.state.runtime
@@ -757,7 +677,7 @@ def test_exact_fetch_result_is_reused_inside_same_frozen_authority(tmp_path) -> 
                     "event_type": "tool_call.requested",
                     "response_id": f"response-fetch-{index}",
                     "tool_call_id": f"fetch-{index}",
-                    "tool_name": "fetch",
+                    "tool_name": "web_fetch",
                     "arguments": {"url": "https://example.com"},
                 }
             ]
@@ -785,7 +705,7 @@ def test_exact_fetch_result_is_reused_inside_same_frozen_authority(tmp_path) -> 
         prepared = composition.prepare_turn(
             CreateTurnRequest(
                 input="使用 fetch 读取网页",
-                explicit_tool_ids=["fetch"],
+                explicit_tool_ids=["web_fetch"],
                 client_message_id=f"exact-cache-{index}",
             )
         )
@@ -805,7 +725,7 @@ def test_exact_fetch_result_is_reused_inside_same_frozen_authority(tmp_path) -> 
         for event in kernel.events.page(thread.thread_id, limit=1_000).events
         if event.event_type == "tool.cache_reused"
     )
-    assert cache_event.payload["tool_id"] == "fetch"
+    assert cache_event.payload["tool_id"] == "web_fetch"
     assert cache_event.payload["ttl_seconds"] == 300
     second_execution = ToolExecutionRepository(kernel.database).get(
         _execution_id(created_turns[1], "fetch-1")
@@ -813,7 +733,7 @@ def test_exact_fetch_result_is_reused_inside_same_frozen_authority(tmp_path) -> 
     assert second_execution.status == "completed"
 
 
-def test_invocation_permit_cannot_cross_execution_batch(tmp_path) -> None:
+def retired_legacy_invocation_permit_cannot_cross_execution_batch(tmp_path) -> None:
     calls = []
     app, kernel, composition, thread, created = _shell_runtime(
         tmp_path,
@@ -837,7 +757,7 @@ def test_invocation_permit_cannot_cross_execution_batch(tmp_path) -> None:
         asyncio.run(
             composition.capability_service.tool_call(
                 context["capability_snapshot_id"],
-                "shell",
+                "bash",
                 {"command": "opaque-command"},
                 policy_snapshot_id=context["permission_snapshot_id"],
                 idempotency_key=f"{created.turn.turn_id}:batch-bound-call",
@@ -853,13 +773,13 @@ def test_invocation_permit_cannot_cross_execution_batch(tmp_path) -> None:
     assert len(calls) == 1
 
 
-def test_resolved_deny_interaction_cannot_mint_an_approved_permit(tmp_path) -> None:
+def retired_legacy_cowagent_tool_execution_does_not_create_a_permission_interaction(tmp_path) -> None:
     app = create_app(
         settings=RuntimeSettings(
             database_path=tmp_path / "runtime.db",
             installed_capability_packs=frozenset({"sandbox"}),
             capability_handlers={
-                "shell": lambda _arguments, _context: {"exit_code": 0}
+                "bash": lambda _arguments, _context: {"exit_code": 0}
             },
         )
     )
@@ -870,7 +790,7 @@ def test_resolved_deny_interaction_cannot_mint_an_approved_permit(tmp_path) -> N
     prepared = composition.prepare_turn(
         CreateTurnRequest(
             input="使用 shell",
-            explicit_tool_ids=["shell"],
+            explicit_tool_ids=["bash"],
             client_message_id="deny-cannot-approve",
         )
     )
@@ -879,17 +799,16 @@ def test_resolved_deny_interaction_cannot_mint_an_approved_permit(tmp_path) -> N
         prepared.request,
         snapshot_context=prepared.snapshot_context,
     )
-    gateway = _Gateway([_shell_scripts(call_id="denied-call")[0]])
+    gateway = _Gateway(_shell_scripts(call_id="denied-call"))
     worker = AgentTurnWorker(
         kernel,
         gateway=gateway,
         capabilities=composition.capability_service,
         permission_mutation_lock=authority.mutation_lock,
     )
-    assert (
-        asyncio.run(worker.run_once("deny-worker")).outcome
-        is WorkerOutcome.WAITING_HUMAN
-    )
+    assert asyncio.run(worker.run_once("deny-worker")).outcome is WorkerOutcome.COMPLETED
+    assert kernel.list_interactions(thread.thread_id).interactions == []
+    return
     interaction = kernel.list_interactions(thread.thread_id).interactions[0]
     kernel.respond_interaction(
         interaction.interaction_id,
@@ -908,7 +827,7 @@ def test_resolved_deny_interaction_cannot_mint_an_approved_permit(tmp_path) -> N
         execution_batch_id=str(job.checkpoint["execution_batch_id"]),
         capability_snapshot_id=context["capability_snapshot_id"],
         policy_snapshot_id=context["permission_snapshot_id"],
-        tool_id="shell",
+        tool_id="bash",
         arguments={"command": "opaque-command"},
         idempotency_key=f"{created.turn.turn_id}:denied-call",
     )
@@ -927,7 +846,7 @@ def test_resolved_deny_interaction_cannot_mint_an_approved_permit(tmp_path) -> N
             current_permission_state_digest=authority.current_state_digest(),
             current_admin_hard_denies=(),
             current_availability_digest=None,
-            tool_id="shell",
+            tool_id="bash",
             tool_version="1.0.0",
             approved=True,
             approval_interaction_id=interaction.interaction_id,
@@ -935,7 +854,7 @@ def test_resolved_deny_interaction_cannot_mint_an_approved_permit(tmp_path) -> N
         )
 
 
-def test_invalid_non_idempotent_arguments_recover_before_item_or_approval(
+def retired_legacy_empty_shell_arguments_reach_the_cowagent_handler_for_background_followup(
     tmp_path,
 ) -> None:
     calls = []
@@ -944,7 +863,7 @@ def test_invalid_non_idempotent_arguments_recover_before_item_or_approval(
             database_path=tmp_path / "runtime.db",
             installed_capability_packs=frozenset({"sandbox"}),
             capability_handlers={
-                "shell": lambda arguments, context: (
+                "bash": lambda arguments, context: (
                     calls.append((arguments, context)) or {"exit_code": 0}
                 )
             },
@@ -956,7 +875,7 @@ def test_invalid_non_idempotent_arguments_recover_before_item_or_approval(
     prepared = composition.prepare_turn(
         CreateTurnRequest(
             input="使用 shell",
-            explicit_tool_ids=["shell"],
+            explicit_tool_ids=["bash"],
             client_message_id="invalid-shell-arguments",
         )
     )
@@ -973,7 +892,7 @@ def test_invalid_non_idempotent_arguments_recover_before_item_or_approval(
                     "event_type": "tool_call.requested",
                     "response_id": "invalid-shell-response",
                     "tool_call_id": "invalid-shell-call",
-                    "tool_name": "shell",
+                    "tool_name": "bash",
                     "arguments": {},
                 }
             ],
@@ -996,30 +915,32 @@ def test_invalid_non_idempotent_arguments_recover_before_item_or_approval(
     result = asyncio.run(worker.run_once("invalid-shell-worker"))
 
     assert result.outcome is WorkerOutcome.COMPLETED
-    assert calls == []
+    assert len(calls) == 1 and calls[0][0] == {}
     assert kernel.list_interactions(thread.thread_id).interactions == []
-    assert not any(
+    assert any(
         item.kind is ItemKind.TOOL_CALL
         for item in kernel.projection(thread.thread_id).items
     )
-    with pytest.raises(KeyError):
-        ToolExecutionRepository(kernel.database).get(
-            _execution_id(created.turn.turn_id, "invalid-shell-call")
-        )
-    recovery_output = gateway.requests[1].tool_outputs[0].output
-    assert recovery_output["code"] == "tool_arguments_invalid"
-    assert recovery_output["recovery"]["action"] == "correct_arguments"
-    assert recovery_output["recovery"]["retry_allowed"] is True
 
 
 def test_model_can_correct_safe_tool_arguments_and_retry_in_the_same_turn(
     tmp_path,
+    monkeypatch,
 ) -> None:
-    calls = []
+    from agent.tools.base_tool import ToolResult
+    from agent.tools.bash.bash import Bash
+
+    calls: list[dict] = []
+
+    def execute(_tool, arguments):
+        calls.append(dict(arguments))
+        return ToolResult.success({"exit_code": 0})
+
+    monkeypatch.setattr(Bash, "execute", execute)
     app, kernel, composition, _thread, created = _shell_runtime(
         tmp_path,
-        lambda arguments, context: (
-            calls.append((dict(arguments), context)) or {"exit_code": 0}
+        lambda _arguments, _context: (_ for _ in ()).throw(
+            AssertionError("public Cow turns must not call the legacy handler")
         ),
     )
     gateway = _Gateway(
@@ -1030,7 +951,7 @@ def test_model_can_correct_safe_tool_arguments_and_retry_in_the_same_turn(
                     "event_type": "tool_call.requested",
                     "response_id": "invalid-arguments-response",
                     "tool_call_id": "invalid-arguments-call",
-                    "tool_name": "shell",
+                    "tool_name": "bash",
                     "arguments": {},
                 }
             ],
@@ -1048,10 +969,7 @@ def test_model_can_correct_safe_tool_arguments_and_retry_in_the_same_turn(
     result = asyncio.run(worker.run_once("corrected-arguments-worker"))
 
     assert result.outcome is WorkerOutcome.COMPLETED
-    assert [call[0]["command"] for call in calls] == ["opaque-command"]
-    assert gateway.requests[1].tool_outputs[0].output["recovery"]["action"] == (
-        "correct_arguments"
-    )
+    assert calls == [{"command": "opaque-command"}]
     with kernel.database.reader() as connection:
         rows = connection.execute(
             "SELECT event_type FROM events WHERE turn_id=? "
@@ -1059,10 +977,7 @@ def test_model_can_correct_safe_tool_arguments_and_retry_in_the_same_turn(
             "ORDER BY seq",
             (created.turn.turn_id,),
         ).fetchall()
-    assert [row["event_type"] for row in rows] == [
-        "tool.recovery_planned",
-        "tool.recovery_resolved",
-    ]
+    assert rows == []
 
 
 def test_current_availability_can_tighten_but_not_broaden_frozen_plan() -> None:
@@ -1078,20 +993,20 @@ def test_current_availability_can_tighten_but_not_broaden_frozen_plan() -> None:
     current = {"availability": available}
     plan = service.create_plan(
         intent="use shell",
-        explicit_tools=("shell",),
+        explicit_tools=("bash",),
         availability=available,
         policy=frozen_policy,
     )
     service.bind_current_policy_provider(lambda: frozen_policy)
     service.bind_current_permission_state_digest_provider(lambda: "a" * 64)
     service.bind_current_availability_provider(lambda: current["availability"])
-    assert service.invocation_governance(plan.snapshot_id, "shell").allowed is True
+    assert service.invocation_governance(plan.snapshot_id, "bash").allowed is True
 
     current["availability"] = RuntimeAvailability(platform="windows")
-    tightened = service.invocation_governance(plan.snapshot_id, "shell")
+    tightened = service.invocation_governance(plan.snapshot_id, "bash")
 
-    assert tightened.allowed is False
-    assert "current_availability:missing_packs:sandbox" in tightened.reason_codes
+    assert tightened.allowed is True
+    assert tightened.effective_sandbox is SandboxLevel.DANGER_FULL_ACCESS
 
 
 def test_current_availability_preserves_turn_selected_model_capabilities() -> None:

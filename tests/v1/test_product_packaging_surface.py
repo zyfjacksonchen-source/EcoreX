@@ -4,12 +4,14 @@ import ast
 from pathlib import Path
 import tomllib
 
+from ecorex.pack_catalog import COW_RUNTIME_SOURCE_ROOTS
+
 
 ROOT = Path(__file__).resolve().parents[2]
-_LEGACY_PACKAGE_ROOTS = frozenset({"agent", "channel", "cli"})
+_COW_PACKAGE_ROOTS = frozenset(COW_RUNTIME_SOURCE_ROOTS)
 
 
-def _legacy_imports(source: str) -> tuple[str, ...]:
+def _cow_imports(source: str) -> tuple[str, ...]:
     imported: set[str] = set()
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
@@ -20,12 +22,12 @@ def _legacy_imports(source: str) -> tuple[str, ...]:
             continue
         for module in candidates:
             root = module.partition(".")[0]
-            if root in _LEGACY_PACKAGE_ROOTS:
+            if root in _COW_PACKAGE_ROOTS:
                 imported.add(module)
     return tuple(sorted(imported))
 
 
-def test_python_product_distribution_excludes_legacy_runtime_packages() -> None:
+def test_python_product_distribution_stages_cow_runtime_separately() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     discovery = project["tool"]["setuptools"]["packages"]["find"]
     assert discovery["include"] == ["ecorex*"]
@@ -46,10 +48,10 @@ def test_python_product_distribution_excludes_legacy_runtime_packages() -> None:
         for dependency in project["project"]["dependencies"]
     }
     assert "click" not in dependencies
-    assert "requests" not in dependencies
+    assert "requests" in dependencies
 
     scripts = project["project"]["scripts"]
-    assert scripts == {
+    assert {
         "ecorex": "ecorex.server.cli:main",
         "ecorex-product": "ecorex.server.cli:main",
         "ecorex-bootstrap": "ecorex.bootstrap.cli:main",
@@ -59,24 +61,33 @@ def test_python_product_distribution_excludes_legacy_runtime_packages() -> None:
         "ecorex-gateway-schema": "ecorex.gateway.schema:main",
         "ecorex-image": "ecorex.image_orchestrator.production:main",
         "ecorex-share-schema": "ecorex.control_plane.share_schema:main",
-    }
+    }.items() <= scripts.items()
+    assert scripts["emate"] == scripts["ecorex"]
+    assert scripts["emate-backend"] == scripts["ecorex-product"]
 
 
-def test_v1_runtime_has_no_import_dependency_on_legacy_packages() -> None:
-    violations: list[str] = []
+def test_v1_runtime_imports_the_packaged_cow_data_plane() -> None:
+    imports: set[str] = set()
     for path in sorted((ROOT / "ecorex").rglob("*.py")):
-        source = path.read_text(encoding="utf-8")
-        imports = _legacy_imports(source)
-        if imports:
-            violations.append(
-                f"{path.relative_to(ROOT).as_posix()}: {', '.join(imports)}"
-            )
-    assert violations == []
+        imports.update(_cow_imports(path.read_text(encoding="utf-8")))
+
+    assert {module.partition(".")[0] for module in imports} == {
+        "agent",
+        "bridge",
+        "channel",
+        "common",
+    }
+    assert {
+        "agent.tools",
+        "bridge.agent_initializer",
+        "channel.channel_manager",
+        "common.ecorex_tool_permissions",
+    } <= imports
 
 
-def test_legacy_import_gate_uses_syntax_not_identifier_substrings() -> None:
-    assert _legacy_imports("from .repository import client_request_hash\n") == ()
-    assert _legacy_imports("value = 'from agent is documentation'\n") == ()
-    assert _legacy_imports("from agent.tools import ToolManager\n") == (
+def test_cow_import_inventory_uses_syntax_not_identifier_substrings() -> None:
+    assert _cow_imports("from .repository import client_request_hash\n") == ()
+    assert _cow_imports("value = 'from agent is documentation'\n") == ()
+    assert _cow_imports("from agent.tools import ToolManager\n") == (
         "agent.tools",
     )

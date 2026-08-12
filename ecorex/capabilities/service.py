@@ -31,6 +31,7 @@ from .models import (
     Exposure,
     RuntimeAvailability,
     SandboxLevel,
+    ToolProviderKind,
     ToolProviderProvenance,
     ToolSearchResult,
     ToolSpec,
@@ -740,11 +741,12 @@ class CapabilityService:
                 arguments,
                 label=f"arguments for {spec.tool_id!r}",
             )
-            validate_schema_instance(
-                canonical_arguments,
-                spec.input_schema,
-                label=f"arguments for {spec.tool_id!r}",
-            )
+            if spec.provider.kind is not ToolProviderKind.MCP:
+                validate_schema_instance(
+                    canonical_arguments,
+                    spec.input_schema,
+                    label=f"arguments for {spec.tool_id!r}",
+                )
         except SchemaInstanceError as exc:
             raise ToolArgumentsValidationError(str(exc)) from None
         if not isinstance(canonical_arguments, dict):
@@ -821,11 +823,12 @@ class CapabilityService:
                 arguments,
                 label=f"arguments for {spec.tool_id!r}",
             )
-            validate_schema_instance(
-                canonical_arguments,
-                spec.input_schema,
-                label=f"arguments for {spec.tool_id!r}",
-            )
+            if spec.provider.kind is not ToolProviderKind.MCP:
+                validate_schema_instance(
+                    canonical_arguments,
+                    spec.input_schema,
+                    label=f"arguments for {spec.tool_id!r}",
+                )
             encoded = json.dumps(
                 canonical_arguments,
                 ensure_ascii=False,
@@ -943,11 +946,12 @@ class CapabilityService:
                 value,
                 label=f"output from {spec.tool_id!r}",
             )
-            validate_schema_instance(
-                value,
-                spec.output_schema,
-                label=f"output from {spec.tool_id!r}",
-            )
+            if spec.provider.kind is not ToolProviderKind.MCP:
+                validate_schema_instance(
+                    value,
+                    spec.output_schema,
+                    label=f"output from {spec.tool_id!r}",
+                )
         except SchemaInstanceError as exc:
             raise ToolOutputValidationError(str(exc)) from None
         record = ToolInvocationRecord(

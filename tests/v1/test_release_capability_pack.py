@@ -14,7 +14,11 @@ from ecorex.capabilities import (
     tool_spec_digest,
     verify_capability_pack,
 )
-from ecorex.pack_catalog import CAPABILITY_PACK_SERVICE_IDS
+from ecorex.pack_catalog import (
+    CAPABILITY_PACK_SERVICE_IDS,
+    CAPABILITY_PACK_TOOL_IDS,
+    REQUIRED_CAPABILITY_PACK_IDS,
+)
 from ecorex.release import (
     ArtifactBuildInput,
     ArtifactKind,
@@ -108,7 +112,7 @@ def test_release_builder_emits_double_signed_verifiable_capability_pack(
     assert verified.manifest.pack_id == "image"
     assert [binding.tool_id for binding in verified.manifest.tools] == ["imagegen"]
     imagegen = builtin_capability_registry().get("imagegen")
-    assert verified.manifest.tools[0].tool_version == "1.1.0"
+    assert verified.manifest.tools[0].tool_version == imagegen.version
     assert verified.manifest.tools[0].spec_sha256 == tool_spec_digest(imagegen)
     assert verified.manifest.services == ()
     metadata = json.loads(built.metadata_path.read_text(encoding="utf-8"))
@@ -176,6 +180,39 @@ def test_release_builder_emits_verifiable_service_only_pack_without_fake_tool(
     assert [binding.service_id for binding in verified.manifest.services] == [
         CAPABILITY_PACK_SERVICE_IDS["ocr"][0]
     ]
+
+
+def test_cow_release_catalog_builds_without_a_sandbox_tool_pack(tmp_path: Path) -> None:
+    expected = ("browser", "channels", "image", "ocr", "office")
+    assert REQUIRED_CAPABILITY_PACK_IDS == expected
+    assert tuple(CAPABILITY_PACK_TOOL_IDS) == expected
+    assert tuple(CAPABILITY_PACK_SERVICE_IDS) == expected
+
+    inputs = []
+    for pack_id in expected:
+        source = tmp_path / pack_id
+        source.mkdir()
+        (source / "payload.bin").write_bytes(pack_id.encode())
+        inputs.append(
+            _pack(
+                source,
+                pack_id=pack_id,
+                tool_ids=CAPABILITY_PACK_TOOL_IDS[pack_id],
+                service_ids=CAPABILITY_PACK_SERVICE_IDS[pack_id],
+            )
+        )
+    built = ReleaseBuilder(
+        Ed25519MemorySigner("release-key", Ed25519PrivateKey.generate())
+    ).build(_spec(*inputs), tmp_path / "release")
+
+    assert set(built.artifact_paths) == {
+        artifact_id
+        for pack_id in expected
+        for artifact_id in (
+            f"capability-pack-{pack_id}-windows-x64",
+            f"capability-pack-{pack_id}-windows-x64-manifest",
+        )
+    }
 
 
 def test_capability_pack_build_rejects_unbound_or_ambiguous_contracts(

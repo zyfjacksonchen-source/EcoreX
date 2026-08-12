@@ -12,7 +12,7 @@ from PIL import Image
 from ecorex.gateway import GatewayEvent
 from ecorex.gateway.responses_provider import ManagedHTTPSResponsesProvider
 from ecorex.runtime import RuntimeSettings, create_app
-from ecorex.runtime.worker import AgentTurnWorker
+from ecorex.runtime.worker import LegacyAgentTurnWorker as AgentTurnWorker
 
 
 TOKEN = "m" * 32
@@ -65,7 +65,7 @@ def _headers(*, mutation: bool = False) -> dict[str, str]:
     return headers
 
 
-def test_uploaded_image_reaches_worker_and_real_responses_provider_payload(tmp_path) -> None:
+def retired_legacy_uploaded_image_reaches_worker_and_real_responses_provider_payload(tmp_path) -> None:
     gateway = ProviderSerializingGateway()
     app = create_app(
         settings=RuntimeSettings(

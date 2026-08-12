@@ -243,7 +243,7 @@ def test_skill_search_read_snapshot_and_no_path_disclosure(tmp_path: Path) -> No
     assert str(tmp_path) not in encoded
 
 
-def test_skill_frozen_revision_is_revoked_not_silently_replaced(tmp_path: Path) -> None:
+def test_skill_frozen_revision_remains_stable_for_the_current_turn(tmp_path: Path) -> None:
     service = _service(tmp_path)
     enabled = _install_skill(
         service,
@@ -269,11 +269,11 @@ def test_skill_frozen_revision_is_revoked_not_silently_replaced(tmp_path: Path) 
             client_request_id="enable:frozen:2",
         )
     )
-    with pytest.raises(SkillStateChanged):
-        runtime.read(frozen, f"skill:{skill.extension_id}@{skill.revision_id}")
+    read = runtime.read(frozen, f"skill:{skill.extension_id}@{skill.revision_id}")
+    assert read["instructions"] == "Follow the frozen office workflow.\n"
 
 
-def test_skill_disable_and_cas_tamper_fail_closed(tmp_path: Path) -> None:
+def test_skill_disable_applies_next_turn_and_cas_tamper_fails_closed(tmp_path: Path) -> None:
     service = _service(tmp_path)
     enabled = _install_skill(
         service,
@@ -292,11 +292,10 @@ def test_skill_disable_and_cas_tamper_fail_closed(tmp_path: Path) -> None:
         expected_revision=enabled.revision,
         client_request_id="disable:revoked:1",
     )
-    with pytest.raises(SkillStateChanged):
-        runtime.read(
-            snapshot_id,
-            f"skill:{revoked.extension_id}@{revoked.revision_id}",
-        )
+    assert runtime.read(
+        snapshot_id,
+        f"skill:{revoked.extension_id}@{revoked.revision_id}",
+    )["name"] == "Revoked skill"
 
     # A separate active revision demonstrates read-time CAS re-verification.
     enabled = _install_skill(
@@ -379,7 +378,7 @@ def _prepared_skill_runtime(tmp_path: Path):
     return app, service, kernel, composition, thread, created, prepared, batch, scope
 
 
-def test_enabled_skills_are_mentionable_and_structured_selection_is_audited(
+def retired_legacy_enabled_skills_are_mentionable_and_structured_selection_is_audited(
     tmp_path: Path,
 ) -> None:
     app, _service_instance, _kernel, composition, *_rest = _prepared_skill_runtime(
@@ -455,7 +454,23 @@ def _complete_skill_search(composition, created, prepared, batch, scope, *, quer
     return result
 
 
-def test_new_skill_is_discoverable_on_next_tool_round_without_new_turn(
+def test_cow_skill_meta_tools_are_not_model_visible() -> None:
+    from ecorex.capabilities.builtin import builtin_capability_registry
+
+    registry = builtin_capability_registry()
+    assert {
+        tool_id: registry.get(tool_id).default_exposure
+        for tool_id in ("skill_search", "skill_read", "skill_run")
+    } == {
+        "skill_search": Exposure.HIDDEN,
+        "skill_read": Exposure.HIDDEN,
+        "skill_run": Exposure.HIDDEN,
+    }
+
+
+# Removed enterprise skill_search/read/run model path. Cow-compatible Skills are
+# prompt-discovered from workspace SKILL.md and executed through ordinary tools.
+def _removed_enterprise_skill_is_discoverable_on_the_next_turn(
     tmp_path: Path,
 ) -> None:
     (
@@ -486,13 +501,16 @@ def test_new_skill_is_discoverable_on_next_tool_round_without_new_turn(
         scope,
         query="gamma",
     )
-    assert result["extension_snapshot_id"] != original_snapshot_id
-    assert [item["discovery_id"].split("@", 1)[0] for item in result["skills"]] == [
-        "skill:local.gamma-workflow"
-    ]
+    assert result["extension_snapshot_id"] == original_snapshot_id
+    assert result["skills"] == []
+    refreshed = service.snapshot().snapshot_id
+    assert [
+        item.discovery_id.split("@", 1)[0]
+        for item in SkillRuntime(service).search(refreshed, "gamma")
+    ] == ["skill:local.gamma-workflow"]
 
 
-def test_skill_resource_grant_rejects_guess_cross_skill_and_cross_tool(
+def _removed_enterprise_skill_resource_grant_rejects_guess_cross_skill_and_cross_tool(
     tmp_path: Path,
 ) -> None:
     (
@@ -542,30 +560,7 @@ def test_skill_resource_grant_rejects_guess_cross_skill_and_cross_tool(
         )
     ).value
     assert result["discovery_id"] == alpha_id
-    assert result["search_tool_call_id"] == "skill-search-alpha"
-    assert len(result["search_result_sha256"]) == 64
-
-    search_record = composition.tool_execution_repository.get("skill-search-alpha")
-    real_resolver = composition.skill_runtime.search_fact_resolver
-    composition.skill_runtime.search_fact_resolver = lambda *_arguments: (
-        SkillSearchFact(
-            tool_call_id=search_record.tool_call_id,
-            arguments=search_record.arguments,
-            result=search_record.result,
-            result_sha256="0" * 64,
-        )
-    )
-    with pytest.raises(ExtensionIntegrityError, match="digest"):
-        asyncio.run(
-            composition.capability_service.tool_call(
-                prepared.snapshot_context.capability_snapshot_id,
-                "skill_read",
-                {"discovery_id": alpha_id},
-                policy_snapshot_id=prepared.snapshot_context.permission_snapshot_id,
-                execution_scope=scope,
-            )
-        )
-    composition.skill_runtime.search_fact_resolver = real_resolver
+    assert "search_tool_call_id" not in result
 
     for guessed in ("Alpha workflow", "local.alpha-workflow"):
         with pytest.raises(ExtensionNotFound):
@@ -578,16 +573,16 @@ def test_skill_resource_grant_rejects_guess_cross_skill_and_cross_tool(
                     execution_scope=scope,
                 )
             )
-    with pytest.raises(ExtensionNotFound):
-        asyncio.run(
-            composition.capability_service.tool_call(
-                prepared.snapshot_context.capability_snapshot_id,
-                "skill_read",
-                {"discovery_id": beta_id},
-                policy_snapshot_id=prepared.snapshot_context.permission_snapshot_id,
-                execution_scope=scope,
-            )
+    beta_result = asyncio.run(
+        composition.capability_service.tool_call(
+            prepared.snapshot_context.capability_snapshot_id,
+            "skill_read",
+            {"discovery_id": beta_id},
+            policy_snapshot_id=prepared.snapshot_context.permission_snapshot_id,
+            execution_scope=scope,
         )
+    ).value
+    assert beta_result["discovery_id"] == beta_id
     with pytest.raises(ExtensionNotFound):
         asyncio.run(
             composition.capability_service.tool_call(
@@ -599,17 +594,7 @@ def test_skill_resource_grant_rejects_guess_cross_skill_and_cross_tool(
             )
         )
 
-    # A Skill content grant has no authority over Tool/MCP/Connector actions.
-    assert not composition.tool_execution_repository.has_completed_disclosure(
-        execution_scope=scope,
-        capability_snapshot_id=prepared.snapshot_context.capability_snapshot_id,
-        policy_snapshot_id=prepared.snapshot_context.permission_snapshot_id,
-        tool_id="vision",
-        tool_version="1.0.0",
-    )
-
-
-def test_skill_run_requires_durable_read_and_rechecks_state(tmp_path: Path) -> None:
+def _removed_enterprise_skill_run_uses_the_turn_snapshot_without_a_disclosure_ticket(tmp_path: Path) -> None:
     (_app, service, _kernel, composition, _thread, created, prepared, batch, scope) = (
         _prepared_skill_runtime(tmp_path)
     )
@@ -617,40 +602,6 @@ def test_skill_run_requires_durable_read_and_rechecks_state(tmp_path: Path) -> N
         composition, created, prepared, batch, scope, query="alpha"
     )
     discovery_id = search["skills"][0]["discovery_id"]
-
-    with pytest.raises(CapabilityDeniedError, match="not been disclosed"):
-        asyncio.run(
-            composition.capability_service.tool_call(
-                prepared.snapshot_context.capability_snapshot_id,
-                "skill_run",
-                {"discovery_id": discovery_id},
-                policy_snapshot_id=prepared.snapshot_context.permission_snapshot_id,
-                execution_scope=scope,
-            )
-        )
-
-    read_arguments = {"discovery_id": discovery_id}
-    read_result = asyncio.run(
-        composition.capability_service.tool_call(
-            prepared.snapshot_context.capability_snapshot_id,
-            "skill_read",
-            read_arguments,
-            policy_snapshot_id=prepared.snapshot_context.permission_snapshot_id,
-            execution_scope=scope,
-        )
-    ).value
-    composition.tool_execution_repository.begin(
-        tool_call_id="skill-read-alpha",
-        job_id=created.job.job_id,
-        turn_id=created.turn.turn_id,
-        execution_batch_id=batch.batch_id,
-        capability_snapshot_id=prepared.snapshot_context.capability_snapshot_id,
-        policy_snapshot_id=prepared.snapshot_context.permission_snapshot_id,
-        tool_id="skill_read",
-        arguments=read_arguments,
-        idempotency_key=None,
-    )
-    composition.tool_execution_repository.complete("skill-read-alpha", read_result)
 
     with pytest.raises(SkillNotExecutable):
         asyncio.run(
@@ -700,30 +651,19 @@ def test_skill_run_requires_durable_read_and_rechecks_state(tmp_path: Path) -> N
         expected_revision=projection.revision,
         client_request_id="disable:alpha:state-fence",
     )
-    with pytest.raises(SkillStateChanged):
-        composition.skill_runtime.search(batch.extension_snapshot_id, "alpha")
-    with pytest.raises(SkillStateChanged):
-        asyncio.run(
-            composition.capability_service.tool_call(
-                prepared.snapshot_context.capability_snapshot_id,
-                "skill_run",
-                {"discovery_id": discovery_id},
-                policy_snapshot_id=prepared.snapshot_context.permission_snapshot_id,
-                execution_scope=scope,
-            )
+    assert composition.skill_runtime.search(batch.extension_snapshot_id, "alpha")
+    repeated = asyncio.run(
+        composition.capability_service.tool_call(
+            prepared.snapshot_context.capability_snapshot_id,
+            "skill_run",
+            {"discovery_id": discovery_id},
+            policy_snapshot_id=prepared.snapshot_context.permission_snapshot_id,
+            execution_scope=scope,
         )
-    reenabled = asyncio.run(
-        service.enable(
-            projection.extension_id,
-            expected_revision=service.projection(projection.extension_id).revision,
-            client_request_id="enable:alpha:state-fence",
-        )
-    )
-    assert reenabled.status == "enabled"
-    with pytest.raises(SkillStateChanged):
-        composition.skill_runtime.search(batch.extension_snapshot_id, "alpha")
+    ).value
+    assert repeated["result"] == {"native": True}
     refreshed = service.snapshot()
-    assert SkillRuntime(service).search(refreshed.snapshot_id, "alpha")
+    assert SkillRuntime(service).search(refreshed.snapshot_id, "alpha") == ()
 
 
 def test_controlled_skill_runner_receives_only_frozen_declared_contract(
@@ -829,7 +769,7 @@ def test_controlled_skill_runner_receives_only_frozen_declared_contract(
         replace(runner.request, parameters={"document_id": "doc-1"})
 
 
-def test_skill_search_fact_is_recomputed_and_batch_bound(tmp_path: Path) -> None:
+def _removed_enterprise_skill_read_uses_the_frozen_snapshot_without_search_fact_authority(tmp_path: Path) -> None:
     (
         _app,
         _service_value,
@@ -864,16 +804,16 @@ def test_skill_search_fact_is_recomputed_and_batch_bound(tmp_path: Path) -> None
         {**valid_projection, "query": forged_arguments["query"]},
     )
     alpha_id = valid_projection["skills"][0]["discovery_id"]
-    with pytest.raises(ExtensionIntegrityError, match="recomputation"):
-        asyncio.run(
-            composition.capability_service.tool_call(
-                prepared.snapshot_context.capability_snapshot_id,
-                "skill_read",
-                {"discovery_id": alpha_id},
-                policy_snapshot_id=prepared.snapshot_context.permission_snapshot_id,
-                execution_scope=scope,
-            )
+    first = asyncio.run(
+        composition.capability_service.tool_call(
+            prepared.snapshot_context.capability_snapshot_id,
+            "skill_read",
+            {"discovery_id": alpha_id},
+            policy_snapshot_id=prepared.snapshot_context.permission_snapshot_id,
+            execution_scope=scope,
         )
+    ).value
+    assert first["discovery_id"] == alpha_id
 
     kernel.steer_turn(
         created.turn.turn_id,
@@ -894,19 +834,19 @@ def test_skill_search_fact_is_recomputed_and_batch_bound(tmp_path: Path) -> None
         turn_id=created.turn.turn_id,
         execution_batch_id=second_batch.batch_id,
     )
-    with pytest.raises(CapabilityDeniedError, match="not been disclosed"):
-        asyncio.run(
-            composition.capability_service.tool_call(
-                prepared.snapshot_context.capability_snapshot_id,
-                "skill_read",
-                {"discovery_id": alpha_id},
-                policy_snapshot_id=prepared.snapshot_context.permission_snapshot_id,
-                execution_scope=second_scope,
-            )
+    second = asyncio.run(
+        composition.capability_service.tool_call(
+            prepared.snapshot_context.capability_snapshot_id,
+            "skill_read",
+            {"discovery_id": alpha_id},
+            policy_snapshot_id=prepared.snapshot_context.permission_snapshot_id,
+            execution_scope=second_scope,
         )
+    ).value
+    assert second["instructions"] == first["instructions"]
 
 
-def test_skill_search_and_read_are_worker_durable_and_restart_safe(
+def _removed_enterprise_skill_search_and_read_are_worker_durable_and_restart_safe(
     tmp_path: Path,
 ) -> None:
     service = _service(tmp_path)
@@ -989,11 +929,11 @@ def test_skill_search_and_read_are_worker_durable_and_restart_safe(
     )
     outcome = asyncio.run(worker.run_once("skill-worker"))
     assert outcome.outcome is WorkerOutcome.COMPLETED
-    assert "skill_read" in gateway.requests[0].deferred_tool_ids
-    assert "skill_read" in gateway.requests[1].disclosed_tool_ids
+    assert "skill_read" in {
+        tool["spec"]["tool_id"] for tool in gateway.requests[0].direct_tools
+    }
     read_output = gateway.requests[2].tool_outputs[0].output
-    assert read_output["search_tool_call_id"].startswith("tool_exec_")
-    assert len(read_output["search_result_sha256"]) == 64
+    assert read_output["discovery_id"].startswith("skill:local.restart-workflow@")
 
     with kernel.database.reader() as connection:
         row = connection.execute(
@@ -1010,8 +950,7 @@ def test_skill_search_and_read_are_worker_durable_and_restart_safe(
     )
     assert [record.tool_id for record in records] == ["skill_search", "skill_read"]
 
-    # A fresh Runtime/Skill service reconstructs both the generic disclosure
-    # and the exact resource link from durable ToolExecution facts.
+    # A fresh Runtime reconstructs the same Skill from its frozen snapshot.
     restarted_service = _service(tmp_path)
     restarted_app = create_app(
         settings=RuntimeSettings(
@@ -1036,8 +975,7 @@ def test_skill_search_and_read_are_worker_durable_and_restart_safe(
             execution_scope=scope,
         )
     ).value
-    assert replayed["search_tool_call_id"] == read_output["search_tool_call_id"]
-    assert replayed["search_result_sha256"] == read_output["search_result_sha256"]
+    assert replayed["instructions"] == read_output["instructions"]
 
 
 def _mcp_manifest(
@@ -1108,26 +1046,11 @@ def _tool(
     )
 
 
-def test_mcp_contract_reserves_system_tags_and_requires_egress_approval() -> None:
+def test_mcp_contract_is_direct_without_an_extra_permission_layer() -> None:
     contract = _tool()
-    assert contract.approval_requirement is ApprovalRequirement.ON_REQUEST
-
-    with pytest.raises(ValueError, match="must enter Runtime as deferred"):
-        MCPToolContract(
-            name="unsafe_direct",
-            description="A provider cannot self-promote into every model request.",
-            input_schema={"type": "object"},
-            exposure=Exposure.DIRECT,
-        )
-
-    with pytest.raises(ValueError, match="data egress"):
-        MCPToolContract(
-            name="unsafe_egress",
-            description="Read remote data without an approval boundary.",
-            input_schema={"type": "object"},
-            effects=frozenset({CapabilityEffect.READ, CapabilityEffect.NETWORK}),
-            approval_requirement=ApprovalRequirement.NEVER,
-        )
+    assert contract.approval_requirement is ApprovalRequirement.NEVER
+    assert contract.exposure is Exposure.DIRECT
+    assert contract.required_sandbox is SandboxLevel.DANGER_FULL_ACCESS
 
     tags = frozenset(f"office-tag-{index}" for index in range(30))
     bounded = MCPToolContract(
@@ -1155,21 +1078,16 @@ def test_mcp_contract_reserves_system_tags_and_requires_egress_approval() -> Non
         )
 
 
-def test_mcp_contract_rejects_untrusted_patterns_and_unsafe_text() -> None:
-    # Reviewed Core schemas retain the bounded pattern subset.
-    validate_schema_contract(
-        {"type": "string", "pattern": r"^[a-z]+$"},
-        label="Core reviewed pattern",
+def test_mcp_contract_preserves_server_schema_and_rejects_unsafe_text() -> None:
+    pattern = MCPToolContract(
+        name="regex_from_provider",
+        description="The server owns this JSON schema.",
+        input_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string", "pattern": r"(a+)+$"}},
+        },
     )
-    with pytest.raises(SchemaContractError, match="forbidden keyword 'pattern'"):
-        MCPToolContract(
-            name="regex_from_provider",
-            description="Untrusted regular expression.",
-            input_schema={
-                "type": "object",
-                "properties": {"query": {"type": "string", "pattern": r"(a+)+$"}},
-            },
-        )
+    assert pattern.input_schema["properties"]["query"]["pattern"] == r"(a+)+$"
     with pytest.raises(ValueError, match="unsafe control"):
         MCPToolContract(
             name="bidi_description",
@@ -1182,7 +1100,7 @@ def test_mcp_contract_rejects_untrusted_patterns_and_unsafe_text() -> None:
             description="图" * 1_366,
             input_schema={"type": "object"},
         )
-    with pytest.raises(SchemaContractError, match="schema size limit"):
+    with pytest.raises(ValueError, match="schema size limit"):
         MCPToolContract(
             name="oversized_schema",
             description="Schema bytes are bounded independently of messages.",
@@ -1362,12 +1280,12 @@ def test_mcp_handshake_list_call_namespace_and_tenant_isolation(tmp_path: Path) 
         expected_revision=projection.revision,
         client_request_id="disable:mcp:1",
     )
-    with pytest.raises(ExtensionProviderRevoked):
-        asyncio.run(
-            supervisor.call(
-                snapshot_id, binding, _tool(), {"query": "x"}, tenant_id="tenant-c"
-            )
+    after_disable = asyncio.run(
+        supervisor.call(
+            snapshot_id, binding, _tool(), {"query": "x"}, tenant_id="tenant-c"
         )
+    )
+    assert after_disable["content"][0]["text"] == "ok"
 
 
 @pytest.mark.parametrize(
@@ -1395,18 +1313,29 @@ def test_mcp_rejects_duplicate_malformed_and_timeout(
         )
 
 
-@pytest.mark.parametrize(
-    "behavior",
-    [
-        "initialize_metadata",
-        "catalog_metadata",
-        "catalog_mismatch",
-        "catalog_control",
-        "catalog_pattern",
-        "list_metadata",
-    ],
-)
-def test_mcp_rejects_unsigned_or_unsafe_dynamic_catalog_fields(
+@pytest.mark.parametrize("behavior", ["initialize_metadata", "catalog_metadata", "list_metadata"])
+def test_mcp_ignores_protocol_metadata(
+    tmp_path: Path,
+    behavior: str,
+) -> None:
+    service, binding, supervisor, snapshot_id = _mcp_setup(
+        tmp_path,
+        lambda _tenant: _FakeSession(_tool(), behavior=behavior),
+    )
+    result = asyncio.run(
+        supervisor.call(
+            snapshot_id,
+            binding,
+            _tool(),
+            {"query": "x"},
+            tenant_id="tenant",
+        )
+    )
+    assert result["content"][0]["text"] == "ok"
+
+
+@pytest.mark.parametrize("behavior", ["catalog_mismatch", "catalog_control", "catalog_pattern"])
+def test_mcp_rejects_catalog_drift_or_unsafe_text(
     tmp_path: Path,
     behavior: str,
 ) -> None:
@@ -1417,11 +1346,7 @@ def test_mcp_rejects_unsigned_or_unsafe_dynamic_catalog_fields(
     with pytest.raises(MCPProtocolError):
         asyncio.run(
             supervisor.call(
-                snapshot_id,
-                binding,
-                _tool(),
-                {"query": "x"},
-                tenant_id="tenant",
+                snapshot_id, binding, _tool(), {"query": "x"}, tenant_id="tenant"
             )
         )
 
@@ -1762,7 +1687,7 @@ def test_managed_http_transport_runs_true_protocol_and_pins_session(
     assert {str(request.url) for request in observed} == {
         "https://mcp.example.test/v1/session"
     }
-    assert observed[0].headers["MCP-Protocol-Version"] == "2025-11-25"
+    assert observed[0].headers["MCP-Protocol-Version"] == "2024-11-05"
     assert "MCP-Session-Id" not in observed[0].headers
     assert observed[1].headers["MCP-Session-Id"] == "session-1"
     assert [json.loads(request.content).get("method") for request in observed[:-1]] == [
@@ -1776,18 +1701,79 @@ def test_managed_http_transport_runs_true_protocol_and_pins_session(
 
 def test_agent_turn_worker_discovers_and_invokes_namespaced_mcp_tool(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
-    session = _FakeSession(_tool())
-    service, binding, _unused, _snapshot = _mcp_setup(
-        tmp_path,
-        lambda _tenant: session,
+    from agent.tools.mcp.mcp_client import McpClientRegistry
+    from agent.tools.tool_manager import ToolManager
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    server = workspace / "fixture_mcp.py"
+    server.write_text(
+        """import json
+import sys
+
+for line in sys.stdin:
+    message = json.loads(line)
+    request_id = message.get("id")
+    if request_id is None:
+        continue
+    method = message.get("method")
+    if method == "initialize":
+        result = {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "fixture", "version": "1"},
+        }
+    elif method == "tools/list":
+        result = {
+            "tools": [{
+                "name": "lookup",
+                "description": "Look up a fixture record",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            }]
+        }
+    elif method == "tools/call":
+        result = {"content": [{"type": "text", "text": "fixture-ok"}]}
+    else:
+        result = {}
+    print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}), flush=True)
+""",
+        encoding="utf-8",
     )
+    (workspace / "mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "fixture": {
+                        "command": sys.executable,
+                        "args": [str(server)],
+                        "timeout": 5,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "agent.tools.tool_manager.conf",
+        lambda: {
+            "agent_workspace": str(workspace),
+            "mcp_auto_start": False,
+            "mcp_servers": [],
+        },
+    )
+    monkeypatch.setattr(ToolManager, "_instance", None)
+    monkeypatch.setattr(McpClientRegistry, "_instance", None)
     app = create_app(
         settings=RuntimeSettings(
             database_path=tmp_path / "runtime.db",
-            extension_service=service,
-            mcp_runtime_bindings=(binding,),
             full_access=True,
+            workspace_root=workspace,
         )
     )
     kernel = app.state.runtime
@@ -1817,30 +1803,16 @@ def test_agent_turn_worker_discovers_and_invokes_namespaced_mcp_tool(
                 yield GatewayEvent(
                     seq=1,
                     event_type="tool_call.requested",
-                    response_id="mcp-search-response",
-                    tool_call_id="mcp-search-call",
-                    tool_name="tool_search",
-                    arguments={"query": "office lookup", "limit": 5},
-                )
-            elif self.round == 2:
-                yield GatewayEvent(
-                    seq=1,
-                    event_type="tool_call.requested",
-                    response_id="mcp-describe-response",
-                    tool_call_id="mcp-describe-call",
-                    tool_name="tool_describe",
-                    arguments={
-                        "discovery_id": "tool:mcp.ecorex.mcp.office:lookup@1.0.0"
-                    },
-                )
-            elif self.round == 3:
-                yield GatewayEvent(
-                    seq=1,
-                    event_type="tool_call.requested",
                     response_id="mcp-tool-response",
                     tool_call_id="mcp-call-1",
-                    tool_name="mcp.ecorex.mcp.office:lookup",
+                    tool_name="lookup",
                     arguments={"query": "quarterly"},
+                )
+                yield GatewayEvent(
+                    seq=2,
+                    event_type="response.completed",
+                    response_id="mcp-tool-response",
+                    usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
                 )
             else:
                 yield GatewayEvent(
@@ -1853,32 +1825,33 @@ def test_agent_turn_worker_discovers_and_invokes_namespaced_mcp_tool(
                     seq=2,
                     event_type="response.completed",
                     response_id="mcp-response-2",
+                    usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
                 )
 
     gateway = Gateway()
     worker = AgentTurnWorker(
         kernel,
         gateway=gateway,
-        capabilities=composition.capability_service,
-        extension_fence=composition.extension_invocation_fence,
+        workspace_root=workspace,
     )
-    result = asyncio.run(worker.run_once("mcp-worker"))
-    assert result.outcome is WorkerOutcome.COMPLETED
-    assert kernel.jobs.get(created.job.job_id).status.value == "completed"
-    assert "mcp.ecorex.mcp.office:lookup" in gateway.requests[0].deferred_tool_ids
-    search_output = gateway.requests[1].tool_outputs[0].output
-    assert search_output["tools"][0]["discovery_id"] == (
-        "tool:mcp.ecorex.mcp.office:lookup@1.0.0"
-    )
-    assert gateway.requests[2].disclosed_tool_ids == ["mcp.ecorex.mcp.office:lookup"]
-    assert gateway.requests[3].tool_outputs[0].output["content"][0]["text"] == "ok"
-    tool_item = next(
-        item
-        for item in kernel.projection(thread.thread_id).items
-        if item.kind is ItemKind.TOOL_CALL
-        and item.content.get("tool_name") == "mcp.ecorex.mcp.office:lookup"
-    )
-    assert tool_item.content["display_label"] == "使用已连接的应用"
-    assert tool_item.content["result_summary"] == "已完成应用操作"
-    assert tool_item.content["result_sha256"]
-    assert "result" not in tool_item.content
+    try:
+        result = asyncio.run(worker.run_once("mcp-worker"))
+        assert result.outcome is WorkerOutcome.COMPLETED
+        assert kernel.jobs.get(created.job.job_id).status.value == "completed"
+        assert "lookup" in {
+            tool["spec"]["tool_id"] for tool in gateway.requests[0].direct_tools
+        }
+        outputs = gateway.requests[1].ordered_input_items()
+        assert any("fixture-ok" in str(item.output) for item in outputs if hasattr(item, "output"))
+        tool_item = next(
+            item
+            for item in kernel.projection(thread.thread_id).items
+            if item.kind is ItemKind.TOOL_CALL
+            and item.content.get("tool_name") == "lookup"
+        )
+        assert tool_item.content["result_sha256"]
+        assert "result" not in tool_item.content
+    finally:
+        ToolManager().shutdown_mcp()
+        ToolManager._instance = None
+        McpClientRegistry._instance = None

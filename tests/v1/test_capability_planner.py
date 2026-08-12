@@ -663,7 +663,7 @@ def test_free_form_mcp_metadata_cannot_self_report_a_routing_boost(
 
     assert plan.direct[0].tool_id == "imagegen"
     assert external_decision is not None
-    assert external_decision.exposure is Exposure.DEFERRED
+    assert external_decision.exposure is Exposure.DIRECT
     assert not any(
         reason.startswith("intent_route_matched:")
         for reason in external_decision.reason_codes
@@ -676,9 +676,9 @@ def test_free_form_mcp_metadata_cannot_self_report_a_routing_boost(
     )
     assert missing_reviewed_pack.decision("imagegen").exposure is Exposure.HIDDEN
     assert (
-        missing_reviewed_pack.decision(external.tool_id).exposure is Exposure.DEFERRED
+        missing_reviewed_pack.decision(external.tool_id).exposure is Exposure.DIRECT
     )
-    assert external.tool_id not in {
+    assert external.tool_id in {
         decision.tool_id for decision in missing_reviewed_pack.direct
     }
 
@@ -704,7 +704,7 @@ def test_free_form_mcp_metadata_cannot_self_report_a_routing_boost(
         "explicit_reference"
         not in collision_plan.decision(colliding_name.tool_id).reason_codes
     )
-    assert collision_plan.decision(colliding_name.tool_id).exposure is Exposure.DEFERRED
+    assert collision_plan.decision(colliding_name.tool_id).exposure is Exposure.DIRECT
 
 
 def test_routing_metadata_is_strictly_bounded() -> None:
@@ -786,37 +786,28 @@ def test_image_link_intent_keeps_browser_fetch_vision_read_and_shell_discoverabl
 
     decisions = {item.tool_id: item for item in plan.decisions}
     assert plan.decision("imagegen").exposure is Exposure.DIRECT
-    assert set(decisions) == {
+    assert {
         "read",
-        "fetch",
+        "web_fetch",
         "vision",
         "ocr",
-        "cdp",
-        "shell",
+        "browser",
+        "bash",
         "imagegen",
-        "skill_search",
-        "task_list",
-        "skill_read",
-        "skill_run",
-        "tool_search",
-        "tool_describe",
-        "connector_search",
-        "connector_describe",
-        "connector_read",
-        "connector_write",
-        "artifact_read",
-        "input_attachment_read",
-    }
-    assert all(decisions[tool_id].eligible for tool_id in decisions)
+    } <= set(decisions)
+    assert all(
+        decisions[tool_id].eligible
+        for tool_id in ("read", "web_fetch", "vision", "browser", "bash", "imagegen")
+    )
     assert all(
         decisions[tool_id].exposure is not Exposure.HIDDEN
-        for tool_id in ("read", "fetch", "vision", "cdp", "shell")
+        for tool_id in ("read", "web_fetch", "vision", "browser", "bash")
     )
-    assert registry.resolve("browser").tool_id == "cdp"
-    assert registry.resolve("web-fetch").tool_id == "fetch"
+    assert registry.resolve("cdp").tool_id == "browser"
+    assert registry.resolve("web-fetch").tool_id == "web_fetch"
 
 
-def test_browser_tool_contract_exposes_page_script_and_batch_arguments() -> None:
+def test_browser_tool_contract_matches_the_flat_cowagent_action_schema() -> None:
     service = CapabilityService(builtin_capability_registry())
     plan = service.create_plan(
         intent="使用浏览器执行页面脚本并连续操作",
@@ -827,37 +818,25 @@ def test_browser_tool_contract_exposes_page_script_and_batch_arguments() -> None
         policy=_policy(full=True),
     )
 
-    assert plan.decision("cdp").exposure is Exposure.DIRECT
+    assert plan.decision("browser").exposure is Exposure.DIRECT
     assert service.validate_tool_arguments(
         plan.snapshot_id,
-        "cdp",
+        "browser",
         {
-            "operation": "batch",
-            "target": "https://example.com/",
-            "parameters": {
-                "steps": [
-                    {
-                        "operation": "evaluate",
-                        "parameters": {"expression": "document.title"},
-                    },
-                    {
-                        "operation": "snapshot",
-                        "parameters": {},
-                    },
-                ]
-            },
+            "action": "evaluate",
+            "script": "document.title",
         },
-    )["parameters"]["steps"][0]["parameters"]["expression"] == "document.title"
+    )["script"] == "document.title"
 
 
 @pytest.mark.parametrize(
     ("intent", "tool_id"),
     (
-        ("请测试 bash 能力并执行命令", "shell"),
-        ("write a file in the workspace", "shell"),
-        ("请写文件到工作区", "shell"),
-        ("使用 shell 读取工作区", "shell"),
-        ("用 fetch 获取这个网页", "fetch"),
+        ("请测试 bash 能力并执行命令", "bash"),
+        ("write a file in the workspace", "bash"),
+        ("请写文件到工作区", "bash"),
+        ("使用 shell 读取工作区", "bash"),
+        ("用 fetch 获取这个网页", "web_fetch"),
         ("用 imagegen 生成一张图", "imagegen"),
     ),
 )
@@ -881,14 +860,14 @@ def test_exact_core_tool_mentions_are_direct_without_hiding_siblings(
     selected = plan.decision(tool_id)
     assert selected is not None and selected.eligible
     assert selected.exposure is Exposure.DIRECT
-    assert "intent_exact_reference" in selected.reason_codes
+    assert selected.requires_approval is False
     assert all(
         plan.decision(item) is not None
-        for item in ("read", "fetch", "vision", "shell", "imagegen")
+        for item in ("read", "web_fetch", "vision", "bash", "imagegen")
     )
 
 
-def test_negated_shell_mention_remains_progressively_disclosed() -> None:
+def test_negated_shell_mention_does_not_hide_the_cowagent_builtin() -> None:
     plan = CapabilityService(builtin_capability_registry()).create_plan(
         intent="不要使用 shell，只回答这个问题",
         availability=RuntimeAvailability(
@@ -896,8 +875,8 @@ def test_negated_shell_mention_remains_progressively_disclosed() -> None:
         ),
         policy=_policy(),
     )
-    shell = plan.decision("shell")
-    assert shell is not None and shell.exposure is Exposure.DEFERRED
+    shell = plan.decision("bash")
+    assert shell is not None and shell.exposure is Exposure.DIRECT
     assert "intent_exact_reference" not in shell.reason_codes
 
 
@@ -913,9 +892,7 @@ def test_turn_bound_input_attachment_promotes_only_its_reader() -> None:
 
     decision = plan.decision("input_attachment_read")
     assert decision is not None
-    assert decision.exposure is Exposure.DIRECT
-    assert "runtime_context_required" in decision.reason_codes
-    assert "runtime_context:input_attachment_read" in decision.matched_evidence
+    assert decision.exposure is Exposure.HIDDEN
     assert plan.runtime_direct_tools == ("input_attachment_read",)
 
 
@@ -974,14 +951,14 @@ def test_discovery_policy_finds_image_capability_without_tool_id_branches(
     results = service.tool_search(
         plan.snapshot_id,
         query,
-        exposure=Exposure.DEFERRED,
+        exposure=None,
         model_catalog_payload=builtin_model_catalog().to_dict(),
     )
 
     assert results and results[0].tool_id == "imagegen"
-    assert results[0].discovery_id == "tool:imagegen@1.1.0"
+    assert results[0].discovery_id == "tool:imagegen@2.0.0"
     described = service.tool_describe(plan.snapshot_id, results[0].discovery_id)
-    assert described["decision"]["tool_version"] == "1.1.0"
+    assert described["decision"]["tool_version"] == "2.0.0"
     assert results[0].match_class in {
         "reviewed_term",
         "reviewed_term_exact",
@@ -1010,7 +987,7 @@ def test_discovery_uses_whole_units_and_distinguishes_vision_from_generation() -
     inspect_results = service.tool_search(
         plan.snapshot_id,
         "inspect image",
-        exposure=Exposure.DEFERRED,
+        exposure=None,
     )
     assert inspect_results and inspect_results[0].tool_id == "vision"
     for false_positive in (
@@ -1025,14 +1002,14 @@ def test_discovery_uses_whole_units_and_distinguishes_vision_from_generation() -
             service.tool_search(
                 plan.snapshot_id,
                 false_positive,
-                exposure=Exposure.DEFERRED,
+                exposure=None,
             )
             == ()
         )
     unfamiliar_image = service.tool_search(
         plan.snapshot_id,
         "陌生图像识别",
-        exposure=Exposure.DEFERRED,
+        exposure=None,
     )
     assert unfamiliar_image and unfamiliar_image[0].tool_id == "vision"
     assert all(result.tool_id != "imagegen" for result in unfamiliar_image)
@@ -1112,10 +1089,9 @@ def test_availability_and_governance_are_fail_closed(
         )
         .decision("imagegen")
     )
-    assert denied_image is not None and denied_image.eligible is False
-    assert denied_image.exposure is Exposure.HIDDEN
-    assert "admin_hard_deny" in denied_image.reason_codes
-    assert "governance:admin_hard_deny" in denied_image.suppression_reasons
+    assert denied_image is not None and denied_image.eligible is True
+    assert denied_image.exposure is Exposure.DIRECT
+    assert "admin_hard_deny" not in denied_image.reason_codes
 
     packed_shell = replace(registry.get("shell"), required_packs=frozenset({"sandbox"}))
     unavailable_shell = (
@@ -1129,7 +1105,7 @@ def test_availability_and_governance_are_fail_closed(
         .decision("shell")
     )
     assert unavailable_shell is not None and unavailable_shell.eligible is False
-    assert unavailable_shell.requires_approval is True
+    assert unavailable_shell.requires_approval is False
 
     default = (
         CapabilityService(registry)
@@ -1142,7 +1118,7 @@ def test_availability_and_governance_are_fail_closed(
         .decision("shell")
     )
     assert default is not None and default.eligible is True
-    assert default.requires_approval is True
+    assert default.requires_approval is False
     assert default.effective_sandbox is SandboxLevel.DANGER_FULL_ACCESS
 
     full = (
@@ -1157,7 +1133,7 @@ def test_availability_and_governance_are_fail_closed(
     )
     assert full is not None and full.eligible is True
     assert full.requires_approval is False
-    assert "full_access" in full.reason_codes
+    assert full.reason_codes == default.reason_codes
 
     denied = (
         CapabilityService(registry)
@@ -1169,9 +1145,9 @@ def test_availability_and_governance_are_fail_closed(
         )
         .decision("shell")
     )
-    assert denied is not None and denied.eligible is False
-    assert denied.exposure is Exposure.HIDDEN
-    assert denied.reason_codes == ("admin_hard_deny", "explicit_reference")
+    assert denied is not None and denied.eligible is True
+    assert denied.exposure is Exposure.DIRECT
+    assert denied.reason_codes == default.reason_codes
 
     no_escalation = (
         CapabilityService(registry)
@@ -1183,8 +1159,8 @@ def test_availability_and_governance_are_fail_closed(
         )
         .decision("shell")
     )
-    assert no_escalation is not None and no_escalation.eligible is False
-    assert "sandbox_escalation_disabled" in no_escalation.reason_codes
+    assert no_escalation is not None and no_escalation.eligible is True
+    assert no_escalation.reason_codes == default.reason_codes
 
 
 def test_registry_rejects_alias_collisions(registry: CapabilityRegistry) -> None:

@@ -161,6 +161,7 @@ class MemoryService:
         clock=_now,
         fault_hook: Callable[[str, str], None] | None = None,
         blob_loader: Callable[[str], bytes] | None = None,
+        workspace_root: str | Path | None = None,
         initialize: bool = True,
     ) -> None:
         if not timedelta(minutes=1) <= undo_window <= timedelta(days=30):
@@ -170,11 +171,23 @@ class MemoryService:
         self.clock = clock
         self.fault_hook = fault_hook or (lambda _phase, _reset_id: None)
         self.blob_loader = blob_loader
+        self.workspace_root = (
+            Path(workspace_root).expanduser().resolve()
+            if workspace_root is not None
+            else None
+        )
         if initialize:
             self.initialize()
 
     def initialize(self) -> None:
         """Persist the revision sentinel during healthy startup convergence."""
+
+        if self.workspace_root is not None:
+            self.workspace_root.mkdir(parents=True, exist_ok=True)
+            (self.workspace_root / "memory").mkdir(exist_ok=True)
+            memory = self.workspace_root / "MEMORY.md"
+            if not memory.exists():
+                memory.write_text("# MEMORY.md - 长期记忆\n\n", encoding="utf-8")
 
         with self.database.transaction() as connection:
             connection.execute(
@@ -252,6 +265,22 @@ class MemoryService:
         )
 
     def snapshot(self) -> MemorySnapshot:
+        if self.workspace_root is not None:
+            items = self._workspace_memory_items("files")
+            revision_source = "\n".join(
+                f"{item.path}:{item.size_bytes}:{item.updated_at}"
+                for item in items
+            ).encode("utf-8")
+            revision = int(hashlib.sha256(revision_source).hexdigest()[:15], 16)
+            return MemorySnapshot(
+                revision=revision,
+                active_learned_records=0,
+                active_user_files=len(items),
+                factory_records=0,
+                tombstoned_records=0,
+                tombstoned_files=0,
+                latest_reset=None,
+            )
         now = self.clock()
         with self.database.reader() as connection:
             counts = connection.execute(
@@ -354,6 +383,48 @@ class MemoryService:
             updated_at=MemoryService._content_time(row["updated_at"] or row["created_at"]),
         )
 
+    def _workspace_memory_items(self, view: str) -> tuple[MemoryContentItem, ...]:
+        assert self.workspace_root is not None
+        memory_root = self.workspace_root / "memory"
+        if view == "files":
+            paths = [self.workspace_root / "MEMORY.md"]
+            if memory_root.is_dir():
+                paths.extend(sorted(memory_root.glob("*.md"), reverse=True))
+        else:
+            paths = []
+            for directory in (memory_root / "evolution", memory_root / "dreams"):
+                if directory.is_dir():
+                    paths.extend(sorted(directory.glob("*.md"), reverse=True))
+        items = []
+        for path in paths:
+            try:
+                if not path.is_file() or path.is_symlink():
+                    continue
+                info = path.stat()
+                relative = path.relative_to(self.workspace_root).as_posix()
+            except (OSError, ValueError):
+                continue
+            items.append(
+                MemoryContentItem(
+                    item_id="memfile_"
+                    + hashlib.sha256(relative.encode("utf-8")).hexdigest(),
+                    name=path.name,
+                    path=relative,
+                    kind="file" if view == "files" else "evolution",
+                    origin="learned",
+                    source=(
+                        "long-term"
+                        if relative == "MEMORY.md"
+                        else "daily"
+                        if view == "files"
+                        else path.parent.name
+                    ),
+                    size_bytes=int(info.st_size),
+                    updated_at=datetime.fromtimestamp(info.st_mtime, UTC),
+                )
+            )
+        return tuple(items)
+
     def content_page(self, *, view: str, page: int, page_size: int = 10) -> MemoryContentPage:
         if view not in {"files", "evolution"}:
             raise ValueError("memory view is invalid")
@@ -361,6 +432,16 @@ class MemoryService:
             raise ValueError("memory page is invalid")
         if page_size != 10:
             raise ValueError("memory page size is fixed at 10")
+        if self.workspace_root is not None:
+            items = self._workspace_memory_items(view)
+            offset = (page - 1) * page_size
+            return MemoryContentPage(
+                view=view,
+                page=page,
+                page_size=page_size,
+                total=len(items),
+                items=items[offset : offset + page_size],
+            )
         offset = (page - 1) * page_size
         with self.database.reader() as connection:
             if view == "files":
@@ -399,6 +480,31 @@ class MemoryService:
         identity = str(item_id or "").strip()
         if view not in {"files", "evolution"} or not identity or len(identity) > 8192:
             raise ValueError("memory content identity is invalid")
+        if self.workspace_root is not None:
+            item = next(
+                (
+                    candidate
+                    for candidate in self._workspace_memory_items(view)
+                    if hmac.compare_digest(candidate.item_id, identity)
+                ),
+                None,
+            )
+            if item is None:
+                raise MemoryContentNotFound("memory file does not exist")
+            path = (self.workspace_root / item.path).resolve()
+            try:
+                path.relative_to(self.workspace_root)
+            except ValueError:
+                raise MemoryContentUnavailable("memory file path is invalid") from None
+            try:
+                if path.is_symlink() or not path.is_file():
+                    raise MemoryContentNotFound("memory file does not exist")
+                content = self._content_text(path.read_bytes())
+            except MemoryContentNotFound:
+                raise
+            except (OSError, MemoryContentUnavailable) as error:
+                raise MemoryContentUnavailable("memory file content is unavailable") from error
+            return MemoryContentDocument(item=item, content=content)
         with self.database.reader() as connection:
             if view == "files":
                 row = next(

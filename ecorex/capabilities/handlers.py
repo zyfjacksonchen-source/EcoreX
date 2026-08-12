@@ -15,6 +15,7 @@ from .packs import CapabilityPackRuntime
 from .registry import CapabilityRegistry
 from .service import ToolHandler
 from .service import ToolExecutionScope
+from .cow_local_tools import CowLocalTools
 
 
 WorkspaceRootResolver = Callable[[ToolExecutionScope | None], tuple[Path, ...]]
@@ -299,7 +300,6 @@ class CapabilityHandlerSet:
     handlers: Mapping[str, ToolHandler]
     installed_pack_ids: frozenset[str]
     disabled_tools: Mapping[str, str]
-    sandbox_profile_availability: Mapping[str, Mapping[str, str | None]]
 
 
 def build_capability_handler_set(
@@ -312,11 +312,11 @@ def build_capability_handler_set(
 ) -> CapabilityHandlerSet:
     """Build one honest availability snapshot from actual executable handlers."""
 
-    handlers: dict[str, ToolHandler] = {
-        "read": WorkspaceReadHandler(
-            workspace_roots, workspace_root_resolver=workspace_root_resolver
-        )
-    }
+    local_tools = CowLocalTools(
+        workspace_roots,
+        workspace_root_resolver=workspace_root_resolver,
+    )
+    handlers: dict[str, ToolHandler] = local_tools.handlers()
     for tool_id, handler in dict(trusted_core_handlers or {}).items():
         try:
             registry.get(tool_id)
@@ -324,16 +324,14 @@ def build_capability_handler_set(
             raise ValueError(f"core handler references unknown tool: {tool_id}") from None
         if tool_id in handlers:
             raise ValueError(f"core handler is duplicated: {tool_id}")
-        if tool_id == "shell":
-            raise ValueError(
-                "shell can only be bound by a verified sandbox capability pack"
-            )
         if not callable(handler):
             raise TypeError(f"core handler is not callable: {tool_id}")
         handlers[tool_id] = handler
     installed_packs = frozenset()
     if pack_runtime is not None:
         for tool_id, handler in pack_runtime.handlers.items():
+            if tool_id == "bash":
+                continue
             if tool_id in handlers:
                 raise ValueError(f"pack handler shadows a core handler: {tool_id}")
             handlers[tool_id] = handler
@@ -346,40 +344,8 @@ def build_capability_handler_set(
         for spec in registry.all()
         if spec.tool_id not in handlers
     }
-    profile_availability: dict[str, Mapping[str, str | None]] = {}
-    for tool_id, handler in handlers.items():
-        raw = getattr(handler, "sandbox_profile_availability", None)
-        if raw is None:
-            continue
-        if not isinstance(raw, Mapping):
-            raise TypeError(
-                f"sandbox profile availability is invalid for handler: {tool_id}"
-            )
-        profiles: dict[str, str | None] = {}
-        for profile, reason in raw.items():
-            if profile not in {"read-only", "workspace-write", "danger-full-access"}:
-                raise ValueError(
-                    f"handler reported an unknown sandbox profile: {tool_id}"
-                )
-            if reason is not None and (
-                not isinstance(reason, str) or not reason.strip() or len(reason) > 128
-            ):
-                raise ValueError(
-                    f"handler reported an invalid sandbox disabled reason: {tool_id}"
-                )
-            profiles[str(profile)] = reason
-        profile_availability[tool_id] = MappingProxyType(profiles)
-    if "shell" in handlers and "shell" not in profile_availability:
-        profile_availability["shell"] = MappingProxyType(
-            {
-                "read-only": "verified_sandbox_boundary_not_bound",
-                "workspace-write": "verified_sandbox_boundary_not_bound",
-                "danger-full-access": "verified_sandbox_boundary_not_bound",
-            }
-        )
     return CapabilityHandlerSet(
         handlers=MappingProxyType(handlers),
         installed_pack_ids=installed_packs,
         disabled_tools=MappingProxyType(disabled),
-        sandbox_profile_availability=MappingProxyType(profile_availability),
     )

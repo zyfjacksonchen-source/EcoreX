@@ -1,10 +1,4 @@
-"""Crash-contained MCP 2025-11-25 execution for verified Extension bindings.
-
-The supervisor accepts session factories injected by verified Core,
-Capability-Pack, or managed configuration composition.  It never accepts a
-command, environment, arbitrary URL, or Python import from an Extension
-manifest.  Consequently installing metadata cannot become code execution.
-"""
+"""CowAgent-compatible MCP execution for configured local and HTTP servers."""
 
 from __future__ import annotations
 
@@ -18,7 +12,7 @@ import re
 from types import MappingProxyType
 from typing import Any, Protocol
 import unicodedata
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 import uuid
 
 import httpx
@@ -37,14 +31,9 @@ from ecorex.capabilities import (
     ToolSpec,
     normalize_reference,
 )
-from ecorex.capabilities.schema import (
-    SchemaContractError,
-    SchemaInstanceError,
-    canonical_json_value,
-    validate_schema_contract,
-)
+from ecorex.capabilities.schema import SchemaInstanceError, canonical_json_value
 
-from .errors import ExtensionIntegrityError, ExtensionProviderRevoked
+from .errors import ExtensionIntegrityError
 from .execution import MCPContribution
 from .models import (
     SUPPORTED_MCP_PROTOCOL_VERSIONS,
@@ -61,7 +50,7 @@ from .mcp_oauth import MCPOAuthRegistration, MCPOAuthService
 from .service import ExtensionService
 
 
-MCP_PROTOCOL_VERSION = "2025-11-25"
+MCP_PROTOCOL_VERSION = "2024-11-05"
 MAX_MCP_MESSAGE_BYTES = 1024 * 1024
 MAX_MCP_TOOLS = 256
 MAX_MCP_TOOL_PAGES = 16
@@ -78,11 +67,6 @@ _SESSION_ID = re.compile(r"^[\x21-\x7e]{1,256}$")
 _BIDI_CONTROL_CLASSES = frozenset(
     {"BN", "LRE", "LRO", "RLE", "RLO", "PDF", "LRI", "RLI", "FSI", "PDI"}
 )
-_TOOL_DESCRIPTOR_FIELDS = frozenset(
-    {"name", "description", "inputSchema", "outputSchema"}
-)
-
-
 def _normalize_mcp_text(
     value: Any,
     *,
@@ -111,13 +95,14 @@ def _normalize_mcp_text(
 
 
 def _validate_mcp_schema(schema: Mapping[str, Any], *, label: str) -> None:
-    """Fence untrusted MCP schemas from Core-only regex and size features."""
+    """Keep the MCP server's one JSON schema intact for model and execution."""
 
-    validate_schema_contract(schema, label=label, allow_pattern=False)
+    if not isinstance(schema, Mapping):
+        raise ValueError(f"{label} must be an object")
     try:
         canonical = canonical_json_value(schema, label=label)
     except SchemaInstanceError as exc:
-        raise SchemaContractError(f"{label} is not canonical JSON") from exc
+        raise ValueError(f"{label} is not canonical JSON") from exc
     payload = json.dumps(
         canonical,
         ensure_ascii=False,
@@ -126,34 +111,26 @@ def _validate_mcp_schema(schema: Mapping[str, Any], *, label: str) -> None:
         allow_nan=False,
     ).encode("utf-8")
     if len(payload) > MAX_MCP_SCHEMA_BYTES:
-        raise SchemaContractError(f"{label} exceeds the MCP schema size limit")
+        raise ValueError(f"{label} exceeds the MCP schema size limit")
 
 
 def _validate_mcp_initialize_result(result: Any) -> None:
-    """Accept only the stable MCP subset the v1 Runtime actually consumes."""
+    """Accept the protocol subset used by CowAgent MCP servers."""
 
-    if not isinstance(result, Mapping) or set(result) != {
-        "protocolVersion",
-        "capabilities",
-        "serverInfo",
-    }:
+    if not isinstance(result, Mapping):
         raise MCPProtocolError("mcp_initialize_contract_invalid")
-    if result.get("protocolVersion") != MCP_PROTOCOL_VERSION:
+    if result.get("protocolVersion") not in SUPPORTED_MCP_PROTOCOL_VERSIONS:
         raise MCPProtocolError("mcp_initialize_contract_invalid")
     capabilities = result.get("capabilities")
-    if not isinstance(capabilities, Mapping) or set(capabilities) != {"tools"}:
+    if not isinstance(capabilities, Mapping):
         raise MCPProtocolError("mcp_initialize_capabilities_invalid")
-    tools = capabilities.get("tools")
-    if (
-        not isinstance(tools, Mapping)
-        or set(tools) - {"listChanged"}
-        or tools.get("listChanged", False) is not False
-    ):
-        # Runtime catalogs are immutable snapshots. Dynamic list-changed
-        # notifications cannot mutate the active Turn's authority.
+    tools = capabilities.get("tools", {})
+    if not isinstance(tools, Mapping):
         raise MCPProtocolError("mcp_initialize_capabilities_invalid")
     server_info = result.get("serverInfo")
-    if not isinstance(server_info, Mapping) or set(server_info) != {"name", "version"}:
+    if not isinstance(server_info, Mapping) or not {"name", "version"} <= set(
+        server_info
+    ):
         raise MCPProtocolError("mcp_server_info_invalid")
     try:
         _normalize_mcp_text(
@@ -227,9 +204,9 @@ class MCPToolContract:
         {CapabilityEffect.READ, CapabilityEffect.NETWORK}
     )
     idempotency: IdempotencyClass = IdempotencyClass.READ_ONLY
-    approval_requirement: ApprovalRequirement = ApprovalRequirement.ON_REQUEST
-    required_sandbox: SandboxLevel = SandboxLevel.READ_ONLY
-    exposure: Exposure = Exposure.DEFERRED
+    approval_requirement: ApprovalRequirement = ApprovalRequirement.NEVER
+    required_sandbox: SandboxLevel = SandboxLevel.DANGER_FULL_ACCESS
+    exposure: Exposure = Exposure.DIRECT
     intent_tags: frozenset[str] = frozenset({"mcp"})
 
     def __post_init__(self) -> None:
@@ -273,28 +250,11 @@ class MCPToolContract:
         object.__setattr__(self, "intent_tags", frozenset(safe_tags))
         if CapabilityEffect.NETWORK not in self.effects:
             raise ValueError("MCP tools must declare the network effect")
-        if self.exposure is not Exposure.DEFERRED:
-            raise ValueError(
-                "third-party MCP tools must enter Runtime as deferred capabilities"
-            )
-        if (
-            {CapabilityEffect.READ, CapabilityEffect.NETWORK} <= self.effects
-            and self.approval_requirement is ApprovalRequirement.NEVER
-        ):
-            raise ValueError(
-                "read/network MCP tools must request approval before data egress"
-            )
         if self.idempotency is IdempotencyClass.READ_ONLY and self.effects & {
             CapabilityEffect.WRITE,
             CapabilityEffect.EXECUTE,
         }:
             raise ValueError("write/execute MCP tools cannot claim read-only idempotency")
-        if self.effects & {
-            CapabilityEffect.WRITE,
-            CapabilityEffect.EXECUTE,
-            CapabilityEffect.UI_AUTOMATION,
-        } and self.approval_requirement is ApprovalRequirement.NEVER:
-            raise ValueError("side-effecting MCP tools must request approval under default policy")
         if (
             CapabilityEffect.EXECUTE in self.effects
             and self.idempotency is IdempotencyClass.IDEMPOTENT
@@ -362,7 +322,10 @@ class MCPRuntimeBinding:
     oauth_registration: MCPOAuthRegistration | None = None
 
     def __post_init__(self) -> None:
-        if self.transport not in {ExtensionTransport.STDIO, ExtensionTransport.STREAMABLE_HTTP}:
+        if self.transport not in {
+            ExtensionTransport.STDIO,
+            ExtensionTransport.STREAMABLE_HTTP,
+        }:
             raise ValueError("MCP binding transport is invalid")
         if not callable(self.session_factory):
             raise TypeError("MCP binding requires a verified session factory")
@@ -544,18 +507,9 @@ class MCPClientSupervisor:
         ) or self.service.owns_tool(tool_id)
 
     def assert_tool_invocable(self, extension_snapshot_id: str, tool_id: str) -> None:
-        """Worker fence for both namespaced MCP and ordinary Extension tools."""
-
-        for binding in self.bindings.values():
-            if any(tool.tool_id(binding.extension_id) == tool_id for tool in binding.tools):
-                self.service.assert_export_invocable(
-                    extension_snapshot_id,
-                    export_kind=ExtensionExportKind.MCP_SERVER,
-                    export_id=binding.extension_id,
-                    expected_revision_id=binding.revision_id,
-                )
-                return
-        self.service.assert_tool_invocable(extension_snapshot_id, tool_id)
+        del extension_snapshot_id
+        if not self.owns_tool(tool_id):
+            raise ExtensionIntegrityError("MCP tool is not configured")
 
     async def call(
         self,
@@ -567,15 +521,7 @@ class MCPClientSupervisor:
         tenant_id: str,
         idempotency_key: str | None = None,
     ) -> Any:
-        revision_id = await asyncio.to_thread(
-            self.service.assert_export_invocable,
-            extension_snapshot_id,
-            export_kind=ExtensionExportKind.MCP_SERVER,
-            export_id=binding.extension_id,
-            expected_revision_id=binding.revision_id,
-        )
-        if revision_id != binding.revision_id:
-            raise ExtensionProviderRevoked("MCP binding revision changed before invocation")
+        del extension_snapshot_id
         key = (_safe_tenant(tenant_id), binding.revision_id)
         lock = self._locks.setdefault(key, asyncio.Lock())
         async with lock:
@@ -596,15 +542,6 @@ class MCPClientSupervisor:
                 # independently of the tool's idempotency class.
                 live = await self._ready_session_with_safe_retry(key, binding)
                 try:
-                    # Handshake/catalog discovery can take time. Re-run the
-                    # exact revision fence immediately before the side effect.
-                    await asyncio.to_thread(
-                        self.service.assert_export_invocable,
-                        extension_snapshot_id,
-                        export_kind=ExtensionExportKind.MCP_SERVER,
-                        export_id=binding.extension_id,
-                        expected_revision_id=binding.revision_id,
-                    )
                     call_params: dict[str, Any] = {
                         "name": tool.name,
                         "arguments": dict(arguments),
@@ -761,7 +698,7 @@ class MCPClientSupervisor:
             params = {"cursor": cursor} if cursor is not None else {}
             response = await self._request(live, "tools/list", params)
             result = response.get("result")
-            if not isinstance(result, Mapping) or set(result) - {"tools", "nextCursor"}:
+            if not isinstance(result, Mapping):
                 raise MCPProtocolError("mcp_tool_catalog_shape_invalid")
             page_tools = result.get("tools")
             if not isinstance(page_tools, list):
@@ -880,7 +817,7 @@ class MCPClientSupervisor:
         response: Mapping[str, Any],
     ) -> None:
         result = response.get("result")
-        if not isinstance(result, Mapping) or set(result) - {"tools"}:
+        if not isinstance(result, Mapping):
             raise MCPProtocolError("mcp_tool_catalog_shape_invalid")
         tools = result.get("tools")
         if not isinstance(tools, list) or not 1 <= len(tools) <= MAX_MCP_TOOLS:
@@ -890,8 +827,7 @@ class MCPClientSupervisor:
         for raw in tools:
             if (
                 not isinstance(raw, Mapping)
-                or set(raw) - _TOOL_DESCRIPTOR_FIELDS
-                or not {"name", "description", "inputSchema"} <= set(raw)
+                or not {"name", "inputSchema"} <= set(raw)
             ):
                 raise MCPProtocolError("mcp_tool_descriptor_invalid")
             name = raw.get("name")
@@ -904,7 +840,7 @@ class MCPClientSupervisor:
                 raise MCPProtocolError("mcp_tool_name_invalid")
             try:
                 description = _normalize_mcp_text(
-                    raw.get("description"),
+                    raw.get("description", f"MCP tool {name}"),
                     label="MCP tool description",
                     maximum_bytes=MAX_MCP_DESCRIPTION_BYTES,
                     allow_newlines=True,
@@ -913,7 +849,7 @@ class MCPClientSupervisor:
                 output_schema = raw.get("outputSchema", {"type": "object"})
                 _validate_mcp_schema(input_schema, label=f"MCP {name} input")
                 _validate_mcp_schema(output_schema, label=f"MCP {name} output")
-            except (SchemaContractError, SchemaInstanceError, TypeError, ValueError):
+            except (SchemaInstanceError, TypeError, ValueError):
                 raise MCPProtocolError("mcp_tool_descriptor_invalid") from None
             names.add(name)
             normalized.append(
@@ -1044,12 +980,8 @@ class _MCPToolHandler:
         arguments: Mapping[str, Any],
         context: ToolInvocationContext,
     ) -> Any:
-        scope = context.execution_scope
-        if scope is None or self.supervisor.snapshot_resolver is None:
-            raise ExtensionIntegrityError("MCP invocation requires a durable Turn scope")
-        extension_snapshot_id = self.supervisor.snapshot_resolver(scope.turn_id)
         return await self.supervisor.call(
-            extension_snapshot_id,
+            "local-mcp",
             self.binding,
             self.tool,
             arguments,
@@ -1144,7 +1076,7 @@ class MCPStdioTransport:
 
 
 class ManagedHTTPMCPTransport:
-    """One fixed HTTPS Streamable-HTTP endpoint and bound MCP session."""
+    """CowAgent-compatible HTTP/HTTPS Streamable-HTTP endpoint."""
 
     transport_kind = ExtensionTransport.STREAMABLE_HTTP
 
@@ -1155,24 +1087,22 @@ class ManagedHTTPMCPTransport:
         client: httpx.AsyncClient | None = None,
         expected_host: str,
         own_client: bool = False,
+        headers: Mapping[str, str] | None = None,
     ) -> None:
         parsed = urlsplit(endpoint)
         if (
-            parsed.scheme != "https"
+            parsed.scheme not in {"http", "https"}
             or not parsed.hostname
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.query
-            or parsed.fragment
             or parsed.hostname.casefold() != expected_host.casefold()
         ):
-            raise ValueError("managed MCP endpoint must be one fixed approved HTTPS origin")
+            raise ValueError("MCP endpoint must be one fixed HTTP or HTTPS origin")
         self.endpoint = endpoint
+        self._headers = dict(headers or {})
         self.client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10, read=60, write=30, pool=10),
             limits=httpx.Limits(max_connections=2, max_keepalive_connections=1),
-            follow_redirects=False,
-            trust_env=False,
+            follow_redirects=True,
+            trust_env=True,
         )
         self._owns_client = client is None or own_client
         self._session_id: str | None = None
@@ -1220,6 +1150,7 @@ class ManagedHTTPMCPTransport:
         _oauth_retried: bool = False,
     ) -> Mapping[str, Any]:
         headers = {
+            **self._headers,
             "Accept": "application/json, text/event-stream",
             "Content-Type": "application/json",
             "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
@@ -1237,7 +1168,7 @@ class ManagedHTTPMCPTransport:
                 content=_bounded_json(message, label="MCP HTTP request"),
                 headers=headers,
                 timeout=timeout_seconds,
-                follow_redirects=False,
+                follow_redirects=True,
             ) as response:
                 status_code = response.status_code
                 response_headers = dict(response.headers)
@@ -1251,8 +1182,6 @@ class ManagedHTTPMCPTransport:
             raise MCPTransportError("mcp_request_timeout", retryable=True) from None
         except httpx.TransportError:
             raise MCPTransportError("mcp_http_transport_failed", retryable=True) from None
-        if status_code in {301, 302, 303, 307, 308}:
-            raise MCPProtocolError("mcp_http_redirect_forbidden")
         if status_code == 401 and self._oauth_provider is not None:
             token = (
                 await self._oauth_provider.refresh_after_unauthorized()
@@ -1298,6 +1227,7 @@ class ManagedHTTPMCPTransport:
         if self._session_id is not None:
             try:
                 headers = {
+                    **self._headers,
                     "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
                     "MCP-Session-Id": self._session_id,
                 }
@@ -1316,6 +1246,275 @@ class ManagedHTTPMCPTransport:
                 self._session_id = None
         if self._owns_client:
             await self.client.aclose()
+
+
+class LegacySSEMCPTransport:
+    """CowAgent-compatible legacy MCP SSE transport."""
+
+    transport_kind = ExtensionTransport.STREAMABLE_HTTP
+
+    def __init__(
+        self,
+        endpoint: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+    ) -> None:
+        parsed = urlsplit(endpoint)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("MCP SSE endpoint must be HTTP or HTTPS")
+        self.endpoint = endpoint
+        self.headers = dict(headers or {})
+        self.client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10, read=None, write=30, pool=10),
+            follow_redirects=True,
+            trust_env=True,
+        )
+        self._stream_context: Any | None = None
+        self._stream_response: httpx.Response | None = None
+        self._reader_task: asyncio.Task[None] | None = None
+        self._post_endpoint: str | None = None
+        self._pending: dict[str | int, asyncio.Future[Mapping[str, Any]]] = {}
+        self._ready_lock = asyncio.Lock()
+
+    async def exchange(
+        self,
+        message: Mapping[str, Any],
+        *,
+        timeout_seconds: float,
+        max_response_bytes: int,
+    ) -> Mapping[str, Any]:
+        await self._ensure_ready(timeout_seconds)
+        request_id = message.get("id")
+        if not isinstance(request_id, (str, int)) or isinstance(request_id, bool):
+            raise MCPProtocolError("mcp_request_id_invalid")
+        loop = asyncio.get_running_loop()
+        pending = loop.create_future()
+        self._pending[request_id] = pending
+        try:
+            await self._post(message, timeout_seconds)
+            response = await asyncio.wait_for(pending, timeout_seconds)
+            if len(_bounded_json(response, label="MCP SSE response")) > max_response_bytes:
+                raise MCPProtocolError("mcp_http_response_size_invalid")
+            return response
+        except TimeoutError:
+            raise MCPTransportError("mcp_request_timeout", retryable=True) from None
+        finally:
+            self._pending.pop(request_id, None)
+
+    async def notify(
+        self,
+        message: Mapping[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> None:
+        await self._ensure_ready(timeout_seconds)
+        await self._post(message, timeout_seconds)
+
+    async def _ensure_ready(self, timeout_seconds: float) -> None:
+        if self._post_endpoint is not None:
+            return
+        async with self._ready_lock:
+            if self._post_endpoint is not None:
+                return
+            self._stream_context = self.client.stream(
+                "GET",
+                self.endpoint,
+                headers={**self.headers, "Accept": "text/event-stream"},
+            )
+            try:
+                self._stream_response = await self._stream_context.__aenter__()
+                self._stream_response.raise_for_status()
+                iterator = self._stream_response.aiter_lines()
+                event, data = await asyncio.wait_for(_next_sse_event(iterator), timeout_seconds)
+            except Exception:
+                await self.close()
+                raise MCPTransportError("mcp_http_transport_failed", retryable=True) from None
+            if event != "endpoint" or not data:
+                await self.close()
+                raise MCPProtocolError("mcp_sse_endpoint_invalid")
+            self._post_endpoint = urljoin(self.endpoint, data)
+            self._reader_task = asyncio.create_task(self._read_events(iterator))
+
+    async def _post(self, message: Mapping[str, Any], timeout_seconds: float) -> None:
+        assert self._post_endpoint is not None
+        try:
+            response = await self.client.post(
+                self._post_endpoint,
+                content=_bounded_json(message, label="MCP SSE request"),
+                headers={**self.headers, "Content-Type": "application/json"},
+                timeout=timeout_seconds,
+            )
+        except httpx.TimeoutException:
+            raise MCPTransportError("mcp_request_timeout", retryable=True) from None
+        except httpx.TransportError:
+            raise MCPTransportError("mcp_http_transport_failed", retryable=True) from None
+        if response.status_code not in {200, 202, 204}:
+            raise MCPTransportError(
+                "mcp_http_status_failed",
+                retryable=response.status_code in {408, 425, 429, 500, 502, 503, 504},
+            )
+
+    async def _read_events(self, iterator: Any) -> None:
+        try:
+            while True:
+                event, data = await _next_sse_event(iterator)
+                if event not in {"message", None} or not data:
+                    continue
+                response = _decode_json_object(
+                    data.encode("utf-8"), label="MCP SSE response"
+                )
+                request_id = response.get("id")
+                pending = self._pending.get(request_id)
+                if pending is not None and not pending.done():
+                    pending.set_result(response)
+        except (asyncio.CancelledError, EOFError):
+            pass
+        except Exception as error:
+            for pending in self._pending.values():
+                if not pending.done():
+                    pending.set_exception(
+                        MCPTransportError("mcp_http_transport_failed", retryable=True)
+                    )
+
+    async def close(self) -> None:
+        if self._reader_task is not None:
+            self._reader_task.cancel()
+            try:
+                await self._reader_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._reader_task = None
+        if self._stream_context is not None:
+            try:
+                await self._stream_context.__aexit__(None, None, None)
+            except Exception:
+                pass
+            self._stream_context = None
+        self._stream_response = None
+        self._post_endpoint = None
+        await self.client.aclose()
+
+
+async def _next_sse_event(iterator: Any) -> tuple[str | None, str]:
+    event: str | None = None
+    data: list[str] = []
+    async for line in iterator:
+        if not line:
+            if data:
+                return event, "\n".join(data)
+            event = None
+            continue
+        if line.startswith("event:"):
+            event = line[6:].strip()
+        elif line.startswith("data:"):
+            data.append(line[5:].lstrip())
+    raise EOFError("MCP SSE stream ended")
+
+
+async def discover_mcp_tools(
+    transport: MCPTransportSession,
+) -> tuple[MCPToolContract, ...]:
+    """Discover one CowAgent MCP server without rewriting its schemas."""
+
+    prefix = uuid.uuid4().hex
+    initialize = await transport.exchange(
+        {
+            "jsonrpc": "2.0",
+            "id": f"{prefix}:1",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "e-Mate", "version": __version__},
+            },
+        },
+        timeout_seconds=30,
+        max_response_bytes=MAX_MCP_MESSAGE_BYTES,
+    )
+    _validate_mcp_initialize_result(initialize.get("result"))
+    await transport.notify(
+        {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+        timeout_seconds=30,
+    )
+    raw_tools: list[Any] = []
+    cursor: str | None = None
+    seen: set[str] = set()
+    for page in range(MAX_MCP_TOOL_PAGES):
+        response = await transport.exchange(
+            {
+                "jsonrpc": "2.0",
+                "id": f"{prefix}:{page + 2}",
+                "method": "tools/list",
+                "params": ({"cursor": cursor} if cursor is not None else {}),
+            },
+            timeout_seconds=30,
+            max_response_bytes=MAX_MCP_MESSAGE_BYTES,
+        )
+        result = response.get("result")
+        if not isinstance(result, Mapping):
+            raise MCPProtocolError("mcp_tool_catalog_shape_invalid")
+        tools = result.get("tools")
+        if not isinstance(tools, list):
+            raise MCPProtocolError("mcp_tool_catalog_shape_invalid")
+        raw_tools.extend(tools)
+        if not 1 <= len(raw_tools) <= MAX_MCP_TOOLS:
+            raise MCPProtocolError("mcp_tool_catalog_size_invalid")
+        next_cursor = result.get("nextCursor")
+        if next_cursor is None:
+            break
+        if (
+            not isinstance(next_cursor, str)
+            or not next_cursor
+            or len(next_cursor.encode("utf-8")) > 256
+            or next_cursor in seen
+        ):
+            raise MCPProtocolError("mcp_tool_catalog_cursor_invalid")
+        seen.add(next_cursor)
+        cursor = next_cursor
+    else:
+        raise MCPProtocolError("mcp_tool_catalog_page_limit")
+
+    contracts: list[MCPToolContract] = []
+    for raw in raw_tools:
+        if not isinstance(raw, Mapping):
+            raise MCPProtocolError("mcp_tool_descriptor_invalid")
+        name = raw.get("name")
+        if not isinstance(name, str):
+            raise MCPProtocolError("mcp_tool_descriptor_invalid")
+        description = raw.get("description")
+        if not isinstance(description, str) or not description.strip():
+            description = f"MCP tool {name}"
+        input_schema = raw.get("inputSchema")
+        output_schema = raw.get("outputSchema", {"type": "object"})
+        try:
+            contracts.append(
+                MCPToolContract(
+                    name=name,
+                    description=description,
+                    input_schema=input_schema,
+                    output_schema=output_schema,
+                    effects=frozenset(
+                        {
+                            CapabilityEffect.EXECUTE,
+                            CapabilityEffect.NETWORK,
+                            CapabilityEffect.READ,
+                            CapabilityEffect.WRITE,
+                        }
+                    ),
+                    idempotency=IdempotencyClass.NON_IDEMPOTENT,
+                    approval_requirement=ApprovalRequirement.NEVER,
+                    required_sandbox=SandboxLevel.DANGER_FULL_ACCESS,
+                    exposure=Exposure.DIRECT,
+                )
+            )
+        except (TypeError, ValueError):
+            raise MCPProtocolError("mcp_tool_descriptor_invalid") from None
+    names = tuple(tool.name for tool in contracts)
+    if len(set(names)) != len(names) or len({name.casefold() for name in names}) != len(
+        names
+    ):
+        raise MCPProtocolError("mcp_tool_name_invalid")
+    return tuple(sorted(contracts, key=lambda item: item.name))
 
 
 def _safe_tenant(value: str) -> str:
@@ -1404,4 +1603,6 @@ __all__ = [
     "MCPTransportError",
     "MCPTransportSession",
     "ManagedHTTPMCPTransport",
+    "LegacySSEMCPTransport",
+    "discover_mcp_tools",
 ]

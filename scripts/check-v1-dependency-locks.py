@@ -57,7 +57,7 @@ _ACTION_ENTRY_KEYS = {
 _MINIMUM_NODE24_RUNNER_VERSION = "2.327.1"
 _PLATFORM_STAGE_RUNNER_RELATIVE = Path("scripts/run-v1-platform-stage-step.py")
 _PLATFORM_STAGE_RUNNER_AST_SHA256 = (
-    "b9b1d3bcfd621109f85bc8f345bc239e8b41d24ef34b8e88b4dd575638fde9aa"
+    "0072c8ff965924f1ce0206ff8375c979c6c2e21cac7e7c61534f082ea98d620f"
 )
 _PLATFORM_STAGE_WORKFLOW_BINDINGS = (
     "run: python scripts/run-v1-platform-stage-step.py clean-check",

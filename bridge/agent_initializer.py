@@ -42,7 +42,14 @@ class AgentInitializer:
         self.bridge = bridge
         self.agent_bridge = agent_bridge
     
-    def initialize_agent(self, session_id: Optional[str] = None) -> Agent:
+    def initialize_agent(
+        self,
+        session_id: Optional[str] = None,
+        workspace_root: Optional[str] = None,
+        builtin_skill_root: Optional[str] = None,
+        conversation_store=None,
+        conversation_max_turns: Optional[int] = None,
+    ) -> Agent:
         """
         Initialize agent for a session
         
@@ -55,7 +62,9 @@ class AgentInitializer:
         from config import conf
         
         # Get workspace from config
-        workspace_root = expand_path(conf().get("agent_workspace", "~/cow"))
+        workspace_root = expand_path(
+            str(workspace_root or conf().get("agent_workspace", "~/cow"))
+        )
         
         # Migrate API keys
         self._migrate_config_to_env(workspace_root)
@@ -83,7 +92,15 @@ class AgentInitializer:
         context_files = load_context_files(workspace_root)
         
         # Initialize skill manager
-        skill_manager = self._initialize_skill_manager(workspace_root, session_id)
+        skill_manager = (
+            self._initialize_skill_manager(workspace_root, session_id)
+            if builtin_skill_root is None
+            else self._initialize_skill_manager(
+                workspace_root,
+                session_id,
+                builtin_skill_root=builtin_skill_root,
+            )
+        )
         
         # Build system prompt
         prompt_builder = PromptBuilder(workspace_dir=workspace_root, language="zh")
@@ -100,10 +117,7 @@ class AgentInitializer:
         # Get cost control parameters
         from config import conf
         max_steps = conf().get("agent_max_steps", 20)
-        max_context_tokens = (
-            conf().get("model_auto_compact_token_limit")
-            or conf().get("agent_max_context_tokens", 258000)
-        )
+        max_context_tokens = conf().get("agent_max_context_tokens", 50000)
         
         # Create agent
         agent = self.agent_bridge.create_agent(
@@ -117,23 +131,42 @@ class AgentInitializer:
             max_context_tokens=max_context_tokens,
             runtime_info=runtime_info  # Pass runtime_info for dynamic time updates
         )
+        agent._tool_manager = ToolManager(workspace_root=workspace_root)
         
         # Attach memory manager and share LLM model for summarization
         if memory_manager:
             agent.memory_manager = memory_manager
             if hasattr(agent, 'model') and agent.model:
-                memory_manager.flush_manager.llm_model = agent.model
+                fork = getattr(agent.model, "fork", None)
+                memory_manager.flush_manager.llm_model = (
+                    fork("memory-summary") if callable(fork) else agent.model
+                )
 
         # Restore persisted conversation history for this session
         if session_id:
-            self._restore_conversation_history(agent, session_id)
+            if conversation_store is None and conversation_max_turns is None:
+                self._restore_conversation_history(agent, session_id)
+            else:
+                self._restore_conversation_history(
+                    agent,
+                    session_id,
+                    store=conversation_store,
+                    max_turns=conversation_max_turns,
+                )
 
         # Start daily memory flush timer (once, on first agent init regardless of session)
         self._start_daily_flush_timer()
 
         return agent
 
-    def _restore_conversation_history(self, agent, session_id: str) -> None:
+    def _restore_conversation_history(
+        self,
+        agent,
+        session_id: str,
+        *,
+        store=None,
+        max_turns: Optional[int] = None,
+    ) -> None:
         """
         Load persisted conversation messages from SQLite and inject them
         into the agent's in-memory message list.
@@ -152,18 +185,21 @@ class AgentInitializer:
             return
 
         try:
-            from agent.memory import get_conversation_store
-            store = get_conversation_store()
-            max_turns = conf().get("agent_max_context_turns", 20)
+            if store is None:
+                from agent.memory import get_conversation_store
+                store = get_conversation_store()
+            configured_max_turns = conf().get("agent_max_context_turns", 20)
             # Scheduler tasks run on a stable isolated session per task and
             # can fire many times a day; a smaller restore window keeps prompt
             # cost bounded while still letting the agent see "last few" runs
             # for trend / dedup style logic. Regular chat sessions keep the
             # original heuristic so user dialogues feel continuous.
             if session_id.startswith("scheduler_"):
-                restore_turns = max(1, max_turns // 5)
+                restore_turns = max(1, configured_max_turns // 5)
+            elif max_turns is not None:
+                restore_turns = max(1, int(max_turns))
             else:
-                restore_turns = max(3, max_turns // 6)
+                restore_turns = max(3, configured_max_turns // 6)
             saved = store.load_messages(session_id, max_turns=restore_turns)
             if saved:
                 filtered = self._filter_text_only_messages(saved)
@@ -509,7 +545,7 @@ class AgentInitializer:
     
     def _load_tools(self, workspace_root: str, memory_manager, memory_tools: List, session_id: Optional[str] = None):
         """Load all tools"""
-        tool_manager = ToolManager()
+        tool_manager = ToolManager(workspace_root=workspace_root)
         tool_manager.load_tools()
         ensure_mcp = getattr(tool_manager, "ensure_mcp_configured_loaded", None)
         if callable(ensure_mcp):
@@ -523,13 +559,6 @@ class AgentInitializer:
         
         for tool_name in tool_manager.tool_classes.keys():
             try:
-                # Skip web_search if no API key is available
-                if tool_name == "web_search":
-                    from agent.tools.web_search.web_search import WebSearch
-                    if not WebSearch.is_available():
-                        logger.debug("[AgentInitializer] WebSearch skipped - no search provider configured")
-                        continue
-
                 # Skip evolution_undo when self-evolution is disabled: with no
                 # evolution there is nothing to roll back, so the tool is dead weight.
                 if tool_name == "evolution_undo":
@@ -551,7 +580,7 @@ class AgentInitializer:
                     # config.json's `tools.<name>` section) instead of replacing
                     # it, otherwise per-tool user configs (e.g. browser.cdp_endpoint)
                     # would be silently dropped.
-                    if tool_name in ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls', 'web_fetch', 'send', 'browser', 'ocr', 'ecorex_cli', 'feishu_cli', 'tongxin_cli', 'host_diagnostics', 'office_documents', 'office_pdf', 'office_presentations', 'office_spreadsheets']:
+                    if tool_name in ['read', 'write', 'edit', 'bash', 'search_files', 'ls', 'web_fetch', 'send', 'browser', 'ocr', 'office_documents', 'office_pdf', 'office_presentations', 'office_spreadsheets']:
                         merged_config = dict(getattr(tool, 'config', None) or {})
                         merged_config.update(file_config)
                         apply_config = getattr(tool, "apply_config", None)
@@ -597,7 +626,20 @@ class AgentInitializer:
         """
         from config import conf
 
-        if not conf().get("scheduler_enabled", False):
+        from agent.tools.scheduler.integration import (
+            get_scheduler_service,
+            get_task_store,
+        )
+
+        task_store = get_task_store()
+        scheduler_service = get_scheduler_service()
+        if task_store is not None and scheduler_service is not None:
+            self.agent_bridge.scheduler_initialized = True
+
+        if (
+            not self.agent_bridge.scheduler_initialized
+            and not conf().get("scheduler_enabled", False)
+        ):
             return
 
         if not self.agent_bridge.scheduler_initialized:
@@ -615,7 +657,6 @@ class AgentInitializer:
         # Inject scheduler dependencies
         if self.agent_bridge.scheduler_initialized:
             try:
-                from agent.tools.scheduler.integration import get_task_store, get_scheduler_service
                 from agent.tools import SchedulerTool
                 from config import conf
                 
@@ -639,11 +680,20 @@ class AgentInitializer:
             except Exception as e:
                 logger.warning(f"[AgentInitializer] Failed to inject scheduler dependencies: {e}")
     
-    def _initialize_skill_manager(self, workspace_root: str, session_id: Optional[str] = None):
+    def _initialize_skill_manager(
+        self,
+        workspace_root: str,
+        session_id: Optional[str] = None,
+        *,
+        builtin_skill_root: Optional[str] = None,
+    ):
         """Initialize skill manager"""
         try:
             from agent.skills import SkillManager
-            skill_manager = SkillManager(custom_dir=os.path.join(workspace_root, "skills"))
+            skill_manager = SkillManager(
+                builtin_dir=builtin_skill_root,
+                custom_dir=os.path.join(workspace_root, "skills"),
+            )
             return skill_manager
         except Exception as e:
             logger.warning(f"[AgentInitializer] Failed to initialize SkillManager: {e}")
@@ -758,7 +808,7 @@ class AgentInitializer:
                     for key, value in sorted(existing_env_vars.items()):
                         f.write(f'{key}={value}\n')
 
-                logger.info(f"[AgentInitializer] Synced API keys from config.json to .env")
+                logger.info("[AgentInitializer] Synced API keys from config.json to .env")
             except Exception as e:
                 logger.warning(f"[AgentInitializer] Failed to sync API keys: {e}")
 

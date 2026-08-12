@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from importlib import metadata
 import json
 from pathlib import Path
 import runpy
+import shutil
+import subprocess
+import sys
+from types import SimpleNamespace
 import zipfile
 
 import pytest
@@ -103,7 +108,7 @@ def test_checked_in_predecessor_trust_covers_supported_v2_release_identities() -
     }
 
 
-def test_manual_webui_runtime_config_is_canonical_and_rebound(
+def test_manual_webui_runtime_config_rebuilds_exact_cow_pack_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -123,9 +128,24 @@ def test_manual_webui_runtime_config_is_canonical_and_rebound(
                 "release_public_keys": {"old": "key"},
                 "capability_packs": [
                     {
-                        "artifact": "ecorex-capability-pack-0.3.2.zip",
-                        "manifest": "ecorex-capability-pack-0.3.2.json",
+                        "pack_id": pack_id,
+                        "artifact": (
+                            f"capability-packs/{pack_id}/ecorex-capability-pack-"
+                            f"{pack_id}-macos-arm64-0.3.2.zip"
+                        ),
+                        "manifest": (
+                            f"capability-packs/{pack_id}/ecorex-capability-pack-"
+                            f"{pack_id}-macos-arm64-0.3.2.json"
+                        ),
                     }
+                    for pack_id in (
+                        "browser",
+                        "channels",
+                        "image",
+                        "ocr",
+                        "office",
+                        "sandbox",
+                    )
                 ],
             },
             indent=2,
@@ -165,9 +185,17 @@ def test_manual_webui_runtime_config_is_canonical_and_rebound(
     assert value["connectors"] is None
     assert value["capability_packs"] == [
         {
-            "artifact": f"ecorex-capability-pack-{__version__}.zip",
-            "manifest": f"ecorex-capability-pack-{__version__}.json",
+            "pack_id": pack_id,
+            "artifact": (
+                f"capability-packs/{pack_id}/ecorex-capability-pack-{pack_id}-"
+                f"macos-arm64-{__version__}.zip"
+            ),
+            "manifest": (
+                f"capability-packs/{pack_id}/ecorex-capability-pack-{pack_id}-"
+                f"macos-arm64-{__version__}.json"
+            ),
         }
+        for pack_id in ("browser", "channels", "image", "ocr", "office")
     ]
 
 
@@ -222,6 +250,207 @@ def test_manual_webui_macos_core_keeps_both_runtime_entries_executable() -> None
     assert builder["_core_executable_paths"]("windows") == ("bin/ecorex.exe",)
 
 
+def test_manual_webui_release_evidence_matches_bootstrap_bounds(
+    tmp_path: Path,
+) -> None:
+    builder = _builder()
+    metadata_path = tmp_path / "release-metadata.json"
+    sbom_path = tmp_path / "sbom.cdx.json"
+    metadata_path.write_bytes(b"{}")
+    with sbom_path.open("wb") as stream:
+        stream.truncate(39_790_694)
+
+    builder["_verify_release_evidence_bounds"](metadata_path, sbom_path)
+    go_source = (ROOT / "platform-staging/bootstrap/main.go").read_text()
+    assert builder["MAX_RELEASE_METADATA_BYTES"] == 16 * 1024 * 1024
+    assert builder["MAX_RELEASE_SBOM_BYTES"] == 64 * 1024 * 1024
+    assert "maxMetadataBytes     = 16 * 1024 * 1024" in go_source
+    assert "maxSBOMBytes         = 64 * 1024 * 1024" in go_source
+
+    with sbom_path.open("wb") as stream:
+        stream.truncate(builder["MAX_RELEASE_SBOM_BYTES"] + 1)
+    with pytest.raises(
+        builder["ManualWebUIBuildError"],
+        match="manual_webui_release_evidence_invalid",
+    ):
+        builder["_verify_release_evidence_bounds"](metadata_path, sbom_path)
+
+
+def test_manual_webui_core_package_shape_matches_bootstrap_bounds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    builder = _builder()
+    archive_path = tmp_path / "core.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("payload.bin", b"bounded")
+    artifact = SimpleNamespace(
+        artifact_id="core-macos-arm64",
+        size_bytes=archive_path.stat().st_size,
+    )
+    built = SimpleNamespace(
+        manifest=SimpleNamespace(artifacts=(artifact,)),
+        artifact_paths={artifact.artifact_id: archive_path},
+    )
+
+    builder["_verify_release_core_bounds"](built)
+    assert 62_034_702 <= builder["MAX_CORE_ARCHIVE_BYTES"]
+    assert 166_490_214 <= builder["MAX_CORE_EXPANDED_BYTES"]
+    go_source = (ROOT / "platform-staging/bootstrap/main.go").read_text()
+    assert "maxCoreArchiveBytes  = 150 * 1024 * 1024" in go_source
+    assert "maxCoreExpandedBytes = 256 * 1024 * 1024" in go_source
+
+    function_globals = builder["_verify_release_core_bounds"].__globals__
+    archive_limit = function_globals["MAX_CORE_ARCHIVE_BYTES"]
+    monkeypatch.setitem(function_globals, "MAX_CORE_ARCHIVE_BYTES", 1)
+    with pytest.raises(
+        builder["ManualWebUIBuildError"],
+        match="manual_webui_release_core_bound_invalid",
+    ):
+        builder["_verify_release_core_bounds"](built)
+    monkeypatch.setitem(function_globals, "MAX_CORE_ARCHIVE_BYTES", archive_limit)
+    monkeypatch.setitem(function_globals, "MAX_CORE_EXPANDED_BYTES", 1)
+    with pytest.raises(
+        builder["ManualWebUIBuildError"],
+        match="manual_webui_release_core_bound_invalid",
+    ):
+        builder["_verify_release_core_bounds"](built)
+
+
+def test_manual_webui_runtime_overlay_tracks_the_complete_active_lock() -> None:
+    builder = _builder()
+
+    versions = builder["active_lock_versions"](
+        ROOT / "requirements" / "locks" / "runtime.lock"
+    )
+    assert "regex" in versions
+    assert "python-multipart" in versions
+    assert len(versions) >= 55
+
+
+def test_manual_webui_product_overlay_contains_the_cow_runtime_spine(
+    tmp_path: Path,
+) -> None:
+    builder = _builder()
+    original_run = builder["_run"]
+    core = tmp_path / "core"
+    site_packages = builder["_runtime_site_packages"](core, "macos")
+    archive = tmp_path / "python311.zip"
+    with zipfile.ZipFile(archive, "w") as output:
+        member = zipfile.ZipInfo("ecorex/stale.py", builder["FIXED_TIME"])
+        member.create_system = 3
+        member.external_attr = (0o100644) << 16
+        output.writestr(member, b"stale = True\n")
+
+    def fake_run(command, **kwargs):  # noqa: ANN001
+        if tuple(command[:3]) == (sys.executable, "-m", "pip"):
+            staging = Path(command[command.index("--target") + 1])
+            versions = builder["active_lock_versions"](
+                ROOT / "requirements" / "locks" / "runtime.lock"
+            )
+            for name, version in versions.items():
+                info = staging / f"{name.replace('-', '_')}-{version}.dist-info"
+                info.mkdir(parents=True)
+                (info / "METADATA").write_text(
+                    f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n",
+                    encoding="utf-8",
+                )
+            regex_package = Path(metadata.distribution("regex").locate_file("regex"))
+            shutil.copytree(regex_package, staging / "regex")
+            return b""
+        return original_run(command, **kwargs)
+
+    builder["_run"] = fake_run
+    builder["_install_locked_runtime_overlay"](
+        ROOT,
+        core,
+        tmp_path,
+        platform="macos",
+        architecture="arm64",
+    )
+    builder["_install_cow_runtime_overlay"](
+        ROOT,
+        core,
+        tmp_path,
+        platform="macos",
+    )
+    builder["_replace_product_imports"](archive, ROOT)
+
+    with zipfile.ZipFile(archive) as packaged:
+        assert "ecorex/runtime/worker.py" in packaged.namelist()
+    assert (site_packages / "agent/tools/tool_manager.py").is_file()
+    assert (site_packages / "bridge/agent_initializer.py").is_file()
+    assert (site_packages / "config.py").is_file()
+    assert (site_packages / "agent/tools/search_files/search_files.py").read_bytes() == (
+        ROOT / "agent/tools/search_files/search_files.py"
+    ).read_bytes()
+    assert any((site_packages / "regex").glob("_regex.*"))
+
+
+def test_manual_webui_product_probe_isolated_from_signed_core(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    builder = _builder()
+    function_globals = builder["_prepare_stages"].__globals__
+    monkeypatch.setattr(function_globals["sys"], "platform", "darwin")
+    monkeypatch.setattr(function_globals["host_platform"], "machine", lambda: "arm64")
+    monkeypatch.setitem(function_globals, "TARGETS", (("macos", "arm64"),))
+    monkeypatch.setitem(function_globals, "PACK_TOOLS", {})
+    for name in (
+        "_install_locked_runtime_overlay",
+        "_install_cow_runtime_overlay",
+        "_replace_product_imports",
+        "_replace_builtin_skills",
+        "_runtime_config",
+    ):
+        monkeypatch.setitem(function_globals, name, lambda *args, **kwargs: None)
+    monkeypatch.setitem(
+        function_globals, "build_pack_python_manifest", lambda *args, **kwargs: b"{}"
+    )
+    monkeypatch.setitem(
+        function_globals,
+        "resolve_pack_python",
+        lambda *args, **kwargs: (Path(sys.executable), None),
+    )
+
+    python_zip = tmp_path / "python311.zip"
+    with zipfile.ZipFile(python_zip, "w"):
+        pass
+    core_archive = tmp_path / "core.zip"
+    with zipfile.ZipFile(core_archive, "w") as archive:
+        member = zipfile.ZipInfo("bin/python311.zip", builder["FIXED_TIME"])
+        member.create_system = 3
+        member.external_attr = (0o100644) << 16
+        archive.writestr(member, python_zip.read_bytes())
+
+    calls: list[tuple[Path, Path, int]] = []
+
+    def fake_run(command, **kwargs):  # noqa: ANN001
+        data_dir = Path(kwargs["environment"]["EMATE_DATA_DIR"])
+        assert data_dir.is_dir()
+        (data_dir / "run.log").write_text("probe", encoding="utf-8")
+        calls.append((Path(kwargs["cwd"]), data_dir, kwargs["timeout"]))
+        return b""
+
+    monkeypatch.setitem(function_globals, "_run", fake_run)
+    stage_root = tmp_path / "stages"
+    builder["_prepare_stages"](
+        ROOT,
+        {"core-macos-arm64": core_archive},
+        stage_root,
+        {},
+    )
+
+    core = stage_root / "macos-arm64" / "core"
+    assert len(calls) == 1
+    assert calls[0][0] == core
+    assert calls[0][1].parent == core.parent
+    assert calls[0][2] == 120
+    assert not calls[0][1].exists()
+    assert not (core / "run.log").exists()
+
+
 def test_manual_webui_core_contains_exact_tracked_builtin_skills(tmp_path: Path) -> None:
     builder = _builder()
     core = tmp_path / "core"
@@ -242,6 +471,106 @@ def test_manual_webui_core_contains_exact_tracked_builtin_skills(tmp_path: Path)
     assert actual == expected
     assert not (core / "skills" / "stale.txt").exists()
     assert (core / "skills" / "office-presentations" / "SKILL.md").is_file()
+
+
+def test_manual_webui_rebuilds_browser_pack_from_current_cow_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    builder = _builder()
+    function_globals = builder["_prepare_stages"].__globals__
+    monkeypatch.setitem(function_globals, "TARGETS", (("windows", "x64"),))
+    monkeypatch.setitem(
+        function_globals,
+        "PACK_TOOLS",
+        {"browser": ("browser", "web_fetch", "web_search")},
+    )
+    for name in (
+        "_install_locked_runtime_overlay",
+        "_install_cow_runtime_overlay",
+        "_replace_product_imports",
+        "_replace_builtin_skills",
+        "_runtime_config",
+    ):
+        monkeypatch.setitem(function_globals, name, lambda *args, **kwargs: None)
+    monkeypatch.setitem(
+        function_globals, "build_pack_python_manifest", lambda *args, **kwargs: b"{}"
+    )
+    monkeypatch.setitem(
+        function_globals,
+        "resolve_pack_python",
+        lambda *args, **kwargs: (Path(sys.executable), None),
+    )
+
+    python_zip = tmp_path / "python311.zip"
+    with zipfile.ZipFile(python_zip, "w"):
+        pass
+
+    def write_member(archive: zipfile.ZipFile, name: str, payload: bytes) -> None:
+        member = zipfile.ZipInfo(name, builder["FIXED_TIME"])
+        member.create_system = 3
+        member.external_attr = (0o100644) << 16
+        archive.writestr(member, payload)
+
+    core = tmp_path / "core.zip"
+    with zipfile.ZipFile(core, "w") as archive:
+        write_member(archive, "bin/python311.zip", python_zip.read_bytes())
+
+    runtime_manifest = b'{"verified":"predecessor"}'
+    runtime_archive = b"verified predecessor browser runtime"
+    browser = tmp_path / "browser.zip"
+    with zipfile.ZipFile(browser, "w") as archive:
+        write_member(archive, "__main__.py", b"run('browser', {'cdp', 'fetch'}, handle)\n")
+        write_member(archive, "browser_pack.py", b"def handle(request): return request\n")
+        write_member(
+            archive,
+            "ecorex-pack.json",
+            b'{"pack_id":"browser","protocol":"ecorex-stdio-tool-v1",'
+            b'"runtime_api_version":"1.0.0","schema_version":1,'
+            b'"tools":["cdp","fetch"]}',
+        )
+        write_member(archive, "ecorex_pack_protocol.py", b"stale = True\n")
+        write_member(archive, "stale.py", b"stale = True\n")
+        write_member(archive, "browser-runtime.json", runtime_manifest)
+        write_member(archive, "browser-runtime.zip", runtime_archive)
+
+    stages = builder["_prepare_stages"](
+        ROOT,
+        {
+            "core-windows-x64": core,
+            "capability-pack-browser-windows-x64": browser,
+        },
+        tmp_path / "stages",
+        {},
+    )
+    pack = stages[("windows", "x64")]["browser"]
+    source = ROOT / "release" / "capability-packs"
+
+    assert (pack / "__main__.py").read_bytes() == (
+        source / "browser" / "__main__.py"
+    ).read_bytes()
+    assert (pack / "browser_pack.py").read_bytes() == (
+        source / "browser" / "browser_pack.py"
+    ).read_bytes()
+    assert (pack / "ecorex_pack_protocol.py").read_bytes() == (
+        source / "common" / "ecorex_pack_protocol.py"
+    ).read_bytes()
+    expected_descriptor = {
+        "schema_version": 1,
+        "protocol": "ecorex-stdio-tool-v1",
+        "pack_id": "browser",
+        "runtime_api_version": "1.0.0",
+        "tools": ["browser", "web_fetch", "web_search"],
+    }
+    assert (pack / "ecorex-pack.json").read_bytes() == json.dumps(
+        expected_descriptor,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    assert (pack / "browser-runtime.json").read_bytes() == runtime_manifest
+    assert (pack / "browser-runtime.zip").read_bytes() == runtime_archive
+    assert not (pack / "stale.py").exists()
 
 
 def test_manual_update_contract_is_the_only_release_authority() -> None:

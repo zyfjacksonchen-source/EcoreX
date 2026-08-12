@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -914,7 +915,8 @@ def test_product_healthy_entry_converges_external_authorities_once(
         assert first_app.state.runtime_execution_gate.snapshot().healthy
         assert first.managed_session.startup_converged is True
         assert first.device_authorization.startup_converged is True
-        assert first.update.service.startup_converged is True
+        assert first.server_settings.update_service is None
+        assert first.update.service.startup_converged is False
         assert first_app.state.extension_service.startup_converged is True
         converged_database = _startup_convergence_snapshot(product["database"])
         converged_filesystem = _startup_filesystem_snapshot(product["install_root"])
@@ -927,7 +929,8 @@ def test_product_healthy_entry_converges_external_authorities_once(
         assert second_app.state.runtime_execution_gate.snapshot().healthy
         assert second.managed_session.startup_converged is True
         assert second.device_authorization.startup_converged is True
-        assert second.update.service.startup_converged is True
+        assert second.server_settings.update_service is None
+        assert second.update.service.startup_converged is False
         assert second_app.state.extension_service.startup_converged is True
         assert _startup_convergence_snapshot(product["database"]) == converged_database
         assert (
@@ -1042,9 +1045,10 @@ def test_real_signed_slot_builds_product_app_and_uvicorn_config(tmp_path: Path) 
     assert server.composition.server_settings.model_gateway.credentials is (
         server.composition.managed_session
     )
-    assert server.composition.server_settings.update_service is (
-        server.composition.update.service
-    )
+    assert server.composition.server_settings.update_service is None
+    assert server.composition.update.feed.client.is_closed is True
+    assert server.composition.update.fetcher.client.is_closed is True
+    assert server.composition.update.signal_source._closed is True
     assert server.composition.server_settings.device_authorization_service is (
         server.composition.device_authorization
     )
@@ -1063,6 +1067,15 @@ def test_real_signed_slot_builds_product_app_and_uvicorn_config(tmp_path: Path) 
     assert server.composition.slot.slot_id == "slot-product-entrypoint"
     assert server.app.state.product_runtime_composition is server.composition
     assert "ignored" not in repr(server.composition)
+
+    async def assert_no_legacy_update_tasks() -> None:
+        async with server.app.router.lifespan_context(server.app):
+            assert not any(
+                task.get_name().startswith("ecorex-update")
+                for task in asyncio.all_tasks()
+            )
+
+    asyncio.run(assert_no_legacy_update_tasks())
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer path contract")
@@ -1882,6 +1895,76 @@ def test_tampered_config_and_non_loopback_endpoint_fail_closed(tmp_path: Path) -
         _loader(product, vault)(host="0.0.0.0", port=8765)
 
 
+def test_packaged_desktop_runtime_uses_app_payload_and_writable_data_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ecorex.server.config as product_config_module
+
+    product = _stage_product(tmp_path / "staged")
+    runtime_root = tmp_path / "app" / "runtime"
+    shutil.copytree(product["payload"], runtime_root / "payload")
+    shutil.copy2(product["slot_path"] / ".slot.json", runtime_root / ".slot.json")
+    shutil.copy2(
+        product["slot_path"] / "release-manifest.json",
+        runtime_root / "release-manifest.json",
+    )
+    data_root = tmp_path / "data"
+
+    class UnexpectedSlotVerifier:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("packaged Runtime must not verify an installed slot")
+
+    monkeypatch.setattr(
+        product_config_module,
+        "CurrentSlotVerifier",
+        UnexpectedSlotVerifier,
+    )
+    monkeypatch.setattr(
+        product_config_module,
+        "_build_update",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("packaged Runtime must not compose the slot updater")
+        ),
+    )
+
+    composition = load_product_runtime(
+        payload_root=runtime_root / "payload",
+        environment={
+            "EMATE_PACKAGED_RUNTIME": "1",
+            "EMATE_DATA_DIR": str(data_root),
+        },
+        vault_factory=InMemoryCredentialVault,
+        host_platform=product["platform"],
+        host_architecture=product["architecture"],
+    )
+    try:
+        assert composition.install_root == data_root.resolve()
+        assert composition.slot.slot_path == runtime_root.resolve()
+        assert composition.slot.payload_root == (runtime_root / "payload").resolve()
+        assert composition.server_settings.database_path == (
+            data_root / "state" / "runtime.sqlite3"
+        )
+        assert composition.server_settings.workspace_roots == (
+            (data_root / "workspace").resolve(),
+        )
+        assert not (data_root / "slots").exists()
+        assert composition.update is None
+        assert composition.server_settings.first_install_registration_recorder is None
+        assert composition.server_settings.first_install_runtime_ready_recorder is None
+    finally:
+        composition.close_unstarted()
+
+    with pytest.raises(ProductRuntimeTrustError, match="slot layout"):
+        load_product_runtime(
+            payload_root=runtime_root / "payload",
+            environment={"ECOREX_BOOTSTRAPPED": "1"},
+            vault_factory=InMemoryCredentialVault,
+            host_platform=product["platform"],
+            host_architecture=product["architecture"],
+        )
+
+
 def test_invalid_release_signature_fails_before_session_or_network_use(
     tmp_path: Path,
 ) -> None:
@@ -2214,12 +2297,11 @@ def test_configured_capability_pack_requires_verified_artifact_and_trusted_adapt
 
 def test_capability_pack_profiles_are_exact_and_share_one_catalog() -> None:
     assert CAPABILITY_PACK_PROFILES["minimal"] == ()
-    assert CAPABILITY_PACK_PROFILES["workspace"] == ("sandbox",)
     assert CAPABILITY_PACK_PROFILES["full_offline"] == REQUIRED_CAPABILITY_PACK_IDS
     assert capability_pack_profile(()) == "minimal"
-    assert capability_pack_profile(("sandbox",)) == "workspace"
     assert capability_pack_profile(REQUIRED_CAPABILITY_PACK_IDS) == "full_offline"
     assert capability_pack_profile(("image",)) is None
+    assert capability_pack_profile(("sandbox",)) is None
 
 
 def test_config_or_ancestor_link_is_rejected(tmp_path: Path) -> None:

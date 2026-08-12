@@ -1085,10 +1085,6 @@ export interface PasswordSessionChangeResponse {
   reauthentication_required: true;
 }
 
-export interface PermissionMutationResponse {
-  permissions: BootstrapResponse["permissions"];
-}
-
 export interface UpdateMutationResponse {
   update: UpdateSnapshot;
 }

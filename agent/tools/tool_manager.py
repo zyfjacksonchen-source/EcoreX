@@ -1,7 +1,5 @@
-import hashlib
 import importlib
 import importlib.util
-import re
 import threading
 import time
 from pathlib import Path
@@ -19,10 +17,12 @@ def _normalize_mcp_configs(raw) -> list:
       - dict format (mcpServers):   {"x": {"command": "npx", ...}}
     """
     if isinstance(raw, list):
-        return raw
+        return [item for item in raw if item.get("enabled", True) is not False]
     if isinstance(raw, dict):
         result = []
         for name, cfg in raw.items():
+            if not isinstance(cfg, dict) or cfg.get("enabled", True) is False:
+                continue
             entry = {"name": name, **cfg}
             if "type" not in entry:
                 entry["type"] = "sse" if "url" in entry else "stdio"
@@ -31,43 +31,36 @@ def _normalize_mcp_configs(raw) -> list:
     return []
 
 
-def _sanitize_mcp_name_part(value: Any, fallback: str) -> str:
-    text = re.sub(r"[^A-Za-z0-9_-]+", "_", str(value or "").strip())
-    text = text.strip("_-")
-    return text[:48] or fallback
-
-
-def _mcp_public_tool_name(server_name: str, tool_name: str) -> str:
-    """Return the local model-visible name for a remote MCP tool.
-
-    MCP servers are untrusted host capabilities. Their tool names must not
-    collide with first-party tools like ``bash`` or ``browser`` because those
-    names carry EcoreX permission, diagnostics, and convergence semantics.
-    """
-    server_part = _sanitize_mcp_name_part(server_name, "server")
-    tool_part = _sanitize_mcp_name_part(tool_name, "tool")
-    public = f"mcp__{server_part}__{tool_part}"
-    if len(public) <= 96:
-        return public
-    digest = hashlib.sha1(f"{server_name}:{tool_name}".encode("utf-8", "ignore")).hexdigest()[:8]
-    return f"mcp__{server_part[:32]}__{tool_part[:48]}_{digest}"
-
-
 class ToolManager:
     """
     Tool manager for managing tools.
     """
     _instance = None
+    _workspace_instances: dict[Path, "ToolManager"] = {}
+    _instance_lock = threading.Lock()
 
-    def __new__(cls):
-        """Singleton pattern to ensure only one instance of ToolManager exists."""
-        if cls._instance is None:
-            cls._instance = super(ToolManager, cls).__new__(cls)
-            cls._instance.tool_classes = {}  # Store tool classes instead of instances
-            cls._instance._initialized = False
-        return cls._instance
+    def __new__(cls, workspace_root=None, *, mcp_oauth_redirect_uri=None):
+        """Keep one tool/MCP lifecycle per resolved workspace."""
+        del mcp_oauth_redirect_uri
+        if workspace_root is None:
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = super(ToolManager, cls).__new__(cls)
+                    cls._instance.tool_classes = {}
+                    cls._instance._initialized = False
+                return cls._instance
 
-    def __init__(self):
+        root = Path(workspace_root).expanduser().resolve()
+        with cls._instance_lock:
+            instance = cls._workspace_instances.get(root)
+            if instance is None:
+                instance = super(ToolManager, cls).__new__(cls)
+                instance.tool_classes = {}
+                instance._initialized = False
+                cls._workspace_instances[root] = instance
+            return instance
+
+    def __init__(self, workspace_root=None, *, mcp_oauth_redirect_uri=None):
         # Initialize only once
         if not hasattr(self, 'tool_classes'):
             self.tool_classes = {}  # Dictionary to store tool classes
@@ -100,6 +93,28 @@ class ToolManager:
             self._registry_errors: list = []
         if not hasattr(self, '_missing_configured_tools'):
             self._missing_configured_tools: list = []
+        if mcp_oauth_redirect_uri is not None:
+            self.mcp_oauth_redirect_uri = str(mcp_oauth_redirect_uri)
+        if workspace_root is not None:
+            self.bind_workspace(workspace_root)
+
+    def bind_workspace(self, workspace_root) -> None:
+        """Bind MCP discovery to the same workspace as the current Agent."""
+
+        root = Path(workspace_root).expanduser().resolve()
+        if getattr(self, "workspace_root", None) == root:
+            return
+        if getattr(self, "workspace_root", None) is not None:
+            raise RuntimeError(
+                "ToolManager is workspace-bound; create the manager for the target workspace"
+            )
+        self.workspace_root = root
+        self._mcp_registry = None
+        self._mcp_tool_instances = {}
+        self._mcp_loaded = False
+        self._mcp_status = {}
+        self._mcp_signature = (None, None)
+        self._mcp_active_configs = {}
 
     def _record_registry_error(self, source: str, exc_or_message: Any) -> None:
         if isinstance(exc_or_message, BaseException):
@@ -189,10 +204,10 @@ class ToolManager:
                                     error_msg = str(e)
                                     if "playwright" in error_msg:
                                         logger.warning(
-                                            f"[ToolManager] Browser tool not loaded - missing dependencies.\n"
-                                            f"  To enable browser tool, run:\n"
-                                            f"    pip install playwright\n"
-                                            f"    playwright install chromium"
+                                            "[ToolManager] Browser tool not loaded - missing dependencies.\n"
+                                            "  To enable browser tool, run:\n"
+                                            "    pip install playwright\n"
+                                            "    playwright install chromium"
                                         )
                                     elif "markdownify" in error_msg:
                                         logger.warning(
@@ -264,10 +279,10 @@ class ToolManager:
                                 error_msg = str(e)
                                 if "playwright" in error_msg:
                                     logger.warning(
-                                        f"[ToolManager] Browser tool not loaded - missing dependencies.\n"
-                                        f"  To enable browser tool, run:\n"
-                                        f"    pip install playwright\n"
-                                        f"    playwright install chromium"
+                                        "[ToolManager] Browser tool not loaded - missing dependencies.\n"
+                                        "  To enable browser tool, run:\n"
+                                        "    pip install playwright\n"
+                                        "    playwright install chromium"
                                     )
                                 elif "markdownify" in error_msg:
                                     logger.warning(
@@ -306,16 +321,16 @@ class ToolManager:
                 for tool_name in missing_tools:
                     if tool_name == "browser":
                         logger.warning(
-                            f"[ToolManager] Browser tool is configured but not loaded.\n"
-                            f"  To enable browser tool, run:\n"
-                            f"    pip install playwright\n"
-                            f"  Only run `playwright install chromium` when CDP fallback is required."
+                            "[ToolManager] Browser tool is configured but not loaded.\n"
+                            "  To enable browser tool, run:\n"
+                            "    pip install playwright\n"
+                            "  Only run `playwright install chromium` when CDP fallback is required."
                         )
                     elif tool_name == "google_search":
                         logger.warning(
-                            f"[ToolManager] Google Search tool is configured but may need API key.\n"
-                            f"  Get API key from: https://serper.dev\n"
-                            f"  Configure in config.json: tools.google_search.api_key"
+                            "[ToolManager] Google Search tool is configured but may need API key.\n"
+                            "  Get API key from: https://serper.dev\n"
+                            "  Configure in config.json: tools.google_search.api_key"
                         )
                     else:
                         logger.warning(f"[ToolManager] Tool '{tool_name}' is configured but could not be loaded.")
@@ -326,7 +341,13 @@ class ToolManager:
 
     def _mcp_json_path(self) -> str:
         import os
-        workspace = os.path.expanduser(conf().get("agent_workspace", "~/cow"))
+        workspace = str(
+            getattr(
+                self,
+                "workspace_root",
+                Path(os.path.expanduser(conf().get("agent_workspace", "~/cow"))).resolve(),
+            )
+        )
         return os.path.join(workspace, "mcp.json")
 
     def _read_mcp_json_signature(self):
@@ -350,17 +371,8 @@ class ToolManager:
         return (mtime, digest)
 
     def _load_mcp_configs(self) -> list:
-        """
-        Load MCP server configs with priority:
-          1. ~/cow/mcp.json  (supports both mcpServers and mcp_servers keys)
-          2. config.json mcp_servers field (fallback)
-        """
-        workspace_configs = self._load_workspace_mcp_configs()
-        if workspace_configs is not None:
-            return workspace_configs
-
-        raw = conf().get("mcp_servers", [])
-        return _normalize_mcp_configs(raw)
+        """Load MCP servers only from the currently bound workspace."""
+        return self._load_workspace_mcp_configs() or []
 
     def _load_workspace_mcp_configs(self) -> Optional[list]:
         """Load only the workspace MCP config, returning None when no file exists or parsing fails."""
@@ -373,22 +385,23 @@ class ToolManager:
         try:
             with open(mcp_json_path, "r", encoding="utf-8") as f:
                 data = _json.load(f)
-            raw = data.get("mcpServers") or data.get("mcp_servers") or data
+            if "mcpServers" in data:
+                raw = data["mcpServers"]
+            elif "mcp_servers" in data:
+                raw = data["mcp_servers"]
+            else:
+                raw = data
             logger.info(f"[ToolManager] Loading MCP config from {mcp_json_path}")
             return _normalize_mcp_configs(raw)
         except Exception as e:
-            logger.warning(f"[ToolManager] Failed to read {mcp_json_path}: {e}, falling back to config.json")
-            return None
+            logger.warning(f"[ToolManager] Failed to read {mcp_json_path}: {e}")
+            return []
 
     def has_mcp_configured(self, *, include_config_fallback: bool = False) -> bool:
-        """Return True when a workspace MCP server is present, or when config fallback is explicitly allowed."""
+        """Return True only when the current workspace configures an MCP server."""
+        del include_config_fallback
         try:
-            workspace_configs = self._load_workspace_mcp_configs()
-            if workspace_configs:
-                return True
-            if include_config_fallback:
-                return bool(_normalize_mcp_configs(conf().get("mcp_servers", [])))
-            return False
+            return bool(self._load_workspace_mcp_configs())
         except Exception as e:
             logger.debug(f"[ToolManager] MCP config probe failed: {e}")
             return False
@@ -410,8 +423,7 @@ class ToolManager:
         if getattr(self, "_mcp_loaded", False):
             self.refresh_mcp_if_changed()
         else:
-            include_config_fallback = bool(conf().get("mcp_auto_start", False))
-            should_start = self.has_mcp_configured(include_config_fallback=include_config_fallback)
+            should_start = self.has_mcp_configured()
             if should_start:
                 self._load_mcp_tools()
 
@@ -433,9 +445,7 @@ class ToolManager:
         statuses = self.list_mcp_status()
         return {
             "status": statuses,
-            "configured": bool(statuses) or self.has_mcp_configured(
-                include_config_fallback=bool(conf().get("mcp_auto_start", False))
-            ),
+            "configured": bool(statuses) or self.has_mcp_configured(),
             "toolCount": len(self._mcp_tool_instances),
         }
 
@@ -552,7 +562,9 @@ class ToolManager:
         """Shut down one MCP server and drop its tools from the registry."""
         if self._mcp_registry is None:
             return
-        client = self._mcp_registry.unregister(server_name)
+        client = None
+        with self._mcp_registry._registry_lock:
+            client = self._mcp_registry._clients.pop(server_name, None)
         if client is not None:
             try:
                 client.shutdown()
@@ -574,39 +586,61 @@ class ToolManager:
         the others, and never raises out of the worker thread.
         """
         try:
-            from agent.tools.mcp.mcp_client import McpClient, McpClientRegistry
+            from agent.tools.mcp.mcp_client import (
+                McpClient,
+                McpClientRegistry,
+            )
             from agent.tools.mcp.mcp_tool import McpTool
 
-            registry = McpClientRegistry()
+            registry = self._mcp_registry or McpClientRegistry()
             self._mcp_registry = registry
 
             for cfg in mcp_servers_config:
                 server_name = cfg.get("name", "<unnamed>")
                 try:
-                    client = McpClient(cfg)
+                    client = McpClient(
+                        cfg,
+                        oauth_redirect_uri=getattr(
+                            self, "mcp_oauth_redirect_uri", None
+                        ),
+                        reload_callback=self.reload_mcp_server,
+                        workspace_identity=(
+                            str(self.workspace_root)
+                            if getattr(self, "workspace_root", None) is not None
+                            else None
+                        ),
+                    )
                     if not client.initialize():
-                        self._mcp_status[server_name] = "failed"
-                        logger.warning(
-                            f"[MCP] Server '{server_name}' failed to initialize — skipping"
-                        )
+                        if getattr(client, "needs_auth", False):
+                            with registry._registry_lock:
+                                registry._clients[server_name] = client
+                            self._mcp_status[server_name] = "needs_auth"
+                            logger.info(
+                                f"[MCP] Server '{server_name}' needs authorization"
+                            )
+                        else:
+                            self._mcp_status[server_name] = "failed"
+                            logger.warning(
+                                f"[MCP] Server '{server_name}' failed to initialize — skipping"
+                            )
                         continue
 
                     tool_schemas = client.list_tools()
                     added = []
                     for schema in tool_schemas:
-                        remote_tool_name = schema.get("name", "")
-                        if not remote_tool_name:
+                        tool_name = schema.get("name", "")
+                        if not tool_name:
                             continue
-                        tool_name = _mcp_public_tool_name(server_name, remote_tool_name)
-                        mcp_tool = McpTool(client, schema, server_name, public_name=tool_name)
+                        mcp_tool = McpTool(client, schema, server_name)
                         # Atomic dict assignment is GIL-safe; readers iterate
                         # over a list() snapshot to avoid concurrent mutation.
                         self._mcp_tool_instances[tool_name] = mcp_tool
-                        added.append(f"{tool_name}->{remote_tool_name}")
+                        added.append(tool_name)
 
                     # Register client into the shared registry only after its
                     # tools are visible, so callers never see a half-loaded server.
-                    registry.register(server_name, client)
+                    with registry._registry_lock:
+                        registry._clients[server_name] = client
                     self._mcp_status[server_name] = "ready"
                     logger.info(
                         f"[MCP] Server '{server_name}' ready — "
@@ -625,6 +659,23 @@ class ToolManager:
             )
         except Exception as e:
             logger.warning(f"[ToolManager] MCP background loader crashed: {e}")
+
+    def reload_mcp_server(self, server_name: str) -> None:
+        """Restart one configured MCP server after OAuth or config refresh."""
+
+        with self._mcp_lock:
+            config = self._mcp_active_configs.get(server_name)
+        if not config:
+            logger.warning(f"[MCP] reload requested for unknown server '{server_name}'")
+            return
+        self._teardown_mcp_server(server_name)
+        self._mcp_status[server_name] = "pending"
+        threading.Thread(
+            target=self._load_mcp_tools_async,
+            args=([config],),
+            daemon=True,
+            name=f"mcp-reload-{server_name}",
+        ).start()
 
     def list_mcp_status(self) -> dict:
         """Return {server_name: status} snapshot for UI / debugging."""
@@ -806,3 +857,9 @@ class ToolManager:
         """Shut down all MCP server clients."""
         if self._mcp_registry:
             self._mcp_registry.shutdown_all()
+        self._mcp_registry = None
+        self._mcp_tool_instances = {}
+        self._mcp_status = {}
+        self._mcp_loaded = False
+        self._mcp_signature = (None, None)
+        self._mcp_active_configs = {}

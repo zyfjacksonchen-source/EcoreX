@@ -842,13 +842,21 @@ def test_uploaded_turn_image_is_a_managed_image_edit_input(tmp_path: Path) -> No
 
         output = await backend.generate_image(
             {
-                "instruction": "改成暖色，保留构图",
-                "attachment_ids": [uploaded.attachment_id],
+                "prompt": "改成暖色，保留构图",
+                "image_url": uploaded.attachment_id,
             },
             context,
         )
 
         assert output["status"] == "completed"
+        assert output["model"] == "gpt-image-2"
+        assert output["images"] == [
+            {
+                "url": output["preview_url"],
+                "artifact_id": output["artifact_id"],
+                "revision_id": output["revision_id"],
+            }
+        ]
         assert client.requests[0].operation is ImageOperation.RETOUCH
         assert len(client.inputs[0]) == 1
         assert client.inputs[0][0].content.startswith(b"\xff\xd8")

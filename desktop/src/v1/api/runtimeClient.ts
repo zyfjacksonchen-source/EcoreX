@@ -36,8 +36,6 @@ import type {
   MemoryContentPage,
   MemoryContentView,
   PasswordSessionChangeResponse,
-  MemoryMutationResponse,
-  MemorySnapshot,
   MCPOAuthChallengeProjection,
   MCPOAuthStatusResponse,
   MigrationQuarantineProjection,
@@ -46,7 +44,6 @@ import type {
   OutputLocationCatalog,
   OutputMaterialization,
   OutputPreference,
-  PermissionMutationResponse,
   ProjectListResponse,
   ProjectProjection,
   ReplaceTurnResponse,
@@ -99,6 +96,10 @@ export interface RuntimeBridgeConfig {
 export interface TurnModelSelection {
   agentModelId: string;
   imageModelId: string | null;
+}
+
+function mcpProjectPath(path: string, projectId?: string | null): string {
+  return projectId ? `${path}?project_id=${encodeURIComponent(projectId)}` : path;
 }
 
 export type ClientOperationDisposition = "create" | "steer" | "queue" | "replace";
@@ -610,15 +611,6 @@ export class RuntimeClient {
     return response.blob();
   }
 
-  memory(signal?: AbortSignal): Promise<MemorySnapshot> {
-    return this.json(
-      "/api/v1/memory",
-      { signal },
-      false,
-      0, // memory snapshot
-    );
-  }
-
   knowledgeTree(query = "", signal?: AbortSignal): Promise<KnowledgeTree> {
     const suffix = query
       ? `?query=${encodeURIComponent(query)}`
@@ -832,35 +824,6 @@ export class RuntimeClient {
       { signal },
       false,
       8, // system metric history
-    );
-  }
-
-  resetLearnedMemory(
-    clientRequestId = createClientRequestId("reset_memory"),
-  ): Promise<MemoryMutationResponse> {
-    return this.json(
-      "/api/v1/memory/reset",
-      {
-        method: "POST",
-        body: JSON.stringify({ confirmed: true, client_request_id: clientRequestId }),
-      },
-      true,
-      1, // memory mutation
-    );
-  }
-
-  undoLearnedMemoryReset(
-    resetId: string,
-    clientRequestId = createClientRequestId("undo_memory_reset"),
-  ): Promise<MemoryMutationResponse> {
-    return this.json(
-      `/api/v1/memory/resets/${encodeURIComponent(resetId)}/undo`,
-      {
-        method: "POST",
-        body: JSON.stringify({ confirmed: true, client_request_id: clientRequestId }),
-      },
-      true,
-      1, // memory mutation
     );
   }
 
@@ -1176,33 +1139,33 @@ export class RuntimeClient {
     );
   }
 
-  mcpOAuthStatuses(signal?: AbortSignal): Promise<MCPOAuthStatusResponse> {
-    return this.json("/api/v1/mcp/oauth", { signal });
+  mcpOAuthStatuses(signal?: AbortSignal, projectId?: string | null): Promise<MCPOAuthStatusResponse> {
+    return this.json(mcpProjectPath("/api/v1/mcp/oauth", projectId), { signal });
   }
 
-  beginMcpOAuth(serviceId: string): Promise<MCPOAuthChallengeProjection> {
+  beginMcpOAuth(serviceId: string, projectId?: string | null): Promise<MCPOAuthChallengeProjection> {
     return this.json(
-      `/api/v1/mcp/oauth/${encodeURIComponent(serviceId)}/begin`,
+      mcpProjectPath(`/api/v1/mcp/oauth/${encodeURIComponent(serviceId)}/begin`, projectId),
       { method: "POST" },
       true,
     );
   }
 
-  async clearMcpOAuth(serviceId: string): Promise<void> {
+  async clearMcpOAuth(serviceId: string, projectId?: string | null): Promise<void> {
     await this.json<unknown>(
-      `/api/v1/mcp/oauth/${encodeURIComponent(serviceId)}`,
+      mcpProjectPath(`/api/v1/mcp/oauth/${encodeURIComponent(serviceId)}`, projectId),
       { method: "DELETE" },
       true,
     );
   }
 
-  userMcpServers(signal?: AbortSignal): Promise<UserMCPServerListResponse> {
-    return this.json("/api/v1/mcp/servers", { signal });
+  userMcpServers(signal?: AbortSignal, projectId?: string | null): Promise<UserMCPServerListResponse> {
+    return this.json(mcpProjectPath("/api/v1/mcp/servers", projectId), { signal });
   }
 
-  createUserMcpServer(request: UserMCPServerRequest): Promise<UserMCPMutationResponse> {
+  createUserMcpServer(request: UserMCPServerRequest, projectId?: string | null): Promise<UserMCPMutationResponse> {
     return this.json(
-      "/api/v1/mcp/servers",
+      mcpProjectPath("/api/v1/mcp/servers", projectId),
       { method: "POST", body: JSON.stringify(request) },
       true,
     );
@@ -1211,9 +1174,10 @@ export class RuntimeClient {
   updateUserMcpServer(
     serverId: string,
     request: UserMCPServerRequest,
+    projectId?: string | null,
   ): Promise<UserMCPMutationResponse> {
     return this.json(
-      `/api/v1/mcp/servers/${encodeURIComponent(serverId)}`,
+      mcpProjectPath(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}`, projectId),
       { method: "PUT", body: JSON.stringify(request) },
       true,
     );
@@ -1222,17 +1186,18 @@ export class RuntimeClient {
   mutateUserMcpServer(
     serverId: string,
     action: "test" | "enable" | "disable",
+    projectId?: string | null,
   ): Promise<UserMCPMutationResponse> {
     return this.json(
-      `/api/v1/mcp/servers/${encodeURIComponent(serverId)}/${action}`,
+      mcpProjectPath(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/${action}`, projectId),
       { method: "POST" },
       true,
     );
   }
 
-  async deleteUserMcpServer(serverId: string): Promise<void> {
+  async deleteUserMcpServer(serverId: string, projectId?: string | null): Promise<void> {
     await this.json<unknown>(
-      `/api/v1/mcp/servers/${encodeURIComponent(serverId)}`,
+      mcpProjectPath(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}`, projectId),
       { method: "DELETE" },
       true,
     );
@@ -1293,25 +1258,6 @@ export class RuntimeClient {
       {
         method: "DELETE",
         headers: { "X-EcoreX-Client-Request-ID": clientRequestId },
-      },
-      true,
-    );
-  }
-
-  updatePermission(
-    profile: "default" | "full_access",
-    expectedRevision: number,
-    clientRequestId = createClientRequestId("permission"),
-  ): Promise<PermissionMutationResponse> {
-    return this.json(
-      "/api/v1/settings/permissions",
-      {
-        method: "PUT",
-        body: JSON.stringify({
-          profile,
-          expected_revision: expectedRevision,
-          client_request_id: clientRequestId,
-        }),
       },
       true,
     );

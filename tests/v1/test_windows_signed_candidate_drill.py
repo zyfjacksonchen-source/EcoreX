@@ -641,7 +641,7 @@ def test_native_helper_identity_requires_matching_helpers_and_v2_authority(
         drill._validated_native_helper_sha256(tmp_path, receipt)
 
 
-def test_local_windows_drill_cannot_relax_fixed_twenty_four_stage_gate() -> None:
+def test_local_windows_drill_cannot_relax_fixed_twenty_one_stage_gate() -> None:
     drill = _drill_module()
     expected = {
         f"{key}-{platform}-{architecture}"
@@ -649,9 +649,9 @@ def test_local_windows_drill_cannot_relax_fixed_twenty_four_stage_gate() -> None
         for key in drill._WINDOWS_STAGE_KEYS
     }
     windows = {f"{key}-windows-x64" for key in drill._WINDOWS_STAGE_KEYS}
-    assert len(expected) == 24
-    assert len(windows) == 8
-    assert len(expected - windows) == 16
+    assert len(expected) == 21
+    assert len(windows) == 7
+    assert len(expected - windows) == 14
     source = Path(drill.__file__).read_text(encoding="utf-8")
     assert "run_bounded_process(" in source
     assert '"fixed_gate_relaxed": False' in source

@@ -50,7 +50,7 @@ class SkillManager:
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.builtin_dir = builtin_dir or os.path.join(project_root, 'skills')
         self.custom_dir = custom_dir or os.path.join(project_root, 'workspace', 'skills')
-        self.extra_dirs = self._discover_extra_skill_dirs()
+        self.extra_dirs: List[str] = []
         self.config = config or {}
         self._skills_config_path = os.path.join(self.custom_dir, SKILLS_CONFIG_FILE)
 
@@ -150,31 +150,6 @@ class SkillManager:
             )
 
     @staticmethod
-    def _discover_extra_skill_dirs() -> List[str]:
-        home = Path.home()
-        roots: List[Path] = [
-            home / ".codex" / "skills",
-            home / ".agents" / "skills",
-            home / ".codex" / "skills" / ".system",
-        ]
-        plugin_cache = home / ".codex" / "plugins" / "cache"
-        if plugin_cache.exists():
-            for candidate in sorted(plugin_cache.glob("**/skills"), key=lambda item: str(item).lower()):
-                roots.append(candidate)
-        seen = set()
-        result: List[str] = []
-        for root in roots:
-            try:
-                resolved = str(root.expanduser().resolve())
-            except Exception:
-                resolved = str(root)
-            if resolved in seen or not os.path.isdir(resolved):
-                continue
-            seen.add(resolved)
-            result.append(resolved)
-        return result
-
-    @staticmethod
     def _read_skill_tree_text(skill_dir: Path) -> str:
         parts: List[str] = []
         for path in sorted(skill_dir.rglob("*")):
@@ -213,11 +188,14 @@ class SkillManager:
         return {}
 
     def _save_skills_config(self):
-        """Reject legacy state writes; ExtensionService is the live authority."""
+        """Persist local Skill preferences beside the local Skill directory."""
 
-        raise RuntimeError(
-            "skills_config.json is migration-only; use the ExtensionService API"
-        )
+        os.makedirs(self.custom_dir, exist_ok=True)
+        try:
+            with open(self._skills_config_path, "w", encoding="utf-8") as file:
+                json.dump(self.skills_config, file, indent=4, ensure_ascii=False)
+        except Exception as exc:
+            logger.error(f"[SkillManager] Failed to save {SKILLS_CONFIG_FILE}: {exc}")
 
     def _sync_skills_config(self):
         """
@@ -229,8 +207,8 @@ class SkillManager:
           owns every live enablement decision afterwards.
         - name/description/source are refreshed from the latest scan.
         """
-        saved: Dict[str, dict] = {}
-        self.legacy_migration_preferences = {}
+        saved = self._load_skills_config()
+        self.legacy_migration_preferences = dict(saved)
         merged: Dict[str, dict] = {}
 
         for name, entry in self.skills.items():
@@ -238,12 +216,16 @@ class SkillManager:
             prev = saved.get(name, {})
             category = prev.get("category") or get_frontmatter_value(skill.frontmatter, "category") or "skill"
             builtin_catalog = self.is_builtin_catalog_skill(name) or skill.source == "builtin"
+            enabled = prev.get(
+                "enabled",
+                entry.metadata.default_enabled if entry.metadata else True,
+            )
 
             entry_dict = {
                 "name": name,
                 "description": skill.description,
                 "source": skill.source,
-                "enabled": True,
+                "enabled": bool(enabled),
                 "default_enabled": True,
                 "builtin_catalog": builtin_catalog,
                 "category": category,
@@ -276,6 +258,7 @@ class SkillManager:
             merged[name] = entry_dict
 
         self.skills_config = merged
+        self._save_skills_config()
 
     def is_skill_enabled(self, name: str) -> bool:
         """
@@ -284,16 +267,8 @@ class SkillManager:
         :param name: skill name
         :return: True if enabled (default True if not in config)
         """
-        try:
-            from ecorex.extensions.live_authority import live_skill_enabled
-
-            current = live_skill_enabled(name)
-        except Exception:
-            current = None
-        # An unbound standalone legacy reader has no mutable state authority;
-        # it may apply only the static first-discovery default. Production
-        # RuntimeComposition always binds ExtensionService before Agent work.
-        return True if current is None else current
+        entry = self.skills_config.get(name)
+        return True if entry is None else bool(entry.get("enabled", True))
 
     def set_skill_enabled(self, name: str, enabled: bool):
         """
@@ -304,9 +279,8 @@ class SkillManager:
         """
         if name not in self.skills_config:
             raise ValueError(f"skill '{name}' not found in config")
-        from ecorex.extensions.live_authority import set_live_skill_enabled
-
-        self.skills_config[name]["enabled"] = set_live_skill_enabled(name, enabled)
+        self.skills_config[name]["enabled"] = bool(enabled)
+        self._save_skills_config()
 
     def get_skills_config(self) -> Dict[str, dict]:
         """
@@ -314,10 +288,7 @@ class SkillManager:
 
         :return: copy of skills_config
         """
-        return {
-            name: {**row, "enabled": self.is_skill_enabled(name)}
-            for name, row in self.skills_config.items()
-        }
+        return {name: dict(row) for name, row in self.skills_config.items()}
     
     def get_skill(self, name: str) -> Optional[SkillEntry]:
         """

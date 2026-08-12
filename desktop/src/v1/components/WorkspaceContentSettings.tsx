@@ -7,7 +7,6 @@ import {
   FolderPlus,
   Network,
   RefreshCw,
-  RotateCcw,
   Search,
   Upload,
 } from "lucide-react";
@@ -24,7 +23,6 @@ import type {
   MemoryContentDocument,
   MemoryContentPage,
   MemoryContentView,
-  MemorySnapshot,
 } from "../api/contracts.ts";
 import type { RuntimeClient } from "../api/runtimeClient.ts";
 import { userFacingError } from "../state/userLanguage.ts";
@@ -347,27 +345,11 @@ export function KnowledgeSettings({ active, client }: { active: boolean; client:
 interface MemorySettingsProps {
   active: boolean;
   client: RuntimeClient;
-  memory: MemorySnapshot | null;
-  memoryLoadState: "loading" | "ready" | "error";
-  memoryBusy: boolean;
-  memoryError: string | null;
-  onClearMemoryError: () => void;
-  onRefreshMemory: () => void;
-  onResetMemory: () => Promise<boolean>;
-  onUndoMemoryReset: (resetId: string) => Promise<boolean>;
 }
 
 export function MemorySettings({
   active,
   client,
-  memory,
-  memoryLoadState,
-  memoryBusy,
-  memoryError,
-  onClearMemoryError,
-  onRefreshMemory,
-  onResetMemory,
-  onUndoMemoryReset,
 }: MemorySettingsProps) {
   const [view, setView] = useState<MemoryContentView>("files");
   const [page, setPage] = useState(1);
@@ -375,7 +357,6 @@ export function MemorySettings({
   const [document, setDocument] = useState<MemoryContentDocument | null>(null);
   const [loading, setLoading] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
-  const [confirmReset, setConfirmReset] = useState(false);
 
   const loadPage = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -415,7 +396,7 @@ export function MemorySettings({
     const controller = new AbortController();
     void loadPage(controller.signal);
     return () => controller.abort();
-  }, [active, loadPage, memory?.revision]);
+  }, [active, loadPage]);
 
   const totalPages = Math.max(1, Math.ceil((contentPage?.total ?? 0) / 10));
 
@@ -423,21 +404,12 @@ export function MemorySettings({
     <section className="ex-settings-section ex-content-settings" id="settings-memory" hidden={!active}>
       <h2>记忆</h2>
       <div className="ex-content-heading">
-        <p>{memoryLoadState === "loading" ? "正在读取记忆状态" : memory ? `${memory.resettable_count} 项可重置的偏好和资料记忆` : "暂时无法读取记忆状态"}</p>
+        <p>{loading && !contentPage ? "正在读取记忆文件" : `${contentPage?.total ?? 0} 个记忆文件`}</p>
         <div className="ex-content-actions">
           <button className="ex-button" type="button" disabled={loading} onClick={() => void loadPage()}><RefreshCw aria-hidden="true" />刷新</button>
-          <button className="ex-button is-danger" type="button" disabled={memoryBusy || memoryLoadState === "loading" || memory?.resettable_count === 0} onClick={() => setConfirmReset(true)}>一键重置</button>
         </div>
       </div>
-      <p className="ex-settings-note">这里只读取现有活动记忆。重置不会删除内置知识、任务、消息或产物，并保留 24 小时撤销时间。</p>
-      {memory?.latest_reset?.can_undo ? (
-        <div className="ex-memory-undo"><div><strong>最近一次重置可以撤销</strong><p>已重置 {memory.latest_reset.affected_records + memory.latest_reset.affected_files} 项，可在 {formatTime(memory.latest_reset.undo_until)} 前恢复。</p></div><button className="ex-button" type="button" disabled={memoryBusy} onClick={() => void onUndoMemoryReset(memory.latest_reset!.reset_id)}><RotateCcw aria-hidden="true" />撤销重置</button></div>
-      ) : null}
-      {confirmReset ? (
-        <div className="ex-permission-confirm" role="group" aria-label="确认重置学习记忆"><div><strong>确认重置学习记忆？</strong><p>学习记忆会立即停用，24 小时内可以撤销。</p></div><div className="ex-permission-confirm-actions"><button className="ex-button" type="button" disabled={memoryBusy} onClick={() => setConfirmReset(false)}>取消</button><button className="ex-button is-danger" type="button" disabled={memoryBusy} onClick={() => void onResetMemory().then((success) => { if (success) setConfirmReset(false); })}>{memoryBusy ? "正在重置" : "确认重置"}</button></div></div>
-      ) : null}
-      {memoryLoadState === "error" && !memoryError ? <button className="ex-button ex-settings-retry" type="button" onClick={onRefreshMemory}>重新读取记忆状态</button> : null}
-      {memoryError ? <div className="ex-settings-error" role="alert"><span>{memoryError}</span><button className="ex-button" type="button" onClick={onClearMemoryError}>关闭</button></div> : null}
+      <p className="ex-settings-note">直接读取工作区中的 MEMORY.md、每日记忆和进化记录；Agent 与此页面使用同一份文件。</p>
       {contentError ? <div className="ex-settings-error" role="alert"><span>{contentError}</span><button className="ex-button" type="button" onClick={() => setContentError(null)}>关闭</button></div> : null}
       <div className="ex-content-tabs" role="tablist" aria-label="记忆视图">
         <button className="ex-button" type="button" role="tab" aria-selected={view === "files"} onClick={() => { setView("files"); setPage(1); }}>记忆文件</button>

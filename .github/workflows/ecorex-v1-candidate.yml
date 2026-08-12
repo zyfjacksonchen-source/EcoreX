@@ -574,18 +574,28 @@ jobs:
       - name: Refuse typed failure receipts and incomplete target set
         run: |
           test ! -e .candidate/input/stage-failure.json
-          for target in windows-x64 macos-arm64 macos-x64; do
-            test -d ".candidate/input/stages/$target/core"
-            test -d ".candidate/input/stages/$target/bootstrap"
-            test -d ".candidate/input/stages/$target/packs/browser"
-            test -d ".candidate/input/stages/$target/packs/image"
-            test -d ".candidate/input/stages/$target/packs/sandbox"
-            test -f ".candidate/input/receipts/$target/core.json"
-            test -f ".candidate/input/receipts/$target/bootstrap.json"
-            test -f ".candidate/input/receipts/$target/browser.json"
-            test -f ".candidate/input/receipts/$target/image.json"
-            test -f ".candidate/input/receipts/$target/sandbox.json"
-          done
+          python - <<'PY'
+          from pathlib import Path
+          from ecorex.pack_catalog import REQUIRED_CAPABILITY_PACK_IDS
+
+          root = Path(".candidate/input")
+          expected_packs = set(REQUIRED_CAPABILITY_PACK_IDS)
+          for target in ("windows-x64", "macos-arm64", "macos-x64"):
+              stages = root / "stages" / target
+              receipts = root / "receipts" / target
+              if not (stages / "core").is_dir() or not (stages / "bootstrap").is_dir():
+                  raise SystemExit(f"{target} Core or Bootstrap is missing")
+              observed_packs = {
+                  path.name for path in (stages / "packs").iterdir() if path.is_dir()
+              }
+              observed_receipts = {
+                  path.stem for path in receipts.glob("*.json") if path.is_file()
+              }
+              if observed_packs != expected_packs or observed_receipts != {
+                  "core", "bootstrap", *expected_packs
+              }:
+                  raise SystemExit(f"{target} stage set is incomplete")
+          PY
 
       - name: Upload consolidated immutable stage input
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -668,7 +678,7 @@ jobs:
         id: commit
         run: echo "created_at=$(git show -s --format=%cI ${{ github.sha }})" >> "$GITHUB_OUTPUT"
 
-      - name: Assemble fixed 24-stage recipe
+      - name: Assemble fixed 21-stage recipe
         env:
           ECOREX_RELEASE_MIRROR_BASE_URL: ${{ vars.ECOREX_RELEASE_MIRROR_BASE_URL }}
           ECOREX_RELEASE_CDN_BASE_URL: ${{ vars.ECOREX_RELEASE_CDN_BASE_URL }}

@@ -27,6 +27,7 @@ interface UseExtensionSessionOptions {
   client: RuntimeClient;
   bootstrap: BootstrapResponse | null;
   formatError: (error: unknown) => string;
+  mcpProjectId: string | null;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -58,6 +59,7 @@ export function useExtensionSession({
   client,
   bootstrap,
   formatError,
+  mcpProjectId,
 }: UseExtensionSessionOptions) {
   const [extensionSnapshot, setExtensionSnapshot] = useState<ExtensionCatalogSnapshot | null>(
     bootstrap?.extensions ?? null,
@@ -298,7 +300,7 @@ export function useExtensionSession({
     signal?: AbortSignal,
   ): Promise<Record<string, MCPOAuthStatusProjection>> => {
     try {
-      const response = await client.mcpOAuthStatuses(signal);
+      const response = await client.mcpOAuthStatuses(signal, mcpProjectId);
       const next = Object.fromEntries(response.items.map((item) => [item.service_id, item]));
       setMcpOAuthStatuses(next);
       return next;
@@ -311,7 +313,7 @@ export function useExtensionSession({
       setExtensionError(`扩展服务授权状态读取失败：${formatError(error)}`);
       return {};
     }
-  }, [client, formatError]);
+  }, [client, formatError, mcpProjectId]);
 
   const beginMcpOAuth = useCallback(async (serviceId: string): Promise<boolean> => {
     if (mcpOAuthBusy) return false;
@@ -323,7 +325,7 @@ export function useExtensionSession({
     setMcpOAuthBusy(serviceId);
     setExtensionError(null);
     try {
-      const challenge = await client.beginMcpOAuth(serviceId);
+      const challenge = await client.beginMcpOAuth(serviceId, mcpProjectId);
       if (challenge.service_id !== serviceId || challenge.expires_at * 1000 <= Date.now()) {
         throw new Error("扩展服务返回了无效或过期的授权会话。");
       }
@@ -348,14 +350,14 @@ export function useExtensionSession({
     } finally {
       setMcpOAuthBusy(null);
     }
-  }, [client, formatError, mcpOAuthBusy, refreshMcpOAuth]);
+  }, [client, formatError, mcpOAuthBusy, mcpProjectId, refreshMcpOAuth]);
 
   const clearMcpOAuth = useCallback(async (serviceId: string): Promise<boolean> => {
     if (mcpOAuthBusy) return false;
     setMcpOAuthBusy(serviceId);
     setExtensionError(null);
     try {
-      await client.clearMcpOAuth(serviceId);
+      await client.clearMcpOAuth(serviceId, mcpProjectId);
       await refreshMcpOAuth();
       return true;
     } catch (error) {
@@ -364,7 +366,7 @@ export function useExtensionSession({
     } finally {
       setMcpOAuthBusy(null);
     }
-  }, [client, formatError, mcpOAuthBusy, refreshMcpOAuth]);
+  }, [client, formatError, mcpOAuthBusy, mcpProjectId, refreshMcpOAuth]);
 
   const refreshSkillHub = useCallback(async (
     query = "",

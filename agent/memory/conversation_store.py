@@ -753,13 +753,17 @@ class ConversationStore:
                 ctx_row = conn.execute(
                     """
                     SELECT context_start_seq, project_id, project_name, project_path,
-                           project_memory_path, project_dreams_path
+                           project_memory_path, project_dreams_path, metadata_json
                     FROM sessions WHERE session_id = ?
                     """,
                     (session_id,),
                 ).fetchone()
                 ctx_start = ctx_row[0] if ctx_row else 0
                 project_payload = _session_project_payload(ctx_row, 1)
+                try:
+                    session_metadata = json.loads(ctx_row[6] or "{}") if ctx_row else {}
+                except Exception:
+                    session_metadata = {}
 
                 try:
                     rows = conn.execute(
@@ -832,6 +836,47 @@ class ConversationStore:
         summary = _history_context_summary(history_context_state)
         if summary and result:
             result[-1]["content"] = _content_with_history_context(result[-1].get("content"), summary)
+        compaction = (
+            session_metadata.get("cow_compaction")
+            if isinstance(session_metadata, dict)
+            else None
+        )
+        compaction_summary = str(
+            compaction.get("summary") if isinstance(compaction, dict) else ""
+        ).strip()
+        if compaction_summary:
+            from agent.protocol.message_utils import build_compaction_summary_text
+
+            try:
+                turn_count = max(0, int(compaction.get("turn_count") or 0))
+            except (TypeError, ValueError):
+                turn_count = 0
+            for message in result:
+                if message.get("role") != "user":
+                    continue
+                content = message.get("content")
+                if isinstance(content, str) and content.strip():
+                    message["content"] = build_compaction_summary_text(
+                        compaction_summary, turn_count, content
+                    )
+                    break
+                if not isinstance(content, list):
+                    continue
+                target = next(
+                    (
+                        block
+                        for block in content
+                        if isinstance(block, dict)
+                        and block.get("type") == "text"
+                        and str(block.get("text") or "").strip()
+                    ),
+                    None,
+                )
+                if target is not None:
+                    target["text"] = build_compaction_summary_text(
+                        compaction_summary, turn_count, str(target.get("text") or "")
+                    )
+                    break
         return result
 
     def append_messages(
@@ -840,7 +885,7 @@ class ConversationStore:
         messages: List[Dict[str, Any]],
         channel_type: str = "",
         project_context: Optional[Dict[str, Any]] = None,
-    ) -> None:
+    ) -> Optional[int]:
         """
         Append new messages to a session's history.
 
@@ -854,10 +899,11 @@ class ConversationStore:
                           Only written on session creation; ignored on update.
         """
         if not messages:
-            return
+            return None
 
         now = int(time.time())
         normalized_project = _normalize_project_context(project_context)
+        first_seq: Optional[int] = None
         with self._lock:
             conn = self._connect()
             try:
@@ -915,6 +961,7 @@ class ConversationStore:
                         (session_id,),
                     ).fetchone()
                     next_seq = row[0] + 1
+                    first_seq = next_seq
 
                     for msg in messages:
                         role = msg.get("role", "")
@@ -963,6 +1010,7 @@ class ConversationStore:
                                     break
             finally:
                 conn.close()
+        return first_seq
 
     def clear_context(self, session_id: str) -> int:
         """
@@ -985,6 +1033,56 @@ class ConversationStore:
                         (new_start, session_id),
                     )
                     return new_start
+            finally:
+                conn.close()
+
+    def set_compaction_state(
+        self,
+        session_id: str,
+        *,
+        summary: str,
+        turn_count: int,
+        context_start_seq: Optional[int] = None,
+    ) -> None:
+        """Persist Cow's working-context summary without rewriting message rows."""
+        summary = str(summary or "").strip()
+        if not summary:
+            return
+        with self._lock:
+            conn = self._connect()
+            try:
+                with conn:
+                    row = conn.execute(
+                        "SELECT metadata_json FROM sessions WHERE session_id = ?",
+                        (session_id,),
+                    ).fetchone()
+                    if row is None:
+                        return
+                    try:
+                        metadata = json.loads(row[0] or "{}")
+                    except Exception:
+                        metadata = {}
+                    if not isinstance(metadata, dict):
+                        metadata = {}
+                    metadata["cow_compaction"] = {
+                        "summary": summary,
+                        "turn_count": max(0, int(turn_count)),
+                    }
+                    if context_start_seq is None:
+                        conn.execute(
+                            "UPDATE sessions SET metadata_json = ? WHERE session_id = ?",
+                            (json.dumps(metadata, ensure_ascii=False), session_id),
+                        )
+                    else:
+                        conn.execute(
+                            "UPDATE sessions SET metadata_json = ?, context_start_seq = ? "
+                            "WHERE session_id = ?",
+                            (
+                                json.dumps(metadata, ensure_ascii=False),
+                                max(0, int(context_start_seq)),
+                                session_id,
+                            ),
+                        )
             finally:
                 conn.close()
 
@@ -2034,4 +2132,3 @@ def get_conversation_store() -> ConversationStore:
         _store_instance = ConversationStore(db_path)
         logger.debug(f"[ConversationStore] Using shared DB at: {db_path}")
         return _store_instance
-

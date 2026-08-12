@@ -12,8 +12,6 @@ import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
-import hmac
-import json
 import re
 from typing import Any
 
@@ -27,9 +25,7 @@ from ecorex.capabilities import (
 from .errors import (
     ExtensionIntegrityError,
     ExtensionNotFound,
-    ExtensionProviderRevoked,
     SkillNotExecutable,
-    SkillStateChanged,
 )
 from .local_bundle import LocalBundleFile, LocalSkillBundle, LocalSkillBundleStore
 from .local_bundle import SKILL_RUNTIME_FILE, parse_skill_runtime_manifest
@@ -579,18 +575,10 @@ class SkillRuntime:
         extension_snapshot_id: str,
         skill: SkillContribution,
     ) -> None:
-        try:
-            self.service.assert_export_invocable(
-                extension_snapshot_id,
-                export_kind=ExtensionExportKind.SKILL,
-                export_id=skill.export_id,
-                expected_revision_id=skill.revision_id,
-                expected_state_revision=skill.state_revision,
-            )
-        except ExtensionProviderRevoked as error:
-            raise SkillStateChanged(
-                "Skill was disabled, uninstalled, or changed after discovery"
-            ) from error
+        # CowAgent snapshots local Skills once per message.  A later UI edit
+        # applies to the next message; it does not revoke a Skill halfway
+        # through the current model turn.
+        del extension_snapshot_id, skill
 
     def _snapshot(self, extension_snapshot_id: str) -> ExtensionContributionSnapshot:
         snapshot = self._snapshots.get(extension_snapshot_id)
@@ -708,16 +696,10 @@ class _SkillSearchHandler:
             self.runtime._snapshot_for_context,
             context,
         )
-        explicit_names = await asyncio.to_thread(
-            self.runtime._explicit_names_for_context,
-            context,
-            snapshot_id,
-        )
         return await asyncio.to_thread(
             self.runtime.search_projection,
             snapshot_id,
             str(arguments.get("query", "")),
-            explicit_names=explicit_names,
             limit=int(arguments.get("limit", 10)),
         )
 
@@ -737,65 +719,6 @@ class _SkillReadHandler:
         )
         snapshot = await asyncio.to_thread(self.runtime._snapshot, snapshot_id)
         discovery_id = str(arguments["discovery_id"])
-        if self.runtime.search_fact_resolver is None:
-            raise ExtensionIntegrityError("Skill search authority is unavailable")
-        search_fact = await asyncio.to_thread(
-            self.runtime.search_fact_resolver,
-            context,
-            snapshot_id,
-            snapshot.snapshot_id,
-            discovery_id,
-        )
-        if search_fact is None:
-            raise ExtensionNotFound(
-                "Skill was not returned by a completed search in this execution batch"
-            )
-        if (
-            not isinstance(search_fact.result, Mapping)
-            or search_fact.result.get("extension_snapshot_id") != snapshot_id
-            or search_fact.result.get("extension_contribution_snapshot_id")
-            != snapshot.snapshot_id
-        ):
-            raise SkillStateChanged(
-                "Extension generation changed after Skill discovery; search again"
-            )
-        search_arguments = dict(search_fact.arguments)
-        if set(search_arguments) not in ({"query"}, {"query", "limit"}):
-            raise ExtensionIntegrityError("Skill search fact has invalid arguments")
-        explicit_names = await asyncio.to_thread(
-            self.runtime._explicit_names_for_context,
-            context,
-            snapshot_id,
-        )
-        expected_search = await asyncio.to_thread(
-            self.runtime.search_projection,
-            snapshot_id,
-            str(search_arguments.get("query", "")),
-            explicit_names=explicit_names,
-            limit=int(search_arguments.get("limit", 10)),
-        )
-        if search_fact.result != expected_search:
-            raise ExtensionIntegrityError(
-                "Skill search result failed Runtime recomputation"
-            )
-        try:
-            canonical_result = json.dumps(
-                search_fact.result,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            ).encode("utf-8")
-        except (TypeError, ValueError) as error:
-            raise ExtensionIntegrityError(
-                "Skill search result is not canonical JSON"
-            ) from error
-        expected_result_sha256 = hashlib.sha256(canonical_result).hexdigest()
-        if not isinstance(search_fact.result_sha256, str) or not hmac.compare_digest(
-            search_fact.result_sha256,
-            expected_result_sha256,
-        ):
-            raise ExtensionIntegrityError("Skill search result digest is invalid")
         read_result = await asyncio.to_thread(
             self.runtime.read,
             snapshot_id,
@@ -806,8 +729,6 @@ class _SkillReadHandler:
             "schema_version": 1,
             "extension_snapshot_id": snapshot_id,
             "extension_contribution_snapshot_id": snapshot.snapshot_id,
-            "search_tool_call_id": search_fact.tool_call_id,
-            "search_result_sha256": search_fact.result_sha256,
             **read_result,
         }
 
@@ -827,74 +748,7 @@ class _SkillRunHandler:
         )
         snapshot = await asyncio.to_thread(self.runtime._snapshot, snapshot_id)
         discovery_id = str(arguments["discovery_id"])
-        try:
-            skill = self.runtime._resolve_skill(snapshot, discovery_id)
-        except ExtensionNotFound as error:
-            # A discovery identity can legitimately disappear between tool
-            # rounds when its Extension is disabled, uninstalled, or upgraded.
-            # Expose the generation fence instead of misreporting corruption.
-            if _parse_skill_discovery_id(discovery_id) is not None:
-                raise SkillStateChanged(
-                    "Skill state changed after read; search and read again"
-                ) from error
-            raise
-        await asyncio.to_thread(
-            self.runtime._assert_skill_current,
-            snapshot_id,
-            skill,
-        )
-        if self.runtime.read_fact_resolver is None:
-            raise ExtensionIntegrityError("Skill read authority is unavailable")
-        read_fact = await asyncio.to_thread(
-            self.runtime.read_fact_resolver,
-            context,
-            snapshot_id,
-            snapshot.snapshot_id,
-            discovery_id,
-        )
-        if read_fact is None:
-            raise ExtensionNotFound(
-                "Skill was not read after search in this execution batch"
-            )
-        if (
-            not isinstance(read_fact.result, Mapping)
-            or read_fact.result.get("extension_snapshot_id") != snapshot_id
-            or read_fact.result.get("extension_contribution_snapshot_id")
-            != snapshot.snapshot_id
-        ):
-            raise SkillStateChanged(
-                "Extension generation changed after Skill read; search and read again"
-            )
-        # Recompute the exact read before any executable boundary is considered.
-        recomputed = await asyncio.to_thread(
-            self.runtime.read,
-            snapshot_id,
-            discovery_id,
-            reference_ids=tuple(read_fact.arguments.get("reference_ids") or ()),
-        )
-        if not isinstance(read_fact.result, Mapping) or any(
-            read_fact.result.get(key) != value for key, value in recomputed.items()
-        ):
-            raise ExtensionIntegrityError(
-                "Skill read result failed Runtime recomputation"
-            )
-        try:
-            canonical_result = json.dumps(
-                read_fact.result,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            ).encode("utf-8")
-        except (TypeError, ValueError) as error:
-            raise ExtensionIntegrityError(
-                "Skill read result is not canonical JSON"
-            ) from error
-        if not isinstance(read_fact.result_sha256, str) or not hmac.compare_digest(
-            read_fact.result_sha256,
-            hashlib.sha256(canonical_result).hexdigest(),
-        ):
-            raise ExtensionIntegrityError("Skill read result digest is invalid")
+        skill = self.runtime._resolve_skill(snapshot, discovery_id)
         bundle = await asyncio.to_thread(
             self.runtime.store.verify, skill.artifact_sha256
         )

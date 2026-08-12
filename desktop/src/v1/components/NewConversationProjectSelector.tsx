@@ -21,10 +21,10 @@ export default function NewConversationProjectSelector({
   onPick,
 }: NewConversationProjectSelectorProps) {
   const description = selectedProject
-    ? `使用 ${selectedProject.name} 项目文件夹开启会话。`
+    ? `使用 ${selectedProject.name} 作为文件、记忆和知识工作区。`
     : projects.length
       ? `从 ${projects.length.toLocaleString("zh-CN")} 个已有项目中选择。`
-      : "选择已有目录，作为会话的项目上下文。";
+      : "选择已有目录，作为会话唯一的文件、记忆和知识工作区。";
 
   return (
     <DropdownMenu.Root>

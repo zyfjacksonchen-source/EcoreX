@@ -19,6 +19,8 @@ from .models import (
     GatewayAccountUsageProjection,
     GatewayEvent,
     GatewayEventType,
+    GatewayWebSearchRequest,
+    GatewayWebSearchResponse,
     ModelGatewayRequest,
 )
 
@@ -32,6 +34,10 @@ class ModelGateway(Protocol):
     def stream(self, request: ModelGatewayRequest) -> AsyncIterator[GatewayEvent]:
         ...
 
+    async def search(
+        self, request: GatewayWebSearchRequest
+    ) -> GatewayWebSearchResponse: ...
+
 
 class RejectingGatewayCredentialProvider:
     def bearer_token(self) -> str:
@@ -43,6 +49,12 @@ class RejectingModelGateway:
         del request
         raise GatewayUnavailable("managed Model Gateway is not configured")
         yield  # pragma: no cover
+
+    async def search(
+        self, request: GatewayWebSearchRequest
+    ) -> GatewayWebSearchResponse:
+        del request
+        raise GatewayUnavailable("managed web search is not configured")
 
 
 class ManagedModelGatewayClient:
@@ -86,6 +98,9 @@ class ManagedModelGatewayClient:
         )
         self.usage_endpoint = (
             f"{parsed.scheme}://{parsed.hostname}/api/v1/usage"
+        )
+        self.web_search_endpoint = (
+            f"{parsed.scheme}://{parsed.hostname}/api/v1/web-search"
         )
         self.credentials = credentials
         self.max_request_bytes = max_request_bytes
@@ -313,6 +328,63 @@ class ManagedModelGatewayClient:
             return value
         except (ValueError, json.JSONDecodeError) as error:
             raise GatewayProtocolError("managed gateway catalog is invalid") from error
+        finally:
+            await response.aclose()
+
+    async def search(
+        self,
+        request: GatewayWebSearchRequest,
+    ) -> GatewayWebSearchResponse:
+        """Run authenticated Gateway-owned Web Search without provider secrets."""
+
+        try:
+            token = self.credentials.bearer_token()
+        except Exception:
+            raise GatewayAuthenticationError(
+                "managed gateway session is unavailable"
+            ) from None
+        if (
+            not isinstance(token, str)
+            or not 24 <= len(token) <= 4096
+            or any(not 33 <= ord(ch) <= 126 for ch in token)
+        ):
+            raise GatewayAuthenticationError("managed gateway session token is invalid")
+        try:
+            response = await self.client.post(
+                self.web_search_endpoint,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                    "Accept-Encoding": "identity",
+                    "Content-Type": "application/json",
+                    "X-EcoreX-Protocol": "1",
+                },
+                content=request.model_dump_json().encode("utf-8"),
+                follow_redirects=False,
+            )
+        except httpx.TimeoutException as error:
+            raise GatewayUnavailable("managed web search timed out") from error
+        except httpx.TransportError as error:
+            raise GatewayUnavailable("managed web search transport failed") from error
+        try:
+            if response.status_code in {401, 403}:
+                raise GatewayAuthenticationError(
+                    "managed web search authentication was rejected"
+                )
+            if response.status_code != 200:
+                raise GatewayUnavailable("managed web search is unavailable")
+            if len(response.content) > 1024 * 1024:
+                raise GatewayProtocolError("managed web search response is oversized")
+            media_type = response.headers.get("content-type", "").split(";", 1)[0].strip()
+            if media_type != "application/json":
+                raise GatewayProtocolError("managed web search response type is invalid")
+            if response.headers.get("content-encoding", "identity").casefold() != "identity":
+                raise GatewayProtocolError("managed web search encoding is unsupported")
+            return GatewayWebSearchResponse.model_validate(response.json())
+        except (ValueError, json.JSONDecodeError, TypeError) as error:
+            raise GatewayProtocolError(
+                "managed web search response is invalid"
+            ) from error
         finally:
             await response.aclose()
 

@@ -737,47 +737,6 @@ test("managed logout carries the current lease digest, CSRF, and one stable inte
   }
 });
 
-test("permission changes carry CSRF, optimistic revision, and a stable idempotency ID", async () => {
-  const requests: Request[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input, init) => {
-    const request = new Request(input, init);
-    requests.push(request);
-    return Response.json({
-      permissions: {
-        ...bootstrap.permissions,
-        profile: "full_access",
-        revision: 2,
-        full_access: true,
-        sandbox: "danger-full-access",
-        approval: "never",
-      },
-    });
-  };
-  try {
-    const client = new RuntimeClient({
-      apiBase: "http://127.0.0.1:8765",
-      bearerToken: "b".repeat(43),
-    });
-    client.acceptBootstrap(bootstrap);
-    const result = await client.updatePermission(
-      "full_access",
-      bootstrap.permissions.revision,
-      "permission_stable_retry",
-    );
-    const body = JSON.parse(await requests[0].text());
-
-    assert.equal(requests[0].method, "PUT");
-    assert.equal(requests[0].headers.get("x-ecorex-csrf"), bootstrap.csrf_token);
-    assert.equal(body.profile, "full_access");
-    assert.equal(body.expected_revision, 1);
-    assert.equal(body.client_request_id, "permission_stable_retry");
-    assert.equal(result.permissions.full_access, true);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
 test("extension catalog and actions use backend projections, revision fencing, and stable identity", async () => {
   const requests: Request[] = [];
   const originalFetch = globalThis.fetch;
@@ -2100,13 +2059,14 @@ test("user MCP client covers HTTPS server CRUD, test, and activation routes", as
       oauth_scope: "",
       authorization_hosts: [],
     };
-    const catalog = await client.userMcpServers();
-    await client.createUserMcpServer(payload);
-    await client.updateUserMcpServer("user.mcp/one", { ...payload, credential: undefined });
-    await client.mutateUserMcpServer("user.mcp/one", "test");
-    await client.mutateUserMcpServer("user.mcp/one", "enable");
-    await client.mutateUserMcpServer("user.mcp/one", "disable");
-    await client.deleteUserMcpServer("user.mcp/one");
+    const projectId = "project/current";
+    const catalog = await client.userMcpServers(undefined, projectId);
+    await client.createUserMcpServer(payload, projectId);
+    await client.updateUserMcpServer("user.mcp/one", { ...payload, credential: undefined }, projectId);
+    await client.mutateUserMcpServer("user.mcp/one", "test", projectId);
+    await client.mutateUserMcpServer("user.mcp/one", "enable", projectId);
+    await client.mutateUserMcpServer("user.mcp/one", "disable", projectId);
+    await client.deleteUserMcpServer("user.mcp/one", projectId);
 
     assert.equal(catalog.items[0]?.credential_configured, true);
     assert.equal("credential" in catalog.items[0]!, false);
@@ -2116,9 +2076,10 @@ test("user MCP client covers HTTPS server CRUD, test, and activation routes", as
       requests.slice(3, 6).map((request) => new URL(request.url).pathname.split("/").at(-1)),
       ["test", "enable", "disable"],
     );
-    assert.match(requests[2]?.url ?? "", /user\.mcp%2Fone$/u);
+    assert.match(new URL(requests[2]?.url ?? "").pathname, /user\.mcp%2Fone$/u);
     assert.equal(requests[6]?.method, "DELETE");
     assert.equal(requests[6]?.headers.get("x-ecorex-csrf"), "mcp-csrf-token");
+    assert.ok(requests.every((request) => new URL(request.url).searchParams.get("project_id") === projectId));
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -2600,16 +2561,6 @@ test("settings transports reject malformed, extra, and cross-identity Runtime da
   };
   const payloads: unknown[] = [
     {
-      revision: 0,
-      active_learned_records: 1,
-      active_user_files: 1,
-      factory_records: 0,
-      tombstoned_records: 0,
-      tombstoned_files: 0,
-      resettable_count: 99,
-      latest_reset: null,
-    },
-    {
       status: "available",
       entry_count: 1,
       can_delete: true,
@@ -2636,7 +2587,6 @@ test("settings transports reject malformed, extra, and cross-identity Runtime da
       bearerToken: "b".repeat(43),
     });
     for (const operation of [
-      () => client.memory(),
       () => client.migrationQuarantine(),
       () => client.outputLocations(),
       () => client.outputPreference(),
@@ -2651,55 +2601,6 @@ test("settings transports reject malformed, extra, and cross-identity Runtime da
       await assert.rejects(operation(), RuntimeContractError);
     }
     assert.equal(payloads.length, 0);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("memory transport preserves the authoritative reset identity and derived count", async () => {
-  const originalFetch = globalThis.fetch;
-  const requests: Request[] = [];
-  const reset = {
-    reset_id: "memreset_1",
-    status: "active" as const,
-    affected_records: 2,
-    affected_files: 1,
-    created_at: bootstrap.server_time,
-    undo_until: "2026-07-16T08:00:00Z",
-    updated_at: bootstrap.server_time,
-    can_undo: true,
-  };
-  const memory = {
-    revision: 2,
-    active_learned_records: 2,
-    active_user_files: 1,
-    factory_records: 1,
-    tombstoned_records: 0,
-    tombstoned_files: 0,
-    resettable_count: 3,
-    latest_reset: reset,
-  };
-  globalThis.fetch = async (input, init) => {
-    const request = new Request(input, init);
-    requests.push(request);
-    return Response.json(request.method === "GET" ? memory : { memory, reset });
-  };
-  try {
-    const client = new RuntimeClient({
-      apiBase: "http://127.0.0.1:8765/api/v1",
-      bearerToken: "b".repeat(43),
-      csrfToken: "csrf-memory",
-    });
-    assert.equal((await client.memory()).resettable_count, 3);
-    assert.equal(
-      (await client.resetLearnedMemory("reset-memory-stable")).reset.reset_id,
-      reset.reset_id,
-    );
-    assert.equal(requests[1]!.headers.get("x-ecorex-csrf"), "csrf-memory");
-    assert.deepEqual(await requests[1]!.clone().json(), {
-      confirmed: true,
-      client_request_id: "reset-memory-stable",
-    });
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -152,6 +152,7 @@ def create_production_pack_adapter_resolver() -> Callable[
             pack_python_resolver=cached_pack_python,
         )
 
+    setattr(resolver, "_resolve_pack_python_for_composition", cached_pack_python)
     return resolver
 
 

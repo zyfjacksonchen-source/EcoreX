@@ -368,7 +368,7 @@ def _coordinator(
     )
 
 
-def test_core_and_six_packs_stage_and_activate_as_one_slot(tmp_path: Path) -> None:
+def test_core_and_required_packs_stage_and_activate_as_one_slot(tmp_path: Path) -> None:
     manifest, files = _release()
     install_root = tmp_path / "install"
     coordinator = _coordinator(
@@ -388,7 +388,6 @@ def test_core_and_six_packs_stage_and_activate_as_one_slot(tmp_path: Path) -> No
         "image",
         "ocr",
         "office",
-        "sandbox",
     ]
     for pack_id in REQUIRED_CAPABILITY_PACK_IDS:
         expected = {
@@ -472,7 +471,10 @@ def test_partial_signed_pack_set_is_rejected_before_transaction(tmp_path: Path) 
             artifact
             for artifact in manifest.artifacts
             if artifact.artifact_id
-            != "capability-pack-sandbox-windows-x64-manifest"
+            != (
+                f"capability-pack-{REQUIRED_CAPABILITY_PACK_IDS[-1]}-"
+                "windows-x64-manifest"
+            )
         ),
     )
     coordinator = _coordinator(

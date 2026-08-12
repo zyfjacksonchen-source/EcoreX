@@ -14,12 +14,14 @@ from .channel_self_service import (
 )
 from .channel_runtime import (
     ChannelInboundMessage,
+    ChannelOutboundReply,
     ChannelOutboundText,
     ChannelRuntimeDispatcher,
     ChannelTextTransport,
     ChannelTurnTerminalFailure,
     ChannelTurnReceipt,
 )
+from .cow_channel import CowChannelRuntimeBridge, CowChannelService
 from .api import create_connector_router
 from .composition import (
     ConnectorComposition,
@@ -103,6 +105,7 @@ __all__ = [
     "ChannelDeviceLifecycleAdapter",
     "ChannelLifecycleAdapter",
     "ChannelInboundMessage",
+    "ChannelOutboundReply",
     "ChannelOutboundText",
     "ChannelRuntimeDispatcher",
     "ChannelSelfService",
@@ -111,6 +114,8 @@ __all__ = [
     "ChannelTextTransport",
     "ChannelTurnTerminalFailure",
     "ChannelTurnReceipt",
+    "CowChannelRuntimeBridge",
+    "CowChannelService",
     "ConnectorActionSpec",
     "ConnectorAdapter",
     "ConnectorAuthError",

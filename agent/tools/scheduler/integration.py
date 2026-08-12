@@ -26,6 +26,15 @@ _init_lock = threading.Lock()
 _SCHEDULER_RUN_REQUEST_ID_KEY = "_scheduler_run_request_id"
 
 
+def bind_scheduler_runtime(task_store, scheduler_service) -> None:
+    """Bind the product's single Cow scheduler runtime for model tools."""
+
+    global _task_store, _scheduler_service
+    with _init_lock:
+        _task_store = task_store
+        _scheduler_service = scheduler_service
+
+
 def _summary_hash(value) -> str:
     text = str(value or "")
     if not text:

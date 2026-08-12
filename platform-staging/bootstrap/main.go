@@ -32,16 +32,18 @@ import (
 )
 
 const (
-	maxIndexBytes      = 256 * 1024
-	maxManifestBytes   = 1024 * 1024
-	maxEvidenceBytes   = 16 * 1024 * 1024
-	maxBootstrapBytes  = 10 * 1024 * 1024
-	maxCoreBytes       = 150 * 1024 * 1024
-	maxPackBytes       = 500 * 1024 * 1024
-	maxFiles           = 50_000
-	artifactChunkBytes = 8 * 1024 * 1024
-	productWebUIURL    = "http://127.0.0.1:8765/"
-	runtimeOwnerDomain = "e-mate.runtime-owner.v1\x00"
+	maxIndexBytes        = 256 * 1024
+	maxManifestBytes     = 1024 * 1024
+	maxMetadataBytes     = 16 * 1024 * 1024
+	maxSBOMBytes         = 64 * 1024 * 1024
+	maxBootstrapBytes    = 10 * 1024 * 1024
+	maxCoreArchiveBytes  = 150 * 1024 * 1024
+	maxCoreExpandedBytes = 256 * 1024 * 1024
+	maxPackBytes         = 500 * 1024 * 1024
+	maxFiles             = 50_000
+	artifactChunkBytes   = 8 * 1024 * 1024
+	productWebUIURL      = "http://127.0.0.1:8765/"
+	runtimeOwnerDomain   = "e-mate.runtime-owner.v1\x00"
 )
 
 var (
@@ -678,7 +680,7 @@ func validateLocalReleaseEvidence(releaseDir string, manifestBytes []byte, relea
 	if metadataErr != nil || sbomErr != nil {
 		return fmt.Errorf("local release evidence verification failed")
 	}
-	metadataBytes, err := readStableRegularFile(metadataPath, maxEvidenceBytes)
+	metadataBytes, err := readStableRegularFile(metadataPath, maxMetadataBytes)
 	if err != nil {
 		return fmt.Errorf("local release evidence verification failed")
 	}
@@ -712,7 +714,7 @@ func validateLocalReleaseEvidence(releaseDir string, manifestBytes []byte, relea
 			return fmt.Errorf("local release evidence verification failed")
 		}
 	}
-	sbomBytes, err := readStableRegularFile(sbomPath, maxEvidenceBytes)
+	sbomBytes, err := readStableRegularFile(sbomPath, maxSBOMBytes)
 	if err != nil || sha256Hex(sbomBytes) != metadata.SBOMSHA256 {
 		return fmt.Errorf("local release evidence verification failed")
 	}
@@ -2038,7 +2040,7 @@ func validateManifest(value *manifest, discovery *indexRelease, keys map[string]
 			return fmt.Errorf("release artifact contract is invalid")
 		}
 		seen[item.ArtifactID] = true
-		if strings.HasPrefix(item.ArtifactID, "core-") && item.SizeBytes > maxCoreBytes {
+		if strings.HasPrefix(item.ArtifactID, "core-") && item.SizeBytes > maxCoreArchiveBytes {
 			return fmt.Errorf("Core artifact exceeds its signed product bound")
 		}
 		if strings.HasSuffix(item.ArtifactID, "-manifest") && item.SizeBytes > maxManifestBytes {
@@ -2306,7 +2308,7 @@ func verifySignature(payload []byte, value signature, keys map[string]ed25519.Pu
 func requiredArtifacts(value *manifest, platform, architecture string) ([]artifact, error) {
 	target := platform + "-" + architecture
 	ids := []string{"core-" + target}
-	for _, packID := range []string{"browser", "channels", "image", "ocr", "office", "sandbox"} {
+	for _, packID := range []string{"browser", "channels", "image", "ocr", "office"} {
 		base := "capability-pack-" + packID + "-" + target
 		ids = append(ids, base, base+"-manifest")
 	}
@@ -2638,7 +2640,7 @@ func extractCore(archivePath, destination string) error {
 			continue
 		}
 		total += int64(entry.UncompressedSize64)
-		if total > maxCoreBytes {
+		if total > maxCoreExpandedBytes {
 			return fmt.Errorf("Core archive expands beyond its bound")
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {

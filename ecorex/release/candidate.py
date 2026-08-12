@@ -17,6 +17,7 @@ from ecorex._version import __version__
 from ecorex.pack_catalog import (
     CAPABILITY_PACK_SERVICE_IDS,
     CAPABILITY_PACK_TOOL_IDS,
+    required_capability_pack_projection,
 )
 from ecorex.integration.pack_python import (
     PACK_PYTHON_MANIFEST,
@@ -67,7 +68,6 @@ PACK_REQUIRED_FILES: Mapping[str, tuple[str, ...]] = {
     "image": ("__main__.py", "ecorex-image-pack.json"),
     "ocr": ("ecorex-dependency-pack.json", "runtime-inventory.json"),
     "office": ("ecorex-dependency-pack.json", "runtime-inventory.json"),
-    "sandbox": ("__main__.py", "ecorex-pack.json"),
 }
 STAGE_GATES: Mapping[str, frozenset[str]] = {
     "core": frozenset(
@@ -94,9 +94,6 @@ STAGE_GATES: Mapping[str, frozenset[str]] = {
     ),
     "office": frozenset(
         {"pack-contract", "office-format-smoke", "format-closure", "supply-chain"}
-    ),
-    "sandbox": frozenset(
-        {"pack-contract", "sandbox-boundary", "process-tree", "supply-chain"}
     ),
 }
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -825,7 +822,7 @@ def _stage_input(
             kind=ArtifactKind.CAPABILITY_PACK,
             platform=platform,
             architecture=architecture,
-            executable_paths=("__main__.py",) if pack_id in {"browser", "sandbox"} else (),
+            executable_paths=("__main__.py",) if pack_id == "browser" else (),
             pack_id=pack_id,
             pack_tool_ids=PACK_TOOLS[str(pack_id)],
             pack_service_ids=PACK_SERVICES[str(pack_id)],
@@ -964,18 +961,12 @@ def _validate_stage_payload(
         except Exception:
             raise CandidateBuildError("stage_runtime_config_invalid") from None
         expected_pack_paths = tuple(
-            (
-                pack,
-                (
-                    f"capability-packs/{pack}/ecorex-capability-pack-{pack}-"
-                    f"{platform}-{architecture}-{__version__}.json"
-                ),
-                (
-                    f"capability-packs/{pack}/ecorex-capability-pack-{pack}-"
-                    f"{platform}-{architecture}-{__version__}.zip"
-                ),
+            (pack["pack_id"], pack["manifest"], pack["artifact"])
+            for pack in required_capability_pack_projection(
+                platform=platform,
+                architecture=architecture,
+                version=__version__,
             )
-            for pack in PACK_TOOLS
         )
         if (
             runtime_config.identity.version != __version__
@@ -988,7 +979,7 @@ def _validate_stage_payload(
             != expected_pack_paths
         ):
             raise CandidateBuildError("stage_runtime_pack_projection_invalid")
-    if pack_id in {"browser", "sandbox"}:
+    if pack_id == "browser":
         descriptor = _read_json(root / "ecorex-pack.json", code="stage_pack_contract_invalid")
         expected_tools = list(PACK_TOOLS[pack_id])
         if (

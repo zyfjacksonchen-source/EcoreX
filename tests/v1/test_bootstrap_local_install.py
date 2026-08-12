@@ -297,7 +297,7 @@ def _sandbox_test_boundary(tmp_path: Path, monkeypatch) -> dict[str, str]:
     }
 
 
-def test_signed_bootstrap_handoff_stages_core_and_six_packs_atomically(
+def test_signed_bootstrap_handoff_stages_core_and_required_packs_atomically(
     tmp_path: Path,
     monkeypatch,
 ) -> None:

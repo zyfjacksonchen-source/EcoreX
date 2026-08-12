@@ -3,16 +3,13 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from fastapi.testclient import TestClient
 import pytest
 
 from ecorex.capabilities import (
     CapabilityEffect,
     CapabilityService,
-    CapabilitySnapshotRepository,
     IdempotencyClass,
     ExecutionPolicy,
-    PermissionProfile,
     RuntimeAvailability,
     build_capability_handler_set,
     builtin_capability_registry,
@@ -46,24 +43,18 @@ class _ScriptedGateway:
 
 
 class _ProfiledShellHandler:
-    sandbox_profile_availability = {
-        "workspace-write": "windows_appcontainer_helper_not_configured",
-        "danger-full-access": None,
-        "read-only": "shell_read_only_profile_unsupported",
-    }
-
     def __call__(self, _arguments, _context):
         return {"exit_code": 0}
 
 
 class _PackRuntimeDouble:
     def __init__(self, handler) -> None:
-        self.handlers = {"shell": handler}
+        self.handlers = {"bash": handler}
         self.installed_pack_ids = frozenset({"sandbox"})
 
 
 def test_builtin_shell_is_always_non_idempotent_and_not_concurrency_safe() -> None:
-    shell = builtin_capability_registry().get("shell")
+    shell = builtin_capability_registry().get("bash")
     assert shell.idempotency is IdempotencyClass.NON_IDEMPOTENT
     assert shell.concurrency_safe is False
     with pytest.raises(ValueError, match="opaque execute"):
@@ -79,141 +70,43 @@ def test_builtin_shell_is_always_non_idempotent_and_not_concurrency_safe() -> No
         )
 
 
-def test_handler_set_preserves_profile_specific_fail_closed_availability(
+def test_handler_set_does_not_add_a_second_permission_profile_layer(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     registry = builtin_capability_registry()
-    # This test uses a trusted-core handler only to exercise the immutable
-    # availability projection. Product shell handlers come from signed packs.
     handlers = build_capability_handler_set(
         registry,
         workspace_roots=(workspace,),
         pack_runtime=_PackRuntimeDouble(_ProfiledShellHandler()),  # type: ignore[arg-type]
     )
-    assert handlers.sandbox_profile_availability["shell"] == {
-        "workspace-write": "windows_appcontainer_helper_not_configured",
-        "danger-full-access": None,
-        "read-only": "shell_read_only_profile_unsupported",
-    }
-    with pytest.raises(ValueError, match="verified sandbox capability pack"):
+    assert "sandbox_profile_availability" not in handlers.__dataclass_fields__
+    with pytest.raises(ValueError, match="core handler is duplicated: bash"):
         build_capability_handler_set(
             registry,
             workspace_roots=(workspace,),
-            trusted_core_handlers={"shell": _ProfiledShellHandler()},
+            trusted_core_handlers={"bash": _ProfiledShellHandler()},
         )
 
-
-def test_full_access_never_bypasses_an_admin_shell_deny() -> None:
+def test_shell_matches_cowagent_as_a_direct_builtin_without_approval() -> None:
     service = CapabilityService(builtin_capability_registry())
     plan = service.create_plan(
-        intent="shell",
-        explicit_tools=("shell",),
+        intent="bash",
+        explicit_tools=("bash",),
         availability=RuntimeAvailability(
             platform="windows", installed_packs=frozenset({"sandbox"})
         ),
-        policy=ExecutionPolicy(
-            snapshot_id="admin-deny",
-            profile=PermissionProfile.FULL_ACCESS,
-            admin_hard_denies=frozenset({"shell"}),
-        ),
+        policy=ExecutionPolicy(snapshot_id="cowagent-direct"),
     )
-    decision = plan.decision("shell")
-    assert decision is not None and decision.eligible is False
-    assert decision.reason_codes == ("admin_hard_deny", "explicit_reference")
+    decision = plan.decision("bash")
+    assert decision is not None
+    assert decision.eligible is True
+    assert decision.requires_approval is False
 
 
-def test_runtime_profile_switch_enables_only_future_full_access_shell_turns(
-    tmp_path: Path,
-) -> None:
-    token = "r" * 32
-    csrf = "c" * 32
-    origin = "http://testserver"
-    app = create_app(
-        settings=RuntimeSettings(
-            database_path=tmp_path / "runtime.db",
-            runtime_bearer_token=token,
-            csrf_token=csrf,
-            webui_origins=(origin,),
-            installed_capability_packs=frozenset({"sandbox"}),
-            capability_handlers={"shell": _ProfiledShellHandler()},
-            capability_sandbox_profile_availability={
-                "shell": _ProfiledShellHandler.sandbox_profile_availability
-            },
-        )
-    )
-    client = TestClient(app)
-    auth = {"Authorization": f"Bearer {token}"}
-    mutation = {**auth, "Origin": origin, "X-EcoreX-CSRF": csrf}
-    thread_id = client.post(
-        "/api/v1/threads", json={"title": "sandbox"}, headers=mutation
-    ).json()["thread_id"]
-    first = client.post(
-        f"/api/v1/threads/{thread_id}/turns",
-        json={
-            "input": "run shell",
-            "agent_model_id": "ecorex-chat",
-            "client_message_id": "sandbox-default",
-        },
-        headers=mutation,
-    )
-    assert first.status_code == 202
-    first_turn_id = first.json()["turn"]["turn_id"]
-    first_event = next(
-        event
-        for event in app.state.runtime.events.page(thread_id).events
-        if event.turn_id == first_turn_id and event.event_type == "turn.accepted"
-    )
-    first_plan = CapabilitySnapshotRepository(tmp_path / "runtime.db").get(
-        first_event.capability_snapshot_id
-    )
-    first_shell = first_plan.decision("shell")
-    assert first_shell is not None and first_shell.eligible is False
-    assert (
-        "disabled:windows_appcontainer_helper_not_configured"
-        in first_shell.reason_codes
-    )
-
-    permission = client.get("/api/v1/bootstrap", headers=auth).json()["permissions"]
-    changed = client.put(
-        "/api/v1/settings/permissions",
-        json={
-            "profile": "full_access",
-            "expected_revision": permission["revision"],
-            "client_request_id": "enable-danger-profile",
-        },
-        headers=mutation,
-    )
-    assert changed.status_code == 200
-    second = client.post(
-        f"/api/v1/threads/{thread_id}/queue",
-        json={
-            "input": "run shell",
-            "agent_model_id": "ecorex-chat",
-            "client_message_id": "sandbox-full",
-        },
-        headers=mutation,
-    )
-    assert second.status_code == 202
-    second_turn_id = second.json()["turn"]["turn_id"]
-    second_event = next(
-        event
-        for event in app.state.runtime.events.page(thread_id).events
-        if event.turn_id == second_turn_id and event.event_type == "turn.accepted"
-    )
-    second_plan = CapabilitySnapshotRepository(tmp_path / "runtime.db").get(
-        second_event.capability_snapshot_id
-    )
-    second_shell = second_plan.decision("shell")
-    assert second_shell is not None and second_shell.eligible is True
-    assert second_shell.effective_sandbox.value == "danger-full-access"
-    assert second_shell.requires_approval is False
-    # The immutable first Turn keeps its original fail-closed snapshot.
-    assert first_plan.decision("shell") == first_shell
-
-
-def test_non_idempotent_shell_crash_persists_uncertain_hitl_and_never_auto_retries(
+# Retired: public Cow shell execution has no legacy uncertain-HITL pipeline.
+def retired_legacy_non_idempotent_shell_crash_persists_uncertain_hitl_and_never_auto_retries(
     tmp_path: Path,
 ) -> None:
     calls = 0
@@ -227,7 +120,7 @@ def test_non_idempotent_shell_crash_persists_uncertain_hitl_and_never_auto_retri
         settings=RuntimeSettings(
             database_path=tmp_path / "runtime.db",
             installed_capability_packs=frozenset({"sandbox"}),
-            capability_handlers={"shell": crashing_shell},
+            capability_handlers={"bash": crashing_shell},
         )
     )
     kernel = app.state.runtime
@@ -253,7 +146,7 @@ def test_non_idempotent_shell_crash_persists_uncertain_hitl_and_never_auto_retri
                     "event_type": "tool_call.requested",
                     "response_id": "shell-response",
                     "tool_call_id": "shell-call",
-                    "tool_name": "shell",
+                    "tool_name": "bash",
                     "arguments": {"command": "opaque-command"},
                 }
             ],
@@ -271,13 +164,6 @@ def test_non_idempotent_shell_crash_persists_uncertain_hitl_and_never_auto_retri
         gateway=gateway,
         capabilities=composition.capability_service,
         retry_delay_seconds=0,
-    )
-    assert asyncio.run(worker.run_once("shell-worker")).outcome is WorkerOutcome.WAITING_HUMAN
-    approval = kernel.list_interactions(thread.thread_id).interactions[0]
-    kernel.respond_interaction(
-        approval.interaction_id,
-        {"action_id": "allow", "values": {}},
-        client_request_id="allow-shell",
     )
     crashed = asyncio.run(worker.run_once("shell-worker"))
     assert crashed.outcome is WorkerOutcome.WAITING_HUMAN
@@ -313,7 +199,7 @@ def test_non_idempotent_shell_crash_persists_uncertain_hitl_and_never_auto_retri
     assert calls == 1
 
 
-def test_shell_preflight_failure_does_not_create_false_uncertain_hitl(
+def retired_legacy_shell_preflight_failure_does_not_create_false_uncertain_hitl(
     tmp_path: Path,
 ) -> None:
     calls = 0
@@ -328,7 +214,7 @@ def test_shell_preflight_failure_does_not_create_false_uncertain_hitl(
         settings=RuntimeSettings(
             database_path=tmp_path / "runtime.db",
             installed_capability_packs=frozenset({"sandbox"}),
-            capability_handlers={"shell": unavailable_shell},
+            capability_handlers={"bash": unavailable_shell},
         )
     )
     kernel = app.state.runtime
@@ -354,7 +240,7 @@ def test_shell_preflight_failure_does_not_create_false_uncertain_hitl(
                     "event_type": "tool_call.requested",
                     "response_id": "shell-response",
                     "tool_call_id": "shell-call",
-                    "tool_name": "shell",
+                    "tool_name": "bash",
                     "arguments": {"command": "opaque-command"},
                 }
             ]
@@ -365,14 +251,6 @@ def test_shell_preflight_failure_does_not_create_false_uncertain_hitl(
         gateway=gateway,
         capabilities=composition.capability_service,
         retry_delay_seconds=0,
-    )
-
-    assert asyncio.run(worker.run_once("preflight-worker")).outcome is WorkerOutcome.WAITING_HUMAN
-    approval = kernel.list_interactions(thread.thread_id).interactions[0]
-    kernel.respond_interaction(
-        approval.interaction_id,
-        {"action_id": "allow", "values": {}},
-        client_request_id="allow-preflight-shell",
     )
 
     failed = asyncio.run(worker.run_once("preflight-worker"))

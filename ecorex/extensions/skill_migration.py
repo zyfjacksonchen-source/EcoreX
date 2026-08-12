@@ -20,21 +20,7 @@ SKILL_ALIASES = {
     "pdf": "office-pdf",
     "lark-cli": "feishu-lark",
 }
-EXCLUDED_SKILL_SLUGS = frozenset(
-    {
-        "linkai-cli",
-        "post-job",
-        "resume-assistant",
-        "plugin-gpt-image",
-        "legal",
-        "architecture",
-        "academic-thesis-review",
-        "gold",
-        "akshare-analysis",
-        "stock-analysis",
-        "travel-manager",
-    }
-)
+EXCLUDED_SKILL_SLUGS: frozenset[str] = frozenset()
 _SLUG = re.compile(r"^[a-z][a-z0-9-]{0,95}$")
 
 

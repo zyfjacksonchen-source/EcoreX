@@ -108,11 +108,11 @@ def _principal() -> GatewayPrincipal:
     )
 
 
-def test_gateway_request_enforces_16_visible_and_12_disclosed_boundaries() -> None:
+def test_gateway_request_enforces_visible_and_disclosed_boundaries() -> None:
     direct = [_descriptor(f"direct_{index}") for index in range(MAX_MODEL_VISIBLE_TOOLS)]
-    assert len(_request(direct_tools=direct).direct_tools) == 16
+    assert len(_request(direct_tools=direct).direct_tools) == MAX_MODEL_VISIBLE_TOOLS
 
-    with pytest.raises(ValueError, match="at most 16|count exceeds"):
+    with pytest.raises(ValueError, match=f"at most {MAX_MODEL_VISIBLE_TOOLS}|count exceeds"):
         _request(direct_tools=[*direct, _descriptor("direct_overflow")])
 
     disclosed = [

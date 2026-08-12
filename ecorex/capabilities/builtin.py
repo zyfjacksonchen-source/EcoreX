@@ -8,7 +8,6 @@ silently remove sibling tools when one intent is promoted.
 from __future__ import annotations
 
 from .models import (
-    ApprovalRequirement,
     CapabilityEffect,
     Exposure,
     IdempotencyClass,
@@ -84,6 +83,19 @@ _FETCH_INPUT = {
     "required": ["url"],
     "additionalProperties": False,
 }
+_WEB_SEARCH_INPUT = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "count": {"type": "integer", "minimum": 1, "maximum": 10},
+        "freshness": {
+            "type": "string",
+            "enum": ["any", "day", "week", "month", "year"],
+        },
+    },
+    "required": ["query"],
+    "additionalProperties": False,
+}
 _VISION_INPUT = {
     "type": "object",
     "properties": {
@@ -102,6 +114,32 @@ _VISION_INPUT = {
         "instruction": {"type": "string", "minLength": 1, "maxLength": 20000},
     },
     "required": ["instruction"],
+    "anyOf": [
+        {
+            "type": "object",
+            "properties": {
+                "artifact_ids": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "minItems": 1,
+                    "maxItems": 4,
+                }
+            },
+            "required": ["artifact_ids"],
+        },
+        {
+            "type": "object",
+            "properties": {
+                "attachment_ids": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "minItems": 1,
+                    "maxItems": 4,
+                }
+            },
+            "required": ["attachment_ids"],
+        },
+    ],
     "additionalProperties": False,
 }
 _OCR_INPUT = {
@@ -129,81 +167,42 @@ _OCR_INPUT = {
 _CDP_INPUT = {
     "type": "object",
     "properties": {
-        "operation": {
+        "action": {
             "type": "string",
             "enum": [
                 "navigate",
                 "snapshot",
-                "evaluate",
                 "click",
-                "type",
+                "fill",
+                "select",
+                "scroll",
                 "wait",
                 "screenshot",
-                "batch",
+                "back",
+                "forward",
+                "get_text",
+                "press",
+                "evaluate",
             ],
-            "description": "Browser operation to perform.",
+            "description": "Browser action to perform.",
         },
-        "target": {
+        "url": {
             "type": "string",
             "maxLength": 4096,
-            "description": "Public http(s), data, or about:blank page URL.",
+            "description": "Page URL for navigate.",
         },
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "expression": {
-                    "type": "string",
-                    "maxLength": 20000,
-                    "description": "JavaScript expression for evaluate.",
-                },
-                "selector": {"type": "string", "maxLength": 2048},
-                "text": {"type": "string", "maxLength": 20000},
-                "timeout_ms": {
-                    "type": "integer",
-                    "minimum": 100,
-                    "maximum": 60000,
-                },
-                "steps": {
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": 32,
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "operation": {
-                                "type": "string",
-                                "enum": [
-                                    "navigate",
-                                    "snapshot",
-                                    "evaluate",
-                                    "click",
-                                    "type",
-                                    "wait",
-                                    "screenshot",
-                                ],
-                            },
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "expression": {
-                                        "type": "string",
-                                        "maxLength": 20000,
-                                    },
-                                    "selector": {"type": "string", "maxLength": 2048},
-                                    "text": {"type": "string", "maxLength": 20000},
-                                },
-                                "additionalProperties": False,
-                            },
-                        },
-                        "required": ["operation"],
-                        "additionalProperties": False,
-                    },
-                },
-            },
-            "additionalProperties": False,
-        },
+        "ref": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "selector": {"type": "string", "maxLength": 2048},
+        "text": {"type": "string", "maxLength": 20000},
+        "value": {"type": "string", "maxLength": 20000},
+        "key": {"type": "string", "maxLength": 128},
+        "direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
+        "amount": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "script": {"type": "string", "maxLength": 20000},
+        "full_page": {"type": "boolean"},
+        "timeout": {"type": "integer", "minimum": 100, "maximum": 60000},
     },
-    "required": ["operation"],
+    "required": ["action"],
     "additionalProperties": False,
 }
 _SHELL_INPUT = {
@@ -211,32 +210,144 @@ _SHELL_INPUT = {
     "properties": {
         "command": {"type": "string", "minLength": 1, "maxLength": 32000},
         "cwd": {"type": "string", "maxLength": 4096},
-        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+        "timeout": {"type": "integer", "minimum": 1, "maximum": 600},
+        "run_in_background": {"type": "boolean"},
+        "bash_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "kill": {"type": "boolean"},
     },
-    "required": ["command"],
+    "additionalProperties": False,
+}
+_WRITE_INPUT = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "content": {"type": "string", "maxLength": 8 * 1024 * 1024},
+    },
+    "required": ["path", "content"],
+    "additionalProperties": False,
+}
+_EDIT_INPUT = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "oldText": {"type": "string", "maxLength": 8 * 1024 * 1024},
+        "newText": {"type": "string", "maxLength": 8 * 1024 * 1024},
+        "replaceAll": {"type": "boolean"},
+    },
+    "required": ["path", "oldText", "newText"],
+    "additionalProperties": False,
+}
+_LS_INPUT = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "maxLength": 4096},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 5000},
+    },
+    "additionalProperties": False,
+}
+_SEARCH_FILES_INPUT = {
+    "type": "object",
+    "properties": {
+        "pattern": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "target": {"type": "string", "enum": ["content", "files"]},
+        "path": {"type": "string", "maxLength": 4096},
+        "file_glob": {"type": "string", "maxLength": 512},
+        "output_mode": {"type": "string", "enum": ["content", "files", "count"]},
+        "ignore_case": {"type": "boolean"},
+        "no_ignore": {"type": "boolean"},
+        "max_results": {"type": "integer", "minimum": 1, "maximum": 500},
+    },
+    "required": ["pattern"],
+    "additionalProperties": False,
+}
+_SCHEDULER_INPUT = {
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": ["create", "list", "get", "delete", "enable", "disable"],
+        },
+        "task_id": {"type": "string", "maxLength": 128},
+        "name": {"type": "string", "maxLength": 240},
+        "message": {"type": "string", "maxLength": 20000},
+        "ai_task": {"type": "string", "maxLength": 20000},
+        "schedule_type": {"type": "string", "enum": ["cron", "interval", "once"]},
+        "schedule_value": {"type": "string", "maxLength": 512},
+        "silent": {"type": "boolean"},
+    },
+    "required": ["action"],
+    "additionalProperties": False,
+}
+_MEMORY_SEARCH_INPUT = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "max_results": {"type": "integer", "minimum": 1, "maximum": 50},
+        "min_score": {"type": "number", "minimum": 0, "maximum": 1},
+    },
+    "required": ["query"],
+    "additionalProperties": False,
+}
+_MEMORY_GET_INPUT = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "start_line": {"type": "integer", "minimum": 1},
+        "num_lines": {"type": "integer", "minimum": 1, "maximum": 5000},
+    },
+    "required": ["path"],
+    "additionalProperties": False,
+}
+
+_SEND_INPUT = {
+    "type": "object",
+    "properties": {
+        "path": {
+            "type": "string",
+            "description": "Local file path to send to the user.",
+            "minLength": 1,
+            "maxLength": 4096,
+        },
+        "message": {"type": "string", "maxLength": 2000},
+    },
+    "required": ["path"],
     "additionalProperties": False,
 }
 def _image_task_properties():
     return {
-        "instruction": {"type": "string", "minLength": 1, "maxLength": 20000},
-        "reference_artifact_ids": {
-            "type": "array",
-            "items": {"type": "string", "minLength": 1, "maxLength": 128},
-            "maxItems": 20,
+        "prompt": {
+            "type": "string",
+            "description": "Image description or edit instruction.",
+            "minLength": 1,
+            "maxLength": 20000,
         },
-        "attachment_ids": {
-            "type": "array",
-            "items": {"type": "string", "minLength": 1, "maxLength": 128},
-            "maxItems": 4,
+        "image_url": {
+            "type": ["string", "array"],
+            "description": (
+                "One image reference or an ordered list for editing/fusion. "
+                "Accepts a local path, HTTP(S) URL, attachment_id, artifact_id, "
+                "or a prior imagegen result URL."
+            ),
+            "items": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "minLength": 1,
+            "maxLength": 4096,
+            "maxItems": 16,
         },
         "size": {"type": "string", "maxLength": 64},
-        "quality": {"type": "string", "maxLength": 64},
+        "quality": {
+            "type": "string",
+            "enum": ["low", "medium", "high", "auto"],
+        },
+        "aspect_ratio": {"type": "string", "minLength": 3, "maxLength": 16},
     }
 
 
 _IMAGE_INPUT = {
     "type": "object",
-    "description": "Provide one instruction or one tasks array, never both.",
+    "description": (
+        "CowAgent-compatible image generation/edit contract. Provide one prompt "
+        "or one tasks array, never both. The Runtime owns the fixed image model."
+    ),
     "properties": {
         **_image_task_properties(),
         "tasks": {
@@ -247,12 +358,59 @@ _IMAGE_INPUT = {
             "items": {
                 "type": "object",
                 "properties": _image_task_properties(),
-                "required": ["instruction"],
+                "required": ["prompt"],
                 "additionalProperties": False,
             },
         },
     },
+    "oneOf": [
+        {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "minLength": 1, "maxLength": 20000}
+            },
+            "required": ["prompt"],
+        },
+        {
+            "type": "object",
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 8,
+                    "items": {
+                        "type": "object",
+                        "properties": _image_task_properties(),
+                        "required": ["prompt"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["tasks"],
+        },
+    ],
     "additionalProperties": False,
+}
+_IMAGE_OUTPUT = {
+    "type": "object",
+    "properties": {
+        "model": {"type": "string", "minLength": 1, "maxLength": 256},
+        "images": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "artifact_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "revision_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                },
+                "required": ["url"],
+                "additionalProperties": True,
+            },
+        },
+    },
+    "additionalProperties": True,
 }
 _TASK_LIST_INPUT = {
     "type": "object",
@@ -391,16 +549,6 @@ _SKILL_READ_OUTPUT = {
             "maxLength": 256,
         },
         "discovery_id": {"type": "string", "minLength": 1, "maxLength": 512},
-        "search_tool_call_id": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256,
-        },
-        "search_result_sha256": {
-            "type": "string",
-            "minLength": 64,
-            "maxLength": 64,
-        },
         "name": {"type": "string", "minLength": 1, "maxLength": 128},
         "instructions": {"type": "string", "maxLength": 131072},
         "available_references": {
@@ -419,8 +567,6 @@ _SKILL_READ_OUTPUT = {
         "extension_snapshot_id",
         "extension_contribution_snapshot_id",
         "discovery_id",
-        "search_tool_call_id",
-        "search_result_sha256",
         "name",
         "instructions",
         "available_references",
@@ -991,7 +1137,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             input_schema=_TOOL_SEARCH_INPUT,
             output_schema=_TOOL_SEARCH_OUTPUT,
             aliases=("find-tool", "search-tools"),
-            default_exposure=Exposure.DIRECT,
+            default_exposure=Exposure.HIDDEN,
             intent_tags=frozenset({"tool", "capability", "search", "discover"}),
         ),
         ToolSpec(
@@ -1005,7 +1151,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             input_schema=_TOOL_DESCRIBE_INPUT,
             output_schema=_TOOL_DESCRIBE_OUTPUT,
             aliases=("describe-tool",),
-            default_exposure=Exposure.DIRECT,
+            default_exposure=Exposure.HIDDEN,
             intent_tags=frozenset({"tool", "capability", "describe"}),
         ),
         ToolSpec(
@@ -1016,7 +1162,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             input_schema=_SKILL_SEARCH_INPUT,
             output_schema=_SKILL_SEARCH_OUTPUT,
             aliases=("find-skill",),
-            default_exposure=Exposure.DIRECT,
+            default_exposure=Exposure.HIDDEN,
             intent_tags=frozenset({"skill", "workflow", "instructions"}),
         ),
         ToolSpec(
@@ -1027,7 +1173,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             input_schema=_TASK_LIST_INPUT,
             output_schema=_TASK_LIST_OUTPUT,
             aliases=("todo-list", "update-plan"),
-            default_exposure=Exposure.DIRECT,
+            default_exposure=Exposure.HIDDEN,
             intent_tags=frozenset(
                 {"task", "plan", "workflow", "multi-step", "任务", "计划"}
             ),
@@ -1043,7 +1189,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             input_schema=_SKILL_READ_INPUT,
             output_schema=_SKILL_READ_OUTPUT,
             aliases=("use-skill",),
-            default_exposure=Exposure.DEFERRED,
+            default_exposure=Exposure.HIDDEN,
             intent_tags=frozenset({"skill", "workflow", "instructions"}),
         ),
         ToolSpec(
@@ -1057,7 +1203,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             input_schema=_SKILL_RUN_INPUT,
             output_schema=_SKILL_RUN_OUTPUT,
             aliases=("run-skill",),
-            default_exposure=Exposure.DEFERRED,
+            default_exposure=Exposure.HIDDEN,
             intent_tags=frozenset({"skill", "workflow", "execute"}),
         ),
         ToolSpec(
@@ -1071,7 +1217,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             input_schema=_CONNECTOR_SEARCH_INPUT,
             output_schema=_CONNECTOR_SEARCH_OUTPUT,
             aliases=("find-connector-action",),
-            default_exposure=Exposure.DIRECT,
+            default_exposure=Exposure.HIDDEN,
             intent_tags=frozenset({"connector", "document", "message", "integration"}),
         ),
         ToolSpec(
@@ -1085,7 +1231,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             input_schema=_CONNECTOR_DESCRIBE_INPUT,
             output_schema=_CONNECTOR_DESCRIBE_OUTPUT,
             aliases=("describe-connector-action",),
-            default_exposure=Exposure.DIRECT,
+            default_exposure=Exposure.HIDDEN,
             intent_tags=frozenset({"connector", "describe", "contract"}),
         ),
         ToolSpec(
@@ -1101,7 +1247,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             aliases=("call-connector-read",),
             effects=frozenset({CapabilityEffect.READ, CapabilityEffect.NETWORK}),
             idempotency=IdempotencyClass.READ_ONLY,
-            default_exposure=Exposure.DEFERRED,
+            default_exposure=Exposure.HIDDEN,
             intent_tags=frozenset({"connector", "read", "document", "search"}),
         ),
         ToolSpec(
@@ -1118,8 +1264,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             effects=frozenset({CapabilityEffect.WRITE, CapabilityEffect.NETWORK}),
             idempotency=IdempotencyClass.IDEMPOTENT,
             required_sandbox=SandboxLevel.WORKSPACE_WRITE,
-            approval_requirement=ApprovalRequirement.ON_REQUEST,
-            default_exposure=Exposure.DEFERRED,
+            default_exposure=Exposure.HIDDEN,
             concurrency_safe=False,
             intent_tags=frozenset({"connector", "write", "send", "edit"}),
         ),
@@ -1136,7 +1281,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             aliases=("read-artifact-data",),
             effects=frozenset({CapabilityEffect.READ}),
             idempotency=IdempotencyClass.READ_ONLY,
-            default_exposure=Exposure.DIRECT,
+            default_exposure=Exposure.HIDDEN,
             intent_tags=frozenset({"artifact", "data", "json", "read"}),
         ),
         ToolSpec(
@@ -1149,10 +1294,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             aliases=("read-input-attachment",),
             effects=frozenset({CapabilityEffect.READ}),
             idempotency=IdempotencyClass.READ_ONLY,
-            # It is promoted only for a Turn that has backend-bound user
-            # attachments. Other Turns discover it through the ordinary
-            # progressive-disclosure contract.
-            default_exposure=Exposure.DEFERRED,
+            default_exposure=Exposure.HIDDEN,
             intent_tags=frozenset({"attachment", "file", "document", "read", "upload"}),
         ),
         ToolSpec(
@@ -1167,13 +1309,65 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             intent_tags=frozenset({"read", "file", "document"}),
         ),
         ToolSpec(
-            tool_id="fetch",
+            tool_id="write",
+            version="1.0.0",
+            display_name="写入文件",
+            description="创建文件或用完整内容覆盖现有文件；相对路径以当前工作区为准",
+            input_schema=_WRITE_INPUT,
+            output_schema=_OBJECT,
+            aliases=("write-file", "写文件"),
+            effects=frozenset({CapabilityEffect.WRITE}),
+            idempotency=IdempotencyClass.IDEMPOTENT,
+            default_exposure=Exposure.DIRECT,
+            intent_tags=frozenset({"write", "file", "create", "写文件"}),
+        ),
+        ToolSpec(
+            tool_id="edit",
+            version="1.0.0",
+            display_name="编辑文件",
+            description="用精确文本替换编辑文件；oldText 为空时追加到文件末尾",
+            input_schema=_EDIT_INPUT,
+            output_schema=_OBJECT,
+            aliases=("edit-file", "修改文件"),
+            effects=frozenset({CapabilityEffect.WRITE}),
+            idempotency=IdempotencyClass.NON_IDEMPOTENT,
+            default_exposure=Exposure.DIRECT,
+            intent_tags=frozenset({"edit", "file", "replace", "修改文件"}),
+        ),
+        ToolSpec(
+            tool_id="ls",
+            version="1.0.0",
+            display_name="列出目录",
+            description="列出目录内容；相对路径以当前工作区为准",
+            input_schema=_LS_INPUT,
+            output_schema=_OBJECT,
+            aliases=("list-files", "list-directory"),
+            effects=frozenset({CapabilityEffect.READ}),
+            idempotency=IdempotencyClass.READ_ONLY,
+            default_exposure=Exposure.DIRECT,
+            intent_tags=frozenset({"list", "directory", "files", "目录"}),
+        ),
+        ToolSpec(
+            tool_id="search_files",
+            version="1.0.0",
+            display_name="搜索文件",
+            description="按名称查找文件或用正则搜索文件内容",
+            input_schema=_SEARCH_FILES_INPUT,
+            output_schema=_OBJECT,
+            aliases=("grep", "find-files", "搜索文件"),
+            effects=frozenset({CapabilityEffect.READ}),
+            idempotency=IdempotencyClass.READ_ONLY,
+            default_exposure=Exposure.DIRECT,
+            intent_tags=frozenset({"search", "files", "grep", "查找文件"}),
+        ),
+        ToolSpec(
+            tool_id="web_fetch",
             version="1.0.0",
             display_name="获取网页",
             description="通过网络读取明确指定的网页资源",
             input_schema=_FETCH_INPUT,
             output_schema=_OBJECT,
-            aliases=("web-fetch",),
+            aliases=("fetch", "web-fetch"),
             effects=frozenset({CapabilityEffect.READ, CapabilityEffect.NETWORK}),
             intent_tags=frozenset(
                 {"web", "research", "fetch", "read", "page", "读取网页", "网页搜索"}
@@ -1182,6 +1376,22 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
                 "Broaden the URL or search scope only when the user's goal permits it.",
                 "Relax optional filters before switching to another read-only web tool.",
             ),
+            cache_ttl_seconds=300,
+            required_packs=frozenset({"browser"}),
+            default_exposure=Exposure.DIRECT,
+        ),
+        ToolSpec(
+            tool_id="web_search",
+            version="1.0.0",
+            display_name="联网搜索",
+            description="搜索公开网页并返回标题、网址和摘要；不需要用户预先提供 URL",
+            input_schema=_WEB_SEARCH_INPUT,
+            output_schema=_OBJECT,
+            aliases=("search-web", "internet-search", "联网搜索"),
+            effects=frozenset({CapabilityEffect.READ, CapabilityEffect.NETWORK}),
+            idempotency=IdempotencyClass.READ_ONLY,
+            default_exposure=Exposure.DIRECT,
+            intent_tags=frozenset({"web", "search", "research", "联网", "搜索"}),
             cache_ttl_seconds=300,
             required_packs=frozenset({"browser"}),
         ),
@@ -1197,6 +1407,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
                 {"vision", "image", "screenshot", "inspect", "图像识别", "视觉检查"}
             ),
             required_packs=frozenset({"image"}),
+            default_exposure=Exposure.DIRECT,
         ),
         ToolSpec(
             tool_id="ocr",
@@ -1211,7 +1422,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             aliases=("extract-image-text", "read-image-text"),
             effects=frozenset({CapabilityEffect.READ}),
             idempotency=IdempotencyClass.READ_ONLY,
-            default_exposure=Exposure.DEFERRED,
+            default_exposure=Exposure.DIRECT,
             intent_tags=frozenset(
                 {"ocr", "image", "text", "read", "文字识别", "识别图片文字"}
             ),
@@ -1219,38 +1430,35 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             required_packs=frozenset({"ocr"}),
         ),
         ToolSpec(
-            tool_id="cdp",
+            tool_id="browser",
             version="1.0.0",
             display_name="浏览器控制",
             description=(
-                "通过浏览器调试协议检查或操作网页；支持导航、快照、点击、"
-                "输入、等待、截图、JavaScript evaluate 和同页批量步骤"
+                "在同一会话中持续控制浏览器；navigate 会自动返回页面快照，"
+                "后续可按 ref 点击、输入、选择、滚动、截图或读取文本"
             ),
             input_schema=_CDP_INPUT,
             output_schema=_OBJECT,
-            aliases=("browser", "browser-cdp", "浏览器"),
+            aliases=("cdp", "browser-cdp", "浏览器"),
             effects=frozenset(
                 {CapabilityEffect.NETWORK, CapabilityEffect.UI_AUTOMATION}
             ),
             idempotency=IdempotencyClass.NON_IDEMPOTENT,
-            approval_requirement=ApprovalRequirement.ON_REQUEST,
             intent_tags=frozenset({"browser", "web", "cdp", "浏览器", "网页搜索"}),
             required_packs=frozenset({"browser"}),
+            default_exposure=Exposure.DIRECT,
         ),
         ToolSpec(
-            tool_id="shell",
+            tool_id="bash",
             version="1.0.0",
             display_name="命令执行",
-            description="在策略规定的沙箱中执行命令，并读取、创建或修改工作区文件",
+            description="在本机当前工作区执行命令；支持前台等待和后台进程",
             input_schema=_SHELL_INPUT,
             output_schema=_OBJECT,
             aliases=(
-                "bash",
+                "shell",
                 "powershell",
                 "terminal",
-                "write",
-                "write-file",
-                "写文件",
             ),
             effects=frozenset({CapabilityEffect.WRITE, CapabilityEffect.EXECUTE}),
             # A shell command is an opaque program boundary.  Even apparently
@@ -1261,8 +1469,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             # after any lost execution acknowledgement.
             idempotency=IdempotencyClass.NON_IDEMPOTENT,
             concurrency_safe=False,
-            required_sandbox=SandboxLevel.WORKSPACE_WRITE,
-            approval_requirement=ApprovalRequirement.ON_REQUEST,
+            required_sandbox=SandboxLevel.DANGER_FULL_ACCESS,
             intent_tags=frozenset(
                 {
                     "shell",
@@ -1276,15 +1483,81 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
                     "存储空间",
                 }
             ),
-            required_packs=frozenset({"sandbox"}),
+            default_exposure=Exposure.DIRECT,
+        ),
+        ToolSpec(
+            tool_id="scheduler",
+            version="1.0.0",
+            display_name="定时任务",
+            description=(
+                "创建、查询和管理提醒或周期任务；仅在用户要求定时、提醒、"
+                "每天、每周或一段时间后执行时使用"
+            ),
+            input_schema=_SCHEDULER_INPUT,
+            output_schema=_OBJECT,
+            aliases=("scheduled-task", "reminder", "定时任务", "提醒"),
+            effects=frozenset({CapabilityEffect.WRITE}),
+            idempotency=IdempotencyClass.NON_IDEMPOTENT,
+            default_exposure=Exposure.DIRECT,
+            intent_tags=frozenset({"schedule", "reminder", "cron", "定时", "提醒"}),
+        ),
+        ToolSpec(
+            tool_id="send",
+            version="1.0.0",
+            display_name="发送文件",
+            description=(
+                "把本机文件作为可下载产物发送给用户；网页 URL 直接写入回复，"
+                "不要先下载再发送"
+            ),
+            input_schema=_SEND_INPUT,
+            output_schema=_OBJECT,
+            aliases=("send-file", "发送文件"),
+            effects=frozenset({CapabilityEffect.READ}),
+            idempotency=IdempotencyClass.READ_ONLY,
+            default_exposure=Exposure.DIRECT,
+            intent_tags=frozenset({"send", "file", "deliver", "发送", "交付"}),
+        ),
+        ToolSpec(
+            tool_id="memory_search",
+            version="1.0.0",
+            display_name="搜索记忆与知识",
+            description=(
+                "用关键词搜索 MEMORY.md、每日记忆和 knowledge 知识页面；"
+                "回忆既往决定、偏好、待办或知识时使用"
+            ),
+            input_schema=_MEMORY_SEARCH_INPUT,
+            output_schema=_OBJECT,
+            aliases=("search-memory", "搜索记忆"),
+            effects=frozenset({CapabilityEffect.READ}),
+            idempotency=IdempotencyClass.READ_ONLY,
+            default_exposure=Exposure.DIRECT,
+            intent_tags=frozenset({"memory", "knowledge", "recall", "记忆", "知识"}),
+        ),
+        ToolSpec(
+            tool_id="memory_get",
+            version="1.0.0",
+            display_name="读取记忆与知识",
+            description=(
+                "按路径和行号读取 MEMORY.md、每日记忆或 knowledge 知识页面"
+            ),
+            input_schema=_MEMORY_GET_INPUT,
+            output_schema=_OBJECT,
+            aliases=("get-memory", "读取记忆"),
+            effects=frozenset({CapabilityEffect.READ}),
+            idempotency=IdempotencyClass.READ_ONLY,
+            default_exposure=Exposure.DIRECT,
+            intent_tags=frozenset({"memory", "knowledge", "read", "记忆", "知识"}),
         ),
         ToolSpec(
             tool_id="imagegen",
-            version="1.1.0",
+            version="2.0.0",
             display_name="图片生成与编辑",
-            description="生成图片或基于现有图片创建新修订",
+            description=(
+                "使用固定图片模型生成或编辑图片；兼容 CowAgent 的 "
+                "prompt/image_url/quality/size/aspect_ratio 语义"
+            ),
             input_schema=_IMAGE_INPUT,
-            output_schema=_OBJECT,
+            output_schema=_IMAGE_OUTPUT,
             aliases=("generate-image", "edit-image", "image-generation"),
             effects=frozenset(
                 {CapabilityEffect.NETWORK, CapabilityEffect.GENERATE_MEDIA}
@@ -1305,6 +1578,7 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             required_model_capabilities={
                 "image": frozenset({"image_generation", "image_edit"}),
             },
+            default_exposure=Exposure.DIRECT,
         ),
     )
 

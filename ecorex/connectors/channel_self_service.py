@@ -1,9 +1,4 @@
-"""Tenant-scoped self-service lifecycle for predecessor messaging channels.
-
-The legacy channels still own their vendor connections.  This boundary owns
-only typed configuration, encrypted credential storage and lifecycle facts;
-it never writes a ``config.json`` or downloads a missing SDK.
-"""
+"""Channel settings API; product mode delegates lifecycle to Cow ChannelManager."""
 
 from __future__ import annotations
 
@@ -167,7 +162,7 @@ class _StoredChannel:
 
 
 class ChannelSelfService:
-    """One-runtime, one-tenant messaging-channel authority."""
+    """UI contract adapter; CowChannelService is product lifecycle authority."""
 
     def __init__(
         self,
@@ -179,6 +174,7 @@ class ChannelSelfService:
         oauth_channels: frozenset[str] = frozenset(),
         oauth_available: frozenset[str] = frozenset(),
         stop_timeout_seconds: float = 5.0,
+        native_service: Any | None = None,
     ) -> None:
         if not 0.1 <= stop_timeout_seconds <= 300:
             raise ValueError("channel stop timeout is invalid")
@@ -201,11 +197,14 @@ class ChannelSelfService:
         if self.oauth_available - self.oauth_channels:
             raise ValueError("OAuth availability includes a non-OAuth channel")
         self.stop_timeout_seconds = float(stop_timeout_seconds)
+        self.native_service = native_service
         self._states: dict[str, tuple[ChannelState, ConnectorHealth, str | None]] = {}
         self._lock = threading.RLock()
         self._device_lock = threading.Lock()
 
     def catalog(self) -> dict[str, Any]:
+        if self.native_service is not None:
+            return self.native_service.catalog()
         items: list[dict[str, Any]] = []
         for channel_id, definition in CHANNEL_CATALOG.items():
             stored = self._read(channel_id)
@@ -265,9 +264,13 @@ class ChannelSelfService:
         return {"contract_version": _CONTRACT_VERSION, "items": items}
 
     async def start(self) -> None:
+        if self.native_service is not None:
+            return
         await asyncio.to_thread(self._restore_enabled)
 
     async def stop(self) -> None:
+        if self.native_service is not None:
+            return
         await asyncio.to_thread(self._shutdown)
 
     def _restore_enabled(self) -> None:
@@ -342,6 +345,31 @@ class ChannelSelfService:
         secrets: Mapping[str, str],
         request_id: str | None,
     ) -> dict[str, Any]:
+        if self.native_service is not None:
+            channel_id = self._writable_channel(channel_id)
+            request_id = _request_id(request_id)
+            try:
+                result = self.native_service.save(
+                    channel_id,
+                    display_name=_display_name(display_name, channel_id),
+                    config=config,
+                    secrets=secrets,
+                )
+            except ValueError:
+                raise ChannelSelfServiceError(
+                    "channel_config_value_invalid", 422
+                ) from None
+            except RuntimeError:
+                raise ChannelSelfServiceError("channel_adapter_failed", 502) from None
+            self._audit(
+                channel_id,
+                "save",
+                "succeeded",
+                request_id,
+                tuple(sorted(set(config) | set(secrets))),
+                None,
+            )
+            return result
         channel_id = self._writable_channel(channel_id)
         if self._auth_kind(channel_id) is ConnectorAuthKind.DEVICE_CODE:
             raise ChannelSelfServiceError("channel_device_authorization_required", 409)
@@ -395,6 +423,8 @@ class ChannelSelfService:
         return self._projection(channel_id, stored)
 
     def test(self, channel_id: str, *, request_id: str | None) -> dict[str, Any]:
+        if self.native_service is not None:
+            return self.health(channel_id, request_id=request_id)
         channel_id, stored, adapter = self._ready(channel_id, request_id)
         result = self._call_adapter(
             channel_id,
@@ -409,6 +439,17 @@ class ChannelSelfService:
         return self._projection(channel_id, stored)
 
     def enable(self, channel_id: str, *, request_id: str | None) -> dict[str, Any]:
+        if self.native_service is not None:
+            channel_id = self._writable_channel(channel_id)
+            request_id = _request_id(request_id)
+            try:
+                result = self.native_service.enable(channel_id)
+            except ValueError:
+                raise ChannelSelfServiceError("channel_not_configured", 409) from None
+            except RuntimeError:
+                raise ChannelSelfServiceError("channel_adapter_failed", 502) from None
+            self._audit(channel_id, "enable", "succeeded", request_id, (), None)
+            return result
         channel_id, stored, adapter = self._ready(channel_id, request_id)
         stored = self._set_enabled(channel_id, stored, True)
         with self._lock:
@@ -433,6 +474,15 @@ class ChannelSelfService:
         return self._projection(channel_id, stored)
 
     def disable(self, channel_id: str, *, request_id: str | None) -> dict[str, Any]:
+        if self.native_service is not None:
+            channel_id = self._writable_channel(channel_id)
+            request_id = _request_id(request_id)
+            try:
+                result = self.native_service.disable(channel_id)
+            except RuntimeError:
+                raise ChannelSelfServiceError("channel_adapter_failed", 502) from None
+            self._audit(channel_id, "disable", "succeeded", request_id, (), None)
+            return result
         channel_id = self._writable_channel(channel_id)
         request_id = _request_id(request_id)
         stored = self._required_stored(channel_id)
@@ -448,6 +498,17 @@ class ChannelSelfService:
         return self._projection(channel_id, stored)
 
     def retry(self, channel_id: str, *, request_id: str | None) -> dict[str, Any]:
+        if self.native_service is not None:
+            channel_id = self._writable_channel(channel_id)
+            request_id = _request_id(request_id)
+            try:
+                result = self.native_service.restart(channel_id)
+            except ValueError:
+                raise ChannelSelfServiceError("channel_not_enabled", 409) from None
+            except RuntimeError:
+                raise ChannelSelfServiceError("channel_adapter_failed", 502) from None
+            self._audit(channel_id, "retry", "succeeded", request_id, (), None)
+            return result
         channel_id, stored, adapter = self._ready(channel_id, request_id)
         self._stop(channel_id, action="retry", request_id=request_id)
         resolve_uncertain = getattr(adapter, "resolve_uncertain", None)
@@ -487,6 +548,12 @@ class ChannelSelfService:
         return self._projection(channel_id, stored)
 
     def health(self, channel_id: str, *, request_id: str | None) -> dict[str, Any]:
+        if self.native_service is not None:
+            channel_id = self._writable_channel(channel_id)
+            request_id = _request_id(request_id)
+            result = self.native_service.health(channel_id)
+            self._audit(channel_id, "health", "succeeded", request_id, (), None)
+            return result
         channel_id, stored, adapter = self._ready(channel_id, request_id)
         result = self._call_adapter(
             channel_id, "health", request_id, adapter.health
@@ -501,6 +568,15 @@ class ChannelSelfService:
         return self._projection(channel_id, stored)
 
     def disconnect(self, channel_id: str, *, request_id: str | None) -> None:
+        if self.native_service is not None:
+            channel_id = self._writable_channel(channel_id)
+            request_id = _request_id(request_id)
+            try:
+                self.native_service.remove(channel_id)
+            except RuntimeError:
+                raise ChannelSelfServiceError("channel_adapter_failed", 502) from None
+            self._audit(channel_id, "disconnect", "succeeded", request_id, (), None)
+            return
         channel_id = self._writable_channel(channel_id)
         request_id = _request_id(request_id)
         if self._read(channel_id) is None:

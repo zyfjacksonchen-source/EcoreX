@@ -76,15 +76,21 @@ _CORE_POLICIES: dict[str, _CorePublicPolicy] = {
         "正在读取本条消息的附件", "已读取消息附件"
     ),
     "read": _CorePublicPolicy("正在读取工作资料", "已读取工作资料"),
-    "fetch": _CorePublicPolicy("正在查找在线资料", "已获取在线资料"),
+    "web_fetch": _CorePublicPolicy("正在查找在线资料", "已获取在线资料"),
+    "web_search": _CorePublicPolicy("正在搜索互联网", "已完成联网搜索"),
     "vision": _CorePublicPolicy(
         "正在查看图片内容",
         "已完成图片检查",
         argument_artifacts="artifact_ids",
     ),
     "ocr": _CorePublicPolicy("正在识别图片文字", "已完成图片文字识别"),
-    "cdp": _CorePublicPolicy("正在浏览网页", "已完成网页操作"),
-    "shell": _CorePublicPolicy("正在执行已批准的命令", "命令执行已完成"),
+    "browser": _CorePublicPolicy("正在浏览网页", "已完成网页操作"),
+    "bash": _CorePublicPolicy("正在执行命令", "命令执行已完成"),
+    "send": _CorePublicPolicy(
+        "正在发送文件",
+        "文件已发送",
+        result_artifacts="root_pair",
+    ),
     "imagegen": _CorePublicPolicy(
         "正在生成或修改图片",
         "图片已生成并保存",

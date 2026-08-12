@@ -9,7 +9,13 @@ from typing import AsyncIterator, Mapping, Protocol
 
 from ecorex.control_plane.management_models import ActiveModelConfiguration
 
-from .models import GatewayEvent, ModelGatewayRequest, ecorex_chat_gateway_policy
+from .models import (
+    GatewayEvent,
+    GatewayWebSearchRequest,
+    GatewayWebSearchResponse,
+    ModelGatewayRequest,
+    ecorex_chat_gateway_policy,
+)
 from .server import GatewayPrincipal
 from .responses_provider import (
     ManagedHTTPSResponsesProvider,
@@ -110,6 +116,27 @@ class DynamicManagedResponsesProvider:
                 await entry.provider.health()
             finally:
                 await self._release(key, entry)
+
+    async def search(
+        self,
+        request: GatewayWebSearchRequest,
+        principal: GatewayPrincipal,
+    ) -> GatewayWebSearchResponse:
+        configuration = await asyncio.to_thread(
+            self.source.active_model, local_model_id=request.model_id
+        )
+        if configuration.modality != "chat":
+            raise ResponsesProviderUnavailable("managed chat model is unavailable")
+        key, entry, _policy = await self._acquire(configuration)
+        try:
+            search = getattr(entry.provider, "search", None)
+            if not callable(search):
+                raise ResponsesProviderUnavailable(
+                    "managed web search provider is unavailable"
+                )
+            return await search(request, principal)
+        finally:
+            await self._release(key, entry)
 
     async def public_catalog(self) -> list[dict[str, object]]:
         catalog = await asyncio.to_thread(self.source.active_public_catalog)

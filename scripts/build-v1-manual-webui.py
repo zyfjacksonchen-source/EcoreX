@@ -45,14 +45,24 @@ from ecorex.product_version import (  # noqa: E402
     is_stable_release_version,
     stable_release_sequence,
 )
+from ecorex.pack_catalog import (  # noqa: E402
+    COW_RUNTIME_SOURCE_ROOTS,
+    required_capability_pack_projection,
+)
 from ecorex.release import (  # noqa: E402
     ArtifactBuildInput,
     ArtifactKind,
     Ed25519MemorySigner,
+    MAX_CORE_ARCHIVE_BYTES,
+    MAX_CORE_EXPANDED_BYTES,
+    MAX_RELEASE_METADATA_BYTES,
+    MAX_RELEASE_SBOM_BYTES,
     ReleaseBuildSpec,
     ReleaseBuilder,
     WebBundleBuildInput,
 )
+from ecorex.release.build_dependency_lock import active_lock_versions  # noqa: E402
+from ecorex.release.dependency_lock import DependencyLockError  # noqa: E402
 from ecorex.release.candidate import PACK_SERVICES, PACK_TOOLS  # noqa: E402
 from ecorex.release.dependency_lock import load_dependency_lock_manifest  # noqa: E402
 from ecorex.release.windows_webui import _verify_webui_contract  # noqa: E402
@@ -96,8 +106,6 @@ PURE_RUNTIME_OVERLAYS = {
     "requests-toolbelt": ("requests_toolbelt", "1.0.0"),
     "urllib3": ("urllib3", "2.7.0"),
 }
-
-
 class ManualWebUIBuildError(RuntimeError):
     pass
 
@@ -112,6 +120,33 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _verify_release_evidence_bounds(metadata_path: Path, sbom_path: Path) -> None:
+    if (
+        not 1 <= metadata_path.stat().st_size <= MAX_RELEASE_METADATA_BYTES
+        or not 1 <= sbom_path.stat().st_size <= MAX_RELEASE_SBOM_BYTES
+    ):
+        _fail("manual_webui_release_evidence_invalid")
+
+
+def _verify_release_core_bounds(built: Any) -> None:
+    for artifact in built.manifest.artifacts:
+        if not artifact.artifact_id.startswith("core-"):
+            continue
+        path = built.artifact_paths[artifact.artifact_id]
+        try:
+            archive_size = path.stat().st_size
+            with zipfile.ZipFile(path) as archive:
+                expanded_size = sum(member.file_size for member in archive.infolist())
+        except (OSError, zipfile.BadZipFile):
+            _fail("manual_webui_release_core_bound_invalid")
+        if (
+            archive_size != artifact.size_bytes
+            or archive_size > MAX_CORE_ARCHIVE_BYTES
+            or expanded_size > MAX_CORE_EXPANDED_BYTES
+        ):
+            _fail("manual_webui_release_core_bound_invalid")
 
 
 def _canonical_json(value: object) -> bytes:
@@ -427,7 +462,7 @@ def _pure_runtime_overlay_files() -> tuple[tuple[str, Path], ...]:
     return tuple(files)
 
 
-def _install_pycryptodome_overlay(
+def _install_locked_runtime_overlay(
     source: Path,
     core: Path,
     root: Path,
@@ -441,6 +476,15 @@ def _install_pycryptodome_overlay(
         ("windows", "x64"): "win_amd64",
     }.get((platform, architecture))
     if target_platform is None:
+        _fail("manual_webui_runtime_overlay_invalid")
+    try:
+        lock_set = load_dependency_lock_manifest(
+            source / "requirements" / "locks" / "manifest.json"
+        )
+        profile = lock_set.profiles["runtime"]
+        runtime_lock = lock_set.path.parent / profile["lock"]
+        expected = active_lock_versions(runtime_lock)
+    except (DependencyLockError, KeyError):
         _fail("manual_webui_runtime_overlay_invalid")
     with tempfile.TemporaryDirectory(
         dir=root, prefix=f".{platform}-{architecture}-runtime-overlay-"
@@ -467,32 +511,80 @@ def _install_pycryptodome_overlay(
                 "--target",
                 str(staging),
                 "-r",
-                str(source / "requirements" / "locks" / "runtime.lock"),
+                str(runtime_lock),
             ),
             cwd=source,
             timeout=300,
             code="manual_webui_runtime_overlay_install_failed",
         )
-        package = staging / "Crypto"
-        destination = core / "bin" / "pack-python"
-        destination = destination / (
-            "Lib/site-packages" if platform == "windows" else "lib/python3.11/site-packages"
-        )
-        if not package.is_dir() or (destination / "Crypto").exists():
-            _fail("manual_webui_runtime_overlay_invalid")
-        for path in sorted(package.rglob("*")):
-            relative = path.relative_to(package)
-            if "__pycache__" in relative.parts or "SelfTest" in relative.parts or path.suffix == ".pyc":
-                continue
-            if path.is_symlink():
+        destination = _runtime_site_packages(core, platform)
+        observed: dict[str, str] = {}
+        for distribution in metadata.distributions(path=[str(staging)]):
+            name = re.sub(
+                r"[-_.]+",
+                "-",
+                str(distribution.metadata.get("Name") or ""),
+            ).casefold()
+            if not name or name in observed:
                 _fail("manual_webui_runtime_overlay_invalid")
-            if not path.is_file():
+            observed[name] = distribution.version
+        if observed != expected:
+            _fail("manual_webui_runtime_overlay_invalid")
+        destination.mkdir(parents=True, exist_ok=True)
+        for source_path in sorted(staging.iterdir(), key=lambda path: path.name.casefold()):
+            if source_path.name == "bin" or source_path.name == "__pycache__":
                 continue
-            target = destination / "Crypto" / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("rb") as input_stream, target.open("xb") as output_stream:
-                shutil.copyfileobj(input_stream, output_stream, 1024 * 1024)
-            target.chmod(0o644)
+            target = destination / source_path.name
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink(missing_ok=True)
+            if source_path.is_symlink():
+                _fail("manual_webui_runtime_overlay_invalid")
+            if source_path.is_dir():
+                shutil.copytree(
+                    source_path,
+                    target,
+                    ignore=shutil.ignore_patterns("__pycache__", "SelfTest", "*.pyc"),
+                )
+            else:
+                shutil.copy2(source_path, target)
+
+
+def _runtime_site_packages(core: Path, platform: str) -> Path:
+    if platform == "windows":
+        return core / "bin" / "pack-python" / "Lib" / "site-packages"
+    if platform == "macos":
+        return core / "bin" / "pack-python" / "lib/python3.11/site-packages"
+    _fail("manual_webui_runtime_overlay_invalid")
+
+
+def _install_cow_runtime_overlay(
+    source: Path,
+    core: Path,
+    root: Path,
+    *,
+    platform: str,
+) -> None:
+    destination = _runtime_site_packages(core, platform)
+    source_roots = (*COW_RUNTIME_SOURCE_ROOTS, "config.py")
+    with tempfile.TemporaryDirectory(dir=root, prefix=f".{platform}-cow-overlay-") as raw:
+        staging = Path(raw)
+        for source_root in source_roots:
+            for path in _tracked_source_files(source, source_root):
+                target = staging / path.relative_to(source)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, target)
+        if not all((staging / source_root).exists() for source_root in source_roots):
+            _fail("manual_webui_product_overlay_failed")
+        destination.mkdir(parents=True, exist_ok=True)
+        for source_root in source_roots:
+            target = destination / source_root
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink(missing_ok=True)
+            os.replace(staging / source_root, target)
 
 
 def _replace_product_imports(archive_path: Path, source: Path) -> None:
@@ -561,6 +653,52 @@ def _replace_builtin_skills(core: Path, source: Path) -> None:
         shutil.copy2(path, target)
 
 
+def _replace_browser_pack_source(pack: Path, source: Path) -> None:
+    runtime_members = {"browser-runtime.json", "browser-runtime.zip"}
+    if any(not (pack / name).is_file() for name in runtime_members):
+        _fail("manual_webui_browser_pack_invalid")
+    for path in pack.iterdir():
+        if path.name in runtime_members:
+            continue
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    browser_source = source / "release" / "capability-packs" / "browser"
+    for path in _tracked_source_files(source, "release/capability-packs/browser"):
+        target = pack / path.relative_to(browser_source)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
+    protocol = _tracked_source_files(
+        source,
+        "release/capability-packs/common/ecorex_pack_protocol.py",
+    )
+    if len(protocol) != 1:
+        _fail("manual_webui_browser_pack_invalid")
+    shutil.copy2(protocol[0], pack / protocol[0].name)
+    expected = {
+        "schema_version": 1,
+        "protocol": "ecorex-stdio-tool-v1",
+        "pack_id": "browser",
+        "runtime_api_version": "1.0.0",
+        "tools": list(PACK_TOOLS["browser"]),
+    }
+    descriptor = pack / "ecorex-pack.json"
+    try:
+        if json.loads(descriptor.read_text(encoding="utf-8")) != expected:
+            _fail("manual_webui_browser_pack_invalid")
+        descriptor.write_bytes(
+            json.dumps(
+                expected,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        _fail("manual_webui_browser_pack_invalid")
+
+
 def _runtime_config(
     core: Path,
     *,
@@ -598,10 +736,13 @@ def _runtime_config(
             if connector_enabled == "true"
             else None
         )
-        packs = value["capability_packs"]
-        for pack in packs:
-            pack["artifact"] = str(pack["artifact"]).replace(BASE_VERSION, __version__)
-            pack["manifest"] = str(pack["manifest"]).replace(BASE_VERSION, __version__)
+        value["capability_packs"] = list(
+            required_capability_pack_projection(
+                platform=platform,
+                architecture=architecture,
+                version=__version__,
+            )
+        )
         path.write_text(
             json.dumps(
                 value,
@@ -635,12 +776,18 @@ def _prepare_stages(
         imports = tuple(core.rglob("python311.zip"))
         if len(imports) != 1:
             _fail("manual_webui_pack_python_invalid")
-        _install_pycryptodome_overlay(
+        _install_locked_runtime_overlay(
             source,
             core,
             target_root,
             platform=platform,
             architecture=architecture,
+        )
+        _install_cow_runtime_overlay(
+            source,
+            core,
+            target_root,
+            platform=platform,
         )
         _replace_product_imports(imports[0], source)
         _replace_builtin_skills(core, source)
@@ -668,21 +815,31 @@ def _prepare_stages(
             "amd64": "x64",
         }.get(host_platform.machine().casefold())
         if sys.platform == "darwin" and platform == "macos" and architecture == host_architecture:
-            _run(
-                (
-                    str(interpreter),
-                    "-I",
-                    "-B",
-                    "-c",
-                    "import ecorex.bootstrap.install_local, "
-                    "ecorex.integration.dependency_pack_process, lark_channel, qrcode; "
-                    "from ecorex.connectors.weixin import _qr_png_data_url; "
-                    "assert _qr_png_data_url('https://weixin.qq.com/q/emate').startswith('data:image/png;base64,')",
-                ),
-                cwd=core,
-                timeout=30,
-                code="manual_webui_product_import_probe_failed",
-            )
+            with tempfile.TemporaryDirectory(
+                prefix="product-import-probe-", dir=target_root
+            ) as probe_data:
+                environment = dict(os.environ)
+                environment["EMATE_DATA_DIR"] = probe_data
+                _run(
+                    (
+                        str(interpreter),
+                        "-I",
+                        "-B",
+                        "-c",
+                        "import ecorex.bootstrap.install_local, "
+                        "ecorex.integration.dependency_pack_process, lark_channel, qrcode; "
+                        "from agent.tools.tool_manager import ToolManager; "
+                        "from bridge.agent_initializer import AgentInitializer; "
+                        "from ecorex.runtime.worker import AgentTurnWorker; "
+                        "from ecorex.connectors.weixin import _qr_png_data_url; "
+                        "assert ToolManager and AgentInitializer and AgentTurnWorker; "
+                        "assert _qr_png_data_url('https://weixin.qq.com/q/emate').startswith('data:image/png;base64,')",
+                    ),
+                    cwd=core,
+                    environment=environment,
+                    timeout=120,
+                    code="manual_webui_product_import_probe_failed",
+                )
         packs: dict[str, Path] = {}
         for pack_id in sorted(PACK_TOOLS):
             pack = target_root / "packs" / pack_id
@@ -692,6 +849,8 @@ def _prepare_stages(
                 ],
                 pack,
             )
+            if pack_id == "browser":
+                _replace_browser_pack_source(pack, source)
             packs[pack_id] = pack
         targets[(platform, architecture)] = {"core": core, **packs}
     return targets
@@ -919,7 +1078,7 @@ def _build_release(
                     platform,
                     architecture,
                     executable_paths=("__main__.py",)
-                    if pack_id in {"browser", "sandbox"}
+                    if pack_id == "browser"
                     else (),
                     pack_id=pack_id,
                     pack_tool_ids=tuple(PACK_TOOLS[pack_id]),
@@ -1196,6 +1355,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             generated_at,
             source,
         )
+        _verify_release_evidence_bounds(built.metadata_path, built.sbom_path)
+        _verify_release_core_bounds(built)
         verifier = Ed25519SignatureVerifier({key_id: public})
         verify_manifest_signature(built.manifest, verifier)
         for artifact in built.manifest.artifacts:

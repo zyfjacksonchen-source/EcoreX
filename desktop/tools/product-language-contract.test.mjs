@@ -73,8 +73,8 @@ test("Composer uses automatic intent routing with truthful paste and model contr
   assert.match(modelSelector, /图片模型 <small>按意图自动调用<\/small>/u);
   assert.doesNotMatch(composer, /aria-label="任务类型"|ex-mode-switch|onModeChange|TaskMode/u);
   assert.doesNotMatch(composer, />\s*办公\s*</u);
-  assert.match(composer, /modelId !== chatModel\) setDisposition\("queue"\)/u);
-  assert.match(composer, /modelId !== imageModel\) setDisposition\("queue"\)/u);
+  assert.match(composer, /onSend\([\s\S]*?"steer"/u);
+  assert.doesNotMatch(composer, /setDisposition\("queue"\)/u);
   assert.match(runtimeSession, /reconcileModelSelection\(current, bootstrap\.models\.chat\)/u);
   assert.match(runtimeSession, /reconcileModelSelection\(current, bootstrap\.models\.image\)/u);
   assert.match(composer, /!draft\.trim\(\) && attachments\.length === 0/u);
@@ -82,9 +82,8 @@ test("Composer uses automatic intent routing with truthful paste and model contr
 });
 
 test("one update identity stays dismissed across its download states", () => {
-  assert.match(app, /window\.localStorage\.getItem\(DISMISSED_UPDATE_BANNERS_KEY\)/u);
-  assert.match(app, /update\.release_id && update\.build_digest/u);
-  assert.doesNotMatch(app, /`\$\{update\.target_version[^`]*\}:\$\{update\.state\}`/u);
+  assert.match(app, /dismissedDesktopUpdateVersion !== \(desktopUpdateVersion \?\? "update-error"\)/u);
+  assert.doesNotMatch(app, /DISMISSED_UPDATE_BANNERS_KEY|update\.release_id && update\.build_digest/u);
 });
 
 test("new conversation choices stay bounded and operational copy is progressive", () => {
@@ -92,9 +91,9 @@ test("new conversation choices stay bounded and operational copy is progressive"
   assert.match(projectSelector, /aria-label="选择项目会话"/u);
   assert.match(projectSelector, /添加项目文件夹…/u);
   assert.doesNotMatch(timeline, /ex-new-project-options/u);
-  assert.match(composer, /<Tooltip\.Root delayDuration=\{900\}>/u);
-  assert.match(composer, /需要权限或信息时会询问；长任务可排队，重启后继续。/u);
-  assert.doesNotMatch(composer, /modelAvailable\s*\?\s*"需要权限或信息时会询问/u);
+  assert.match(composer, /<Tooltip\.Root delayDuration=\{500\}>/u);
+  assert.doesNotMatch(composer, /需要权限或信息时会询问；长任务可排队，重启后继续。/u);
+  assert.doesNotMatch(composer, /setDisposition\("queue"\)/u);
 });
 
 test("workspace chrome keeps the share action right aligned and removes the Composer divider", () => {
@@ -119,7 +118,7 @@ test("settings and external connections stay on real product contracts", () => {
   assert.match(workspaceContentSettings, /settings-knowledge[\s\S]*?settings-memory/u);
   assert.match(settings, /仅保存在此设备，不会上传或改变企业账号资料/u);
   assert.match(settings, /changeSessionPassword\(currentPassword, newPassword, requestId\)/u);
-  assert.match(settings, /onPermissionChange\(profile\)/u);
+  assert.doesNotMatch(settings, /onPermissionChange|完全访问|默认权限/u);
   assert.match(composer, /data-testid="composer-connections"[\s\S]*?onClick=\{onOpenConnections\}/u);
   assert.match(app, /setOpenChannelsKey\(\(value\) => value \+ 1\)[\s\S]*?setSkillsOpen\(true\)/u);
   assert.match(extensionManager, /data-testid="capability-channels"/u);

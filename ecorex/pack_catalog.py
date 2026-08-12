@@ -7,12 +7,11 @@ from types import MappingProxyType
 
 CAPABILITY_PACK_TOOL_IDS = MappingProxyType(
     {
-        "browser": ("cdp", "fetch"),
+        "browser": ("browser", "web_fetch", "web_search"),
         "channels": (),
         "image": ("imagegen", "vision"),
         "ocr": (),
         "office": (),
-        "sandbox": ("shell",),
     }
 )
 CAPABILITY_PACK_SERVICE_IDS = MappingProxyType(
@@ -22,8 +21,21 @@ CAPABILITY_PACK_SERVICE_IDS = MappingProxyType(
         "image": (),
         "ocr": ("ocr.extract",),
         "office": ("office.formats",),
-        "sandbox": (),
     }
+)
+
+# Product Python roots inherited from CowAgent and shipped with every Runtime.
+COW_RUNTIME_SOURCE_ROOTS = (
+    "agent",
+    "bridge",
+    "models",
+    "channel",
+    "plugins",
+    "common",
+    "skills",
+    "voice",
+    "translate",
+    "cli",
 )
 
 _tool_pack_ids = frozenset(CAPABILITY_PACK_TOOL_IDS)
@@ -43,9 +55,8 @@ REQUIRED_CAPABILITY_PACK_IDS = tuple(sorted(_tool_pack_ids))
 CAPABILITY_PACK_PROFILES = MappingProxyType(
     {
         # Projection-only and legacy signed slots remain valid without optional
-        # Packs; workspace execution adds the reviewed sandbox boundary.
+        # Packs. Cow Shell is part of Core and does not require a Pack.
         "minimal": (),
-        "workspace": ("sandbox",),
         # Managed offline install: ship the complete reviewed Pack closure.
         "full_offline": REQUIRED_CAPABILITY_PACK_IDS,
     }
@@ -65,10 +76,33 @@ def capability_pack_profile(pack_ids: tuple[str, ...]) -> str | None:
     )
 
 
+def required_capability_pack_projection(
+    *, platform: str, architecture: str, version: str
+) -> tuple[dict[str, str], ...]:
+    """Return the exact Runtime paths for the product's required Packs."""
+
+    return tuple(
+        {
+            "pack_id": pack_id,
+            "manifest": (
+                f"capability-packs/{pack_id}/ecorex-capability-pack-{pack_id}-"
+                f"{platform}-{architecture}-{version}.json"
+            ),
+            "artifact": (
+                f"capability-packs/{pack_id}/ecorex-capability-pack-{pack_id}-"
+                f"{platform}-{architecture}-{version}.zip"
+            ),
+        }
+        for pack_id in REQUIRED_CAPABILITY_PACK_IDS
+    )
+
+
 __all__ = [
     "CAPABILITY_PACK_SERVICE_IDS",
     "CAPABILITY_PACK_TOOL_IDS",
     "CAPABILITY_PACK_PROFILES",
+    "COW_RUNTIME_SOURCE_ROOTS",
     "REQUIRED_CAPABILITY_PACK_IDS",
     "capability_pack_profile",
+    "required_capability_pack_projection",
 ]

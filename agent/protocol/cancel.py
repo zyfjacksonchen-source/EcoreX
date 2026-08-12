@@ -12,8 +12,7 @@ No project deps — importable from any layer without circular imports.
 from __future__ import annotations
 
 import threading
-import time
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 
 class AgentCancelledError(Exception):
@@ -26,13 +25,11 @@ class AgentCancelledError(Exception):
 
 
 class _CancelEntry:
-    __slots__ = ("event", "session_id", "created_at", "cancelled_at")
+    __slots__ = ("event", "session_id")
 
     def __init__(self, session_id: Optional[str]):
         self.event = threading.Event()
         self.session_id = session_id
-        self.created_at = time.time()
-        self.cancelled_at: Optional[float] = None
 
 
 class CancelTokenRegistry:
@@ -76,11 +73,9 @@ class CancelTokenRegistry:
             return False
         with self._lock:
             entry = self._by_request.get(request_id)
-            if entry is None:
-                return False
-            if entry.cancelled_at is None:
-                entry.cancelled_at = time.time()
-            entry.event.set()
+        if entry is None:
+            return False
+        entry.event.set()
         return True
 
     def cancel_session(self, session_id: str) -> int:
@@ -90,14 +85,11 @@ class CancelTokenRegistry:
         """
         if not session_id:
             return 0
-        now = time.time()
         with self._lock:
             request_ids = list(self._by_session.get(session_id, ()))
             entries = [self._by_request[r] for r in request_ids if r in self._by_request]
-            for entry in entries:
-                if entry.cancelled_at is None:
-                    entry.cancelled_at = now
-                entry.event.set()
+        for entry in entries:
+            entry.event.set()
         return len(entries)
 
     def unregister(self, request_id: str) -> None:
@@ -119,30 +111,6 @@ class CancelTokenRegistry:
         with self._lock:
             bucket = self._by_session.get(session_id)
             return bool(bucket)
-
-    def snapshot(self) -> List[dict]:
-        """Return a stable, non-mutating snapshot of in-flight requests."""
-        now = time.time()
-        with self._lock:
-            rows = []
-            for request_id, entry in self._by_request.items():
-                cancelled = entry.event.is_set()
-                cancelled_at = entry.cancelled_at if cancelled else None
-                cancel_age_seconds = (
-                    max(0, round(now - cancelled_at, 3))
-                    if cancelled_at is not None else None
-                )
-                rows.append({
-                    "request_id": request_id,
-                    "session_id": entry.session_id or "",
-                    "cancelled": cancelled,
-                    "state": "cancelling" if cancelled else "running",
-                    "created_at": entry.created_at,
-                    "cancelled_at": cancelled_at,
-                    "cancel_age_seconds": cancel_age_seconds,
-                    "age_seconds": max(0, round(now - entry.created_at, 3)),
-                })
-            return rows
 
 
 _registry = CancelTokenRegistry()

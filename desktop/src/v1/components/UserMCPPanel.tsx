@@ -28,6 +28,7 @@ type MCPBusyAction = "load" | "save" | "test" | "enable" | "disable" | "delete";
 
 interface UserMCPPanelProps {
   client: RuntimeClient;
+  projectId: string | null;
   oauthStatuses: Record<string, MCPOAuthStatusProjection>;
   oauthBusy: string | null;
   onRefreshOAuth: () => Promise<Record<string, MCPOAuthStatusProjection>>;
@@ -118,6 +119,7 @@ function errorMessage(code: string): string {
 
 export function UserMCPPanel({
   client,
+  projectId,
   oauthStatuses,
   oauthBusy,
   onRefreshOAuth,
@@ -136,7 +138,7 @@ export function UserMCPPanel({
   const load = async (signal?: AbortSignal) => {
     setBusy({ id: "catalog", action: "load" });
     try {
-      const response = await client.userMcpServers(signal);
+      const response = await client.userMcpServers(signal, projectId);
       if (signal?.aborted) return;
       setItems(response.items);
       setErrors((current) => {
@@ -157,7 +159,7 @@ export function UserMCPPanel({
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
-  }, [client]);
+  }, [client, projectId]);
 
   const upsert = (server: UserMCPServerProjection) => {
     setItems((current) => [...current.filter((item) => item.server_id !== server.server_id), server]
@@ -177,8 +179,8 @@ export function UserMCPPanel({
     setErrors((current) => ({ ...current, [id]: "" }));
     try {
       const response = id === "new"
-        ? await client.createUserMcpServer(requestFor(form))
-        : await client.updateUserMcpServer(id, requestFor(form));
+        ? await client.createUserMcpServer(requestFor(form), projectId)
+        : await client.updateUserMcpServer(id, requestFor(form), projectId);
       upsert(response.server);
       setForm((current) => ({ ...current, credential: "" }));
       setEditingId(null);
@@ -196,7 +198,7 @@ export function UserMCPPanel({
     setBusy({ id: server.server_id, action });
     setErrors((current) => ({ ...current, [server.server_id]: "" }));
     try {
-      const response = await client.mutateUserMcpServer(server.server_id, action);
+      const response = await client.mutateUserMcpServer(server.server_id, action, projectId);
       upsert(response.server);
       setNotice(action === "test"
         ? `真实测试通过，已冻结 ${response.server.tool_count} 个工具。`
@@ -217,7 +219,7 @@ export function UserMCPPanel({
     }
     setBusy({ id: server.server_id, action: "delete" });
     try {
-      await client.deleteUserMcpServer(server.server_id);
+      await client.deleteUserMcpServer(server.server_id, projectId);
       setItems((current) => current.filter((item) => item.server_id !== server.server_id));
       setConfirmDeleteId(null);
       setNotice("远程 MCP 及其本地凭据已删除。Runtime 重载后完成断开。");

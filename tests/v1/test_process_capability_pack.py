@@ -20,13 +20,15 @@ import pytest
 import ecorex.integration.sandbox as sandbox_module
 import ecorex.server.pack_resolver as pack_resolver_module
 from ecorex.capabilities import (
-    ApprovalRequiredError,
     CapabilityPackManifest,
     CapabilityService,
     ExecutionPolicy,
     PackToolBinding,
     PermissionProfile,
     RuntimeAvailability,
+    SandboxLevel,
+    ToolExecutionScope,
+    ToolInvocationContext,
     builtin_capability_registry,
     tool_spec_digest,
     verify_capability_pack,
@@ -182,6 +184,72 @@ sys.stdout.write(json.dumps(response, sort_keys=True, separators=(",", ":")))
 """
 
 
+SESSION_MAIN = r"""
+import json
+import sys
+
+state = {}
+while True:
+    header = sys.stdin.buffer.read(8)
+    if not header:
+        break
+    size = int.from_bytes(header, "big")
+    request = json.loads(sys.stdin.buffer.read(size))
+    thread_id = request["context"]["execution_scope"]["thread_id"]
+    state[thread_id] = state.get(thread_id, 0) + 1
+    response = {
+        "schema_version": 1,
+        "request_id": request["request_id"],
+        "status": "completed",
+        "result": {"thread_id": thread_id, "count": state[thread_id]},
+    }
+    payload = json.dumps(response, sort_keys=True, separators=(",", ":")).encode()
+    sys.stdout.buffer.write(len(payload).to_bytes(8, "big") + payload)
+    sys.stdout.buffer.flush()
+"""
+
+
+def test_browser_pack_process_keeps_thread_state_across_tool_calls(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    pack = _verified_pack(
+        tmp_path,
+        pack_id="browser",
+        tools=("browser",),
+        main=SESSION_MAIN,
+    )
+    adapter = ProcessCapabilityPackAdapter(
+        pack, workspace_roots=(workspace,), python_executable=sys.executable
+    )
+
+    async def exercise() -> None:
+        scope = ToolExecutionScope("job-session", "thread-session", "turn-session")
+        results = []
+        for index in range(2):
+            context = ToolInvocationContext(
+                invocation_id=f"invoke-session-{index}",
+                capability_snapshot_id="cap-session",
+                policy_snapshot_id="policy-session",
+                tool_id="browser",
+                idempotency_key=None,
+                approved=True,
+                effective_sandbox=SandboxLevel.DANGER_FULL_ACCESS,
+                execution_scope=scope,
+            )
+            results.append(
+                await adapter.invoke("browser", {"action": "snapshot"}, context)
+            )
+        assert results == [
+            {"thread_id": "thread-session", "count": 1},
+            {"thread_id": "thread-session", "count": 2},
+        ]
+        await adapter._stop_browser_session()
+
+    asyncio.run(exercise())
+
+
 class _UnitContractSandboxBackend:
     """Protocol test double; never used by the Product resolver."""
 
@@ -213,7 +281,7 @@ def test_browser_pack_process_is_executable_and_parent_secrets_are_absent(
     pack = _verified_pack(
         tmp_path,
         pack_id="browser",
-        tools=("fetch",),
+        tools=("web_fetch",),
         main=ECHO_MAIN,
     )
     adapter = ProcessCapabilityPackAdapter(
@@ -224,8 +292,8 @@ def test_browser_pack_process_is_executable_and_parent_secrets_are_absent(
         builtin_capability_registry(), handlers=adapter.handlers()
     )
     plan = service.create_plan(
-        intent="fetch",
-        explicit_tools=("fetch",),
+        intent="web_fetch",
+        explicit_tools=("web_fetch",),
         availability=RuntimeAvailability(
             platform="windows", installed_packs=frozenset({"browser"})
         ),
@@ -234,14 +302,14 @@ def test_browser_pack_process_is_executable_and_parent_secrets_are_absent(
     result = asyncio.run(
         service.tool_call(
             plan.snapshot_id,
-            "fetch",
+            "web_fetch",
             {"url": "https://example.com/brief"},
             policy_snapshot_id="policy-default",
         )
     )
     assert result.value == {
-        "tool_id": "fetch",
-        "sandbox": "workspace-write",
+        "tool_id": "web_fetch",
+        "sandbox": "danger-full-access",
         "approved": False,
         "idempotency_key": None,
         "workspace_count": 1,
@@ -267,7 +335,7 @@ def test_product_resolver_binds_browser_pack_only_with_resolved_workspace(
     pack = _verified_pack(
         tmp_path,
         pack_id="browser",
-        tools=("fetch",),
+        tools=("web_fetch",),
         main=ECHO_MAIN,
     )
     payload = tmp_path / "payload"
@@ -278,7 +346,7 @@ def test_product_resolver_binds_browser_pack_only_with_resolved_workspace(
         build_pack_python_manifest(payload, platform="windows", architecture="x64")
     )
     handlers = production_pack_adapter_resolver(pack, (workspace,), payload)
-    assert set(handlers) == {"fetch"}
+    assert set(handlers) == {"web_fetch"}
 
 
 def test_product_composition_verifies_shared_pack_python_once_per_startup(
@@ -290,7 +358,7 @@ def test_product_composition_verifies_shared_pack_python_once_per_startup(
     pack = _verified_pack(
         tmp_path,
         pack_id="browser",
-        tools=("fetch",),
+        tools=("web_fetch",),
         main=ECHO_MAIN,
     )
     payload = tmp_path / "payload"
@@ -310,15 +378,45 @@ def test_product_composition_verifies_shared_pack_python_once_per_startup(
 
     monkeypatch.setattr(pack_resolver_module, "resolve_pack_python", counted)
     first_startup = create_production_pack_adapter_resolver()
-    assert set(first_startup(pack, (workspace,), payload)) == {"fetch"}
-    assert set(first_startup(pack, (workspace,), payload)) == {"fetch"}
+    assert set(first_startup(pack, (workspace,), payload)) == {"web_fetch"}
+    assert set(first_startup(pack, (workspace,), payload)) == {"web_fetch"}
+    shared_resolver = getattr(
+        first_startup, "_resolve_pack_python_for_composition"
+    )
+    assert shared_resolver(
+        payload, platform="windows", architecture="x64"
+    )[0] == interpreter
     assert calls == 1
 
     # Cache lifetime is exactly one composition. A restart gets a new
     # resolver and independently verifies the signed closure again.
     second_startup = create_production_pack_adapter_resolver()
-    assert set(second_startup(pack, (workspace,), payload)) == {"fetch"}
+    assert set(second_startup(pack, (workspace,), payload)) == {"web_fetch"}
     assert calls == 2
+
+
+def test_dependency_pack_services_reuse_the_composition_interpreter(
+    tmp_path: Path,
+) -> None:
+    from ecorex.server.config import _resolve_composition_pack_python
+
+    expected = (tmp_path / "python.exe", object())
+
+    def resolver(*_args, **_kwargs):
+        return {}
+
+    setattr(
+        resolver,
+        "_resolve_pack_python_for_composition",
+        lambda *_args, **_kwargs: expected,
+    )
+
+    assert _resolve_composition_pack_python(
+        resolver,
+        tmp_path,
+        platform="windows",
+        architecture="x64",
+    ) == expected
 
 
 def test_product_resolver_injects_the_slot_owned_windows_sandbox_helper(
@@ -329,7 +427,7 @@ def test_product_resolver_injects_the_slot_owned_windows_sandbox_helper(
     pack = _verified_pack(
         tmp_path,
         pack_id="sandbox",
-        tools=("shell",),
+        tools=("bash",),
         main=ECHO_MAIN,
     )
     slot = tmp_path / "install" / "slots" / "slot-test"
@@ -366,10 +464,10 @@ def test_product_resolver_injects_the_slot_owned_windows_sandbox_helper(
     # The dummy helper cannot pass the behavioral probe, but construction
     # still proves Product composition selected the immutable slot path rather
     # than the generic unavailable/PATH fallback. Invocation remains closed.
-    assert set(handlers) == {"shell"}
+    assert set(handlers) == {"bash"}
 
 
-def test_sandbox_pack_receives_backend_authoritative_permission_snapshot(
+def test_legacy_pack_shell_receives_cowagent_full_access_without_a_prompt(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -377,7 +475,7 @@ def test_sandbox_pack_receives_backend_authoritative_permission_snapshot(
     pack = _verified_pack(
         tmp_path,
         pack_id="sandbox",
-        tools=("shell",),
+        tools=("bash",),
         main=ECHO_MAIN,
     )
     adapter = ProcessCapabilityPackAdapter(
@@ -390,56 +488,38 @@ def test_sandbox_pack_receives_backend_authoritative_permission_snapshot(
         builtin_capability_registry(), handlers=adapter.handlers()
     )
     plan = service.create_plan(
-        intent="shell",
-        explicit_tools=("shell",),
+        intent="bash",
+        explicit_tools=("bash",),
         availability=RuntimeAvailability(
             platform="windows", installed_packs=frozenset({"sandbox"})
         ),
         policy=ExecutionPolicy(snapshot_id="policy-default"),
     )
-    with pytest.raises(ApprovalRequiredError):
-        asyncio.run(
-            service.tool_call(
-                plan.snapshot_id,
-                "shell",
-                {"command": "echo safe"},
-                policy_snapshot_id="policy-default",
-                idempotency_key="job:tool",
-            )
-        )
     result = asyncio.run(
         service.tool_call(
             plan.snapshot_id,
-            "shell",
-            {"command": "echo safe", "timeout_seconds": 5},
+            "bash",
+            {"command": "echo safe", "timeout": 5},
             policy_snapshot_id="policy-default",
             idempotency_key="job:tool",
-            approved=True,
         )
     )
-    assert result.value["sandbox"] == "workspace-write"
-    assert result.value["approved"] is True
+    assert result.value["sandbox"] == "danger-full-access"
+    assert result.value["approved"] is False
     assert result.value["idempotency_key"] == "job:tool"
-    assert result.value["sandbox_os_enforced"] is True
-    assert result.value["read_scope"] == "workspace-and-runtime"
-    assert result.value["write_scope"] == "workspace-only"
-    assert result.value["network_scope"] == "denied"
-    assert result.value["process_tree_scope"] == "contained-inherited"
-    assert result.value["stdout_limit_bytes"] == 4 * 1024 * 1024
     default_timeout = asyncio.run(
         service.tool_call(
             plan.snapshot_id,
-            "shell",
+            "bash",
             {"command": "pwd"},
             policy_snapshot_id="policy-default",
             idempotency_key="job:tool-default-timeout",
-            approved=True,
         )
     )
-    assert default_timeout.value["timeout_seconds"] == 125
+    assert default_timeout.value["sandbox"] == "danger-full-access"
 
 
-def test_workspace_shell_is_fail_closed_without_a_verified_os_backend(
+def test_cowagent_full_access_shell_does_not_require_an_extra_sandbox_backend(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -447,7 +527,7 @@ def test_workspace_shell_is_fail_closed_without_a_verified_os_backend(
     pack = _verified_pack(
         tmp_path,
         pack_id="sandbox",
-        tools=("shell",),
+        tools=("bash",),
         main=ECHO_MAIN,
     )
     adapter = ProcessCapabilityPackAdapter(
@@ -456,38 +536,27 @@ def test_workspace_shell_is_fail_closed_without_a_verified_os_backend(
         python_executable=sys.executable,
         sandbox_backend=UnavailableSandboxBackend("sandbox_probe_not_verified"),
     )
-    assert adapter.sandbox_profile_availability == {
-        "workspace-write": "sandbox_probe_not_verified",
-        "danger-full-access": (
-            "windows_process_tree_supervisor_unavailable"
-            if os.name == "nt"
-            else None
-        ),
-        "read-only": "shell_read_only_profile_unsupported",
-    }
     service = CapabilityService(
         builtin_capability_registry(), handlers=adapter.handlers()
     )
     plan = service.create_plan(
-        intent="shell",
-        explicit_tools=("shell",),
+        intent="bash",
+        explicit_tools=("bash",),
         availability=RuntimeAvailability(
             platform="windows", installed_packs=frozenset({"sandbox"})
         ),
         policy=ExecutionPolicy(snapshot_id="default"),
     )
-    with pytest.raises(CapabilityPackProcessError) as raised:
-        asyncio.run(
-            service.tool_call(
-                plan.snapshot_id,
-                "shell",
-                {"command": "echo should-not-run"},
-                policy_snapshot_id="default",
-                idempotency_key="job:blocked",
-                approved=True,
-            )
+    result = asyncio.run(
+        service.tool_call(
+            plan.snapshot_id,
+            "bash",
+            {"command": "echo runs"},
+            policy_snapshot_id="default",
+            idempotency_key="job:direct",
         )
-    assert raised.value.code == "workspace_sandbox_unavailable"
+    )
+    assert result.value["sandbox"] == "danger-full-access"
 
 
 def test_explicit_full_access_uses_auditable_danger_contract_without_claiming_sandbox(
@@ -498,7 +567,7 @@ def test_explicit_full_access_uses_auditable_danger_contract_without_claiming_sa
     pack = _verified_pack(
         tmp_path,
         pack_id="sandbox",
-        tools=("shell",),
+        tools=("bash",),
         main=ECHO_MAIN,
     )
     adapter = ProcessCapabilityPackAdapter(
@@ -511,8 +580,8 @@ def test_explicit_full_access_uses_auditable_danger_contract_without_claiming_sa
         builtin_capability_registry(), handlers=adapter.handlers()
     )
     plan = service.create_plan(
-        intent="shell",
-        explicit_tools=("shell",),
+        intent="bash",
+        explicit_tools=("bash",),
         availability=RuntimeAvailability(
             platform="windows", installed_packs=frozenset({"sandbox"})
         ),
@@ -524,7 +593,7 @@ def test_explicit_full_access_uses_auditable_danger_contract_without_claiming_sa
     result = asyncio.run(
         service.tool_call(
             plan.snapshot_id,
-            "shell",
+            "bash",
             {"command": "echo explicitly-unrestricted"},
             policy_snapshot_id="full",
             idempotency_key="job:danger",
@@ -547,17 +616,17 @@ def test_pack_crash_is_contained_as_one_stable_tool_failure(tmp_path: Path) -> N
     pack = _verified_pack(
         tmp_path,
         pack_id="browser",
-        tools=("fetch",),
+        tools=("web_fetch",),
         main="raise SystemExit(7)\n",
     )
     adapter = ProcessCapabilityPackAdapter(
         pack, workspace_roots=(workspace,), python_executable=sys.executable
     )
-    handler = adapter.handlers()["fetch"]
-    service = CapabilityService(builtin_capability_registry(), handlers={"fetch": handler})
+    handler = adapter.handlers()["web_fetch"]
+    service = CapabilityService(builtin_capability_registry(), handlers={"web_fetch": handler})
     plan = service.create_plan(
-        intent="fetch",
-        explicit_tools=("fetch",),
+        intent="web_fetch",
+        explicit_tools=("web_fetch",),
         availability=RuntimeAvailability(
             platform="windows", installed_packs=frozenset({"browser"})
         ),
@@ -567,7 +636,7 @@ def test_pack_crash_is_contained_as_one_stable_tool_failure(tmp_path: Path) -> N
         asyncio.run(
             service.tool_call(
                 plan.snapshot_id,
-                "fetch",
+                "web_fetch",
                 {"url": "https://example.com"},
                 policy_snapshot_id="policy",
             )
@@ -582,8 +651,8 @@ def test_descriptor_must_match_the_outer_signed_tool_contract(tmp_path: Path) ->
     pack = _verified_pack(
         tmp_path,
         pack_id="browser",
-        tools=("fetch",),
-        descriptor_tools=("cdp",),
+        tools=("web_fetch",),
+        descriptor_tools=("browser",),
         main=ECHO_MAIN,
     )
     with pytest.raises(CapabilityPackProcessError) as raised:
@@ -610,7 +679,7 @@ sys.stdout.write(json.dumps(response, sort_keys=True, separators=(",", ":")))
     pack = _verified_pack(
         tmp_path,
         pack_id="browser",
-        tools=("fetch",),
+        tools=("web_fetch",),
         main=main,
     )
     adapter = ProcessCapabilityPackAdapter(
@@ -620,8 +689,8 @@ sys.stdout.write(json.dumps(response, sort_keys=True, separators=(",", ":")))
         builtin_capability_registry(), handlers=adapter.handlers()
     )
     plan = service.create_plan(
-        intent="fetch",
-        explicit_tools=("fetch",),
+        intent="web_fetch",
+        explicit_tools=("web_fetch",),
         availability=RuntimeAvailability(
             platform="windows", installed_packs=frozenset({"browser"})
         ),
@@ -631,7 +700,7 @@ sys.stdout.write(json.dumps(response, sort_keys=True, separators=(",", ":")))
         asyncio.run(
             service.tool_call(
                 plan.snapshot_id,
-                "fetch",
+                "web_fetch",
                 {"url": "https://example.com"},
                 policy_snapshot_id="policy",
             )
@@ -647,7 +716,7 @@ def test_output_flood_is_killed_without_growing_the_runtime_response(
     pack = _verified_pack(
         tmp_path,
         pack_id="browser",
-        tools=("fetch",),
+        tools=("web_fetch",),
         main="import sys\nsys.stdout.write('x' * (5 * 1024 * 1024))\n",
     )
     adapter = ProcessCapabilityPackAdapter(
@@ -657,8 +726,8 @@ def test_output_flood_is_killed_without_growing_the_runtime_response(
         builtin_capability_registry(), handlers=adapter.handlers()
     )
     plan = service.create_plan(
-        intent="fetch",
-        explicit_tools=("fetch",),
+        intent="web_fetch",
+        explicit_tools=("web_fetch",),
         availability=RuntimeAvailability(
             platform="windows", installed_packs=frozenset({"browser"})
         ),
@@ -668,7 +737,7 @@ def test_output_flood_is_killed_without_growing_the_runtime_response(
         asyncio.run(
             service.tool_call(
                 plan.snapshot_id,
-                "fetch",
+                "web_fetch",
                 {"url": "https://example.com"},
                 policy_snapshot_id="policy",
             )
@@ -685,7 +754,7 @@ def test_shell_timeout_kills_the_process_and_returns_one_bounded_failure(
     pack = _verified_pack(
         tmp_path,
         pack_id="sandbox",
-        tools=("shell",),
+        tools=("bash",),
         main="import time\ntime.sleep(30)\n",
     )
     adapter = ProcessCapabilityPackAdapter(
@@ -699,8 +768,8 @@ def test_shell_timeout_kills_the_process_and_returns_one_bounded_failure(
         builtin_capability_registry(), handlers=adapter.handlers()
     )
     plan = service.create_plan(
-        intent="shell",
-        explicit_tools=("shell",),
+        intent="bash",
+        explicit_tools=("bash",),
         availability=RuntimeAvailability(
             platform="windows", installed_packs=frozenset({"sandbox"})
         ),
@@ -710,7 +779,7 @@ def test_shell_timeout_kills_the_process_and_returns_one_bounded_failure(
         asyncio.run(
             service.tool_call(
                 plan.snapshot_id,
-                "shell",
+                "bash",
                 {"command": "long-running-command"},
                 policy_snapshot_id="timeout",
                 idempotency_key="timeout:tool",
@@ -740,7 +809,7 @@ sys.stdout.write(json.dumps({
     pack = _verified_pack(
         tmp_path,
         pack_id="sandbox",
-        tools=("shell",),
+        tools=("bash",),
         main=main,
     )
     adapter = ProcessCapabilityPackAdapter(
@@ -753,8 +822,8 @@ sys.stdout.write(json.dumps({
         builtin_capability_registry(), handlers=adapter.handlers()
     )
     plan = service.create_plan(
-        intent="shell",
-        explicit_tools=("shell",),
+        intent="bash",
+        explicit_tools=("bash",),
         availability=RuntimeAvailability(
             platform="windows", installed_packs=frozenset({"sandbox"})
         ),
@@ -764,7 +833,7 @@ sys.stdout.write(json.dumps({
         asyncio.run(
             service.tool_call(
                 plan.snapshot_id,
-                "shell",
+                "bash",
                 {"command": "echo no-forged-handshake"},
                 policy_snapshot_id="handshake",
                 idempotency_key="handshake:tool",
@@ -775,7 +844,7 @@ sys.stdout.write(json.dumps({
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS Seatbelt real-host contract")
-def test_macos_workspace_sandbox_allows_read_and_denies_outside_write_network_and_child_escape(
+def test_macos_pack_shell_uses_cowagent_full_access_without_the_workspace_profile(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -823,7 +892,7 @@ sys.stdout.write(json.dumps(response, sort_keys=True, separators=(",", ":")))
     pack = _verified_pack(
         tmp_path,
         pack_id="sandbox",
-        tools=("shell",),
+        tools=("bash",),
         main=main,
     )
     adapter = ProcessCapabilityPackAdapter(
@@ -835,8 +904,8 @@ sys.stdout.write(json.dumps(response, sort_keys=True, separators=(",", ":")))
         builtin_capability_registry(), handlers=adapter.handlers()
     )
     plan = service.create_plan(
-        intent="shell",
-        explicit_tools=("shell",),
+        intent="bash",
+        explicit_tools=("bash",),
         availability=RuntimeAvailability(
             platform="macos", installed_packs=frozenset({"sandbox"})
         ),
@@ -845,7 +914,7 @@ sys.stdout.write(json.dumps(response, sort_keys=True, separators=(",", ":")))
     result = asyncio.run(
         service.tool_call(
             plan.snapshot_id,
-            "shell",
+            "bash",
             {"command": "boundary-probe"},
             policy_snapshot_id="macos-seatbelt",
             idempotency_key="macos:boundary",
@@ -854,9 +923,7 @@ sys.stdout.write(json.dumps(response, sort_keys=True, separators=(",", ":")))
     ).value
     assert result["inside_write"] is True
     assert result["outside_read"] is True
-    assert result["outside_write"] is False
-    assert result["child_escape"] is False
-    assert result["network_errno"] in {1, 13}
+    assert result["outside_write"] is True
 
 
 def test_macos_probe_evaluator_rejects_false_network_and_child_evidence() -> None:
@@ -1216,7 +1283,7 @@ def test_pack_bytes_are_revalidated_after_adapter_binding(tmp_path: Path) -> Non
     pack = _verified_pack(
         tmp_path,
         pack_id="browser",
-        tools=("fetch",),
+        tools=("web_fetch",),
         main=ECHO_MAIN,
     )
     adapter = ProcessCapabilityPackAdapter(
@@ -1229,8 +1296,8 @@ def test_pack_bytes_are_revalidated_after_adapter_binding(tmp_path: Path) -> Non
         builtin_capability_registry(), handlers=adapter.handlers()
     )
     plan = service.create_plan(
-        intent="fetch",
-        explicit_tools=("fetch",),
+        intent="web_fetch",
+        explicit_tools=("web_fetch",),
         availability=RuntimeAvailability(
             platform="windows", installed_packs=frozenset({"browser"})
         ),
@@ -1240,7 +1307,7 @@ def test_pack_bytes_are_revalidated_after_adapter_binding(tmp_path: Path) -> Non
         asyncio.run(
             service.tool_call(
                 plan.snapshot_id,
-                "fetch",
+                "web_fetch",
                 {"url": "https://example.com"},
                 policy_snapshot_id="policy",
             )
@@ -1264,7 +1331,7 @@ sys.stdout.write(json.dumps({
     pack = _verified_pack(
         tmp_path,
         pack_id="browser",
-        tools=("fetch",),
+        tools=("web_fetch",),
         main=main,
     )
     adapter = ProcessCapabilityPackAdapter(
@@ -1274,8 +1341,8 @@ sys.stdout.write(json.dumps({
         builtin_capability_registry(), handlers=adapter.handlers()
     )
     plan = service.create_plan(
-        intent="fetch",
-        explicit_tools=("fetch",),
+        intent="web_fetch",
+        explicit_tools=("web_fetch",),
         availability=RuntimeAvailability(
             platform="windows", installed_packs=frozenset({"browser"})
         ),
@@ -1285,7 +1352,7 @@ sys.stdout.write(json.dumps({
         asyncio.run(
             service.tool_call(
                 plan.snapshot_id,
-                "fetch",
+                "web_fetch",
                 {"url": "https://example.com"},
                 policy_snapshot_id="policy",
             )

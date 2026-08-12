@@ -1,6 +1,5 @@
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { AtSign, Cable, ChevronDown, FileText, LoaderCircle, Plus, Send, ShieldCheck, Square, X } from "lucide-react";
+import { AtSign, Cable, ChevronDown, CornerUpRight, FileText, LoaderCircle, Plus, Send, Square, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { SendDisposition } from "../state/useRuntimeSession.ts";
@@ -37,13 +36,10 @@ interface ComposerProps {
     limits: Record<string, number>;
   } | null;
   usage: ConversationUsageProjection | null;
-  permissionLabel: string;
-  permissionDescription: string;
   capabilityMentions: CapabilityMentionProjection[];
   capabilityMentionState: "loading" | "ready" | "error";
   onChatModelChange: (modelId: string) => void;
   onImageModelChange: (modelId: string) => void;
-  onOpenPermissionSettings: () => void;
   onOpenConnections: () => void;
   onSend: (
     input: string,
@@ -57,12 +53,6 @@ interface ComposerProps {
   onLoadAttachmentThumbnail: InputAttachmentBlobLoader;
   onInterrupt: () => void;
 }
-
-const dispositionLabel: Record<SendDisposition, string> = {
-  steer: "追加到当前任务",
-  queue: "排到下一轮",
-  replace: "替换当前任务",
-};
 
 export function Composer({
   taskList = null,
@@ -80,13 +70,10 @@ export function Composer({
   imageModel,
   quota,
   usage,
-  permissionLabel,
-  permissionDescription,
   capabilityMentions,
   capabilityMentionState,
   onChatModelChange,
   onImageModelChange,
-  onOpenPermissionSettings,
   onOpenConnections,
   onSend,
   onRefreshCapabilityMentions,
@@ -95,7 +82,6 @@ export function Composer({
   onLoadAttachmentThumbnail,
   onInterrupt,
 }: ComposerProps) {
-  const [disposition, setDisposition] = useState<SendDisposition>("steer");
   const [sendFailed, setSendFailed] = useState(false);
   const [attachments, setAttachments] = useState<InputAttachmentProjection[]>([]);
   const [attachmentUploading, setAttachmentUploading] = useState(false);
@@ -138,6 +124,7 @@ export function Composer({
       : "审计连续性待核对";
   const usageOpen = usageHoverOpen || usagePinned;
   const sendLabel = submitting ? "发送中" : sendFailed ? "重试发送" : "发送";
+  const primaryActionLabel = active ? "停止当前任务" : sendLabel;
   const selectedChatModel = chatModels.find((model) => model.model_id === chatModel);
   const mentionOptions = useMemo(() => {
     if (mentionQuery === null) return [];
@@ -204,7 +191,7 @@ export function Composer({
     if ((!draft.trim() && attachments.length === 0 && selectedMentions.length === 0) || !modelAvailable) return;
     const sent = await onSend(
       draft,
-      active ? disposition : "steer",
+      "steer",
       attachments,
       selectedMentions.map((item) => item.reference),
     );
@@ -446,14 +433,8 @@ export function Composer({
                 imageModels={imageModels}
                 chatModel={chatModel}
                 imageModel={imageModel}
-                onChatModelChange={(modelId) => {
-                  onChatModelChange(modelId);
-                  if (active && modelId !== chatModel) setDisposition("queue");
-                }}
-                onImageModelChange={(modelId) => {
-                  onImageModelChange(modelId);
-                  if (active && modelId !== imageModel) setDisposition("queue");
-                }}
+                onChatModelChange={onChatModelChange}
+                onImageModelChange={onImageModelChange}
               />
             </Suspense>
             <Tooltip.Root delayDuration={500}>
@@ -475,55 +456,15 @@ export function Composer({
                 </Tooltip.Content>
               </Tooltip.Portal>
             </Tooltip.Root>
-            <Tooltip.Root delayDuration={900}>
-              <Tooltip.Trigger asChild>
-                <button
-                  type="button"
-                  className="ex-permission-inline"
-                  onClick={onOpenPermissionSettings}
-                >
-                  <ShieldCheck aria-hidden="true" />{permissionLabel}
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Portal>
-                <Tooltip.Content className="ex-tooltip ex-permission-tooltip" side="top" sideOffset={8}>
-                  <span>{permissionDescription}</span>
-                  <span>需要权限或信息时会询问；长任务可排队，重启后继续。</span>
-                  <Tooltip.Arrow className="ex-tooltip-arrow" />
-                </Tooltip.Content>
-              </Tooltip.Portal>
-            </Tooltip.Root>
           </div>
           <div className="ex-send-tools" data-active={active ? "true" : "false"}>
             {active ? (
-              <DropdownMenu.Root>
-                <DropdownMenu.Trigger asChild>
-                  <button className="ex-disposition" type="button">
-                    {dispositionLabel[disposition]}
-                    <ChevronDown aria-hidden="true" />
-                  </button>
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Portal>
-                  <DropdownMenu.Content className="ex-menu" side="top" align="end" sideOffset={8}>
-                    {(Object.keys(dispositionLabel) as SendDisposition[]).map((value) => (
-                      <DropdownMenu.Item
-                        className="ex-menu-item"
-                        key={value}
-                        onSelect={() => {
-                          setDisposition(value);
-                          setSendFailed(false);
-                        }}
-                      >
-                        {dispositionLabel[value]}
-                      </DropdownMenu.Item>
-                    ))}
-                  </DropdownMenu.Content>
-                </DropdownMenu.Portal>
-              </DropdownMenu.Root>
-            ) : null}
-            {active ? (
-              <IconButton label="停止当前任务" onClick={onInterrupt}>
-                <Square aria-hidden="true" />
+              <IconButton
+                label="追加到当前任务"
+                disabled={(!draft.trim() && attachments.length === 0 && selectedMentions.length === 0) || submitting || !modelAvailable}
+                onClick={() => void submit()}
+              >
+                <CornerUpRight aria-hidden="true" />
               </IconButton>
             ) : null}
             <Tooltip.Root delayDuration={500} open={usageOpen} onOpenChange={setUsageHoverOpen}>
@@ -576,14 +517,15 @@ export function Composer({
             <button
               className="ex-send-button"
               type="button"
-              disabled={(!draft.trim() && attachments.length === 0 && selectedMentions.length === 0) || submitting || !modelAvailable}
-              aria-label={sendLabel}
-              aria-busy={submitting}
+              data-mode={active ? "stop" : "send"}
+              disabled={!active && ((!draft.trim() && attachments.length === 0 && selectedMentions.length === 0) || submitting || !modelAvailable)}
+              aria-label={primaryActionLabel}
+              aria-busy={!active && submitting}
               aria-describedby={!modelAvailable ? "ecorex-composer-note" : undefined}
-              onClick={() => void submit()}
+              onClick={() => active ? onInterrupt() : void submit()}
             >
-              <Send aria-hidden="true" />
-              <span className="ex-send-button-label">{sendLabel}</span>
+              {active ? <Square aria-hidden="true" /> : <Send aria-hidden="true" />}
+              <span className="ex-send-button-label">{primaryActionLabel}</span>
             </button>
           </div>
         </div>

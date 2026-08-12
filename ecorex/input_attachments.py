@@ -15,6 +15,10 @@ import hashlib
 import io
 import json
 import mimetypes
+import os
+from pathlib import Path
+import stat
+import tempfile
 import threading
 import warnings
 from typing import Any, Iterable, Mapping
@@ -356,6 +360,85 @@ class InputAttachmentService:
         if hashlib.sha256(content).hexdigest() != projection.sha256:
             raise InputAttachmentUnavailable("attachment content digest changed")
         return projection, content
+
+    def materialize_bound(
+        self,
+        attachment_id: str,
+        *,
+        thread_id: str,
+        turn_id: str,
+        workspace_root: str | Path,
+    ) -> tuple[InputAttachmentProjection, Path]:
+        """Publish one Turn-bound attachment as an immutable workspace file."""
+
+        projection, content = self.read_bound(
+            attachment_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+        )
+        workspace = Path(workspace_root).expanduser().resolve()
+        workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
+        attachment_root = workspace
+        for part in (
+            ".emate",
+            "attachments",
+            hashlib.sha256(turn_id.encode("utf-8")).hexdigest()[:16],
+        ):
+            attachment_root /= part
+            if attachment_root.exists() or attachment_root.is_symlink():
+                if attachment_root.is_symlink() or not attachment_root.is_dir():
+                    raise InputAttachmentUnavailable(
+                        "attachment workspace is unavailable"
+                    )
+            else:
+                attachment_root.mkdir(mode=0o700)
+            if not attachment_root.resolve().is_relative_to(workspace):
+                raise InputAttachmentUnavailable(
+                    "attachment workspace escapes the Turn workspace"
+                )
+            os.chmod(attachment_root, 0o700)
+
+        original = Path(projection.display_name.replace("\\", "/")).name
+        safe_name = "".join(
+            character if character.isalnum() or character in " ._-" else "_"
+            for character in original
+        ).strip(" .")
+        safe_name = safe_name[:120] or "attachment"
+        destination = attachment_root / f"{projection.sha256[:12]}-{safe_name}"
+        if destination.exists() or destination.is_symlink():
+            metadata = destination.lstat()
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or destination.is_symlink()
+                or hashlib.sha256(destination.read_bytes()).hexdigest()
+                != projection.sha256
+            ):
+                raise InputAttachmentUnavailable("materialized attachment changed")
+            os.chmod(destination, 0o400)
+            return projection, destination
+
+        temporary_name: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=attachment_root,
+                prefix=".attachment-",
+                delete=False,
+            ) as temporary:
+                temporary_name = temporary.name
+                temporary.write(content)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            os.chmod(temporary_name, 0o400)
+            os.replace(temporary_name, destination)
+            temporary_name = None
+            os.chmod(destination, 0o400)
+        finally:
+            if temporary_name is not None:
+                try:
+                    os.unlink(temporary_name)
+                except FileNotFoundError:
+                    pass
+        return projection, destination
 
     def read_bound_visual(
         self,

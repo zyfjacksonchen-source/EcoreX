@@ -34,6 +34,8 @@ from .models import (
     GatewayEventType,
     GatewayFunctionCallOutputInput,
     GatewayTokenUsageWindow,
+    GatewayWebSearchRequest,
+    GatewayWebSearchResponse,
     ModelGatewayRequest,
 )
 from .handoff import ChatModelRevision, DurableChatHandoff
@@ -2225,6 +2227,85 @@ def create_managed_gateway_app(
                 status_code=503,
                 detail="managed gateway usage is unavailable",
             ) from None
+
+    @app.post(
+        "/api/v1/web-search",
+        response_model=GatewayWebSearchResponse,
+    )
+    async def web_search(
+        body: GatewayWebSearchRequest,
+        current: GatewayPrincipal = Depends(principal),
+    ) -> GatewayWebSearchResponse:
+        if body.model_id not in current.allowed_model_ids:
+            raise HTTPException(status_code=403, detail="managed model is not allowed")
+        if dynamic_model_authority:
+            try:
+                _catalog, active_ids = await active_chat_catalog()
+            except Exception:
+                raise HTTPException(
+                    status_code=503,
+                    detail="managed model catalog is unavailable",
+                ) from None
+            if body.model_id not in active_ids:
+                raise HTTPException(status_code=403, detail="managed model is not allowed")
+        elif body.model_id not in allowed_model_ids:
+            raise HTTPException(status_code=403, detail="managed model is not allowed")
+        search = getattr(provider, "search", None)
+        if not callable(search) or usage_accountant is None:
+            raise HTTPException(
+                status_code=503,
+                detail="managed web search is unavailable",
+            )
+        try:
+            available = await asyncio.to_thread(
+                usage_accountant.tokens_available,
+                current.account_id,
+            )
+        except Exception:
+            raise HTTPException(
+                status_code=503,
+                detail="managed usage settlement is unavailable",
+            ) from None
+        if not available:
+            raise HTTPException(
+                status_code=429,
+                detail="managed token quota is exhausted",
+            )
+        admitted = False
+        if service_lifecycle is not None:
+            admitted = service_lifecycle.admit_stream()
+            if not admitted:
+                raise HTTPException(
+                    status_code=503,
+                    detail="managed gateway is draining",
+                    headers={"Retry-After": "1"},
+                )
+        try:
+            result = GatewayWebSearchResponse.model_validate(
+                await search(body, current)
+            )
+            usage = result.usage
+            fact = GatewayCompletedUsageFact(
+                request_id=body.request_id,
+                account_id=current.account_id,
+                terminal_event_type=GatewayEventType.RESPONSE_COMPLETED,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                total_tokens=usage.total_tokens,
+                provider_created_at=result.provider_created_at,
+            )
+            await asyncio.to_thread(usage_accountant.settle, fact)
+            return result
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(
+                status_code=503,
+                detail="managed web search is unavailable",
+            ) from None
+        finally:
+            if admitted:
+                service_lifecycle.release_stream()
 
     @app.post("/v1/responses", response_model=None, include_in_schema=False)
     @app.post("/api/v1/model/stream", response_model=None)

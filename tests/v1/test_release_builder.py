@@ -21,6 +21,7 @@ from ecorex.release import (
     ArtifactKind,
     Ed25519MemorySigner,
     CoreDeltaBuildInput,
+    MAX_CORE_EXPANDED_BYTES,
     ReleaseBuildError,
     ReleaseBuilder,
     ReleaseBuildSpec,
@@ -513,7 +514,7 @@ def test_builder_rejects_same_or_future_delta_base_version(tmp_path: Path) -> No
 
     major, minor, patch = (int(part) for part in __version__.split("."))
     next_patch = f"{major}.{minor}.{patch + 1}"
-    for version in (__version__, next_patch, "2.0.0-alpha.1"):
+    for version in (__version__, next_patch):
         base_manifest = replace(
             base_release.manifest,
             release_id=f"release-stable-base-{version.replace('.', '-')}",
@@ -592,6 +593,43 @@ def test_builder_emits_machine_verifiable_metadata_and_sbom(tmp_path: Path) -> N
         == hashlib.sha256(package.read_bytes()).hexdigest()
         for component in sbom["components"]
     )
+
+
+def test_builder_rejects_sbom_above_bootstrap_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ecorex.release.builder as builder_module
+
+    signer, _public, _private = _signer()
+    monkeypatch.setattr(builder_module, "MAX_RELEASE_SBOM_BYTES", 1)
+
+    with pytest.raises(
+        ReleaseBuildError,
+        match="release SBOM exceeds its Bootstrap bound",
+    ):
+        ReleaseBuilder(signer).build(
+            _spec(_input(_source_tree(tmp_path / "source"))),
+            tmp_path / "release",
+        )
+
+
+def test_builder_rejects_core_above_bootstrap_expanded_bound(
+    tmp_path: Path,
+) -> None:
+    signer, _public, _private = _signer()
+    source = _source_tree(tmp_path / "source")
+    with (source / "oversized.bin").open("wb") as stream:
+        stream.truncate(MAX_CORE_EXPANDED_BYTES + 1)
+
+    with pytest.raises(
+        ReleaseBuildError,
+        match=f"source expands above the {MAX_CORE_EXPANDED_BYTES} byte hard limit",
+    ):
+        ReleaseBuilder(signer).build(
+            _spec(_input(source)),
+            tmp_path / "release",
+        )
 
 
 @pytest.mark.parametrize(

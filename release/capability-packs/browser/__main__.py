@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from browser_pack import handle
-from ecorex_pack_protocol import run
+import sys
+
+from browser_pack import BrowserPackHandler, handle
+from ecorex_pack_protocol import run, run_session
 
 
 if __name__ == "__main__":
-    raise SystemExit(run("browser", frozenset({"cdp", "fetch"}), handle))
+    tools = frozenset({"browser", "web_fetch", "web_search"})
+    if sys.argv[1:] == ["--session"]:
+        raise SystemExit(run_session("browser", tools, BrowserPackHandler()))
+    raise SystemExit(run("browser", tools, handle))

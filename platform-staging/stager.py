@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build one real platform Core and the six signed Capability Pack trees.
+"""Build one real platform Core and the five signed Capability Pack trees.
 
 The protected workflow invokes this file as the digest-pinned adapter behind
 ``invoke-v1-platform-stager.py``. It consumes one strict request on stdin and
@@ -55,6 +55,8 @@ from ecorex.release.macos_native_contract import (  # noqa: E402
 from ecorex.pack_catalog import (  # noqa: E402
     CAPABILITY_PACK_SERVICE_IDS as PACK_SERVICES,
     CAPABILITY_PACK_TOOL_IDS as PACK_TOOLS,
+    COW_RUNTIME_SOURCE_ROOTS,
+    required_capability_pack_projection,
 )
 from ecorex.release.process_boundary import (  # noqa: E402
     BoundedProcessError,
@@ -65,6 +67,7 @@ from ecorex.release.dependency_lock import (  # noqa: E402
     DependencyLockError,
     load_dependency_lock_manifest,
 )
+from ecorex.release.build_dependency_lock import active_lock_versions  # noqa: E402
 from ecorex.release.web_bundle import scan_web_bundle  # noqa: E402
 from ecorex.release.secret_scan import detect_secret  # noqa: E402
 from ecorex.server.config import ProductRuntimeConfig  # noqa: E402
@@ -75,19 +78,6 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{2,127}$")
 _SAFE_KEY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _TARGETS = frozenset({("windows", "x64"), ("macos", "arm64"), ("macos", "x64")})
-_RUNTIME_DISTRIBUTIONS = (
-    "cryptography",
-    "fastapi",
-    "httpx",
-    "lark-channel-sdk",
-    "pillow",
-    "pydantic",
-    "python-multipart",
-    "qrcode",
-    "tzdata",
-    "uvicorn",
-    "websockets",
-)
 _FIXED_TIME = (1980, 1, 1, 0, 0, 0)
 _MAX_FILE_BYTES = 512 * 1024 * 1024
 _IMPORT_ARCHIVE_NATIVE_SUFFIXES = frozenset({".dll", ".dylib", ".exe", ".pyd", ".so"})
@@ -382,7 +372,6 @@ def _stage(request: Mapping[str, Any]) -> None:
         platform=platform,
         architecture=architecture,
         interpreter=interpreter,
-        native=native,
         evidence=evidence,
     )
     _core_gates(
@@ -840,6 +829,13 @@ def _build_python_closure(
         site_packages / "ecorex",
         excluded=frozenset({"__pycache__"}),
     )
+    for package in COW_RUNTIME_SOURCE_ROOTS:
+        _copy_tree(
+            ROOT / package,
+            site_packages / package,
+            excluded=frozenset({"__pycache__", "test", "tests"}),
+        )
+    _copy_regular(ROOT / "config.py", site_packages / "config.py")
     _prune_runtime_tree(destination)
     if platform == "macos":
         _reject_macos_build_objects(destination)
@@ -2668,6 +2664,15 @@ except BaseException:
  print('__ECOREX_PACK_PROBE_BOOTSTRAP_FAILED__')
  raise SystemExit(81)
 try:
+ from bridge.agent_initializer import AgentInitializer
+ from agent.tools.search_files.search_files import SearchFiles
+ from agent.tools.tool_manager import ToolManager
+ import regex
+ assert AgentInitializer and SearchFiles and ToolManager and regex
+except BaseException:
+ print('__ECOREX_PACK_PROBE_COW_SPINE_FAILED__')
+ raise SystemExit(87)
+try:
  import cryptography
  import pydantic_core
  from cryptography.hazmat.bindings import _rust
@@ -2970,20 +2975,13 @@ def _write_runtime_config(
             "platform": platform,
             "architecture": architecture,
         }
-        raw["capability_packs"] = [
-            {
-                "pack_id": pack_id,
-                "manifest": (
-                    f"capability-packs/{pack_id}/ecorex-capability-pack-{pack_id}-"
-                    f"{platform}-{architecture}-{__version__}.json"
-                ),
-                "artifact": (
-                    f"capability-packs/{pack_id}/ecorex-capability-pack-{pack_id}-"
-                    f"{platform}-{architecture}-{__version__}.zip"
-                ),
-            }
-            for pack_id in PACK_TOOLS
-        ]
+        raw["capability_packs"] = list(
+            required_capability_pack_projection(
+                platform=platform,
+                architecture=architecture,
+                version=__version__,
+            )
+        )
         canonical = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode(
             "utf-8"
         )
@@ -3053,7 +3051,6 @@ def _stage_packs(
     platform: str,
     architecture: str,
     interpreter: Path,
-    native: Path,
     evidence: Path,
 ) -> None:
     common = (
@@ -3063,7 +3060,7 @@ def _stage_packs(
         source = ROOT / "release" / "capability-packs" / pack_id
         destination = root / pack_id
         _copy_tree(source, destination, excluded=frozenset({"__pycache__"}))
-        if pack_id in {"browser", "sandbox"}:
+        if pack_id == "browser":
             _copy_regular(common, destination / common.name)
             _normalize_process_pack_descriptor(destination, pack_id=pack_id)
     browser_inventory = _vendor_browser_runtime(
@@ -3117,14 +3114,6 @@ def _stage_packs(
         interpreter=interpreter,
         inventory=office_inventory,
         evidence=evidence / "office",
-    )
-    _sandbox_gates(
-        root / "sandbox",
-        platform=platform,
-        architecture=architecture,
-        interpreter=interpreter,
-        native=native,
-        evidence=evidence / "sandbox",
     )
 
 
@@ -3709,11 +3698,11 @@ def _browser_gates(
         )
         request = _pack_request(
             "browser",
-            "cdp",
+            "browser",
             {
-                "operation": "snapshot",
-                "target": "data:text/html,<title>EcoreX Stage</title><body>ecorex-stage-ready</body>",
-                "parameters": {"timeout_ms": 20_000},
+                "action": "navigate",
+                "url": "data:text/html,<title>ECoreX Stage</title><body>ecorex-stage-ready</body>",
+                "timeout": 20_000,
             },
         )
         response = _invoke_zipapp(interpreter, zipapp, request, timeout=60)
@@ -4392,46 +4381,15 @@ def _locked_inventory_evidence(
 
 
 def _active_lock_versions(path: Path) -> dict[str, str]:
-    entries: list[str] = []
-    pending = ""
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeError):
+        return active_lock_versions(path)
+    except DependencyLockError:
         raise StageError("python_dependency_lock_invalid") from None
-    for raw in lines:
-        stripped = raw.strip()
-        if not stripped or (stripped.startswith("#") and not pending):
-            continue
-        continued = stripped.endswith("\\")
-        if continued:
-            stripped = stripped[:-1].strip()
-        pending = f"{pending} {stripped}".strip()
-        if not continued:
-            entries.append(pending)
-            pending = ""
-    if pending or not entries:
-        raise StageError("python_dependency_lock_invalid")
-    versions: dict[str, str] = {}
-    for entry in entries:
-        try:
-            requirement = Requirement(entry.split(" --hash=", 1)[0].strip())
-            if requirement.marker is not None and not requirement.marker.evaluate(
-                {"extra": ""}
-            ):
-                continue
-        except (InvalidRequirement, ValueError):
-            raise StageError("python_dependency_lock_invalid") from None
-        specifiers = tuple(requirement.specifier)
-        name = canonicalize_name(requirement.name)
-        if (
-            requirement.url is not None
-            or len(specifiers) != 1
-            or specifiers[0].operator != "=="
-            or name in versions
-        ):
-            raise StageError("python_dependency_lock_invalid")
-        versions[name] = specifiers[0].version
-    return versions
+
+
+_RUNTIME_DISTRIBUTIONS = tuple(
+    _active_lock_versions(ROOT / "requirements" / "locks" / "runtime.lock")
+)
 
 
 def _stage_size_gate(

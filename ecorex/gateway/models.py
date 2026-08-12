@@ -12,6 +12,7 @@ from typing import Annotated, Any, Literal
 
 import json
 import re
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -27,12 +28,11 @@ _MAX_JSON_DEPTH = 20
 _MAX_JSON_NODES = 50_000
 _MAX_JSON_STRING = 1_000_000
 
-# The model-facing tool working set is deliberately much smaller than the
-# searchable capability catalog.  These are protocol limits, not tuning
-# hints: both the local Runtime request model and the cloud provider adapter
-# enforce them before a model request can cross the network boundary.
+# First-party tools are a single model-facing working set, matching the
+# CowAgent desktop runtime.  The byte budget remains the hard boundary for
+# provider requests; use the provider's 64-tool envelope for built-ins and MCP.
 TOOL_PROJECTION_BUDGET_VERSION = "1.0.0"
-MAX_MODEL_VISIBLE_TOOLS = 16
+MAX_MODEL_VISIBLE_TOOLS = 64
 MAX_DISCLOSED_WORKING_SET = 12
 MAX_TOOL_DESCRIPTOR_BYTES = 96 * 1024
 MAX_TOOL_SCHEMA_BATCH_BYTES = 256 * 1024
@@ -200,6 +200,68 @@ class GatewayAccountUsageProjection(GatewayModel):
             raise ValueError("gateway usage timestamp must be timezone-aware")
         if self.week_started_at > self.calculated_at:
             raise ValueError("gateway usage window is invalid")
+        return self
+
+
+class GatewayWebSearchRequest(GatewayModel):
+    """Authenticated Runtime request for the Gateway-owned search backend."""
+
+    schema_version: Literal[1] = 1
+    request_id: str = Field(min_length=1, max_length=256)
+    model_id: str = Field(min_length=1, max_length=256)
+    query: str = Field(min_length=1, max_length=2048)
+    count: int = Field(default=10, ge=1, le=50, strict=True)
+    freshness: str = Field(default="noLimit", min_length=1, max_length=64)
+    summary: bool = False
+
+    @model_validator(mode="after")
+    def validate_request(self) -> "GatewayWebSearchRequest":
+        _validate_id(self.request_id, "web search request_id")
+        _validate_id(self.model_id, "web search model_id")
+        _validate_json_value(self.query, "web search query")
+        _validate_json_value(self.freshness, "web search freshness")
+        return self
+
+
+class GatewayWebSearchResult(GatewayModel):
+    title: str = Field(default="", max_length=4096)
+    url: str = Field(min_length=1, max_length=8192)
+    snippet: str = Field(default="", max_length=32_768)
+    siteName: str = Field(default="", max_length=1024)
+    datePublished: str = Field(default="", max_length=128)
+
+    @model_validator(mode="after")
+    def validate_result(self) -> "GatewayWebSearchResult":
+        parsed = urlsplit(self.url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ValueError("managed web search result URL is invalid")
+        return self
+
+
+class GatewayWebSearchResponse(GatewayModel):
+    schema_version: Literal[1] = 1
+    query: str = Field(min_length=1, max_length=2048)
+    backend: Literal["managed"] = "managed"
+    total: int = Field(ge=0, strict=True)
+    count: int = Field(ge=0, le=50, strict=True)
+    results: list[GatewayWebSearchResult] = Field(default_factory=list, max_length=50)
+    usage: GatewayTokenUsageWindow
+    provider_created_at: datetime
+
+    @model_validator(mode="after")
+    def validate_response(self) -> "GatewayWebSearchResponse":
+        if (
+            self.count != len(self.results)
+            or self.total < self.count
+            or self.usage.total_tokens <= 0
+            or self.provider_created_at.tzinfo is None
+        ):
+            raise ValueError("managed web search response is invalid")
         return self
 
 

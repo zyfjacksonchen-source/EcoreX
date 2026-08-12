@@ -664,7 +664,9 @@ class ExtensionService:
             )
         request_id = f"runtime-bind:{manifest.extension_id}:{manifest.revision_id[-24:]}"
         negotiated_protocol = (
-            "2025-11-25" if manifest.kind is ExtensionKind.MCP_SERVER else None
+            manifest.supported_protocol_versions[0]
+            if manifest.kind is ExtensionKind.MCP_SERVER
+            else None
         )
         catalog_digest = canonical_digest(
             [item.to_dict() for item in manifest.exports]
@@ -1974,9 +1976,9 @@ class ExtensionService:
                     "declarative Skill export must use its exact extension ID and declare no permissions"
                 )
         if manifest.kind is ExtensionKind.MCP_SERVER:
-            if manifest.supported_protocol_versions != ("2025-11-25",):
+            if not manifest.supported_protocol_versions:
                 raise ExtensionDependencyError(
-                    "MCP providers must negotiate the stable 2025-11-25 protocol"
+                    "MCP providers must declare a supported protocol"
                 )
             if not any(
                 item.kind is ExtensionExportKind.MCP_SERVER

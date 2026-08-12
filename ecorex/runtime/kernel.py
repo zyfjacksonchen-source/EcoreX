@@ -1058,11 +1058,6 @@ class RuntimeKernel:
         if ThreadStatus(thread["status"]) != ThreadStatus.ACTIVE:
             raise ConflictError("turns cannot be created in an archived thread")
         if snapshot_context is not None:
-            self.snapshots.validate_extension_snapshot_in_transaction(
-                connection,
-                snapshot_context.extension_snapshot_id,
-                config_snapshot_id=snapshot_context.config_snapshot_id,
-            )
             self.snapshots.validate_model_selection_in_transaction(
                 connection,
                 snapshot_context,
@@ -1138,12 +1133,7 @@ class RuntimeKernel:
                     raise ConflictError("idempotent turn is missing its durable job")
                 return self._turn_from_row(duplicate), self.jobs._from_row(job_row)
 
-        if snapshot_context is not None and permission_account_id is not None:
-            self.snapshots.validate_permission_snapshot_current_in_transaction(
-                connection,
-                snapshot_context.permission_snapshot_id,
-                account_id=permission_account_id,
-            )
+        del permission_account_id
         now = now or _utc_now()
         turn_id = new_id("trn")
         self.events.append_in_transaction(

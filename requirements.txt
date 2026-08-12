@@ -10,6 +10,7 @@ croniter>=2.0.0
 click>=8.0
 qrcode
 json-repair
+regex>=2019.3.12
 playwright
 
 # wechatcom & wechatmp

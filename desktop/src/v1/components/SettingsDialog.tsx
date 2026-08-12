@@ -1,10 +1,8 @@
-import { Activity, AlertCircle, Blocks, Camera, FolderOutput, KeyRound, RefreshCw, Shield, UserRound, X } from "lucide-react";
+import { Activity, AlertCircle, Blocks, Camera, FolderOutput, KeyRound, RefreshCw, UserRound, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
   BootstrapResponse,
-  ExtensionCatalogSnapshot,
-  MemorySnapshot,
   MigrationCredentialKind,
   MigrationCredentialOrigin,
   MigrationQuarantineProjection,
@@ -17,39 +15,16 @@ import {
   createClientRequestId,
   type RuntimeClient,
 } from "../api/runtimeClient.ts";
-import {
-  extensionCatalogSummary,
-  type ExtensionLoadState,
-} from "../state/extensions.ts";
 import { userFacingError } from "../state/userLanguage.ts";
-import {
-  isRuntimeUpdateInstalling,
-  isVerifiedRuntimeUpdateReady,
-  runtimeUpdateStatusText,
-} from "../state/updatePresentation.ts";
 import { KnowledgeSettings, MemorySettings } from "./WorkspaceContentSettings.tsx";
 
 interface SettingsDialogProps {
   open: boolean;
   bootstrap: BootstrapResponse | null;
   onOpenChange: (open: boolean) => void;
-  permissionUpdating: boolean;
-  permissionError: string | null;
-  onClearPermissionError: () => void;
-  onPermissionChange: (profile: "default" | "full_access") => Promise<boolean>;
-  extensions: ExtensionCatalogSnapshot | null;
-  extensionLoadState: ExtensionLoadState;
   onManageExtensions: () => void;
   profileAvatar: string | null;
   onProfileAvatarChange: (value: string | null) => void;
-  memory: MemorySnapshot | null;
-  memoryLoadState: "loading" | "ready" | "error";
-  memoryBusy: boolean;
-  memoryError: string | null;
-  onClearMemoryError: () => void;
-  onRefreshMemory: () => void;
-  onResetMemory: () => Promise<boolean>;
-  onUndoMemoryReset: (resetId: string) => Promise<boolean>;
   client: RuntimeClient;
   outputLocations: OutputLocationOption[];
   outputPreference: OutputPreference | null;
@@ -66,11 +41,6 @@ interface SettingsDialogProps {
   onClearSystemHealthError: () => void;
   onRefreshSystemHealth: () => void;
   onLoadSystemTechnicalHealth: () => Promise<SystemHealthSample>;
-  updateBusy: boolean;
-  updateError: string | null;
-  onClearUpdateError: () => void;
-  onCheckUpdate: () => Promise<boolean>;
-  onActivateUpdate: () => Promise<boolean>;
 }
 
 type SettingsPage = "profile" | "general" | "knowledge" | "memory";
@@ -79,23 +49,9 @@ export function SettingsDialog({
   open,
   bootstrap,
   onOpenChange,
-  permissionUpdating,
-  permissionError,
-  onClearPermissionError,
-  onPermissionChange,
-  extensions,
-  extensionLoadState,
   onManageExtensions,
   profileAvatar,
   onProfileAvatarChange,
-  memory,
-  memoryLoadState,
-  memoryBusy,
-  memoryError,
-  onClearMemoryError,
-  onRefreshMemory,
-  onResetMemory,
-  onUndoMemoryReset,
   client,
   outputLocations,
   outputPreference,
@@ -112,15 +68,8 @@ export function SettingsDialog({
   onClearSystemHealthError,
   onRefreshSystemHealth,
   onLoadSystemTechnicalHealth,
-  updateBusy,
-  updateError,
-  onClearUpdateError,
-  onCheckUpdate,
-  onActivateUpdate,
 }: SettingsDialogProps) {
   const authenticated = bootstrap?.login.authenticated === true;
-  const fullAccess = bootstrap?.permissions.profile === "full_access";
-  const [confirmElevation, setConfirmElevation] = useState(false);
   const [confirmQuarantineDelete, setConfirmQuarantineDelete] = useState(false);
   const [migrationQuarantine, setMigrationQuarantine] = useState<MigrationQuarantineProjection | null>(null);
   const [migrationQuarantineLoadState, setMigrationQuarantineLoadState] = useState<"loading" | "ready" | "error">("loading");
@@ -136,12 +85,9 @@ export function SettingsDialog({
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [desktopUpdateChecking, setDesktopUpdateChecking] = useState(false);
   const [activePage, setActivePage] = useState<SettingsPage>("profile");
   const passwordRequestId = useRef<string | null>(null);
-  const extensionSummary = extensionCatalogSummary(extensions);
-  const updateReady = isVerifiedRuntimeUpdateReady(bootstrap?.update);
-  const updateAvailable = bootstrap?.update.state === "available";
-  const updateInstalling = isRuntimeUpdateInstalling(bootstrap?.update, updateBusy);
 
   const refreshMigrationQuarantine = useCallback(async (signal?: AbortSignal) => {
     setMigrationQuarantineLoadState((current) => current === "ready" ? current : "loading");
@@ -182,10 +128,6 @@ export function SettingsDialog({
   }, [client, migrationQuarantine?.can_delete, migrationQuarantineBusy]);
 
   useEffect(() => {
-    if (!open || fullAccess) setConfirmElevation(false);
-  }, [fullAccess, open]);
-
-  useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
     void refreshMigrationQuarantine(controller.signal);
@@ -206,11 +148,6 @@ export function SettingsDialog({
       passwordRequestId.current = null;
     }
   }, [open]);
-
-  const applyPermission = async (profile: "default" | "full_access") => {
-    const applied = await onPermissionChange(profile);
-    if (applied) setConfirmElevation(false);
-  };
 
   const changePassword = async () => {
     if (passwordBusy) return;
@@ -262,6 +199,17 @@ export function SettingsDialog({
     }, { once: true });
     reader.addEventListener("error", () => setAvatarError("头像读取失败，请重试。"), { once: true });
     reader.readAsDataURL(file);
+  };
+
+  const checkDesktopUpdate = async () => {
+    if (desktopUpdateChecking) return;
+    setDesktopUpdateChecking(true);
+    try {
+      await window.eMateDesktop?.checkForUpdates?.();
+    } finally {
+      setDesktopUpdateChecking(false);
+      onOpenChange(false);
+    }
   };
 
   const credentialKindLabel = (kind: MigrationCredentialKind) => ({
@@ -513,12 +461,8 @@ export function SettingsDialog({
             <div className="ex-settings-row">
               <span className="ex-settings-icon"><Blocks aria-hidden="true" /></span>
               <div>
-                <strong>技能与扩展能力</strong>
-                <p aria-live="polite">
-                  {extensionLoadState === "loading"
-                    ? "正在同步扩展目录"
-                    : `${extensionSummary.total} 个扩展，${extensionSummary.enabled} 个已启用`}
-                </p>
+                <strong>技能、MCP 与消息通道</strong>
+                <p>从本地 Skill 目录、MCP 配置和通道配置读取 Agent 能力</p>
               </div>
               <button
                 className="ex-button ex-permission-change"
@@ -526,32 +470,15 @@ export function SettingsDialog({
                 disabled={!bootstrap}
                 onClick={onManageExtensions}
               >
-                管理扩展
+                管理能力
               </button>
             </div>
-            <p className="ex-settings-note">
-              {extensionSummary.quarantined
-                ? `${extensionSummary.quarantined} 个扩展已被隔离。打开管理页查看原因和可用操作。`
-                : extensionLoadState === "error"
-                  ? "扩展目录尚未同步。打开管理页即可刷新。"
-                  : "e-Mate 会在启用前检查来源、依赖、健康状态和权限影响。"}
-            </p>
+            <p className="ex-settings-note">合法的本地 Skill 和 MCP 工具直接可用；修改从下一次任务开始生效。</p>
           </section>
 
           <KnowledgeSettings active={activePage === "knowledge"} client={client} />
 
-          <MemorySettings
-            active={activePage === "memory"}
-            client={client}
-            memory={memory}
-            memoryLoadState={memoryLoadState}
-            memoryBusy={memoryBusy}
-            memoryError={memoryError}
-            onClearMemoryError={onClearMemoryError}
-            onRefreshMemory={onRefreshMemory}
-            onResetMemory={onResetMemory}
-            onUndoMemoryReset={onUndoMemoryReset}
-          />
+          <MemorySettings active={activePage === "memory"} client={client} />
 
           <section className="ex-settings-section" hidden={activePage !== "general"}>
             <h2>旧版凭证</h2>
@@ -572,7 +499,7 @@ export function SettingsDialog({
                     ? "这些内容未被激活，也没有上传到云端。"
                     : migrationQuarantine?.status === "deleted" && migrationQuarantine.deleted_at
                       ? `删除于 ${new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(migrationQuarantine.deleted_at))}`
-                      : "当前连接器和托管模型不使用旧版密钥。"}
+                      : "旧版凭证不会自动写入当前 Agent 配置。"}
                 </p>
               </div>
               {migrationQuarantine?.can_delete ? (
@@ -610,7 +537,7 @@ export function SettingsDialog({
               <div className="ex-permission-confirm" role="group" aria-label="确认删除旧版凭证备份">
                 <div>
                   <strong>确认永久删除旧版凭证备份？</strong>
-                  <p>删除后无法从 e-Mate 恢复。当前托管模型和连接器不会受到影响。</p>
+                  <p>删除后无法从 e-Mate 恢复。当前本地 Skill、MCP 和消息通道配置不会改变。</p>
                 </div>
                 <div className="ex-permission-confirm-actions">
                   <button
@@ -654,146 +581,22 @@ export function SettingsDialog({
           </section>
 
           <section className="ex-settings-section" hidden={activePage !== "general"}>
-            <h2>权限</h2>
-            <div className="ex-settings-row">
-              <span className="ex-settings-icon"><Shield aria-hidden="true" /></span>
-              <div>
-                <strong>{fullAccess ? "完全访问" : "默认权限"}</strong>
-                <p>
-                  {fullAccess
-                    ? "可在已授权位置执行操作，不再逐项询问"
-                    : "主要在工作区内操作，敏感步骤会先询问"}
-                </p>
-              </div>
-              <button
-                className="ex-skill-switch ex-permission-switch"
-                type="button"
-                role="switch"
-                aria-checked={fullAccess}
-                aria-label={fullAccess ? "关闭完全访问" : "开启完全访问"}
-                disabled={!bootstrap || !authenticated || permissionUpdating}
-                aria-busy={permissionUpdating}
-                title={fullAccess ? "切换为默认权限" : "切换为完全访问"}
-                onClick={() => {
-                  if (fullAccess) {
-                    void applyPermission("default");
-                  } else {
-                    setConfirmElevation(true);
-                  }
-                }}
-              ><span /></button>
-            </div>
-            <p className="ex-settings-note" aria-live="polite">
-              {fullAccess
-                ? "完全访问会跳过一般工具审批；可随时一键撤销，管理员硬限制仍然生效。"
-                : authenticated
-                  ? "默认权限在工具需要更高权限或外部写入时向你确认。"
-                  : "登录托管账号并重启 e-Mate 后才能修改执行权限。"}
-            </p>
-            {bootstrap?.permissions.admin_hard_denies.length ? (
-              <p className="ex-settings-note">
-                组织策略限制了 {bootstrap.permissions.admin_hard_denies.length} 项高风险操作。
-              </p>
-            ) : null}
-            {confirmElevation ? (
-              <div
-                className="ex-permission-confirm"
-                role="group"
-                aria-label="确认启用完全访问"
-              >
-                <div>
-                  <strong>确认启用完全访问？</strong>
-                  <p>
-                    e-Mate 将可在本机执行命令并写入工作区，不再逐项请求一般工具审批；管理员限制仍不可绕过。
-                  </p>
-                </div>
-                <div className="ex-permission-confirm-actions">
-                  <button
-                    className="ex-button"
-                    type="button"
-                    disabled={permissionUpdating}
-                    onClick={() => setConfirmElevation(false)}
-                  >
-                    取消
-                  </button>
-                  <button
-                    className="ex-button is-primary"
-                    type="button"
-                    disabled={permissionUpdating}
-                    aria-busy={permissionUpdating}
-                    onClick={() => void applyPermission("full_access")}
-                  >
-                    {permissionUpdating ? "正在应用" : "确认启用"}
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            {permissionError ? (
-              <div className="ex-settings-error" role="alert">
-                <AlertCircle aria-hidden="true" />
-                <span>{permissionError}</span>
-                <button
-                  className="ex-icon-button"
-                  type="button"
-                  aria-label="关闭权限错误"
-                  onClick={onClearPermissionError}
-                >
-                  <X aria-hidden="true" />
-                </button>
-              </div>
-            ) : null}
-          </section>
-
-          <section className="ex-settings-section" hidden={activePage !== "general"}>
             <h2>版本</h2>
             <div className="ex-settings-row">
               <div>
                 <strong>e-Mate {bootstrap?.update.current_version ?? "版本未读取"}</strong>
-                <p>
-                  {runtimeUpdateStatusText(bootstrap?.update, updateBusy)}
-                </p>
+                <p>由桌面更新器检查；Windows 下载已签名更新，macOS 打开官方下载页手动安装。</p>
               </div>
-              {updateAvailable || updateReady || updateInstalling ? (
-                <button
-                  className="ex-button is-primary ex-permission-change"
-                  type="button"
-                  disabled={updateBusy || updateInstalling}
-                  aria-busy={updateInstalling}
-                  onClick={() => void onActivateUpdate()}
-                >
-                  {bootstrap?.update.state === "activating"
-                    ? "正在打开新版"
-                    : updateInstalling
-                      ? "正在下载并安装"
-                      : updateAvailable
-                        ? "下载并安装"
-                        : "立即安装"}
-                </button>
-              ) : (
-                <button
-                  className="ex-button ex-permission-change"
-                  type="button"
-                  disabled={!bootstrap || updateBusy}
-                  onClick={() => void onCheckUpdate()}
-                >
-                  {updateBusy ? "正在检查" : "检查更新"}
-                </button>
-              )}
+              <button
+                className="ex-button ex-permission-change"
+                type="button"
+                disabled={!bootstrap || desktopUpdateChecking}
+                aria-busy={desktopUpdateChecking}
+                onClick={() => void checkDesktopUpdate()}
+              >
+                {desktopUpdateChecking ? "正在检查" : "检查更新"}
+              </button>
             </div>
-            {updateError ? (
-              <div className="ex-settings-error" role="alert">
-                <AlertCircle aria-hidden="true" />
-                <span>{updateError}</span>
-                <button
-                  className="ex-icon-button"
-                  type="button"
-                  aria-label="关闭更新错误"
-                  onClick={onClearUpdateError}
-                >
-                  <X aria-hidden="true" />
-                </button>
-              </div>
-            ) : null}
           </section>
         </div>
       </div>

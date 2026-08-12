@@ -15,7 +15,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
 from ecorex.capabilities import (
-    Exposure,
     SandboxLevel,
     ToolExecutionScope,
     ToolInvocationContext,
@@ -24,6 +23,7 @@ from ecorex.connectors import InMemoryCredentialVault
 from ecorex.extensions import SkillReadFact, SkillSearchFact
 from ecorex.integration import ImageGenerationToolHandler
 from ecorex.observability import AuditIntegrityError
+from ecorex.protocol import CreateThreadRequest
 from ecorex.server import (
     BundleIntegrityError,
     ProductServerSettings,
@@ -290,6 +290,8 @@ def _installed_managed_session(
 
 
 def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
+    from agent.tools.scheduler import integration as scheduler_integration
+
     signed = _write_signed_bundle(tmp_path)
     secrets = iter(
         [
@@ -301,8 +303,18 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
         _settings(tmp_path, signed, secret_factory=lambda _bytes: next(secrets))
     )
     capability_service = app.state.runtime_composition.capability_service
-    assert set(capability_service.handlers) == {
+    handlers = set(capability_service.handlers)
+    assert {
         "read",
+        "write",
+        "edit",
+        "ls",
+        "search_files",
+        "bash",
+        "memory_search",
+        "memory_get",
+        "scheduler",
+        "send",
         "skill_search",
         "skill_read",
         "skill_run",
@@ -315,7 +327,16 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
         "connector_write",
         "artifact_read",
         "input_attachment_read",
-    }
+    } <= handlers
+    assert handlers.isdisjoint(
+        {"ecorex_cli", "host_diagnostics", "optional_abilities", "agent_capability"}
+    )
+    scheduler = capability_service.handlers["scheduler"]
+    if app.state.scheduler_service is None:
+        assert scheduler_integration.get_scheduler_service() is None
+    else:
+        assert scheduler.task_store is scheduler_integration.get_task_store()
+        assert app.state.scheduler_service is scheduler_integration.get_scheduler_service()
     connector_runtime = app.state.runtime_composition.connector_agent_runtime
     artifact_runtime = app.state.runtime_composition.artifact_read_runtime
     input_attachment_runtime = (
@@ -338,24 +359,17 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
     )
     assert app.state.runtime_composition.availability.installed_packs == frozenset()
     assert app.state.runtime_composition.availability.disabled_tools == {
-        "cdp": "verified_handler_not_installed",
-        "fetch": "verified_handler_not_installed",
+        "browser": "verified_handler_not_installed",
         "imagegen": "verified_handler_not_installed",
         "ocr": "input_attachment_ocr_runtime_not_bound",
-        "shell": "verified_handler_not_installed",
         "vision": "verified_handler_not_installed",
+        "web_fetch": "verified_handler_not_installed",
+        "web_search": "verified_handler_not_installed",
     }
     specs = capability_service.registry.all()
-    assert len(specs) == 19
-    handlers = set(capability_service.handlers)
-    pack_bound = {spec.tool_id for spec in specs if spec.required_packs}
-    assert {spec.tool_id for spec in specs} == handlers | pack_bound
-    for spec in specs:
-        if spec.default_exposure is Exposure.DIRECT:
-            assert spec.tool_id in handlers
-            assert spec.tool_id not in (
-                app.state.runtime_composition.availability.disabled_tools
-            )
+    spec_ids = {spec.tool_id for spec in specs}
+    assert len(specs) == len(spec_ids)
+    assert handlers <= spec_ids
     client = TestClient(app, base_url=ORIGIN)
 
     index = client.get("/")
@@ -410,7 +424,7 @@ def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
     assert asset.headers["etag"]
 
 
-def test_product_composes_message_channels_with_the_agent_runtime(tmp_path: Path) -> None:
+def test_product_composes_native_cow_channels_with_the_agent_runtime(tmp_path: Path) -> None:
     signed = _write_signed_bundle(tmp_path)
     managed_session, _lease = _installed_managed_session(tmp_path)
     app = create_product_app(
@@ -438,21 +452,94 @@ def test_product_composes_message_channels_with_the_agent_runtime(tmp_path: Path
         "weixin",
     }
 
-    assert set(service.adapters) == channel_ids
-    assert all(
-        catalog[channel_id]["adapter_available"] for channel_id in channel_ids
-    )
+    assert service.adapters == {}
+    assert service.native_service is app.state.cow_channel_service
+    assert all(catalog[channel_id]["adapter_available"] for channel_id in channel_ids)
     assert all(catalog[channel_id]["instance"] is None for channel_id in channel_ids)
     assert app.state.channel_runtime_dispatcher is not None
-    assert all(
-        service.adapters[channel_id].health().health.value == "disabled"
-        for channel_id in channel_ids
+    assert app.state.cow_channel_service is not None
+    assert (
+        app.state.cow_channel_service.manager.__class__.__module__
+        == "channel.channel_manager"
     )
+    assert all(catalog[channel_id]["label"] for channel_id in channel_ids)
+    assert all(catalog[channel_id]["icon"] for channel_id in channel_ids)
     with TestClient(app, base_url=ORIGIN):
-        assert service.adapters["telegram"].health().health.value == "disabled"
+        assert app.state.cow_channel_service.started is True
 
 
-def test_installed_payload_builtin_skill_search_read_run_chain(tmp_path: Path) -> None:
+def test_product_scheduler_uses_kernel_thread_and_native_vendor_delivery(
+    tmp_path: Path,
+) -> None:
+    signed = _write_signed_bundle(tmp_path)
+    app = create_product_app(
+        replace(_settings(tmp_path, signed), model_gateway=_ProductGateway())
+    )
+    thread = app.state.runtime.create_thread(CreateThreadRequest(title="scheduled"))
+    sent = []
+
+    class Channel:
+        def send(self, reply, context) -> None:
+            sent.append((reply, context))
+
+        def stop(self) -> None:
+            return None
+
+    task = {
+        "id": "scheduled-message",
+        "next_run_at": "2026-08-12T12:00:00",
+        "action": {
+            "type": "send_message",
+            "content": "提醒内容",
+            "thread_id": thread.thread_id,
+            "channel_type": "telegram",
+            "conversation_id": "vendor-conversation",
+            "receiver": "vendor-receiver",
+            "is_group": True,
+        },
+    }
+
+    with TestClient(app, base_url=ORIGIN):
+        app.state.cow_channel_service.manager._channels["telegram"] = Channel()
+        assert app.state.scheduler_service.execute_callback(task) is True
+    assert len(sent) == 1
+    assert sent[0][0].content == "提醒内容"
+    assert sent[0][1].get("session_id") == "vendor-conversation"
+    assert sent[0][1].get("receiver") == "vendor-receiver"
+    assert sent[0][1].get("telegram_chat_id") == "vendor-receiver"
+
+
+def test_installed_payload_builtin_skills_feed_the_cow_agent(tmp_path: Path) -> None:
+    from bridge.agent_initializer import AgentInitializer
+
+    signed = _write_signed_bundle(tmp_path)
+    builtin_skill_root = tmp_path / "payload" / "skills"
+    shutil.copytree(
+        Path(__file__).resolve().parents[2] / "skills",
+        builtin_skill_root,
+    )
+    settings = replace(
+        _settings(tmp_path, signed),
+        builtin_skill_root=builtin_skill_root,
+    )
+    create_product_app(settings)
+    manager = AgentInitializer(object(), object())._initialize_skill_manager(
+        str(tmp_path / "workspace"),
+        builtin_skill_root=str(settings.builtin_skill_root),
+    )
+    skill = manager.get_skill("office-presentations")
+
+    assert skill is not None
+    assert skill.skill.source == "builtin"
+    assert "Office Presentations" in skill.skill.content
+    assert "office-presentations" in {
+        entry.skill.name for entry in manager.filter_skills()
+    }
+
+
+def retired_legacy_installed_payload_skill_discovery_chain(tmp_path: Path) -> None:
+    """The ecorex discovery/run path is not part of the public Cow executor."""
+
     signed = _write_signed_bundle(tmp_path)
     builtin_skill_root = tmp_path / "payload" / "skills"
     shutil.copytree(
@@ -574,7 +661,7 @@ def test_acceptance_preview_is_visible_and_blocks_external_mutations(
         for item in app.state.channel_self_service.catalog()["items"]
         if item["channel_id"] == "telegram"
     )
-    assert telegram["adapter_available"] is False
+    assert telegram["adapter_available"] is True
     assert app.state.channel_runtime_dispatcher is None
     with TestClient(app, base_url=ORIGIN) as client:
         index = client.get("/")

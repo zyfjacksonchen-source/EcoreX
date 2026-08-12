@@ -329,7 +329,12 @@ DELIVERY_MODES = {
 def _default_manager() -> Any:
     try:
         app_module = sys.modules.get("__main__") or sys.modules.get("app")
-        return getattr(app_module, "_channel_mgr", None) if app_module else None
+        manager = getattr(app_module, "_channel_mgr", None) if app_module else None
+        if manager is not None:
+            return manager
+        from channel.channel_manager import get_channel_manager
+
+        return get_channel_manager()
     except Exception:
         return None
 

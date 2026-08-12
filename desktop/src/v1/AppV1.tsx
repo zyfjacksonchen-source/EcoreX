@@ -30,12 +30,6 @@ import {
   THEME_PREFERENCE_KEY,
   type ThemePreference,
 } from "./state/themePreference.ts";
-import {
-  hasPendingRuntimeUpdate,
-  isRuntimeUpdateInstalling,
-  isVerifiedRuntimeUpdateReady,
-  runtimeUpdateStatusText,
-} from "./state/updatePresentation.ts";
 import { serviceReasonMessage } from "./state/userLanguage.ts";
 import "./styles/primitives.css";
 import "./styles/layout.css";
@@ -128,26 +122,27 @@ function useMediaMatch(query: string): boolean {
   return matches;
 }
 
-const DISMISSED_UPDATE_BANNERS_KEY = "ecorex-dismissed-update-banners";
 const PROFILE_AVATAR_KEY = "emate-profile-avatar";
 const DESKTOP_THREAD_ID = /^thr_[A-Za-z0-9._:-]{1,252}$/u;
+
+type DesktopUpdateStatus =
+  | { state: "checking" | "not-available"; userInitiated: boolean }
+  | { state: "available"; version: string; platform: "windows" | "macos"; manualInstall: boolean; userInitiated: boolean }
+  | { state: "downloading"; version: string | null; percent: number }
+  | { state: "downloaded"; version: string }
+  | { state: "error"; version: string | null; message: string; userInitiated: boolean };
 
 declare global {
   interface Window {
     eMateDesktop?: {
+      checkForUpdates?: () => Promise<void>;
+      openUpdatePage?: () => Promise<void>;
+      downloadDesktopUpdate?: () => Promise<void>;
+      installDesktopUpdate?: () => Promise<void>;
+      desktopUpdateStatus?: () => Promise<DesktopUpdateStatus | null>;
+      onDesktopUpdateStatus?: (callback: (status: DesktopUpdateStatus) => void) => () => void;
       onOpenThread?: (callback: (threadId: string) => void) => () => void;
     };
-  }
-}
-
-function initialDismissedUpdateBanners(): string[] {
-  try {
-    const value = JSON.parse(window.localStorage.getItem(DISMISSED_UPDATE_BANNERS_KEY) ?? "[]");
-    return Array.isArray(value)
-      ? value.filter((item): item is string => typeof item === "string")
-      : [];
-  } catch {
-    return [];
   }
 }
 
@@ -188,9 +183,9 @@ export function AppV1() {
   const [retouchArtifact, setRetouchArtifact] = useState<ArtifactProjection | null>(null);
   const retouchReturnFocusRef = useRef<HTMLElement | null>(null);
   const [artifactNotice, setArtifactNotice] = useState<string | null>(null);
-  const [dismissedUpdateBanners, setDismissedUpdateBanners] = useState(
-    initialDismissedUpdateBanners,
-  );
+  const [desktopUpdate, setDesktopUpdate] = useState<DesktopUpdateStatus | null>(null);
+  const [desktopUpdateBusy, setDesktopUpdateBusy] = useState(false);
+  const [dismissedDesktopUpdateVersion, setDismissedDesktopUpdateVersion] = useState<string | null>(null);
   const [composerPrefill, setComposerPrefill] = useState<{ key: string; text: string } | null>(null);
   const [composerDraft, setComposerDraft] = useState("");
 
@@ -204,6 +199,28 @@ export function AppV1() {
       setSidebarOpen(false);
     });
   }), [runtime.openThread]);
+
+  useEffect(() => {
+    const desktop = window.eMateDesktop;
+    if (!desktop) return undefined;
+    let active = true;
+    const accept = (status: DesktopUpdateStatus) => {
+      if (!active) return;
+      if (status.state === "available" && status.userInitiated) {
+        setDismissedDesktopUpdateVersion(null);
+      }
+      setDesktopUpdateBusy(false);
+      setDesktopUpdate(status);
+    };
+    const unsubscribe = desktop.onDesktopUpdateStatus?.(accept);
+    void desktop.desktopUpdateStatus?.().then((status) => {
+      if (status) accept(status);
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, []);
 
   const updateProfileAvatar = (value: string | null) => {
     setProfileAvatar(value);
@@ -413,11 +430,6 @@ export function AppV1() {
   const modelUnavailable = modelServiceReady && !bootstrap?.models.chat.length
     ? "无可用 Agent 模型，请联系管理员。"
     : modelUnavailableMessage(authenticated, bootstrap?.model_service.reason);
-  const accessLabel = bootstrap?.permissions.full_access ? "完全访问" : "默认权限";
-  const accessDescription = bootstrap?.permissions.full_access
-    ? "完全访问：可访问本机和网络，可随时在设置中关闭。"
-    : "默认权限：仅修改工作区文件，扩大范围前会询问。";
-  const update = bootstrap?.update;
   const shareUnavailableReason = !authenticated
     ? "登录后才能分享任务。"
     : !runtime.state.thread
@@ -432,38 +444,37 @@ export function AppV1() {
     bootstrap?.retouch_service.reason,
     "精准修图暂时不可用，请稍后重试。",
   );
-  const updatePending = hasPendingRuntimeUpdate(update) && update?.state !== "failed";
-  const updateReady = isVerifiedRuntimeUpdateReady(update);
-  const updateInstalling = isRuntimeUpdateInstalling(update, runtime.updateBusy);
-  const updateActionable = update?.state === "available" || updateReady;
-  const updateMessage = updatePending
-    ? runtimeUpdateStatusText(update, runtime.updateBusy)
+  const desktopUpdateVersion = desktopUpdate && "version" in desktopUpdate
+    ? desktopUpdate.version
     : null;
-  const updateBannerKey = updateMessage && update
-    ? (update.release_id && update.build_digest
-        ? `${update.release_id}:${update.build_digest}`
-        : update.release_id ?? update.build_digest)
-      ?? update.target_version
-      ?? update.transaction_id
-      ?? "unknown-update"
-    : null;
-  const updateBannerVisible = Boolean(
-    updateMessage
-    && updateBannerKey
-    && !dismissedUpdateBanners.includes(updateBannerKey),
+  const desktopUpdateMessage = (() => {
+    switch (desktopUpdate?.state) {
+      case "available":
+        return desktopUpdate.manualInstall
+          ? `e-Mate ${desktopUpdate.version} 已发布。当前 macOS 版本未签名，请打开官方下载页，并按安装图解或信任命令手动更新。`
+          : `e-Mate ${desktopUpdate.version} 已发布，已签名 Windows 安装包可供下载。`;
+      case "downloading":
+        return `正在下载并验证 e-Mate ${desktopUpdate.version ?? "新版"}（${desktopUpdate.percent}%）`;
+      case "downloaded":
+        return `e-Mate ${desktopUpdate.version} 已下载并验证，重启后完成更新。`;
+      case "error":
+        return "桌面更新失败，当前版本不受影响，请稍后重试。";
+      default:
+        return null;
+    }
+  })();
+  const desktopUpdateVisible = Boolean(
+    desktopUpdateMessage
+    && (desktopUpdate?.state !== "error" || desktopUpdate.userInitiated)
+    && dismissedDesktopUpdateVersion !== (desktopUpdateVersion ?? "update-error"),
   );
-  const dismissUpdateBanner = () => {
-    if (!updateBannerKey) return;
-    setDismissedUpdateBanners((current) => {
-      if (current.includes(updateBannerKey)) return current;
-      const next = [...current, updateBannerKey].slice(-32);
-      try {
-        window.localStorage.setItem(DISMISSED_UPDATE_BANNERS_KEY, JSON.stringify(next));
-      } catch {
-        // In-memory dismissal still works when storage is unavailable.
-      }
-      return next;
-    });
+  const downloadDesktopUpdate = async () => {
+    setDesktopUpdateBusy(true);
+    try {
+      await window.eMateDesktop?.downloadDesktopUpdate?.();
+    } finally {
+      setDesktopUpdateBusy(false);
+    }
   };
   const isNewConversation = !runtime.state.thread;
 
@@ -611,17 +622,10 @@ export function AppV1() {
         imageModel={runtime.imageModel}
         quota={bootstrap?.quota || null}
         usage={runtime.conversationUsage}
-        permissionLabel={accessLabel}
-        permissionDescription={accessDescription}
         capabilityMentions={runtime.capabilityMentions}
         capabilityMentionState={runtime.capabilityMentionState}
         onChatModelChange={runtime.setChatModel}
         onImageModelChange={runtime.setImageModel}
-        onOpenPermissionSettings={() => {
-          captureFeatureTrigger(settingsReturnFocusRef);
-          warmFeature(loadSettingsDialog);
-          setSettingsOpen(true);
-        }}
         onOpenConnections={() => {
           warmFeature(loadSkillsWorkspace);
           setSettingsOpen(false);
@@ -735,6 +739,7 @@ export function AppV1() {
               <SkillsWorkspace
                 openChannelsKey={openChannelsKey}
                 mcpClient={runtime.client}
+                mcpProjectId={runtime.mcpProjectId}
                 connectorRuntime={{
                   catalog: runtime.connectorCatalog,
                   channelCatalog: runtime.channelConnectorCatalog,
@@ -863,47 +868,46 @@ export function AppV1() {
                 </span>
               </section>
             ) : null}
-            {updateBannerVisible ? (
-              <section className="ex-update-banner" aria-live="polite">
+            {desktopUpdateVisible && desktopUpdateMessage ? (
+              <section className="ex-update-banner" aria-live="polite" data-desktop-update-state={desktopUpdate?.state}>
                 <div className="ex-update-copy">
-                  <span>{updateMessage}</span>
-                  {updateInstalling ? (
-                    <progress aria-label="新版下载与安装进度" />
+                  <span>{desktopUpdateMessage}</span>
+                  {desktopUpdate?.state === "downloading" ? (
+                    <progress aria-label="桌面更新下载进度" max={100} value={desktopUpdate.percent} />
                   ) : null}
                 </div>
-                {updateActionable ? (
+                {desktopUpdate?.state === "available" ? (
                   <button
                     className="ex-button is-primary"
                     type="button"
-                    disabled={runtime.updateBusy}
-                    aria-busy={runtime.updateBusy}
-                    onClick={() => void runtime.activateUpdate()}
+                    disabled={desktopUpdateBusy}
+                    onClick={() => void (desktopUpdate.manualInstall
+                      ? window.eMateDesktop?.openUpdatePage?.()
+                      : downloadDesktopUpdate())}
                   >
-                    {runtime.updateBusy
-                      ? "正在下载并安装"
-                      : update?.state === "available"
-                        ? "下载并安装"
-                        : "立即安装"}
+                    {desktopUpdate.manualInstall
+                      ? "打开官方下载页"
+                      : desktopUpdateBusy ? "正在准备下载" : "下载更新"}
                   </button>
                 ) : null}
-                {!updateInstalling ? (
-                  <IconButton label="关闭更新提示" onClick={dismissUpdateBanner}>
-                    <X aria-hidden="true" />
-                  </IconButton>
+                {desktopUpdate?.state === "downloaded" ? (
+                  <button className="ex-button is-primary" type="button" onClick={() => void window.eMateDesktop?.installDesktopUpdate?.()}>
+                    重启并更新
+                  </button>
                 ) : null}
-              </section>
-            ) : null}
-
-            {runtime.updateError ? (
-              <section className="ex-error-banner" role="alert">
-                <AlertCircle aria-hidden="true" />
-                <span>{runtime.updateError}</span>
-                <IconButton label="关闭更新错误" onClick={runtime.clearUpdateError}>
+                {desktopUpdate?.state === "error" ? (
+                  <button className="ex-button" type="button" onClick={() => void window.eMateDesktop?.checkForUpdates?.()}>
+                    重新检查
+                  </button>
+                ) : null}
+                <IconButton
+                  label="关闭桌面更新提示"
+                  onClick={() => setDismissedDesktopUpdateVersion(desktopUpdateVersion ?? "update-error")}
+                >
                   <X aria-hidden="true" />
                 </IconButton>
               </section>
             ) : null}
-
             {bootstrap && authenticated && !modelServiceReady ? (
               <section className="ex-error-banner" role="status">
                 <WifiOff aria-hidden="true" />
@@ -1039,12 +1043,6 @@ export function AppV1() {
               if (open) setSettingsOpen(true);
               else closeSettings();
             }}
-            permissionUpdating={runtime.permissionUpdating}
-            permissionError={runtime.permissionError}
-            onClearPermissionError={runtime.clearPermissionError}
-            onPermissionChange={runtime.updatePermission}
-            extensions={runtime.extensionSnapshot}
-            extensionLoadState={runtime.extensionCatalogState}
             onManageExtensions={() => {
               warmFeature(loadSkillsWorkspace);
               setSettingsOpen(false);
@@ -1053,14 +1051,6 @@ export function AppV1() {
             }}
             profileAvatar={profileAvatar}
             onProfileAvatarChange={updateProfileAvatar}
-            memory={runtime.memory}
-            memoryLoadState={runtime.memoryLoadState}
-            memoryBusy={runtime.memoryBusy}
-            memoryError={runtime.memoryError}
-            onClearMemoryError={runtime.clearMemoryError}
-            onRefreshMemory={runtime.refreshMemory}
-            onResetMemory={runtime.resetLearnedMemory}
-            onUndoMemoryReset={runtime.undoLearnedMemoryReset}
             client={runtime.client}
             outputLocations={runtime.outputLocations}
             outputPreference={runtime.outputPreference}
@@ -1077,11 +1067,6 @@ export function AppV1() {
             onClearSystemHealthError={runtime.clearSystemHealthError}
             onRefreshSystemHealth={runtime.refreshSystemHealth}
             onLoadSystemTechnicalHealth={runtime.loadSystemTechnicalHealth}
-            updateBusy={runtime.updateBusy}
-            updateError={runtime.updateError}
-            onClearUpdateError={runtime.clearUpdateError}
-            onCheckUpdate={runtime.checkUpdate}
-            onActivateUpdate={runtime.activateUpdate}
           />
         </LazyFeatureBoundary>
         <LazyFeatureBoundary active={shareOpen} label="任务分享" onClose={closeShare}>

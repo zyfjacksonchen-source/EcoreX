@@ -464,6 +464,7 @@ jobs:
           import os
           from pathlib import Path
           import subprocess
+          from ecorex.pack_catalog import REQUIRED_CAPABILITY_PACK_IDS
 
           install_root = Path(os.environ["ECOREX_INSTALL_ROOT"])
           pointers = json.loads(
@@ -503,7 +504,7 @@ jobs:
           if any(not path.is_file() or path.stat().st_size < 1 for path in required_core):
               raise SystemExit("installed Core or WebUI is incomplete")
 
-          required_packs = {"browser", "channels", "image", "ocr", "office", "sandbox"}
+          required_packs = set(REQUIRED_CAPABILITY_PACK_IDS)
           capability_root = payload / "capability-packs"
           observed_packs = {
               path.name for path in capability_root.iterdir() if path.is_dir()
@@ -568,7 +569,7 @@ jobs:
                   f"- Version: `{os.environ['ECOREX_EXPECTED_VERSION']}`\n"
                   f"- Build: `{os.environ['ECOREX_EXPECTED_BUILD_DIGEST']}`\n"
                   "- Verified: public index, download SHA-256, native self-test, "
-                  "isolated first install, known-good health, six required Packs, "
+                  "isolated first install, known-good health, five required Packs, "
                   "embedded Python 3.11, WebUI and `/api/v1/bootstrap`\n"
               )
 

@@ -9,7 +9,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowDown, FolderOpen, Workflow, WandSparkles } from "lucide-react";
+import * as Tooltip from "@radix-ui/react-tooltip";
+import { ArrowDown, FolderOpen, Minus, Workflow, WandSparkles } from "lucide-react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 
 import type {
@@ -78,6 +79,15 @@ interface TimelineProps {
 
 const TIMELINE_BOTTOM_THRESHOLD_PX = 72;
 const TIMELINE_SCROLL_SETTLE_MS = 80;
+const DIRECTORY_SUMMARY_LIMIT = 80;
+
+function directorySummary(input: string, index: number): string {
+  const summary = input.trim().replace(/\s+/gu, " ");
+  if (!summary) return `第 ${index + 1} 轮对话`;
+  return summary.length > DIRECTORY_SUMMARY_LIMIT
+    ? `${summary.slice(0, DIRECTORY_SUMMARY_LIMIT - 1)}…`
+    : summary;
+}
 
 function role(item: ItemProjection): string {
   return typeof item.content.role === "string" ? item.content.role : "assistant";
@@ -497,6 +507,7 @@ export function Timeline({
   }, [chatModels, turns]);
   const [scrollParent, setScrollParent] = useState<HTMLElement | null>(null);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const [directoryIndex, setDirectoryIndex] = useState(0);
   const followLatestRef = useRef(true);
   const followPausedByUserRef = useRef(false);
   const resumeAtBottomRef = useRef(false);
@@ -504,6 +515,10 @@ export function Timeline({
   const pausedAnchorRef = useRef<{ turnId: string; viewportOffset: number } | null>(null);
   const mountRef = useRef<HTMLDivElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const directoryListRef = useRef<HTMLDivElement>(null);
+  const directoryJumpTargetRef = useRef<number | null>(null);
+  const directoryVisibleStartRef = useRef(0);
+  const directoryJumpSettleTimer = useRef<number | null>(null);
   const bottomSettleTimer = useRef<number | null>(null);
   const pausedAnchorTimer = useRef<number | null>(null);
   const contentRevision = timelineItems.map((item) => `${item.item_id}:${item.updated_at}:${messageText(item).length}`).join("|");
@@ -514,6 +529,15 @@ export function Timeline({
       delete scrollParent.dataset.scrollAnchorOffset;
     }
     pausedAnchorRef.current = null;
+  };
+  const finishDirectoryJump = () => {
+    if (directoryJumpTargetRef.current === null) return;
+    directoryJumpTargetRef.current = null;
+    if (directoryJumpSettleTimer.current !== null) {
+      window.clearTimeout(directoryJumpSettleTimer.current);
+      directoryJumpSettleTimer.current = null;
+    }
+    setDirectoryIndex(directoryVisibleStartRef.current);
   };
   const capturePausedAnchor = () => {
     if (!scrollParent) return;
@@ -538,6 +562,7 @@ export function Timeline({
     }
   };
   const restorePausedAnchor = () => {
+    if (directoryJumpTargetRef.current !== null) return;
     const anchor = pausedAnchorRef.current;
     if (!scrollParent || !followPausedByUserRef.current || !anchor) return;
     const row = [...scrollParent.querySelectorAll<HTMLElement>(".ex-timeline-turn[data-turn-id]")]
@@ -558,7 +583,13 @@ export function Timeline({
     followLatestRef.current = true;
     resumeAtBottomRef.current = false;
     clearPausedAnchor();
+    directoryJumpTargetRef.current = null;
+    if (directoryJumpSettleTimer.current !== null) {
+      window.clearTimeout(directoryJumpSettleTimer.current);
+      directoryJumpSettleTimer.current = null;
+    }
     setShowJumpToLatest(false);
+    setDirectoryIndex(Math.max(0, timelineTurns.length - 1));
   }, [timelineThreadId]);
 
   useEffect(() => {
@@ -566,8 +597,21 @@ export function Timeline({
     return () => {
       if (bottomSettleTimer.current !== null) window.clearTimeout(bottomSettleTimer.current);
       if (pausedAnchorTimer.current !== null) window.clearTimeout(pausedAnchorTimer.current);
+      if (directoryJumpSettleTimer.current !== null) window.clearTimeout(directoryJumpSettleTimer.current);
     };
   }, []);
+
+  useLayoutEffect(() => {
+    const list = directoryListRef.current;
+    const item = list?.children.item(directoryIndex) as HTMLElement | null;
+    if (!list || !item) return;
+    const itemTop = item.offsetTop;
+    const itemBottom = itemTop + item.offsetHeight;
+    if (itemTop < list.scrollTop) list.scrollTop = itemTop;
+    else if (itemBottom > list.scrollTop + list.clientHeight) {
+      list.scrollTop = itemBottom - list.clientHeight;
+    }
+  }, [directoryIndex]);
 
   useEffect(() => {
     if (!scrollParent) return undefined;
@@ -576,6 +620,7 @@ export function Timeline({
       return remaining <= TIMELINE_BOTTOM_THRESHOLD_PX;
     };
     const schedulePausedAnchorCapture = () => {
+      if (directoryJumpTargetRef.current !== null) return;
       if (pausedAnchorTimer.current !== null || pausedAnchorRef.current !== null) return;
       pausedAnchorTimer.current = window.setTimeout(() => {
         pausedAnchorTimer.current = null;
@@ -602,6 +647,7 @@ export function Timeline({
       }
     };
     const pauseFollowOnWheel = (event: WheelEvent) => {
+      finishDirectoryJump();
       if (event.deltaY < 0 || followPausedByUserRef.current) {
         resumeAtBottomRef.current = event.deltaY > 0;
         followPausedByUserRef.current = true;
@@ -612,6 +658,7 @@ export function Timeline({
       }
     };
     const pauseFollowOnTouch = () => {
+      finishDirectoryJump();
       followPausedByUserRef.current = true;
       followLatestRef.current = false;
       resumeAtBottomRef.current = false;
@@ -681,6 +728,20 @@ export function Timeline({
       }, TIMELINE_SCROLL_SETTLE_MS);
     }
   };
+  const jumpToTurn = (index: number) => {
+    followPausedByUserRef.current = true;
+    followLatestRef.current = false;
+    resumeAtBottomRef.current = false;
+    clearPausedAnchor();
+    setShowJumpToLatest(true);
+    directoryJumpTargetRef.current = index;
+    if (directoryJumpSettleTimer.current !== null) {
+      window.clearTimeout(directoryJumpSettleTimer.current);
+    }
+    directoryJumpSettleTimer.current = window.setTimeout(finishDirectoryJump, 2_000);
+    setDirectoryIndex(index);
+    virtuosoRef.current?.scrollToIndex({ index, align: "start", behavior: "auto" });
+  };
 
   if (!timelineTurns.length && !visibleArtifacts.length && !isThinking) {
     return (
@@ -727,6 +788,37 @@ export function Timeline({
   ));
   return (
     <>
+      {timelineTurns.length > 1 ? (
+        <nav className="ex-timeline-directory" aria-label="对话目录">
+          <div ref={directoryListRef} className="ex-timeline-directory-list">
+            {timelineTurns.map((entry, index) => {
+              const summary = directorySummary(entry.turn.input, index);
+              return (
+                <Tooltip.Root key={entry.turn.turn_id} delayDuration={120}>
+                  <Tooltip.Trigger asChild>
+                    <button
+                      className="ex-button ex-timeline-directory-item"
+                      type="button"
+                      aria-label={`跳转到第 ${index + 1} 轮：${summary}`}
+                      aria-current={directoryIndex === index ? "location" : undefined}
+                      onClick={() => jumpToTurn(index)}
+                    >
+                      <Minus aria-hidden="true" strokeLinecap="butt" />
+                    </button>
+                  </Tooltip.Trigger>
+                  <Tooltip.Portal>
+                    <Tooltip.Content className="ex-tooltip ex-timeline-directory-tooltip" side="left" sideOffset={8}>
+                      <small>第 {index + 1} 轮</small>
+                      <span>{summary}</span>
+                      <Tooltip.Arrow className="ex-tooltip-arrow" />
+                    </Tooltip.Content>
+                  </Tooltip.Portal>
+                </Tooltip.Root>
+              );
+            })}
+          </div>
+        </nav>
+      ) : null}
       <div ref={mountRef} className="ex-timeline-inner ex-timeline-virtualized">
         <div className="ex-live-status" aria-live="polite" aria-atomic="true">
           {latestTerminal ? <span key={latestTerminal.turn_id}>
@@ -741,6 +833,23 @@ export function Timeline({
             computeItemKey={(_index, entry) => entry.turn.turn_id}
             increaseViewportBy={{ top: 800, bottom: 800 }}
             atBottomThreshold={TIMELINE_BOTTOM_THRESHOLD_PX}
+            rangeChanged={({ startIndex, endIndex }) => {
+              directoryVisibleStartRef.current = startIndex;
+              const target = directoryJumpTargetRef.current;
+              if (target === null) {
+                setDirectoryIndex(startIndex);
+                return;
+              }
+              setDirectoryIndex(target);
+              if (target < startIndex || target > endIndex) return;
+              if (directoryJumpSettleTimer.current !== null) {
+                window.clearTimeout(directoryJumpSettleTimer.current);
+              }
+              directoryJumpSettleTimer.current = window.setTimeout(
+                finishDirectoryJump,
+                TIMELINE_SCROLL_SETTLE_MS * 2,
+              );
+            }}
             totalListHeightChanged={() => {
               if (followPausedByUserRef.current) restorePausedAnchor();
               else if (followLatestRef.current) scrollParent.scrollTop = scrollParent.scrollHeight;

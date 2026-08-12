@@ -119,6 +119,14 @@ class SchedulerTool(BaseTool):
         # Will be set by agent bridge
         self.task_store = None
         self.current_context = None
+
+    def __call__(self, arguments, _context=None):
+        """Keep the same SchedulerTool instance usable by e-Mate adapters."""
+
+        result = self.execute(dict(arguments or {}))
+        if result.status != "success":
+            raise RuntimeError(str(result.result))
+        return result.result
     
     def execute(self, params: dict) -> ToolResult:
         """
@@ -228,6 +236,7 @@ class SchedulerTool(BaseTool):
         # can later inject the delivered output into the user's actual conversation
         # (in group chats, session_id != receiver, e.g. "user_id:group_id" on feishu).
         notify_session_id = context.get("session_id")
+        thread_id = context.get("thread_id") or notify_session_id
 
         # Build action based on message or ai_task
         if message:
@@ -238,6 +247,8 @@ class SchedulerTool(BaseTool):
                 "receiver_name": self._get_receiver_name(context),
                 "is_group": context.get("isgroup", False),
                 "channel_type": self.config.get("channel_type", "unknown"),
+                "thread_id": thread_id,
+                "conversation_id": notify_session_id,
                 "notify_session_id": notify_session_id,
             }
         else:  # ai_task
@@ -248,6 +259,8 @@ class SchedulerTool(BaseTool):
                 "receiver_name": self._get_receiver_name(context),
                 "is_group": context.get("isgroup", False),
                 "channel_type": self.config.get("channel_type", "unknown"),
+                "thread_id": thread_id,
+                "conversation_id": notify_session_id,
                 "notify_session_id": notify_session_id,
             }
         

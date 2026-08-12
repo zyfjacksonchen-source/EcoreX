@@ -3,14 +3,13 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 import sqlite3
-import threading
 
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 import pytest
 
-from ecorex.protocol import CreateTurnRequest, PermissionSnapshot
-from ecorex.runtime import RuntimeSettings, RuntimeSnapshotStale, create_app
+from ecorex.protocol import PermissionSnapshot
+from ecorex.runtime import RuntimeSettings, create_app
 from ecorex.runtime.errors import ConflictError, SchemaVersionError
 from ecorex.runtime.database import SQLiteDatabase
 from ecorex.runtime.permissions import PermissionAuthority, PermissionIntegrityError
@@ -63,442 +62,43 @@ def test_permission_schema_fragment_is_static_product_inventory() -> None:
     ] == PERMISSIONS_SCHEMA_FRAGMENT.object_names
 
 
-def test_permission_profile_is_persistent_idempotent_and_only_affects_future_turns(
+def test_product_has_one_cowagent_runtime_boundary_and_no_permission_setting(
     tmp_path,
 ) -> None:
+    from ecorex.server.app import ProductServerSettings
+
     app = create_app(settings=_settings(tmp_path))
     client = TestClient(app)
     auth, mutation = _headers()
-    initial = client.get("/api/v1/bootstrap", headers=auth).json()["permissions"]
-    assert initial["full_access"] is False
 
-    thread_id = client.post(
-        "/api/v1/threads", json={"title": "permissions"}, headers=mutation
-    ).json()["thread_id"]
-    first = client.post(
-        f"/api/v1/threads/{thread_id}/turns",
-        json={"input": "run shell", "client_message_id": "permission-1"},
-        headers=mutation,
-    ).json()
-
-    request = {
-        "profile": "full_access",
-        "expected_revision": initial["revision"],
-        "client_request_id": "profile-change-1",
-    }
-    changed = client.put(
-        "/api/v1/settings/permissions", json=request, headers=mutation
-    )
-    assert changed.status_code == 200
-    full = changed.json()["permissions"]
-    assert full["full_access"] is True
-    assert full["sandbox"] == "danger-full-access"
-    assert full["approval"] == "never"
-    assert full["snapshot_id"] != initial["snapshot_id"]
+    permissions = client.get("/api/v1/bootstrap", headers=auth).json()["permissions"]
+    assert permissions["profile"] == "full_access"
+    assert permissions["full_access"] is True
+    assert permissions["sandbox"] == "danger-full-access"
+    assert permissions["approval"] == "never"
     assert client.put(
-        "/api/v1/settings/permissions", json=request, headers=mutation
-    ).json()["permissions"] == full
-    conflict = client.put(
         "/api/v1/settings/permissions",
         json={
             "profile": "default",
-            "expected_revision": initial["revision"],
-            "client_request_id": "profile-change-1",
+            "expected_revision": permissions["revision"],
+            "client_request_id": "removed-permission-setting",
         },
         headers=mutation,
-    )
-    assert conflict.status_code == 409
+    ).status_code == 404
 
-    second = client.post(
-        f"/api/v1/threads/{thread_id}/queue",
-        json={"input": "run shell", "client_message_id": "permission-2"},
-        headers=mutation,
-    ).json()
-    events = app.state.runtime.events.page(thread_id).events
-    accepted = {
-        event.turn_id: event
-        for event in events
-        if event.event_type == "turn.accepted"
-    }
-    assert accepted[first["turn"]["turn_id"]].permission_snapshot_id == initial["snapshot_id"]
-    assert accepted[second["turn"]["turn_id"]].permission_snapshot_id == full["snapshot_id"]
-    first_plan = app.state.runtime_composition.capability_service.get_plan(
-        accepted[first["turn"]["turn_id"]].capability_snapshot_id
+    assert "full_access" not in ProductServerSettings.__dataclass_fields__
+    assert "admin_hard_denies" not in ProductServerSettings.__dataclass_fields__
+    assert "enforce_admin_tool_denies" not in ProductServerSettings.__dataclass_fields__
+    assert (
+        "capability_sandbox_profile_availability"
+        not in RuntimeSettings.__dataclass_fields__
     )
-    second_plan = app.state.runtime_composition.capability_service.get_plan(
-        accepted[second["turn"]["turn_id"]].capability_snapshot_id
-    )
-    assert first_plan.decision("shell").requires_approval is True
-    assert second_plan.decision("shell").requires_approval is False
 
     restarted = TestClient(create_app(settings=_settings(tmp_path)))
-    persisted = restarted.get("/api/v1/bootstrap", headers=auth).json()["permissions"]
-    assert persisted == full
-
-
-def test_v030_promotes_existing_default_once_then_preserves_user_revocation(
-    tmp_path,
-) -> None:
-    auth, mutation = _headers()
-    legacy = TestClient(create_app(settings=_settings(tmp_path, full_access=False)))
-    assert legacy.get("/api/v1/bootstrap", headers=auth).json()["permissions"]["full_access"] is False
-
-    upgraded = TestClient(create_app(settings=_settings(tmp_path, full_access=True)))
-    promoted = upgraded.get("/api/v1/bootstrap", headers=auth).json()["permissions"]
-    assert promoted["full_access"] is True
-    revoked = upgraded.put(
-        "/api/v1/settings/permissions",
-        json={
-            "profile": "default",
-            "expected_revision": promoted["revision"],
-            "client_request_id": "user-revokes-full-access",
-        },
-        headers=mutation,
-    ).json()["permissions"]
-    assert revoked["full_access"] is False
-
-    restarted = TestClient(create_app(settings=_settings(tmp_path, full_access=True)))
-    assert restarted.get("/api/v1/bootstrap", headers=auth).json()["permissions"] == revoked
-
-
-@pytest.mark.parametrize("operation", ["create", "queue", "replace"])
-def test_permission_update_linearizes_with_every_http_turn_acceptance(
-    tmp_path,
-    monkeypatch,
-    operation,
-) -> None:
-    app = create_app(settings=_settings(tmp_path))
-    client = TestClient(app)
-    auth, mutation = _headers()
-    initial = client.get("/api/v1/bootstrap", headers=auth).json()["permissions"]
-    thread_id = client.post(
-        "/api/v1/threads",
-        json={"title": f"linearize-{operation}"},
-        headers=mutation,
-    ).json()["thread_id"]
-    source_turn_id = None
-    if operation == "replace":
-        source_turn_id = client.post(
-            f"/api/v1/threads/{thread_id}/turns",
-            json={
-                "input": "source",
-                "client_message_id": "linearize-replace-source",
-            },
-            headers=mutation,
-        ).json()["turn"]["turn_id"]
-
-    composition = app.state.runtime_composition
-    original_prepare = composition.prepare_turn
-    prepared = threading.Event()
-    release = threading.Event()
-    target_message_id = f"linearize-{operation}-old"
-
-    def pause_after_permission_capture(request):
-        result = original_prepare(request)
-        if request.client_message_id == target_message_id:
-            prepared.set()
-            assert release.wait(timeout=5)
-        return result
-
-    monkeypatch.setattr(composition, "prepare_turn", pause_after_permission_capture)
-
-    def submit_turn():
-        payload = {
-            "input": f"{operation} under old permission",
-            "client_message_id": target_message_id,
-        }
-        if operation == "create":
-            path = f"/api/v1/threads/{thread_id}/turns"
-        elif operation == "queue":
-            path = f"/api/v1/threads/{thread_id}/queue"
-        else:
-            assert source_turn_id is not None
-            path = f"/api/v1/turns/{source_turn_id}/replace"
-            payload["reason"] = "permission linearization"
-        return client.post(path, json=payload, headers=mutation)
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        turn_future = executor.submit(submit_turn)
-        assert prepared.wait(timeout=5)
-        update_future = executor.submit(
-            client.put,
-            "/api/v1/settings/permissions",
-            json={
-                "profile": "full_access",
-                "expected_revision": initial["revision"],
-                "client_request_id": f"linearize-{operation}-permission",
-            },
-            headers=mutation,
-        )
-        # The update cannot return 200 while accepted persistence still owns
-        # the shared permission admission.
-        assert not update_future.done()
-        threading.Event().wait(0.1)
-        assert not update_future.done()
-        release.set()
-        turn_response = turn_future.result(timeout=5)
-        update_response = update_future.result(timeout=5)
-
-    assert turn_response.status_code == 202
-    assert update_response.status_code == 200
-    changed = update_response.json()["permissions"]
-    assert changed["snapshot_id"] != initial["snapshot_id"]
-    body = turn_response.json()
-    accepted_turn_id = (
-        body["replacement_turn"]["turn_id"]
-        if operation == "replace"
-        else body["turn"]["turn_id"]
+    assert (
+        restarted.get("/api/v1/bootstrap", headers=auth).json()["permissions"]
+        == permissions
     )
-    old_event = next(
-        event
-        for event in app.state.runtime.events.page(thread_id, limit=1000).events
-        if event.event_type == "turn.accepted" and event.turn_id == accepted_turn_id
-    )
-    assert old_event.permission_snapshot_id == initial["snapshot_id"]
-
-    after_update = client.post(
-        f"/api/v1/threads/{thread_id}/queue",
-        json={
-            "input": "must use new permission",
-            "client_message_id": f"linearize-{operation}-new",
-        },
-        headers=mutation,
-    )
-    assert after_update.status_code == 202
-    new_turn_id = after_update.json()["turn"]["turn_id"]
-    new_event = next(
-        event
-        for event in app.state.runtime.events.page(thread_id, limit=1000).events
-        if event.event_type == "turn.accepted" and event.turn_id == new_turn_id
-    )
-    assert new_event.permission_snapshot_id == changed["snapshot_id"]
-
-
-def test_kernel_rejects_a_prepared_permission_after_another_writer_commits(
-    tmp_path,
-) -> None:
-    app = create_app(settings=_settings(tmp_path))
-    client = TestClient(app)
-    auth, mutation = _headers()
-    initial = client.get("/api/v1/bootstrap", headers=auth).json()["permissions"]
-    thread_id = client.post(
-        "/api/v1/threads",
-        json={"title": "cross-process permission fence"},
-        headers=mutation,
-    ).json()["thread_id"]
-    request = CreateTurnRequest(
-        input="prepared before permission commit",
-        client_message_id="cross-process-stale-turn",
-    )
-    prepared = app.state.runtime_composition.prepare_turn(request)
-
-    changed = client.put(
-        "/api/v1/settings/permissions",
-        json={
-            "profile": "full_access",
-            "expected_revision": initial["revision"],
-            "client_request_id": "cross-process-permission-update",
-        },
-        headers=mutation,
-    )
-    assert changed.status_code == 200
-
-    with pytest.raises(RuntimeSnapshotStale, match="no longer current"):
-        app.state.runtime.create_turn(
-            thread_id,
-            prepared.request,
-            snapshot_context=prepared.snapshot_context,
-            permission_account_id=(
-                app.state.runtime_composition.permission_account_id
-            ),
-        )
-    assert not any(
-        event.event_type == "turn.accepted"
-        and event.permission_snapshot_id == initial["snapshot_id"]
-        for event in app.state.runtime.events.page(thread_id, limit=1000).events
-    )
-
-
-def test_permission_snapshot_and_audit_failure_roll_back_one_authority_unit(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    app = create_app(settings=_settings(tmp_path))
-    client = TestClient(app, raise_server_exceptions=False)
-    auth, mutation = _headers()
-    initial = client.get("/api/v1/bootstrap", headers=auth).json()["permissions"]
-
-    def reject_audit(*_args, **_kwargs):
-        raise RuntimeError("injected permission audit failure")
-
-    monkeypatch.setattr(
-        app.state.audit_outbox,
-        "_persist_view_in_transaction",
-        reject_audit,
-    )
-    response = client.put(
-        "/api/v1/settings/permissions",
-        json={
-            "profile": "full_access",
-            "expected_revision": initial["revision"],
-            "client_request_id": "permission-atomic-failure",
-        },
-        headers=mutation,
-    )
-
-    assert response.status_code == 500
-    assert app.state.permission_authority.current().model_dump(mode="json") == initial
-    assert app.state.runtime_composition.permission_snapshot.snapshot_id == initial[
-        "snapshot_id"
-    ]
-    with app.state.runtime.database.reader() as connection:
-        assert connection.execute(
-            "SELECT 1 FROM permission_change_requests "
-            "WHERE client_request_id='permission-atomic-failure'"
-        ).fetchone() is None
-        assert connection.execute(
-            "SELECT 1 FROM runtime_snapshots WHERE snapshot_id != ? "
-            "AND kind='permission'",
-            (initial["snapshot_id"],),
-        ).fetchone() is None
-
-
-def test_full_access_keeps_admin_audit_denies_without_blocking_local_tools(tmp_path) -> None:
-    app = create_app(
-        settings=_settings(
-            tmp_path,
-            admin_hard_denies=[" SHELL "],
-            installed_capability_packs=frozenset({"sandbox"}),
-            capability_handlers={"shell": lambda arguments, context: {"exit_code": 0}},
-        )
-    )
-    client = TestClient(app)
-    auth, mutation = _headers()
-    client.put(
-        "/api/v1/settings/permissions",
-        json={
-            "profile": "full_access",
-            "expected_revision": 1,
-            "client_request_id": "enable-full",
-        },
-        headers=mutation,
-    )
-    thread_id = client.post(
-        "/api/v1/threads", json={"title": "hard deny"}, headers=mutation
-    ).json()["thread_id"]
-    created = client.post(
-        f"/api/v1/threads/{thread_id}/turns",
-        json={"input": "run shell", "client_message_id": "hard-deny"},
-        headers=mutation,
-    ).json()
-    accepted = next(
-        event
-        for event in app.state.runtime.events.page(thread_id).events
-        if event.turn_id == created["turn"]["turn_id"]
-        and event.event_type == "turn.accepted"
-    )
-    plan = app.state.runtime_composition.capability_service.get_plan(
-        accepted.capability_snapshot_id
-    )
-    decision = plan.decision("shell")
-    assert decision.eligible is True
-    assert "admin_hard_deny" not in decision.reason_codes
-    full_revision = client.get(
-        "/api/v1/bootstrap", headers=auth
-    ).json()["permissions"]["revision"]
-    weakened = PermissionSnapshot.issue(
-        profile="full_access",
-        revision=full_revision,
-        updated_at=datetime.now(UTC),
-        admin_hard_denies=[],
-    )
-    assert full_revision == 2
-    with pytest.raises(ValueError, match="cannot weaken"):
-        app.state.runtime_composition.record_permission(weakened)
-
-    revoked = client.put(
-        "/api/v1/settings/permissions",
-        json={
-            "profile": "default",
-            "expected_revision": 2,
-            "client_request_id": "revoke-full",
-        },
-        headers=mutation,
-    ).json()["permissions"]
-    assert revoked["full_access"] is False
-    assert revoked["admin_hard_denies"] == ["shell"]
-    delayed_retry = client.put(
-        "/api/v1/settings/permissions",
-        json={
-            "profile": "full_access",
-            "expected_revision": 1,
-            "client_request_id": "enable-full",
-        },
-        headers=mutation,
-    ).json()["permissions"]
-    assert delayed_retry == revoked
-    assert client.get("/api/v1/bootstrap", headers=auth).json()["permissions"] == revoked
-
-
-def test_permission_revision_prevents_lost_updates_and_bootstrap_stays_dynamic(
-    tmp_path,
-) -> None:
-    app = create_app(settings=_settings(tmp_path))
-    client = TestClient(app)
-    auth, mutation = _headers()
-    initial = client.get("/api/v1/bootstrap", headers=auth).json()["permissions"]
-
-    first = client.put(
-        "/api/v1/settings/permissions",
-        json={
-            "profile": "full_access",
-            "expected_revision": initial["revision"],
-            "client_request_id": "first-writer",
-        },
-        headers=mutation,
-    )
-    assert first.status_code == 200
-    assert first.json()["permissions"]["revision"] == initial["revision"] + 1
-
-    stale = client.put(
-        "/api/v1/settings/permissions",
-        json={
-            "profile": "default",
-            "expected_revision": initial["revision"],
-            "client_request_id": "stale-writer",
-        },
-        headers=mutation,
-    )
-    assert stale.status_code == 409
-    current = client.get("/api/v1/bootstrap", headers=auth).json()["permissions"]
-    assert current == first.json()["permissions"]
-
-
-def test_permission_mutation_requires_bearer_origin_csrf_and_revision(tmp_path) -> None:
-    client = TestClient(create_app(settings=_settings(tmp_path)))
-    auth, mutation = _headers()
-    payload = {
-        "profile": "full_access",
-        "expected_revision": 1,
-        "client_request_id": "security-boundary",
-    }
-    assert client.put("/api/v1/settings/permissions", json=payload).status_code == 401
-    assert client.put(
-        "/api/v1/settings/permissions", json=payload, headers=auth
-    ).status_code == 403
-    assert client.put(
-        "/api/v1/settings/permissions",
-        json=payload,
-        headers={**mutation, "X-EcoreX-CSRF": "wrong" * 10},
-    ).status_code == 403
-    assert client.put(
-        "/api/v1/settings/permissions",
-        json={
-            "profile": "full_access",
-            "client_request_id": "missing-revision",
-        },
-        headers=mutation,
-    ).status_code == 422
 
 
 def test_two_authorities_cannot_commit_the_same_expected_revision(tmp_path) -> None:
@@ -590,20 +190,17 @@ def test_permission_schema_tamper_is_rejected_without_startup_repair(tmp_path) -
     assert authority.current() == expected
 
 
-def test_permission_audit_tamper_is_detected_on_bootstrap(tmp_path) -> None:
-    app = create_app(settings=_settings(tmp_path))
-    client = TestClient(app)
-    auth, mutation = _headers()
-    client.put(
-        "/api/v1/settings/permissions",
-        json={
-            "profile": "full_access",
-            "expected_revision": 1,
-            "client_request_id": "audited-change",
-        },
-        headers=mutation,
-    ).raise_for_status()
-    with sqlite3.connect(tmp_path / "runtime.db") as connection:
+def test_permission_audit_tamper_is_detected_by_internal_authority(tmp_path) -> None:
+    path = tmp_path / "runtime.db"
+    authority = PermissionAuthority(
+        path, account_id="local-user", initial_full_access=False
+    )
+    authority.update(
+        "full_access",
+        expected_revision=1,
+        client_request_id="audited-change",
+    )
+    with sqlite3.connect(path) as connection:
         connection.execute("DROP TRIGGER permission_change_requests_no_update")
         connection.execute(
             "UPDATE permission_change_requests SET response_json = '{}' "
@@ -611,7 +208,7 @@ def test_permission_audit_tamper_is_detected_on_bootstrap(tmp_path) -> None:
         )
         connection.commit()
     with pytest.raises(PermissionIntegrityError, match="audit digest"):
-        app.state.permission_authority.current()
+        authority.current()
 
 
 def test_permission_snapshot_rejects_semantic_or_digest_forgery() -> None:
@@ -693,62 +290,3 @@ def test_preledger_permission_state_requires_signed_migration_without_repair(
     assert "state_digest" not in columns
     assert state == ("full_access", 3, updated_at)
     assert ledger is None
-
-
-def test_admin_policy_restart_changes_only_future_turn_snapshots(tmp_path) -> None:
-    pack_settings = {
-        "installed_capability_packs": frozenset({"sandbox"}),
-        "capability_handlers": {
-            "shell": lambda arguments, context: {"exit_code": 0}
-        },
-    }
-    first_app = create_app(settings=_settings(tmp_path, **pack_settings))
-    first_client = TestClient(first_app)
-    auth, mutation = _headers()
-    initial_permission = first_client.get(
-        "/api/v1/bootstrap", headers=auth
-    ).json()["permissions"]
-    thread_id = first_client.post(
-        "/api/v1/threads", json={"title": "admin policy"}, headers=mutation
-    ).json()["thread_id"]
-    first_turn = first_client.post(
-        f"/api/v1/threads/{thread_id}/turns",
-        json={"input": "run shell", "client_message_id": "before-admin-policy"},
-        headers=mutation,
-    ).json()["turn"]["turn_id"]
-
-    second_app = create_app(
-        settings=_settings(
-            tmp_path,
-            admin_hard_denies=["shell"],
-            **pack_settings,
-        )
-    )
-    second_client = TestClient(second_app)
-    changed_permission = second_client.get(
-        "/api/v1/bootstrap", headers=auth
-    ).json()["permissions"]
-    assert changed_permission["revision"] == initial_permission["revision"]
-    assert changed_permission["snapshot_id"] != initial_permission["snapshot_id"]
-    second_turn = second_client.post(
-        f"/api/v1/threads/{thread_id}/queue",
-        json={"input": "run shell", "client_message_id": "after-admin-policy"},
-        headers=mutation,
-    ).json()["turn"]["turn_id"]
-
-    events = second_app.state.runtime.events.page(thread_id).events
-    accepted = {
-        event.turn_id: event
-        for event in events
-        if event.event_type == "turn.accepted"
-    }
-    assert accepted[first_turn].permission_snapshot_id == initial_permission["snapshot_id"]
-    assert accepted[second_turn].permission_snapshot_id == changed_permission["snapshot_id"]
-    first_plan = second_app.state.runtime_composition.capability_service.get_plan(
-        accepted[first_turn].capability_snapshot_id
-    )
-    second_plan = second_app.state.runtime_composition.capability_service.get_plan(
-        accepted[second_turn].capability_snapshot_id
-    )
-    assert first_plan.decision("shell").eligible is True
-    assert second_plan.decision("shell").eligible is True

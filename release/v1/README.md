@@ -8,10 +8,10 @@ protected Candidate workflow:
   and four platform receipts, including a per-tree supply-chain scan. It also
   records the protected stager executable/adapter digests and workflow run
   attempt.
-- `candidate-recipe.schema.json` selects exactly 24 such trees: three Runtime,
-  three Bootstrap and all six required Capability Packs for every target.
+- `candidate-recipe.schema.json` selects exactly 21 such trees: three Runtime,
+  three Bootstrap and all five required Capability Packs for every target.
 - `candidate-build-receipt.schema.json` describes the successful, externally
-  Ed25519-signed Candidate receipt that binds those 24 receipts, staging
+  Ed25519-signed Candidate receipt that binds those 21 receipts, staging
   provenance, Web tree and complete signed manifest artifact projection.
 
 The executable validator in `ecorex.release.candidate` is intentionally stricter
@@ -33,7 +33,7 @@ and behavioral probes. Protected runners must still provide the target native
 toolchain, locked Python profile, digest-bound production Runtime config and
 real Playwright Chromium installation. If any dependency, native build or
 behavioral probe is unavailable, the stage emits a typed failure receipt and
-the Candidate does not sign or publish anything. Core and the exact six-Pack
+the Candidate does not sign or publish anything. Core and the exact five-Pack
 set are verified and atomically projected as one slot; unchanged Pack bytes may
 come from the content-addressed verified cache rather than the network; see
 `docs/v1.0/capability-pack-platform-staging.md`.

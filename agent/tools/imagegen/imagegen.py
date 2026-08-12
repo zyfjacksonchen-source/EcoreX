@@ -8,9 +8,10 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import ContextVar, copy_context
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from agent.tools.base_tool import BaseTool, ToolResult
 from agent.tools.imagegen.provider_runner import image_generation_env_with_config, run_image_generation_payload
@@ -24,6 +25,21 @@ from common.image_quality_runtime import (
 from common.log import logger
 from common.utils import expand_path
 from config import conf
+
+
+ManagedImageExecutor = Callable[[Dict[str, Any], Optional[str]], ToolResult]
+_MANAGED_IMAGE_EXECUTOR: ContextVar[Optional[ManagedImageExecutor]] = ContextVar(
+    "managed_image_executor",
+    default=None,
+)
+
+
+def bind_managed_image_executor(executor: ManagedImageExecutor):
+    return _MANAGED_IMAGE_EXECUTOR.set(executor)
+
+
+def reset_managed_image_executor(token: Any) -> None:
+    _MANAGED_IMAGE_EXECUTOR.reset(token)
 
 
 _QUALITY_RETRY_PROMPT_SUFFIX = (
@@ -357,96 +373,80 @@ def _imagegen_route(input_route: str = "text_to_image", runner_mode: str = "in_p
     }
 
 
+_COW_IMAGE_TASK_PARAMS = {
+    "prompt": {
+        "type": "string",
+        "description": "Image generation or edit instruction.",
+        "minLength": 1,
+        "maxLength": 20000,
+    },
+    "image_url": {
+        "type": ["string", "array"],
+        "description": (
+            "One image reference or an ordered list for editing/fusion. Accepts a local "
+            "path, HTTP(S) URL, attachment_id, artifact_id, or prior imagegen result URL."
+        ),
+        "items": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "minLength": 1,
+        "maxLength": 4096,
+        "maxItems": 16,
+    },
+    "size": {
+        "type": "string",
+        "description": "Optional size, for example 1024x1024.",
+        "maxLength": 64,
+    },
+    "aspect_ratio": {
+        "type": "string",
+        "description": "Optional aspect ratio, for example 1:1, 16:9, or 9:16.",
+        "minLength": 3,
+        "maxLength": 16,
+    },
+    "quality": {
+        "type": "string",
+        "description": "Optional quality hint.",
+        "enum": ["low", "medium", "high", "auto"],
+    },
+}
+
+
 class ImageGenTool(BaseTool):
     name: str = "imagegen"
     description: str = (
-        "Generate or edit images through the native EcoreX image route. "
+        "Generate or edit images through e-Mate's fixed image-2-pro route. "
         "Use this tool for text-to-image, image edits, reference-image generation, "
         "multi-image fusion, batch/multi-image requests, and visual asset requests. "
-        "For batches, the model may call this tool multiple times or use the optional "
-        "tasks field when the visible schema fits the requested ordering. The default GPT Image route "
-        "starts with gpt-image-2-pro; do not replace image edits or reference-image "
+        "For two to eight independent outputs, use the optional tasks field. "
+        "Do not pass a provider, model, output directory, timeout, or concurrency policy; "
+        "the Runtime owns them. Do not replace image edits or reference-image "
         "generation with Python/PIL/HTML/SVG scripts."
     )
     params: dict = {
         "type": "object",
+        "description": (
+            "CowAgent-compatible image generation/edit contract. Provide one prompt "
+            "or one tasks array, never both."
+        ),
         "properties": {
-            "prompt": {
-                "type": "string",
-                "description": "Image generation or edit instruction.",
-            },
-            "image_url": {
-                "type": "string",
-                "description": (
-                    "Optional local path, file URL, data URL, or remote URL for image-to-image "
-                    "editing/reference generation. Supplying this keeps the request on the image "
-                    "edit route."
-                ),
-            },
-            "image_urls": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": (
-                    "Optional reference/input images for multi-image editing or reference-guided "
-                    "generation. These are normalized to the edit route and should not be ignored."
-                ),
-            },
+            **_COW_IMAGE_TASK_PARAMS,
             "tasks": {
                 "type": "array",
-                "items": {"type": "object"},
-                "description": (
-                    "Optional native batch generation tasks. Each task may contain prompt, image_url(s), "
-                    "size, aspect_ratio, quality, and output_format. This is optional; multiple regular "
-                    "imagegen calls are also valid for ordered one-by-one generation. Never use shell/Python loops "
-                    "as the semantic image-generation substitute."
-                ),
-            },
-            "model": {
-                "type": "string",
-                "description": "Optional image model override. When omitted, image generation stays on gpt-image-2-pro regardless of the active chat model.",
-            },
-            "provider": {
-                "type": "string",
-                "description": "Optional image provider override. Chat model switching does not change this image route.",
-            },
-            "size": {
-                "type": "string",
-                "description": "Optional size, for example 1024x1024.",
-            },
-            "aspect_ratio": {
-                "type": "string",
-                "description": "Optional aspect ratio, for example 1:1, 16:9, or 9:16.",
-            },
-            "quality": {
-                "type": "string",
-                "description": "Optional quality hint.",
-            },
-            "output_format": {
-                "type": "string",
-                "description": "Optional output format, such as png, jpeg, or webp.",
-            },
-            "output_dir": {
-                "type": "string",
-                "description": "Optional output directory.",
-            },
-            "timeout": {
-                "type": "integer",
-                "description": "Timeout in seconds. Defaults to 300.",
-            },
-            "quality_retry_max": {
-                "type": "integer",
-                "description": "Maximum post-QA image regeneration attempts. Defaults to 1 and is capped at 2.",
-            },
-            "max_parallel": {
-                "type": "integer",
-                "description": "Optional maximum parallel image tasks for native batches. Defaults to 2 for multi-image batches and 1 for single-image work.",
-            },
-            "action": {
-                "type": "string",
-                "enum": ["generate", "probe", "status"],
-                "description": "Use probe/status for lightweight readiness checks; generate is the default image action.",
+                "description": "Two to eight ordered image generation or edit tasks.",
+                "minItems": 2,
+                "maxItems": 8,
+                "items": {
+                    "type": "object",
+                    "properties": _COW_IMAGE_TASK_PARAMS,
+                    "required": ["prompt"],
+                    "additionalProperties": False,
+                },
             },
         },
+        "oneOf": [
+            {"type": "object", "required": ["prompt"]},
+            {"type": "object", "required": ["tasks"]},
+        ],
+        "additionalProperties": False,
     }
 
     def execute(self, params: Dict[str, Any]) -> ToolResult:
@@ -462,6 +462,13 @@ class ImageGenTool(BaseTool):
                 "route": _imagegen_route(),
                 "redacted": True,
             })
+
+        managed_executor = _MANAGED_IMAGE_EXECUTOR.get()
+        if managed_executor is not None:
+            return managed_executor(
+                dict(args),
+                str(getattr(self, "tool_call_id", "") or "") or None,
+            )
 
         tasks = args.get("tasks")
         if isinstance(tasks, list) and tasks:
@@ -760,7 +767,10 @@ class ImageGenTool(BaseTool):
                     stop_after_cancel = True
         else:
             with ThreadPoolExecutor(max_workers=max_parallel, thread_name_prefix="imagegen-batch") as executor:
-                futures = {executor.submit(run_one, index, raw_task): index for index, raw_task in enumerate(tasks)}
+                futures = {
+                    executor.submit(copy_context().run, run_one, index, raw_task): index
+                    for index, raw_task in enumerate(tasks)
+                }
                 next_emit_index = 0
                 for future in as_completed(futures):
                     index = futures[future]

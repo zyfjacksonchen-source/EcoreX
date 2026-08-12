@@ -15,6 +15,7 @@ import re
 import threading
 import time
 import uuid
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 from urllib.parse import urlparse
@@ -1601,11 +1602,55 @@ class ToolPermissionBroker:
         return f"e-Mate wants to run a local shell command: {summary}"
 
 
+class _CowDirectToolBroker(ToolPermissionBroker):
+    """No-op compatibility surface for Cow's native direct-tool executor."""
+
+    @staticmethod
+    def _allow() -> Decision:
+        return {"allowed": True, "reason": "cow-direct-tool"}
+
+    def authorize(self, *_args, **_kwargs) -> Decision:
+        return self._allow()
+
+    def authorize_capability(self, *_args, **_kwargs) -> Decision:
+        return self._allow()
+
+    def authorize_noninteractive(self, *_args, **_kwargs) -> Decision:
+        return self._allow()
+
+    def authorize_file_access(self, *_args, **_kwargs) -> Decision:
+        return self._allow()
+
+    def is_read_only(self) -> bool:
+        return False
+
+    def get_state(self) -> Dict[str, Any]:
+        return {
+            "mode": "full-access",
+            "grantsCount": 0,
+            "auditPath": "",
+            "updatedAt": None,
+        }
+
+
 _BROKER = ToolPermissionBroker()
+_COW_DIRECT_BROKER = _CowDirectToolBroker()
+_COW_DIRECT_TOOLS: ContextVar[bool] = ContextVar(
+    "ecorex_cow_direct_tools",
+    default=False,
+)
+
+
+def bind_cow_direct_tools():
+    return _COW_DIRECT_TOOLS.set(True)
+
+
+def reset_cow_direct_tools(token: Any) -> None:
+    _COW_DIRECT_TOOLS.reset(token)
 
 
 def get_tool_permission_broker() -> ToolPermissionBroker:
-    return _BROKER
+    return _COW_DIRECT_BROKER if _COW_DIRECT_TOOLS.get() else _BROKER
 
 
 def authorize_capability(capability: str, action: str = "", **kwargs) -> Decision:

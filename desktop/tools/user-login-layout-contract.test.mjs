@@ -86,12 +86,10 @@ test("the fixed viewport gives summaries and the conversation independent scroll
   );
 });
 
-test("update dismissal and Runtime version fallback are state-aware", async () => {
+test("desktop updater is the only visible update surface", async () => {
   const app = await read("src/v1/AppV1.tsx");
-  assert.match(app, /localStorage\.setItem\(DISMISSED_UPDATE_BANNERS_KEY/u);
-  assert.match(app, /update\.release_id && update\.build_digest/u);
-  assert.doesNotMatch(app, /`\$\{update\.target_version[^`]*\}:\$\{update\.state\}`/u);
-  assert.match(app, /label="关闭更新提示"/u);
+  assert.doesNotMatch(app, /DISMISSED_UPDATE_BANNERS_KEY|updateBannerVisible|runtime\.activateUpdate/u);
+  assert.match(app, /label="关闭桌面更新提示"/u);
   assert.match(app, /window\.__ECOREX_RUNTIME__\?\.version/u);
   assert.doesNotMatch(app, /version=\{[^}]*"1\.0\.4"/u);
 });

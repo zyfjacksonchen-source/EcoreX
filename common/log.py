@@ -1,6 +1,13 @@
 import logging
 import sys
 import io
+import os
+from pathlib import Path
+
+
+def _runtime_log_path():
+    data_dir = os.environ.get("EMATE_DATA_DIR")
+    return Path(data_dir, "run.log") if data_dir else Path("run.log")
 
 
 def _reset_logger(log):
@@ -20,7 +27,7 @@ def _reset_logger(log):
             datefmt="%Y-%m-%d %H:%M:%S",
         )
     )
-    file_handle = logging.FileHandler("run.log", encoding="utf-8")
+    file_handle = logging.FileHandler(_runtime_log_path(), encoding="utf-8")
     file_handle.setFormatter(
         logging.Formatter(
             "[%(levelname)s][%(asctime)s][%(filename)s:%(lineno)d] - %(message)s",

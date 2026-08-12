@@ -4,7 +4,7 @@ Message sending channel abstract class
 
 from bridge.bridge import Bridge
 from bridge.context import Context
-from bridge.reply import *
+from bridge.reply import Reply, ReplyType
 from common.log import logger
 from config import conf
 
@@ -72,6 +72,16 @@ class Channel(object):
         """
         Build reply content, using agent if enabled in config
         """
+        # e-Mate binds this only while its durable Runtime owns Agent turns;
+        # the native Cow channel still owns receive/reply/reconnect semantics.
+        from channel.runtime_bridge import current_runtime_bridge
+
+        runtime_bridge = current_runtime_bridge()
+        if runtime_bridge is not None:
+            if context and "channel_type" not in context:
+                context["channel_type"] = self.channel_type
+            return runtime_bridge(query, context or Context())
+
         # Check if agent mode is enabled
         use_agent = conf().get("agent", True)
 

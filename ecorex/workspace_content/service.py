@@ -93,6 +93,12 @@ class WorkspaceContentService:
         if create_root:
             self.workspace_root.mkdir(parents=True, exist_ok=True)
             self.root.mkdir(exist_ok=True)
+            index = self.root / "index.md"
+            log = self.root / "log.md"
+            if not index.exists():
+                index.write_text("# 知识库目录\n\n", encoding="utf-8")
+            if not log.exists():
+                log.write_text("# 知识库更新日志\n\n", encoding="utf-8")
         self._verify_directory(self.workspace_root, "workspace")
         if self.root.exists():
             self._verify_directory(self.root, "knowledge")
