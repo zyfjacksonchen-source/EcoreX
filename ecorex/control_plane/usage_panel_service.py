@@ -813,11 +813,13 @@ def scenario_from_tool(tool: str, detail: dict | None = None) -> str:
 def task_status_category(rec: dict) -> str:
     if rec.get("failed"):
         return "失败"
+    if rec.get("completedAt") and rec.get("problemEvents"):
+        return "部分完成"
     if rec.get("completedAt"):
         return "成功"
     if rec.get("cancelled"):
         return "中止"
-    return "失败"
+    return "进行中"
 
 
 def build_payload(start: datetime, end: datetime) -> dict:
@@ -982,6 +984,15 @@ def build_payload(start: datetime, end: datetime) -> dict:
         if str(row.get("request_id") or "").strip()
     }
     gateway_request_ids = set(gateway_requests_by_id)
+    def task_key_for_request(request_id: str) -> str:
+        request = gateway_requests_by_id.get(request_id, {})
+        turn_id = str(request.get("turn_id") or "").strip()
+        return f"turn:{turn_id}" if turn_id else f"request:{request_id}"
+
+    def task_id_for_request(request_id: str) -> str:
+        task_key = task_key_for_request(request_id)
+        return task_key.removeprefix("turn:") if task_key.startswith("turn:") else request_id
+
     merged_usage: dict[tuple[str, str], dict] = {}
     legacy_request_ids: set[str] = set()
     anonymous_usage_sequence = 0
@@ -1065,6 +1076,46 @@ def build_payload(start: datetime, end: datetime) -> dict:
         }
     for request_id, row in gateway_completion_by_request.items():
         merged_usage[("request", request_id)] = row
+    for fact in provider_fact_rows:
+        if (
+            fact.get("source_service") != "managed_gateway"
+            or fact.get("usage_kind") != "chat"
+        ):
+            continue
+        request_id = str(fact.get("source_id") or "").strip()
+        if not request_id:
+            continue
+        try:
+            created = parse_time(str(fact.get("provider_created_at") or ""))
+        except (TypeError, ValueError):
+            continue
+        if not start <= created < end:
+            continue
+        account = canonical_email(fact.get("account_id"))
+        identity = account_aliases.get(account, account)
+        request = gateway_requests_by_id.get(request_id, {})
+        merged_usage[("request", request_id)] = {
+            "id": str(fact.get("fact_id") or f"settled:{request_id}"),
+            "category": "chat",
+            "label": "usage.provider.settled",
+            "user_email": identity,
+            "detail": json.dumps(
+                {"usageSource": "settled_gateway", "requestId": request_id},
+                ensure_ascii=False,
+            ),
+            "created_at": created.isoformat(),
+            "device_id": "",
+            "session_id": request.get("trace_id") or "",
+            "model": request.get("actual_model_id") or request.get("model_id") or "",
+            "organization_id": fact.get("organization_id") or request.get("organization_id") or "",
+            "reasoning_effort": request.get("reasoning_effort") or "",
+            "provider": "managed_gateway",
+            "input_tokens": max(0, token_number(fact.get("input_tokens"))),
+            "output_tokens": max(0, token_number(fact.get("output_tokens"))),
+            "total_tokens": max(0, token_number(fact.get("total_tokens"))),
+            "_identity": identity,
+            "_request_id": request_id,
+        }
     usage_rows = sorted(
         merged_usage.values(),
         key=lambda row: (
@@ -1261,17 +1312,19 @@ def build_payload(start: datetime, end: datetime) -> dict:
 
     requests = {}
     for event in rows:
-        request_id = event.get("request_id") or ""
+        request_id = str(event.get("request_id") or "").strip()
         if not request_id:
             continue
+        task_key = task_key_for_request(request_id)
         email = canonical_email(event.get("user_email") or event.get("user_key"))
         created = parse_time(event.get("created_at"))
         rec = requests.setdefault(
-            request_id,
+            task_key,
             {
                 "email": email,
                 "user": labels_by_email.get(email, "未识别用户"),
-                "requestId": request_id,
+                "requestId": task_id_for_request(request_id),
+                "_taskKey": task_key,
                 "sessionId": event.get("session_id") or "",
                 "acceptedAt": None,
                 "completedAt": None,
@@ -1280,6 +1333,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
                 "scenarios": Counter(),
                 "artifactEvents": 0,
                 "problemEvents": 0,
+                "gatewayFailedAttempts": 0,
                 "cancelled": False,
                 "failed": False,
                 "hasUsage": False,
@@ -1300,7 +1354,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
             rec["completedAt"] = max([item for item in [rec["completedAt"], created] if item], default=created)
         if event_type == "run.cancelled" or status == "cancelled":
             rec["cancelled"] = True
-        if event_type == "run.failed" or status == "failed":
+        if event_type == "run.failed":
             rec["failed"] = True
         if event_type == "artifact.updated":
             rec["artifactEvents"] += 1
@@ -1321,17 +1375,19 @@ def build_payload(start: datetime, end: datetime) -> dict:
         request_id = str(request.get("request_id") or "").strip()
         if not request_id:
             continue
+        task_key = task_key_for_request(request_id)
         account_id = canonical_email(request.get("account_id"))
         identity = account_aliases.get(account_id, account_id)
         accepted_at = parse_time(request.get("created_at"))
         updated_at = parse_time(request.get("updated_at"))
         terminal = str(request.get("terminal_event_type") or "").strip()
         rec = requests.setdefault(
-            request_id,
+            task_key,
             {
                 "email": identity,
                 "user": labels_by_email.get(identity, "未识别用户"),
-                "requestId": request_id,
+                "requestId": task_id_for_request(request_id),
+                "_taskKey": task_key,
                 "sessionId": request.get("trace_id") or "",
                 "acceptedAt": accepted_at,
                 "completedAt": None,
@@ -1340,6 +1396,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
                 "scenarios": Counter(),
                 "artifactEvents": 0,
                 "problemEvents": 0,
+                "gatewayFailedAttempts": 0,
                 "cancelled": False,
                 "failed": False,
                 "hasUsage": False,
@@ -1363,31 +1420,62 @@ def build_payload(start: datetime, end: datetime) -> dict:
             rec["sessionId"] = request["trace_id"]
         if str(request.get("status") or "") == "completed":
             if terminal == "response.failed":
-                rec["failed"] = True
                 rec["problemEvents"] += 1
-            else:
+                rec["gatewayFailedAttempts"] += 1
+            elif terminal == "response.completed":
                 rec["completedAt"] = max(
                     [item for item in (rec.get("completedAt"), updated_at) if item],
                     default=updated_at,
                 )
 
-    usage_by_request: dict[str, dict] = {}
+    # A Cow Turn can span several provider requests while tools execute. Usage
+    # is additive across those model rounds, but the task outcome is the Turn's
+    # final response plus any persisted failures along the way.
+    usage_by_task: dict[str, dict] = {}
+    usage_by_session: dict[str, dict] = {}
     for row in usage_rows:
         request_id = str(row.get("_request_id") or "").strip()
+        projection = usage_row_projection(row)
         if request_id:
-            usage_by_request[request_id] = usage_row_projection(row)
+            key = task_key_for_request(request_id)
+            bucket = usage_by_task.setdefault(
+                key,
+                {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0},
+            )
+        else:
+            session_id = str(row.get("session_id") or "").strip()
+            if not session_id:
+                continue
+            bucket = usage_by_session.setdefault(
+                session_id,
+                {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0},
+            )
+        for field in ("inputTokens", "outputTokens", "totalTokens"):
+            bucket[field] += int(projection.get(field, 0))
+
+    tasks_by_session = Counter(
+        rec.get("sessionId") for rec in requests.values() if rec.get("sessionId")
+    )
 
     tasks = []
     for rec in requests.values():
         if not rec["acceptedAt"]:
             continue
+        if rec["gatewayFailedAttempts"] and not rec["completedAt"]:
+            rec["failed"] = True
         status_category = task_status_category(rec)
         success = status_category == "成功"
         duration = None
-        if success:
+        if rec["completedAt"]:
             duration = max(0, (rec["completedAt"] - rec["acceptedAt"]).total_seconds() / 60)
         scenario = rec["scenarios"].most_common(1)[0][0] if rec["scenarios"] else "创作内容"
-        task_usage = usage_by_request.get(rec["requestId"])
+        task_usage = usage_by_task.get(rec["_taskKey"])
+        if (
+            task_usage is None
+            and rec["sessionId"]
+            and tasks_by_session[rec["sessionId"]] == 1
+        ):
+            task_usage = usage_by_session.get(rec["sessionId"])
         tasks.append(
             {
                 "user": rec["user"],
@@ -1399,7 +1487,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
                 "success": success,
                 "statusCategory": status_category,
                 "durationMinutes": round(duration, 2) if duration is not None else None,
-                "needsIntervention": rec["problemEvents"] > 0 or not success,
+                "needsIntervention": status_category in {"部分完成", "失败", "中止"},
                 "problemEvents": rec["problemEvents"],
                 "artifactEvents": rec["artifactEvents"],
                 "hasUsage": task_usage is not None,
@@ -1474,8 +1562,11 @@ def build_payload(start: datetime, end: datetime) -> dict:
             ]
             total = len(slice_tasks)
             successes = sum(1 for task in slice_tasks if task["success"])
+            partials = sum(1 for task in slice_tasks if task.get("statusCategory") == "部分完成")
             stopped = sum(1 for task in slice_tasks if task.get("statusCategory") == "中止")
-            failed = max(0, total - successes - stopped)
+            running = sum(1 for task in slice_tasks if task.get("statusCategory") == "进行中")
+            failed = sum(1 for task in slice_tasks if task.get("statusCategory") == "失败")
+            terminal = successes + partials + stopped + failed
             interventions = sum(1 for task in slice_tasks if task["needsIntervention"])
             durations = [task["durationMinutes"] for task in slice_tasks if task["durationMinutes"] is not None]
             scene_counts = Counter(task["scenario"] for task in slice_tasks)
@@ -1505,9 +1596,12 @@ def build_payload(start: datetime, end: datetime) -> dict:
                     "date": date,
                     "totalTasks": total,
                     "successTasks": successes,
+                    "partialTasks": partials,
                     "failedTasks": failed,
                     "stoppedTasks": stopped,
-                    "successRate": round(successes / total * 100, 1) if total else 0,
+                    "runningTasks": running,
+                    "terminalTasks": terminal,
+                    "successRate": round(successes / terminal * 100, 1) if terminal else 0,
                     "avgCompletionMinutes": round(sum(durations) / len(durations), 2) if durations else None,
                     "interventionCount": interventions,
                     "interventionRate": round(interventions / total * 100, 1) if total else 0,
@@ -1536,31 +1630,17 @@ def build_payload(start: datetime, end: datetime) -> dict:
 
     total_tasks = len(tasks)
     success_tasks = sum(1 for task in tasks if task["success"])
+    partial_tasks = sum(1 for task in tasks if task.get("statusCategory") == "部分完成")
     stopped_tasks = sum(1 for task in tasks if task.get("statusCategory") == "中止")
-    failed_tasks = max(0, total_tasks - success_tasks - stopped_tasks)
+    running_tasks = sum(1 for task in tasks if task.get("statusCategory") == "进行中")
+    failed_tasks = sum(1 for task in tasks if task.get("statusCategory") == "失败")
+    terminal_tasks = success_tasks + partial_tasks + stopped_tasks + failed_tasks
     interventions = sum(1 for task in tasks if task["needsIntervention"])
     durations = [task["durationMinutes"] for task in tasks if task["durationMinutes"] is not None]
     input_tokens = sum(usage_row_projection(row)["inputTokens"] for row in usage_rows)
     output_tokens = sum(usage_row_projection(row)["outputTokens"] for row in usage_rows)
     total_tokens = sum(usage_row_projection(row)["totalTokens"] for row in usage_rows)
-    usage_sessions = {
-        str(row.get("session_id") or "").strip()
-        for row in usage_rows
-        if str(row.get("session_id") or "").strip()
-    }
-    usage_request_ids = {
-        str(row.get("_request_id") or "").strip()
-        for row in usage_rows
-        if str(row.get("_request_id") or "").strip()
-    }
-    token_usage_tasks = sum(
-        1
-        for task in tasks
-        if (
-            task.get("requestId") in usage_request_ids
-            or task.get("sessionId") in usage_sessions
-        )
-    )
+    token_usage_tasks = sum(1 for task in tasks if task.get("hasUsage"))
     scenario_counts = Counter(task["scenario"] for task in tasks)
     daily_counts = []
     for date in dates:
@@ -1570,6 +1650,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
                 "date": date,
                 "total": len(slice_tasks),
                 "success": sum(1 for task in slice_tasks if task["success"]),
+                "partial": sum(1 for task in slice_tasks if task.get("statusCategory") == "部分完成"),
                 "intervention": sum(1 for task in slice_tasks if task["needsIntervention"]),
             }
         )
@@ -1581,6 +1662,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
                 "user": user,
                 "total": len(slice_tasks),
                 "success": sum(1 for task in slice_tasks if task["success"]),
+                "partial": sum(1 for task in slice_tasks if task.get("statusCategory") == "部分完成"),
                 "intervention": sum(1 for task in slice_tasks if task["needsIntervention"]),
             }
         )
@@ -1589,7 +1671,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
     insights = [
         f"当前范围服务器 RAW 共 {len(raw_events)} 条事件，按 request_id 去重后为 {total_tasks} 个任务。",
         f"任务集中在 {busiest['date']}，当天有 {busiest['total']} 个任务。",
-        f"成功任务 {success_tasks} 个，失败 {failed_tasks} 个，中止 {stopped_tasks} 个；按任务口径成功率为 {round(success_tasks / total_tasks * 100, 1) if total_tasks else 0}%。",
+        f"成功任务 {success_tasks} 个，部分完成 {partial_tasks} 个，失败 {failed_tasks} 个，中止 {stopped_tasks} 个，进行中 {running_tasks} 个；按已结束任务口径成功率为 {round(success_tasks / terminal_tasks * 100, 1) if terminal_tasks else 0}%。",
         "6 月 22 日和 6 月 23 日服务器未收到详细事件上报，图表里保留为 0，避免补造数据。",
         "人工干预次数为根据失败、取消、受限事件推算的需复查任务数，RAW 中没有单独的人工点击字段。",
     ]
@@ -1611,9 +1693,12 @@ def build_payload(start: datetime, end: datetime) -> dict:
             "rawEvents": len(raw_events),
             "tasks": total_tasks,
             "successTasks": success_tasks,
+            "partialTasks": partial_tasks,
             "failedTasks": failed_tasks,
             "stoppedTasks": stopped_tasks,
-            "successRate": round(success_tasks / total_tasks * 100, 1) if total_tasks else 0,
+            "runningTasks": running_tasks,
+            "terminalTasks": terminal_tasks,
+            "successRate": round(success_tasks / terminal_tasks * 100, 1) if terminal_tasks else 0,
             "avgCompletionMinutes": round(sum(durations) / len(durations), 2) if durations else 0,
             "interventions": interventions,
             "interventionRate": round(interventions / total_tasks * 100, 1) if total_tasks else 0,
@@ -1661,36 +1746,6 @@ def _account_identity(account_id: str) -> str:
     raise KeyError("usage account does not exist")
 
 
-def _coverage_started_at() -> datetime | None:
-    candidates: list[datetime] = []
-    for rows in (
-        _read_optional_rows(
-            [DB_PATH],
-            "usage_events",
-            "SELECT MIN(created_at) AS created_at FROM usage_events",
-        ),
-        _read_optional_rows(
-            [DB_PATH],
-            "sync_events",
-            "SELECT MIN(created_at) AS created_at FROM sync_events",
-        ),
-        _read_optional_rows(
-            [GATEWAY_DB_PATH, DB_PATH],
-            "gateway_requests",
-            "SELECT MIN(created_at) AS created_at FROM gateway_requests",
-        ),
-    ):
-        if not rows or not rows[0].get("created_at"):
-            continue
-        try:
-            candidates.append(parse_time(str(rows[0]["created_at"])))
-        except (TypeError, ValueError):
-            continue
-    if not candidates:
-        return None
-    return min(candidates).astimezone(timezone.utc)
-
-
 def build_account_usage_projection(
     account_id: str,
     *,
@@ -1718,20 +1773,30 @@ def build_account_usage_projection(
     day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = day_start - timedelta(days=day_start.weekday())
     end = day_start + timedelta(days=1)
-    identity = _account_identity(account_id)
-    validate_data_request(week_start, end)
-    payload = build_payload(week_start, end)
-    rows = [
-        row
-        for row in payload.get("summaryRows", [])
-        if canonical_email(row.get("email")) == identity
-    ]
-    today_label = day_start.strftime("%Y-%m-%d")
+    _account_identity(account_id)
+    rows = _read_optional_rows(
+        [CONTROL_PLANE_DB_PATH, DB_PATH],
+        "admin_ops_provider_usage_facts",
+        "SELECT input_tokens,output_tokens,total_tokens,provider_created_at "
+        "FROM admin_ops_provider_usage_facts "
+        "WHERE account_id=? AND source_service='managed_gateway' "
+        "AND usage_kind='chat' ORDER BY provider_created_at,fact_id",
+        (account_id,),
+    )
+
+    def in_window(row: dict, start: datetime) -> bool:
+        try:
+            created = datetime.fromisoformat(
+                str(row.get("provider_created_at") or "").replace("Z", "+00:00")
+            )
+        except ValueError:
+            return False
+        return created.tzinfo is not None and start <= created.astimezone(zone) < end
 
     def totals(selected: list[dict]) -> dict[str, int]:
-        input_tokens = sum(max(0, token_number(row.get("inputTokens"))) for row in selected)
-        output_tokens = sum(max(0, token_number(row.get("outputTokens"))) for row in selected)
-        total_tokens = sum(max(0, token_number(row.get("totalTokens"))) for row in selected)
+        input_tokens = sum(max(0, token_number(row.get("input_tokens"))) for row in selected)
+        output_tokens = sum(max(0, token_number(row.get("output_tokens"))) for row in selected)
+        total_tokens = sum(max(0, token_number(row.get("total_tokens"))) for row in selected)
         return {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
@@ -1742,11 +1807,23 @@ def build_account_usage_projection(
         "schema_version": 1,
         "scope": "account",
         "timezone": timezone_name,
-        "today": totals([row for row in rows if row.get("date") == today_label]),
-        "week": totals(rows),
+        "today": totals([row for row in rows if in_window(row, day_start)]),
+        "week": totals([row for row in rows if in_window(row, week_start)]),
         "week_started_at": week_start.astimezone(timezone.utc).isoformat(),
         "coverage_started_at": (
-            value.isoformat() if (value := _coverage_started_at()) is not None else None
+            value.isoformat()
+            if (
+                value := min(
+                    (
+                        datetime.fromisoformat(
+                            str(row["provider_created_at"]).replace("Z", "+00:00")
+                        ).astimezone(timezone.utc)
+                        for row in rows
+                    ),
+                    default=None,
+                )
+            ) is not None
+            else None
         ),
         "calculated_at": calculated_at.isoformat(),
     }

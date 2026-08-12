@@ -66,7 +66,7 @@ const auditState = {
   error: ''
 };
 
-const statusOptions = ['成功', '失败', '中止'];
+const statusOptions = ['成功', '部分完成', '失败', '中止', '进行中'];
 const mainstreamCacheReferenceRate = 90;
 const mainstreamCacheReferenceText = 'Artificial Analysis 公开编码 Agent 榜单显示 Claude Code 96%、Cursor CLI 89%，面板取 90% 做对标线';
 const scenarioDefinitions = {
@@ -83,6 +83,10 @@ const statusOptionMeta = {
     label: '成功',
     desc: '这一天这个用户有成功完成的任务；只要成功任务数大于 0，就会出现在这里。'
   },
+  '部分完成': {
+    label: '部分完成',
+    desc: '任务已返回结果，但至少一个工具步骤失败或取消。'
+  },
   '失败': {
     label: '失败',
     desc: '已接收但未成功，且不是用户主动停止的任务。'
@@ -90,6 +94,10 @@ const statusOptionMeta = {
   '中止': {
     label: '中止',
     desc: '用户主动停止的任务；不再混入失败。'
+  },
+  '进行中': {
+    label: '进行中',
+    desc: '任务已接收，但还没有终态结果。'
   }
 };
 const initialDateRange = defaultDateRange();
@@ -227,9 +235,20 @@ function saveManualNotes() {
 
 function rowState(row) {
   if (row.successTasks > 0) return '成功';
+  if (partialTasksForRow(row) > 0) return '部分完成';
   if (stoppedTasksForRow(row) > 0) return '中止';
   if (failedTasksForRow(row) > 0) return '失败';
+  if (runningTasksForRow(row) > 0) return '进行中';
   return '无任务';
+}
+
+function partialTasksForRow(row) {
+  return Number(row && row.partialTasks || 0) || 0;
+}
+
+function runningTasksForRow(row) {
+  if (row && row.runningTasks != null) return Number(row.runningTasks || 0);
+  return 0;
 }
 
 function stoppedTasksForRow(row) {
@@ -238,7 +257,7 @@ function stoppedTasksForRow(row) {
 
 function failedTasksForRow(row) {
   if (row && row.failedTasks != null) return Number(row.failedTasks || 0);
-  return Math.max(0, Number(row && row.totalTasks || 0) - Number(row && row.successTasks || 0) - stoppedTasksForRow(row));
+  return Math.max(0, Number(row && row.totalTasks || 0) - Number(row && row.successTasks || 0) - partialTasksForRow(row) - stoppedTasksForRow(row) - Number(row && row.runningTasks || 0));
 }
 
 function invalidArtifactsForRow(row) {
@@ -262,8 +281,10 @@ function rowMatches(row) {
   const stoppedTasks = stoppedTasksForRow(row);
   const stateTags = [];
   if (row.successTasks > 0) stateTags.push('成功');
+  if (partialTasksForRow(row) > 0) stateTags.push('部分完成');
   if (failedTasks > 0) stateTags.push('失败');
   if (stoppedTasks > 0) stateTags.push('中止');
+  if (runningTasksForRow(row) > 0) stateTags.push('进行中');
   const allScenariosSelected = state.scenarios.size === DATA.scenarios.length;
   const scenarioMatches = row.mainScenario === '无'
     ? allScenariosSelected
@@ -280,27 +301,35 @@ function rowMatches(row) {
 
 function applyStatusFilterToRow(row) {
   const wantsSuccess = state.states.has('成功');
+  const wantsPartial = state.states.has('部分完成');
   const wantsFailed = state.states.has('失败');
   const wantsStopped = state.states.has('中止');
+  const wantsRunning = state.states.has('进行中');
+  const partialTasks = partialTasksForRow(row);
   const failedTasks = failedTasksForRow(row);
   const stoppedTasks = stoppedTasksForRow(row);
-  if (wantsSuccess && wantsFailed && wantsStopped) return row;
-  const selectedTotal = (wantsSuccess ? row.successTasks : 0) + (wantsFailed ? failedTasks : 0) + (wantsStopped ? stoppedTasks : 0);
+  const runningTasks = runningTasksForRow(row);
+  if (wantsSuccess && wantsPartial && wantsFailed && wantsStopped && wantsRunning) return row;
+  const selectedTotal = (wantsSuccess ? row.successTasks : 0) + (wantsPartial ? partialTasks : 0) + (wantsFailed ? failedTasks : 0) + (wantsStopped ? stoppedTasks : 0) + (wantsRunning ? runningTasks : 0);
+  const selectedTerminal = selectedTotal - (wantsRunning ? runningTasks : 0);
   if (selectedTotal > 0) {
     return {
       ...row,
       totalTasks: selectedTotal,
       successTasks: wantsSuccess ? row.successTasks : 0,
+      partialTasks: wantsPartial ? partialTasks : 0,
       failedTasks: wantsFailed ? failedTasks : 0,
       stoppedTasks: wantsStopped ? stoppedTasks : 0,
-      successRate: selectedTotal ? (wantsSuccess ? row.successTasks : 0) / selectedTotal * 100 : 0,
+      runningTasks: wantsRunning ? runningTasks : 0,
+      terminalTasks: selectedTerminal,
+      successRate: selectedTerminal ? (wantsSuccess ? row.successTasks : 0) / selectedTerminal * 100 : 0,
       avgCompletionMinutes: wantsSuccess ? row.avgCompletionMinutes : null,
       interventionCount: Math.min(row.interventionCount || 0, selectedTotal),
       interventionRate: selectedTotal ? Math.min(row.interventionCount || 0, selectedTotal) / selectedTotal * 100 : 0,
-      remarks: `仅显示${[wantsSuccess && '成功', wantsFailed && '失败', wantsStopped && '中止'].filter(Boolean).join('、')}任务`
+      remarks: `仅显示${[wantsSuccess && '成功', wantsPartial && '部分完成', wantsFailed && '失败', wantsStopped && '中止', wantsRunning && '进行中'].filter(Boolean).join('、')}任务`
     };
   }
-  return { ...row, totalTasks: 0, successTasks: 0, failedTasks: 0, stoppedTasks: 0, successRate: 0, avgCompletionMinutes: null };
+  return { ...row, totalTasks: 0, successTasks: 0, partialTasks: 0, failedTasks: 0, stoppedTasks: 0, runningTasks: 0, terminalTasks: 0, successRate: 0, avgCompletionMinutes: null };
 }
 
 function filteredRows() {
@@ -549,22 +578,25 @@ function aggregateRows(rows) {
   const totals = rows.reduce((acc, row) => {
     acc.totalTasks += row.totalTasks;
     acc.successTasks += row.successTasks;
+    acc.partialTasks += partialTasksForRow(row);
     acc.failedTasks += failedTasksForRow(row);
     acc.stoppedTasks += stoppedTasksForRow(row);
+    acc.runningTasks += runningTasksForRow(row);
     acc.interventionCount += row.interventionCount;
     acc.effectiveArtifacts += artifactCountForRow(row);
     acc.invalidArtifacts += invalidArtifactsForRow(row);
     return acc;
-  }, { totalTasks: 0, successTasks: 0, failedTasks: 0, stoppedTasks: 0, interventionCount: 0, effectiveArtifacts: 0, invalidArtifacts: 0 });
+  }, { totalTasks: 0, successTasks: 0, partialTasks: 0, failedTasks: 0, stoppedTasks: 0, runningTasks: 0, interventionCount: 0, effectiveArtifacts: 0, invalidArtifacts: 0 });
   const tasks = filteredTasks();
   const rawEvents = rawEventsForSelection();
   const durations = tasks.filter(t => t.durationMinutes != null).map(t => t.durationMinutes);
   totals.rawEvents = rawEvents.length;
-  if (!totals.failedTasks) totals.failedTasks = Math.max(0, totals.totalTasks - totals.successTasks - totals.stoppedTasks);
+  if (!totals.failedTasks) totals.failedTasks = Math.max(0, totals.totalTasks - totals.successTasks - totals.partialTasks - totals.stoppedTasks - totals.runningTasks);
+  totals.terminalTasks = totals.successTasks + totals.partialTasks + totals.failedTasks + totals.stoppedTasks;
   totals.avgCompletionMinutes = durations.length
     ? durations.reduce((sum, item) => sum + item, 0) / durations.length
     : 0;
-  totals.successRate = totals.totalTasks ? totals.successTasks / totals.totalTasks * 100 : 0;
+  totals.successRate = totals.terminalTasks ? totals.successTasks / totals.terminalTasks * 100 : 0;
   totals.interventionRate = totals.totalTasks ? totals.interventionCount / totals.totalTasks * 100 : 0;
   return totals;
 }
@@ -652,9 +684,11 @@ function renderKpis(rows) {
   const a = aggregateRows(rows);
   const cards = [
     { label: '总任务数', value: number(a.totalTasks), foot: `由 ${number(a.rawEvents)} 条事件整理`, icon: 'target', color: colors.blue, tip: `任务：用户发起一次需求并被系统接收，就算 1 个任务；同一个任务过程里会有多条事件。` },
-    { label: '成功任务数', value: number(a.successTasks), foot: `成功率 ${pct(a.successRate)}`, icon: 'check', color: colors.green, tip: `成功任务：有完成结果的任务。成功率就是成功任务数除以总任务数。` },
+    { label: '成功任务数', value: number(a.successTasks), foot: `已结束成功率 ${pct(a.successRate)}`, icon: 'check', color: colors.green, tip: `成功任务没有失败的工具步骤；成功率按已结束任务计算，进行中任务不进入分母。` },
+    { label: '部分完成', value: number(a.partialTasks), foot: '有工具步骤未完成', icon: 'alert', color: colors.orange, tip: '任务返回了结果，但至少一个工具步骤失败或取消；模型文字兜底不会把它改成成功。' },
     { label: '失败任务数', value: number(a.failedTasks), foot: `失败率 ${pct(a.totalTasks ? a.failedTasks / a.totalTasks * 100 : 0)}`, icon: 'alert', color: colors.red, tip: `失败任务：已接收但未成功，且不是用户主动停止的任务。` },
     { label: '中止任务数', value: number(a.stoppedTasks), foot: `中止率 ${pct(a.totalTasks ? a.stoppedTasks / a.totalTasks * 100 : 0)}`, icon: 'rotate', color: colors.orange, tip: `中止任务：用户主动停止的任务，不再混入失败。` },
+    { label: '进行中', value: number(a.runningTasks), foot: '不计入成功率', icon: 'clock', color: colors.slate, tip: '已接收但尚未产生终态的任务。' },
     { label: '有效产物', value: number(a.effectiveArtifacts), foot: `无效 ${number(a.invalidArtifacts)} 个`, icon: 'table', color: colors.teal, tip: `有效产物：未被用户勾选下拇指且状态可用的产物；用户勾选 👎 定义为无效产物。` },
     { label: '涉及用户', value: number(new Set(rows.map(r => r.user)).size), foot: `RAW ${number(a.rawEvents)} 条`, icon: 'users', color: colors.purple, tip: `当前筛选里出现过记录的用户数；RAW 是后台事件明细。` }
   ];
@@ -834,13 +868,15 @@ function renderDailyChart(rows) {
     renderTokenDailyChart(filteredTokenRows());
     return;
   }
-  const byDate = new Map(DATA.dates.map(date => [date, { date, total: 0, success: 0, failed: 0, stopped: 0 }]));
+  const byDate = new Map(DATA.dates.map(date => [date, { date, total: 0, success: 0, partial: 0, failed: 0, stopped: 0, running: 0 }]));
   rows.forEach(row => {
     const item = byDate.get(row.date);
     item.total += row.totalTasks;
     item.success += row.successTasks;
+    item.partial += partialTasksForRow(row);
     item.failed += failedTasksForRow(row);
     item.stopped += stoppedTasksForRow(row);
+    item.running += runningTasksForRow(row);
   });
   const items = [...byDate.values()];
   const max = Math.max(1, ...items.map(item => item.total));
@@ -855,19 +891,25 @@ function renderDailyChart(rows) {
       ${items.map((item, index) => {
         const x = 58 + index * (barWidth + gap);
         const successHeight = Math.round(item.success / max * 150);
+        const partialHeight = Math.round(item.partial / max * 150);
         const failedHeight = Math.round(item.failed / max * 150);
         const stoppedHeight = Math.round(item.stopped / max * 150);
-        const totalHeight = successHeight + failedHeight + stoppedHeight;
+        const runningHeight = Math.round(item.running / max * 150);
+        const totalHeight = successHeight + partialHeight + failedHeight + stoppedHeight + runningHeight;
         const successY = base - successHeight;
-        const failedY = successY - failedHeight;
+        const partialY = successY - partialHeight;
+        const failedY = partialY - failedHeight;
         const stoppedY = failedY - stoppedHeight;
+        const runningY = stoppedY - runningHeight;
         return `
           <g>
-            <title>${item.date}: 成功 ${item.success}，失败 ${item.failed}，中止 ${item.stopped}</title>
+            <title>${item.date}: 成功 ${item.success}，部分完成 ${item.partial}，失败 ${item.failed}，中止 ${item.stopped}，进行中 ${item.running}</title>
             <rect x="${x}" y="${successY}" width="${barWidth}" height="${successHeight}" rx="5" fill="${colors.green}"/>
+            <rect x="${x}" y="${partialY}" width="${barWidth}" height="${partialHeight}" rx="5" fill="${colors.orange}"/>
             <rect x="${x}" y="${failedY}" width="${barWidth}" height="${failedHeight}" rx="5" fill="${colors.red}"/>
             <rect x="${x}" y="${stoppedY}" width="${barWidth}" height="${stoppedHeight}" rx="5" fill="${colors.orange}"/>
-            <text x="${x + barWidth / 2}" y="${base - totalHeight - 8}" text-anchor="middle" font-size="12" fill="#172033">${item.success}/${item.failed}/${item.stopped}</text>
+            <rect x="${x}" y="${runningY}" width="${barWidth}" height="${runningHeight}" rx="5" fill="${colors.slate}"/>
+            <text x="${x + barWidth / 2}" y="${base - totalHeight - 8}" text-anchor="middle" font-size="12" fill="#172033">${item.total}</text>
             <text x="${x + barWidth / 2}" y="${base + 26}" text-anchor="middle" font-size="13" fill="#64748b">${item.date.slice(5).replace('-', '/')}</text>
           </g>
         `;
@@ -1100,7 +1142,7 @@ function renderInsights(rows = filteredRows()) {
   const insights = [];
   insights.push(`当前筛选包含 ${activeUsers} 个用户、${activeDates} 天，共 ${a.totalTasks} 个任务、${rawEvents.length} 条事件。`);
   if (a.totalTasks) {
-    insights.push(`成功 ${a.successTasks} 个，失败 ${a.failedTasks} 个，中止 ${a.stoppedTasks} 个，成功率 ${pct(a.successRate)}；平均完成时间 ${minutes(a.avgCompletionMinutes)}。`);
+    insights.push(`成功 ${a.successTasks} 个，部分完成 ${a.partialTasks} 个，失败 ${a.failedTasks} 个，中止 ${a.stoppedTasks} 个，进行中 ${a.runningTasks} 个，已结束成功率 ${pct(a.successRate)}；平均完成时间 ${minutes(a.avgCompletionMinutes)}。`);
     insights.push(`有效产物 ${a.effectiveArtifacts} 个，无效产物 ${a.invalidArtifacts} 个；无效产物按用户勾选 👎 统计。`);
     if (topDate) insights.push(`任务最多的日期是 ${topDate.name}，当天 ${topDate.total} 个任务。`);
     if (topUser) insights.push(`任务最多的用户是 ${topUser.name}，共 ${topUser.total} 个任务。`);
@@ -1327,9 +1369,11 @@ function renderTableHeaders() {
     ${headerCell('分日', '按天拆开看，方便看到哪一天用得多、哪一天没记录')}
     ${headerCell('总任务数', '用户发起一次需求并被系统接收，就算 1 个任务；同一个任务会产生多条事件')}
     ${headerCell('成功任务数', '这一天完成了多少个任务；有完成结果才算成功')}
+    ${headerCell('部分完成', '任务已返回结果，但至少一个工具步骤失败或取消')}
     ${headerCell('失败任务数', '已接收但未成功，且不是用户主动停止的任务')}
     ${headerCell('中止任务数', '用户主动停止的任务')}
-    ${headerCell('成功任务率', '成功任务数除以总任务数；总任务数为 0 时显示 0%')}
+    ${headerCell('进行中', '任务已接收，但还没有终态结果')}
+    ${headerCell('成功任务率', '成功任务数除以已结束任务数；进行中任务不进入分母')}
     ${headerCell('平均完成时间', '只看已完成任务，从开始到完成平均用了多久')}
     ${headerCell('人工干预次数', '取消、失败、受限这类需要人工看一下的任务数量')}
     ${headerCell('干预率', '人工干预次数除以总任务数；用于看这一天需要复查的比例')}
@@ -1343,9 +1387,11 @@ function renderTableHeaders() {
     ${headerCell('日期', '个人汇总行显示当前筛选范围；展开后显示具体日期')}
     ${headerCell('任务数', '任务数就是使用次数：用户发起一次需求并被系统接收，算 1 次')}
     ${headerCell('成功', '成功完成的任务数')}
+    ${headerCell('部分完成', '任务返回结果，但有工具步骤失败或取消')}
     ${headerCell('失败', '已接收但未成功，且不是用户主动停止的任务')}
     ${headerCell('中止', '用户主动停止的任务')}
-    ${headerCell('成功率', '成功数除以任务数')}
+    ${headerCell('进行中', '已接收但尚未结束的任务')}
+    ${headerCell('成功率', '成功数除以已结束任务数')}
     ${headerCell('平均完成时间', '只统计已完成任务，从开始到完成平均用了多久')}
     ${headerCell('人工干预', '取消、失败、受限这类需要人工看一下的任务数量')}
     ${headerCell('主要使用场景', '当前范围内最常出现的使用方向')}
@@ -1363,7 +1409,7 @@ function renderTable(rows) {
   $('#rowCount').textContent = `${rows.length} 行`;
   const body = $('#summaryBody');
   if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="14"><div class="empty">没有匹配的汇总数据</div></td></tr>';
+    body.innerHTML = '<tr><td colspan="16"><div class="empty">没有匹配的汇总数据</div></td></tr>';
     return;
   }
   body.innerHTML = rows.map(row => {
@@ -1371,17 +1417,21 @@ function renderTable(rows) {
     const manualNote = manualNotes[row.id] ?? '';
     const failedTasks = failedTasksForRow(row);
     const stoppedTasks = stoppedTasksForRow(row);
-    const unsuccessfulTasks = failedTasks + stoppedTasks;
+    const partialTasks = partialTasksForRow(row);
+    const runningTasks = runningTasksForRow(row);
+    const unsuccessfulTasks = partialTasks + failedTasks + stoppedTasks;
     const successClass = row.totalTasks === 0 ? '' : row.successRate >= 95 ? 'metric-good' : row.successRate >= 80 ? 'metric-warn' : 'metric-bad';
     const interventionClass = row.interventionCount === 0 ? 'metric-good' : row.interventionRate >= 20 ? 'metric-bad' : 'metric-warn';
     const mainRow = `
-      <tr title="${escapeAttr(`${row.user} ${row.date}: 总任务 ${row.totalTasks}，成功 ${row.successTasks}，失败 ${failedTasks}，中止 ${stoppedTasks}，主要场景 ${row.mainScenario}`)}">
+      <tr title="${escapeAttr(`${row.user} ${row.date}: 总任务 ${row.totalTasks}，成功 ${row.successTasks}，部分完成 ${partialTasks}，失败 ${failedTasks}，中止 ${stoppedTasks}，进行中 ${runningTasks}，主要场景 ${row.mainScenario}`)}">
         <td><strong>${escapeHtml(row.user)}</strong><br><span class="muted small">${escapeHtml(row.email || '')}</span></td>
         <td>${row.date}</td>
         <td>${row.totalTasks}</td>
         <td>${row.successTasks}</td>
+        <td class="${partialTasks ? 'metric-warn' : 'metric-good'}">${partialTasks}</td>
         <td class="${failedTasks ? 'metric-bad' : 'metric-good'}">${failedTasks}</td>
         <td class="${stoppedTasks ? 'metric-warn' : 'metric-good'}">${stoppedTasks}</td>
+        <td>${runningTasks}</td>
         <td class="${successClass}">${pct(row.successRate)}${failureToggleHtml(row.id, row.user, row.date, unsuccessfulTasks)}</td>
         <td>${minutes(row.avgCompletionMinutes)}</td>
         <td class="${interventionClass}">${row.interventionCount}</td>
@@ -1392,7 +1442,7 @@ function renderTable(rows) {
         <td><textarea class="manual-note" data-row-id="${escapeAttr(row.id)}" placeholder="手动填写备注">${escapeHtml(manualNote)}</textarea></td>
       </tr>
     `;
-    return mainRow + failureDetailRowHtml(row.id, row.user, row.date, 14);
+    return mainRow + failureDetailRowHtml(row.id, row.user, row.date, 16);
   }).join('');
   body.querySelectorAll('.manual-input').forEach((input) => {
     input.addEventListener('input', () => {
@@ -1469,8 +1519,10 @@ function summarizeRows(rows) {
   const totals = rows.reduce((acc, row) => {
     acc.totalTasks += row.totalTasks;
     acc.successTasks += row.successTasks;
+    acc.partialTasks += partialTasksForRow(row);
     acc.failedTasks += failedTasksForRow(row);
     acc.stoppedTasks += stoppedTasksForRow(row);
+    acc.runningTasks += runningTasksForRow(row);
     acc.interventionCount += row.interventionCount;
     acc.manualArtifacts += artifactCountForRow(row);
     acc.invalidArtifacts += invalidArtifactsForRow(row);
@@ -1484,8 +1536,10 @@ function summarizeRows(rows) {
   }, {
     totalTasks: 0,
     successTasks: 0,
+    partialTasks: 0,
     failedTasks: 0,
     stoppedTasks: 0,
+    runningTasks: 0,
     interventionCount: 0,
     manualArtifacts: 0,
     invalidArtifacts: 0,
@@ -1493,8 +1547,9 @@ function summarizeRows(rows) {
     durationCount: 0,
     remarks: new Set()
   });
-  if (!totals.failedTasks) totals.failedTasks = Math.max(0, totals.totalTasks - totals.successTasks - totals.stoppedTasks);
-  totals.successRate = totals.totalTasks ? totals.successTasks / totals.totalTasks * 100 : 0;
+  if (!totals.failedTasks) totals.failedTasks = Math.max(0, totals.totalTasks - totals.successTasks - totals.partialTasks - totals.stoppedTasks - totals.runningTasks);
+  totals.terminalTasks = totals.successTasks + totals.partialTasks + totals.failedTasks + totals.stoppedTasks;
+  totals.successRate = totals.terminalTasks ? totals.successTasks / totals.terminalTasks * 100 : 0;
   totals.avgCompletionMinutes = totals.durationCount ? totals.durationSum / totals.durationCount : null;
   totals.mainScenario = formatScenarioCounter(scenarioCounts);
   totals.remarksText = [...totals.remarks].slice(0, 3).join('；') || (totals.totalTasks ? '当前筛选范围内有任务记录' : '当前筛选范围内无任务记录');
@@ -1558,7 +1613,7 @@ function renderPersonDetailTable(rows) {
   const dayCount = users.reduce((sum, item) => sum + item.rows.length, 0);
   $('#detailRowCount').textContent = `${number(users.length)} 人 · ${number(dayCount)} 天`;
   if (!users.length) {
-    body.innerHTML = '<tr><td colspan="13"><div class="empty">没有匹配的个人明细数据</div></td></tr>';
+    body.innerHTML = '<tr><td colspan="15"><div class="empty">没有匹配的个人明细数据</div></td></tr>';
     return;
   }
   body.innerHTML = users.map((item) => {
@@ -1566,15 +1621,17 @@ function renderPersonDetailTable(rows) {
     const expanded = state.expandedUsers.has(item.user);
     const notedDays = item.rows.filter(row => (manualNotes[row.id] || '').trim()).length;
     const successClass = summary.totalTasks === 0 ? '' : summary.successRate >= 95 ? 'metric-good' : summary.successRate >= 80 ? 'metric-warn' : 'metric-bad';
-    const unsuccessfulTasks = summary.failedTasks + summary.stoppedTasks;
+    const unsuccessfulTasks = summary.partialTasks + summary.failedTasks + summary.stoppedTasks;
     const parent = `
       <tr class="person-row" data-user="${escapeAttr(item.user)}" title="${escapeAttr(`点击查看 ${item.user} 的分日数据`)}">
         <td><button class="expand-toggle" type="button">${expanded ? '收起' : '展开'}</button><strong>${escapeHtml(item.user)}</strong><br><span class="muted small">${escapeHtml(item.email || '')}</span></td>
         <td>当前筛选范围</td>
         <td>${summary.totalTasks}</td>
         <td class="metric-good">${summary.successTasks}</td>
+        <td class="${summary.partialTasks ? 'metric-warn' : 'metric-good'}">${summary.partialTasks}</td>
         <td class="${summary.failedTasks ? 'metric-bad' : 'metric-good'}">${summary.failedTasks}</td>
         <td class="${summary.stoppedTasks ? 'metric-warn' : 'metric-good'}">${summary.stoppedTasks}</td>
+        <td>${summary.runningTasks}</td>
         <td class="${successClass}">${pct(summary.successRate)}${failureToggleHtml(`person|${item.user}`, item.user, null, unsuccessfulTasks)}</td>
         <td>${minutes(summary.avgCompletionMinutes)}</td>
         <td class="${summary.interventionCount ? 'metric-warn' : 'metric-good'}">${summary.interventionCount}</td>
@@ -1584,14 +1641,16 @@ function renderPersonDetailTable(rows) {
         <td>${escapeHtml(notedDays ? `已填写 ${notedDays} 天备注` : (expanded ? '可在分日行填写备注' : `点击展开 ${item.rows.length} 天数据`))}</td>
       </tr>
     `;
-    const parentFailureRow = failureDetailRowHtml(`person|${item.user}`, item.user, null, 13);
+    const parentFailureRow = failureDetailRowHtml(`person|${item.user}`, item.user, null, 15);
     if (!expanded) return parent + parentFailureRow;
     const children = item.rows
       .sort((left, right) => left.date.localeCompare(right.date))
       .map((row) => {
         const failedTasks = failedTasksForRow(row);
         const stoppedTasks = stoppedTasksForRow(row);
-        const unsuccessfulTasks = failedTasks + stoppedTasks;
+        const partialTasks = partialTasksForRow(row);
+        const runningTasks = runningTasksForRow(row);
+        const unsuccessfulTasks = partialTasks + failedTasks + stoppedTasks;
         const manualNote = manualNotes[row.id] ?? '';
         const rowSuccessClass = row.totalTasks === 0 ? '' : row.successRate >= 95 ? 'metric-good' : row.successRate >= 80 ? 'metric-warn' : 'metric-bad';
         return `
@@ -1600,8 +1659,10 @@ function renderPersonDetailTable(rows) {
             <td>${row.date}</td>
             <td>${row.totalTasks}</td>
             <td class="metric-good">${row.successTasks}</td>
+            <td class="${partialTasks ? 'metric-warn' : 'metric-good'}">${partialTasks}</td>
             <td class="${failedTasks ? 'metric-bad' : 'metric-good'}">${failedTasks}</td>
             <td class="${stoppedTasks ? 'metric-warn' : 'metric-good'}">${stoppedTasks}</td>
+            <td>${runningTasks}</td>
             <td class="${rowSuccessClass}">${pct(row.successRate)}${failureToggleHtml(row.id, row.user, row.date, unsuccessfulTasks)}</td>
             <td>${minutes(row.avgCompletionMinutes)}</td>
             <td class="${row.interventionCount ? 'metric-warn' : 'metric-good'}">${row.interventionCount}</td>
@@ -1610,7 +1671,7 @@ function renderPersonDetailTable(rows) {
             <td class="${invalidArtifactsForRow(row) ? 'metric-bad' : 'metric-good'}">${invalidArtifactsForRow(row) || ''}</td>
             <td><textarea class="manual-note compact" data-row-id="${escapeAttr(row.id)}" placeholder="手动填写备注">${escapeHtml(manualNote)}</textarea></td>
           </tr>
-        ` + failureDetailRowHtml(row.id, row.user, row.date, 13);
+        ` + failureDetailRowHtml(row.id, row.user, row.date, 15);
       }).join('');
     return parent + parentFailureRow + children;
   }).join('');
@@ -1870,7 +1931,7 @@ function exportSummaryCsv() {
     exportTokenSummaryCsv();
     return;
   }
-  const headers = ['用户', '分日', '总任务数', '成功任务数', '失败任务数', '中止任务数', '成功任务率', '平均完成时间', '人工干预次数', '干预率', '主要使用场景', '有效产物数', '无效产物数', '备注'];
+  const headers = ['用户', '分日', '总任务数', '成功任务数', '部分完成', '失败任务数', '中止任务数', '进行中', '成功任务率', '平均完成时间', '人工干预次数', '干预率', '主要使用场景', '有效产物数', '无效产物数', '备注'];
   const lines = [headers];
   filteredRows().forEach(row => {
     lines.push([
@@ -1878,8 +1939,10 @@ function exportSummaryCsv() {
       row.date,
       row.totalTasks,
       row.successTasks,
+      partialTasksForRow(row),
       failedTasksForRow(row),
       stoppedTasksForRow(row),
+      runningTasksForRow(row),
       pct(row.successRate),
       row.avgCompletionMinutes == null ? '' : row.avgCompletionMinutes,
       row.interventionCount,

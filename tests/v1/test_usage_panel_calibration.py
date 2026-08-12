@@ -528,6 +528,247 @@ def test_gateway_completion_supplies_usage_and_task_detail(tmp_path, monkeypatch
     assert gateway_tasks[0]["totalTokens"] == 25
 
 
+def test_task_statuses_keep_tool_failure_partial_and_running_out_of_success_rate(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "task-terminal-facts.sqlite3"
+    _database(str(database))
+    connection = sqlite3.connect(database)
+    connection.execute("DELETE FROM sync_events")
+    connection.execute("DELETE FROM usage_events")
+    rows = []
+    sequence = 1
+    for request_id, events in {
+        "plain": (("run.accepted", "running"), ("run.completed", "completed")),
+        "tool-fallback": (
+            ("run.accepted", "running"),
+            ("tool.failed", "failed"),
+            ("run.completed", "completed"),
+        ),
+        "failed": (("run.accepted", "running"), ("run.failed", "failed")),
+        "running": (("run.accepted", "running"),),
+    }.items():
+        for minute, (event_type, status) in enumerate(events):
+            created = f"2026-07-18T09:{sequence + minute:02d}:00+08:00"
+            rows.append(
+                (
+                    sequence,
+                    f"status-{sequence}",
+                    event_type,
+                    "org",
+                    "one@example.test",
+                    "",
+                    "device",
+                    f"session-{request_id}",
+                    request_id,
+                    "WebUI",
+                    status,
+                    json.dumps({"tool": "browser"}) if event_type == "tool.failed" else "{}",
+                    created,
+                    created,
+                )
+            )
+            sequence += 1
+    connection.executemany(
+        "INSERT INTO sync_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        rows,
+    )
+    connection.commit()
+    connection.close()
+    _use_database(monkeypatch, str(database))
+
+    payload = usage_panel_service.build_payload(
+        datetime(2026, 7, 18, tzinfo=TZ),
+        datetime(2026, 7, 19, tzinfo=TZ),
+    )
+    statuses = {task["requestId"]: task["statusCategory"] for task in payload["tasks"]}
+
+    assert statuses == {
+        "plain": "成功",
+        "tool-fallback": "部分完成",
+        "failed": "失败",
+        "running": "进行中",
+    }
+    assert payload["kpis"]["successTasks"] == 1
+    assert payload["kpis"]["partialTasks"] == 1
+    assert payload["kpis"]["failedTasks"] == 1
+    assert payload["kpis"]["runningTasks"] == 1
+    assert payload["kpis"]["terminalTasks"] == 3
+    assert payload["kpis"]["successRate"] == 33.3
+
+
+def test_gateway_model_rounds_roll_up_to_one_cow_turn(tmp_path, monkeypatch) -> None:
+    database = tmp_path / "gateway-turn-rollup.sqlite3"
+    _database(str(database))
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        DELETE FROM sync_events;
+        DELETE FROM usage_events;
+        CREATE TABLE gateway_requests(
+            request_id TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL,
+            organization_id TEXT,
+            model_id TEXT NOT NULL,
+            trace_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            terminal_event_type TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE gateway_model_attempts(
+            request_id TEXT PRIMARY KEY,
+            upstream_model_id TEXT NOT NULL,
+            reasoning_effort TEXT,
+            thread_id TEXT,
+            turn_id TEXT
+        );
+        CREATE TABLE gateway_events(
+            request_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(request_id, seq)
+        );
+        INSERT INTO gateway_requests VALUES
+            ('round-tool','one@example.test','org','gpt-5.6-sol','thread-1','completed','tool_call.requested','2026-07-18T10:00:00+08:00','2026-07-18T10:01:00+08:00'),
+            ('round-failed','one@example.test','org','gpt-5.6-sol','thread-1','completed','response.failed','2026-07-18T10:01:00+08:00','2026-07-18T10:02:00+08:00'),
+            ('round-final','one@example.test','org','gpt-5.6-sol','thread-1','completed','response.completed','2026-07-18T10:02:00+08:00','2026-07-18T10:03:00+08:00');
+        INSERT INTO gateway_model_attempts VALUES
+            ('round-tool','gpt-5.6-sol','high','thread-1','turn-1'),
+            ('round-failed','gpt-5.6-sol','high','thread-1','turn-1'),
+            ('round-final','gpt-5.6-sol','high','thread-1','turn-1');
+        """
+    )
+    connection.executemany(
+        "INSERT INTO gateway_events VALUES(?,?,?,?)",
+        [
+            (
+                "round-tool",
+                1,
+                json.dumps(
+                    {
+                        "event_type": "tool_call.requested",
+                        "usage": {
+                            "input_tokens": 5,
+                            "output_tokens": 1,
+                            "total_tokens": 6,
+                        },
+                    }
+                ),
+                "2026-07-18T10:01:00+08:00",
+            ),
+            (
+                "round-final",
+                1,
+                json.dumps(
+                    {
+                        "event_type": "response.completed",
+                        "usage": {
+                            "input_tokens": 10,
+                            "output_tokens": 2,
+                            "total_tokens": 12,
+                        },
+                    }
+                ),
+                "2026-07-18T10:03:00+08:00",
+            ),
+        ],
+    )
+    connection.commit()
+    connection.close()
+    _use_database(monkeypatch, str(database))
+
+    payload = usage_panel_service.build_payload(
+        datetime(2026, 7, 18, tzinfo=TZ),
+        datetime(2026, 7, 19, tzinfo=TZ),
+    )
+
+    assert len(payload["tasks"]) == 1
+    task = payload["tasks"][0]
+    assert task["requestId"] == "turn-1"
+    assert task["statusCategory"] == "部分完成"
+    assert (task["inputTokens"], task["outputTokens"], task["totalTokens"]) == (
+        15,
+        3,
+        18,
+    )
+    assert payload["kpis"]["tasks"] == 1
+    assert payload["kpis"]["partialTasks"] == 1
+    assert payload["kpis"]["successRate"] == 0
+
+
+def test_composer_calendar_uses_only_settled_gateway_chat_facts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "settled-account-usage.sqlite3"
+    _database(str(database))
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        CREATE TABLE admin_ops_users(
+            account_id TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            email TEXT,
+            organization_id TEXT,
+            status TEXT NOT NULL,
+            token_limit INTEGER NOT NULL,
+            tokens_used INTEGER NOT NULL,
+            image_limit INTEGER NOT NULL,
+            images_used INTEGER NOT NULL
+        );
+        CREATE TABLE admin_ops_provider_usage_facts(
+            fact_id TEXT PRIMARY KEY,
+            source_service TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            usage_kind TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            input_tokens INTEGER NOT NULL,
+            output_tokens INTEGER NOT NULL,
+            total_tokens INTEGER NOT NULL,
+            image_count INTEGER NOT NULL,
+            provider_created_at TEXT NOT NULL
+        );
+        INSERT INTO admin_ops_users VALUES(
+            'account-one','测试用户','one@example.test','org','active',0,400040,0,1
+        );
+        INSERT INTO admin_ops_provider_usage_facts VALUES
+            ('baseline','legacy_baseline','account-one','baseline','account-one',0,0,400000,0,'2026-07-18T08:00:00+08:00'),
+            ('chat-1','managed_gateway','request-1','chat','account-one',10,5,15,0,'2026-07-18T09:00:00+08:00'),
+            ('chat-2','managed_gateway','request-2','chat','account-one',20,5,25,0,'2026-07-18T10:00:00+08:00'),
+            ('image-1','image_service','image-1','image','account-one',0,0,0,1,'2026-07-18T11:00:00+08:00');
+        """
+    )
+    connection.commit()
+    connection.close()
+    _use_database(monkeypatch, str(database))
+
+    projection = usage_panel_service.build_account_usage_projection(
+        "account-one",
+        timezone_name="Asia/Shanghai",
+        now=datetime(2026, 7, 18, 18, 0, tzinfo=TZ),
+    )
+
+    assert projection["today"] == {
+        "input_tokens": 30,
+        "output_tokens": 10,
+        "total_tokens": 40,
+    }
+    assert projection["week"] == projection["today"]
+
+
+def test_usage_panel_web_exposes_partial_and_running_without_folding_into_failure() -> None:
+    source = (
+        Path(usage_panel_service.__file__).with_name("usage_panel_web") / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "const statusOptions = ['成功', '部分完成', '失败', '中止', '进行中'];" in source
+    assert "partialTasksForRow" in source
+    assert "runningTasksForRow" in source
+
+
 def test_same_request_is_deduplicated_across_legacy_and_gateway_ledgers(
     tmp_path,
     monkeypatch,
@@ -801,11 +1042,34 @@ def test_usage_panel_reconciles_actual_upstream_model_and_reasoning(
     ]
 
 
-def test_composer_account_projection_uses_the_exact_panel_ledger(
+def test_composer_account_projection_uses_only_settled_gateway_facts(
     tmp_path,
     monkeypatch,
 ):
-    payload = _v1_payload(tmp_path, monkeypatch)
+    _v1_payload(tmp_path, monkeypatch)
+    database = tmp_path / "admin-v1.sqlite3"
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        CREATE TABLE admin_ops_provider_usage_facts(
+            fact_id TEXT PRIMARY KEY,
+            source_service TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            usage_kind TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            input_tokens INTEGER NOT NULL,
+            output_tokens INTEGER NOT NULL,
+            total_tokens INTEGER NOT NULL,
+            image_count INTEGER NOT NULL,
+            provider_created_at TEXT NOT NULL
+        );
+        INSERT INTO admin_ops_provider_usage_facts VALUES
+            ('settled-legacy','managed_gateway','request-1','chat','account-one',10,4,14,0,'2026-07-18T09:01:00+08:00'),
+            ('settled-gateway','managed_gateway','gateway-request-1','chat','account-one',20,5,25,0,'2026-07-18T10:02:00+08:00');
+        """
+    )
+    connection.commit()
+    connection.close()
     now = datetime(2026, 7, 18, 18, 0, tzinfo=TZ)
 
     projection = usage_panel_service.build_account_usage_projection(
@@ -813,16 +1077,10 @@ def test_composer_account_projection_uses_the_exact_panel_ledger(
         timezone_name="Asia/Shanghai",
         now=now,
     )
-    panel_row = next(
-        row
-        for row in payload["summaryRows"]
-        if row["email"] == "one@example.test"
-    )
-
     assert projection["today"] == {
-        "input_tokens": panel_row["inputTokens"],
-        "output_tokens": panel_row["outputTokens"],
-        "total_tokens": panel_row["totalTokens"],
+        "input_tokens": 30,
+        "output_tokens": 9,
+        "total_tokens": 39,
     }
     assert projection["week"] == projection["today"]
     assert projection["week"]["total_tokens"] == 39
@@ -898,4 +1156,4 @@ def test_tool_handoff_usage_is_counted_as_a_terminal_provider_fact(
         if item["requestId"] == "gateway-tool-request"
     )
     assert task["totalTokens"] == 8
-    assert task["success"] is True
+    assert task["statusCategory"] == "进行中"
