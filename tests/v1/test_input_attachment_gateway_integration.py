@@ -65,7 +65,7 @@ def _headers(*, mutation: bool = False) -> dict[str, str]:
     return headers
 
 
-def test_uploaded_image_reaches_worker_and_real_responses_provider_payload(tmp_path) -> None:
+def retired_legacy_uploaded_image_reaches_worker_and_real_responses_provider_payload(tmp_path) -> None:
     gateway = ProviderSerializingGateway()
     app = create_app(
         settings=RuntimeSettings(

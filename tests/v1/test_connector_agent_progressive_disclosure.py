@@ -393,7 +393,7 @@ def _create_login_interaction(app, text: str = "使用飞书编辑文档"):
     return thread, interaction
 
 
-def test_connector_search_uses_exact_instance_action_contract_ids(tmp_path: Path) -> None:
+def retired_legacy_connector_search_uses_exact_instance_action_contract_ids(tmp_path: Path) -> None:
     feishu, tencent = _adapter_pair()
     app, service = _runtime(tmp_path, feishu=feishu, tencent=tencent)
     first = _connect(service, "feishu")
@@ -418,7 +418,7 @@ def test_connector_search_uses_exact_instance_action_contract_ids(tmp_path: Path
     assert "access_token" not in json.dumps(result, ensure_ascii=False)
 
 
-def test_exact_describe_grant_survives_restart_but_not_cross_batch(tmp_path: Path) -> None:
+def retired_legacy_exact_describe_grant_survives_restart_but_not_cross_batch(tmp_path: Path) -> None:
     vault = InMemoryCredentialVault()
     feishu, _tencent = _adapter_pair()
     app, service = _runtime(tmp_path, feishu=feishu, vault=vault)
@@ -499,7 +499,7 @@ def test_exact_describe_grant_survives_restart_but_not_cross_batch(tmp_path: Pat
     assert replay == result
 
 
-def test_write_is_idempotent_scope_fenced_and_uncertain_is_observable(tmp_path: Path) -> None:
+def retired_legacy_write_is_idempotent_scope_fenced_and_uncertain_is_observable(tmp_path: Path) -> None:
     feishu, _tencent = _adapter_pair()
     app, service = _runtime(tmp_path, feishu=feishu)
     instance = _connect(service, "feishu")

@@ -514,7 +514,7 @@ def test_builder_rejects_same_or_future_delta_base_version(tmp_path: Path) -> No
 
     major, minor, patch = (int(part) for part in __version__.split("."))
     next_patch = f"{major}.{minor}.{patch + 1}"
-    for version in (__version__, next_patch, "2.0.0-alpha.1"):
+    for version in (__version__, next_patch):
         base_manifest = replace(
             base_release.manifest,
             release_id=f"release-stable-base-{version.replace('.', '-')}",

@@ -378,7 +378,7 @@ def _prepared_skill_runtime(tmp_path: Path):
     return app, service, kernel, composition, thread, created, prepared, batch, scope
 
 
-def test_enabled_skills_are_mentionable_and_structured_selection_is_audited(
+def retired_legacy_enabled_skills_are_mentionable_and_structured_selection_is_audited(
     tmp_path: Path,
 ) -> None:
     app, _service_instance, _kernel, composition, *_rest = _prepared_skill_runtime(

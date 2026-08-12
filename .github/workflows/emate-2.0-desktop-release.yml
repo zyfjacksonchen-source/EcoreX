@@ -92,7 +92,9 @@ jobs:
             tests/v1/test_release_process_boundary.py \
             tests/v1/test_user_mcp_self_service.py \
             tests/v1/test_mcp_oauth.py \
-            tests/v1/test_agent_turn_worker.py \
+            tests/v1/test_cow_public_hotpath_contract.py \
+            tests/v1/test_cow_history_attachment_subagent_lifecycle.py \
+            tests/v1/test_cow_data_plane_admission.py \
             tests/v1/test_runtime_composition.py \
             tests/v1/test_usage_projection.py \
             tests/v1/test_device_identity_management.py \

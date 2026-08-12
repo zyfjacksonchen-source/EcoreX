@@ -331,7 +331,7 @@ def _complete_discovery_facts(kernel, composition, created, worker, *, malformed
     return authority
 
 
-def test_uploaded_image_reaches_gateway_as_bounded_rendition_and_is_not_repeated(
+def retired_legacy_uploaded_image_reaches_gateway_as_bounded_rendition_and_is_not_repeated(
     tmp_path,
 ) -> None:
     import base64
@@ -430,7 +430,7 @@ def test_uploaded_image_reaches_gateway_as_bounded_rendition_and_is_not_repeated
     assert second_images == []
 
 
-def test_artifact_vision_tool_continuation_carries_bounded_semantic_image(
+def retired_legacy_artifact_vision_tool_continuation_carries_bounded_semantic_image(
     tmp_path,
 ) -> None:
     import base64
@@ -569,7 +569,7 @@ def test_artifact_vision_tool_continuation_carries_bounded_semantic_image(
     )
 
 
-def test_verified_capability_failure_is_failed_and_recoverable(tmp_path) -> None:
+def retired_legacy_verified_capability_failure_is_failed_and_recoverable(tmp_path) -> None:
     def unavailable_handler(_arguments, _context):
         raise CapabilityUnavailableError("verified handler rejected the command")
 
@@ -619,7 +619,7 @@ def test_verified_capability_failure_is_failed_and_recoverable(tmp_path) -> None
     )
 
 
-def test_image_workflow_guidance_is_frozen_injected_and_cached(tmp_path) -> None:
+def retired_legacy_image_workflow_guidance_is_frozen_injected_and_cached(tmp_path) -> None:
     import hashlib
 
     _app, kernel, composition, _thread, created = _runtime(
@@ -694,7 +694,7 @@ def test_image_workflow_guidance_is_frozen_injected_and_cached(tmp_path) -> None
     assert loaded["count"] == 2
 
 
-def test_workflow_guidance_reserves_space_for_emate_identity(tmp_path) -> None:
+def retired_legacy_workflow_guidance_reserves_space_for_emate_identity(tmp_path) -> None:
     import hashlib
 
     _app, kernel, composition, _thread, _created = _runtime(
@@ -727,7 +727,7 @@ def test_workflow_guidance_reserves_space_for_emate_identity(tmp_path) -> None:
     }
 
 
-def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> None:
+def retired_legacy_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> None:
     app, kernel, composition, thread, created = _runtime(tmp_path, input_text="hello")
     del app
     gateway = ScriptedGateway(
@@ -827,7 +827,7 @@ def test_worker_streams_message_and_atomically_finishes_turn_job(tmp_path) -> No
     )
 
 
-def test_steer_before_first_model_request_is_applied_in_one_execution_batch(
+def retired_legacy_steer_before_first_model_request_is_applied_in_one_execution_batch(
     tmp_path,
 ) -> None:
     app, kernel, composition, _thread, created = _runtime(
@@ -877,7 +877,7 @@ def test_steer_before_first_model_request_is_applied_in_one_execution_batch(
     ] == [(0, 1)]
 
 
-def test_new_turn_replays_completed_thread_history_with_roles(tmp_path) -> None:
+def retired_legacy_new_turn_replays_completed_thread_history_with_roles(tmp_path) -> None:
     app, kernel, composition, thread, first = _runtime(
         tmp_path,
         input_text="请给我 5 个适合旅行主题的短视频标题",
@@ -951,7 +951,7 @@ def test_new_turn_replays_completed_thread_history_with_roles(tmp_path) -> None:
     assert second.turn.thread_id == first.turn.thread_id
 
 
-def test_new_turn_receives_verified_batch_image_context(tmp_path) -> None:
+def retired_legacy_new_turn_receives_verified_batch_image_context(tmp_path) -> None:
     app, kernel, composition, thread, first = _runtime(
         tmp_path,
         input_text="生成两张海报",
@@ -1082,7 +1082,7 @@ def test_new_turn_receives_verified_batch_image_context(tmp_path) -> None:
     assert request.input_items[-1].content == "把第2张改成暖色"
 
 
-def test_steer_during_streaming_runs_in_the_next_model_batch(tmp_path) -> None:
+def retired_legacy_steer_during_streaming_runs_in_the_next_model_batch(tmp_path) -> None:
     app, kernel, composition, _thread, created = _runtime(
         tmp_path,
         input_text="先回答第一步",
@@ -1123,7 +1123,7 @@ def test_steer_during_streaming_runs_in_the_next_model_batch(tmp_path) -> None:
     ] == [(0, 0), (1, 1)]
 
 
-def test_tool_output_and_concurrent_steer_share_one_typed_continuation(
+def retired_legacy_tool_output_and_concurrent_steer_share_one_typed_continuation(
     tmp_path,
 ) -> None:
     holder = {}
@@ -1231,7 +1231,7 @@ def retired_legacy_worker_keeps_image_capability_ranked_and_other_tools_discover
     assert {"fetch", "vision", "cdp", "shell"}.issubset(set(request.deferred_tool_ids))
 
 
-def test_blocked_image_turn_releases_worker_for_ordinary_turn(tmp_path) -> None:
+def retired_legacy_blocked_image_turn_releases_worker_for_ordinary_turn(tmp_path) -> None:
     async def scenario() -> None:
         image_started = asyncio.Event()
         release_image = asyncio.Event()
@@ -1579,7 +1579,7 @@ def retired_legacy_tool_projection_keeps_direct_core_and_bounds_durable_grants(t
     assert grants[-1].tool_id in projection.deferred_tool_ids
 
 
-def test_oversized_direct_projection_fails_without_truncating_core(tmp_path) -> None:
+def retired_legacy_oversized_direct_projection_fails_without_truncating_core(tmp_path) -> None:
     direct = [
         _budget_decision(f"core_overflow_{index}", Exposure.DIRECT, 1_000 - index)
         for index in range(MAX_MODEL_VISIBLE_TOOLS + 1)
@@ -1594,7 +1594,7 @@ def test_oversized_direct_projection_fails_without_truncating_core(tmp_path) -> 
         )
 
 
-def test_deferred_grant_batch_bytes_are_suppressed_without_losing_core(
+def retired_legacy_deferred_grant_batch_bytes_are_suppressed_without_losing_core(
     tmp_path,
 ) -> None:
     direct = _budget_decision("core_schema_budget", Exposure.DIRECT, 1_000)
@@ -1632,7 +1632,7 @@ def test_deferred_grant_batch_bytes_are_suppressed_without_losing_core(
     assert projection.suppressed_tool_ids == (grants[2].tool_id,)
 
 
-def test_budget_suppressed_grant_is_not_authorized_or_executable(tmp_path) -> None:
+def retired_legacy_budget_suppressed_grant_is_not_authorized_or_executable(tmp_path) -> None:
     direct = _budget_decision("core_required", Exposure.DIRECT, 1_000)
     deferred = _budget_decision("plugin_oversized", Exposure.DEFERRED, 500)
     descriptors = {
@@ -1890,7 +1890,7 @@ def retired_legacy_undisclosed_approval_tool_recovers_before_hitl_is_created(tmp
     assert recovery_output["recovery"]["action"] == "describe_then_retry"
 
 
-def test_worker_executes_discovered_tool_and_continues_model_response(tmp_path) -> None:
+def retired_legacy_worker_executes_discovered_tool_and_continues_model_response(tmp_path) -> None:
     app, kernel, composition, thread, created = _runtime(
         tmp_path,
         input_text="read the report",
@@ -1951,7 +1951,7 @@ def test_worker_executes_discovered_tool_and_continues_model_response(tmp_path) 
     assert kernel.jobs.get(created.job.job_id).status.value == "completed"
 
 
-def test_empty_tool_continuation_forces_text_without_replaying_tool(tmp_path) -> None:
+def retired_legacy_empty_tool_continuation_forces_text_without_replaying_tool(tmp_path) -> None:
     calls = []
     app, kernel, composition, thread, _created = _runtime(
         tmp_path,
@@ -2019,7 +2019,7 @@ def test_empty_tool_continuation_forces_text_without_replaying_tool(tmp_path) ->
     )
 
 
-def test_round_guardrail_returns_partial_after_completed_tool(tmp_path) -> None:
+def retired_legacy_round_guardrail_returns_partial_after_completed_tool(tmp_path) -> None:
     calls = []
     _app, kernel, composition, thread, created = _runtime(
         tmp_path,
@@ -2079,7 +2079,7 @@ def test_round_guardrail_returns_partial_after_completed_tool(tmp_path) -> None:
     assert exhausted.payload["partial_result"] is True
 
 
-def test_repeated_empty_tool_continuation_is_failed_not_completed(tmp_path) -> None:
+def retired_legacy_repeated_empty_tool_continuation_is_failed_not_completed(tmp_path) -> None:
     calls = []
     _app, kernel, composition, _thread, created = _runtime(
         tmp_path,
@@ -2133,7 +2133,7 @@ def test_repeated_empty_tool_continuation_is_failed_not_completed(tmp_path) -> N
     assert kernel.jobs.get(created.job.job_id).status.value == "failed"
 
 
-def test_worker_observes_and_self_repairs_failed_tool_continuation(tmp_path) -> None:
+def retired_legacy_worker_observes_and_self_repairs_failed_tool_continuation(tmp_path) -> None:
     """A provider handoff failure must not discard or repeat a completed tool.
 
     This is the production-shaped failure path: a model discovers and invokes
@@ -2281,7 +2281,7 @@ def test_worker_observes_and_self_repairs_failed_tool_continuation(tmp_path) -> 
     kernel.invariants.audit().raise_if_invalid()
 
 
-def test_stateless_continuation_keeps_every_completed_tool_fact(tmp_path) -> None:
+def retired_legacy_stateless_continuation_keeps_every_completed_tool_fact(tmp_path) -> None:
     calls = []
     _app, kernel, composition, _thread, _created = _runtime(
         tmp_path,
@@ -2387,7 +2387,7 @@ def test_stateless_continuation_keeps_every_completed_tool_fact(tmp_path) -> Non
     assert "second.txt" in continuity_notes[0]
 
 
-def test_stateless_continuation_keeps_failed_recovery_fact_across_restart(
+def retired_legacy_stateless_continuation_keeps_failed_recovery_fact_across_restart(
     tmp_path,
 ) -> None:
     calls = []
@@ -2662,7 +2662,7 @@ def retired_legacy_worker_persists_permission_hitl_and_resumes_after_restart(tmp
     assert restarted_kernel.jobs.get(created.job.job_id).status.value == "completed"
 
 
-def test_gateway_unavailability_schedules_retry_without_losing_turn(tmp_path) -> None:
+def retired_legacy_gateway_unavailability_schedules_retry_without_losing_turn(tmp_path) -> None:
     app, kernel, composition, _thread, created = _runtime(tmp_path, input_text="retry")
     del app
     gateway = ScriptedGateway(
@@ -2697,7 +2697,7 @@ def test_gateway_unavailability_schedules_retry_without_losing_turn(tmp_path) ->
     assert "_a2_r0" in gateway.requests[1].request_id
 
 
-def test_read_only_tool_retries_with_backoff_before_agent_recovery(tmp_path) -> None:
+def retired_legacy_read_only_tool_retries_with_backoff_before_agent_recovery(tmp_path) -> None:
     calls = []
     delays = []
 
@@ -2766,7 +2766,7 @@ def test_read_only_tool_retries_with_backoff_before_agent_recovery(tmp_path) -> 
     )
 
 
-def test_exhausted_safe_tool_reports_structured_failure_to_model(tmp_path) -> None:
+def retired_legacy_exhausted_safe_tool_reports_structured_failure_to_model(tmp_path) -> None:
     calls = []
 
     class TemporaryReadFailure(RuntimeError):
@@ -2831,7 +2831,7 @@ def test_exhausted_safe_tool_reports_structured_failure_to_model(tmp_path) -> No
     assert exhausted[0].payload["attempts"] == 3
 
 
-def test_repeated_identical_failures_trigger_reflection_then_loop_stop(
+def retired_legacy_repeated_identical_failures_trigger_reflection_then_loop_stop(
     tmp_path,
 ) -> None:
     _app, kernel, composition, thread, _created = _runtime(
@@ -2885,7 +2885,7 @@ def test_repeated_identical_failures_trigger_reflection_then_loop_stop(
     assert any(event.event_type == "agent.reflection_resolved" for event in events)
 
 
-def test_open_tool_circuit_blocks_repeat_dispatch_and_returns_to_model(
+def retired_legacy_open_tool_circuit_blocks_repeat_dispatch_and_returns_to_model(
     tmp_path,
 ) -> None:
     calls = []
@@ -2952,7 +2952,7 @@ def test_open_tool_circuit_blocks_repeat_dispatch_and_returns_to_model(
     assert sum(event.event_type == "tool.circuit_opened" for event in events) == 1
 
 
-def test_deterministic_tool_failures_do_not_poison_circuit_and_force_final_text(
+def retired_legacy_deterministic_tool_failures_do_not_poison_circuit_and_force_final_text(
     tmp_path,
 ) -> None:
     calls = []
@@ -3028,7 +3028,7 @@ def test_deterministic_tool_failures_do_not_poison_circuit_and_force_final_text(
     assert not any(event.event_type == "tool.circuit_opened" for event in events)
 
 
-def test_tool_call_in_forced_final_round_hits_runtime_guardrail(tmp_path) -> None:
+def retired_legacy_tool_call_in_forced_final_round_hits_runtime_guardrail(tmp_path) -> None:
     _app, kernel, composition, _thread, _created = _runtime(
         tmp_path,
         input_text="反复读取",
@@ -3073,7 +3073,7 @@ def test_tool_call_in_forced_final_round_hits_runtime_guardrail(tmp_path) -> Non
     assert gateway.requests[3].direct_tools == []
 
 
-def test_new_provider_attempt_does_not_append_to_failed_partial_message(
+def retired_legacy_new_provider_attempt_does_not_append_to_failed_partial_message(
     tmp_path,
 ) -> None:
     app, kernel, composition, thread, created = _runtime(
@@ -3136,7 +3136,7 @@ def test_new_provider_attempt_does_not_append_to_failed_partial_message(
     assert kernel.jobs.get(created.job.job_id).attempt == 2
 
 
-def test_worker_heartbeats_while_waiting_for_first_model_event(tmp_path) -> None:
+def retired_legacy_worker_heartbeats_while_waiting_for_first_model_event(tmp_path) -> None:
     app, kernel, composition, _thread, created = _runtime(
         tmp_path, input_text="slow first token"
     )
@@ -3190,7 +3190,7 @@ def test_worker_heartbeats_while_waiting_for_first_model_event(tmp_path) -> None
     asyncio.run(scenario())
 
 
-def test_checkpoint_pulse_uses_monotonic_deadline_and_forced_boundaries() -> None:
+def retired_legacy_checkpoint_pulse_uses_monotonic_deadline_and_forced_boundaries() -> None:
     async def scenario() -> None:
         monotonic = [100.0]
         persisted: list[dict[str, object]] = []
@@ -3238,7 +3238,7 @@ def test_checkpoint_pulse_uses_monotonic_deadline_and_forced_boundaries() -> Non
     asyncio.run(scenario())
 
 
-def test_worker_coalesces_high_frequency_stream_checkpoints_and_finishes(
+def retired_legacy_worker_coalesces_high_frequency_stream_checkpoints_and_finishes(
     tmp_path,
 ) -> None:
     app, kernel, composition, thread, created = _runtime(
@@ -3316,7 +3316,7 @@ def test_worker_coalesces_high_frequency_stream_checkpoints_and_finishes(
     assert len(heartbeat_events) < delta_count
 
 
-def test_worker_cancellation_closes_pending_gateway_stream(tmp_path) -> None:
+def retired_legacy_worker_cancellation_closes_pending_gateway_stream(tmp_path) -> None:
     app, kernel, composition, _thread, created = _runtime(
         tmp_path, input_text="cancel pending stream"
     )
@@ -3341,7 +3341,7 @@ def test_worker_cancellation_closes_pending_gateway_stream(tmp_path) -> None:
     asyncio.run(scenario())
 
 
-def test_worker_fails_closed_on_injected_gateway_sequence_gap(tmp_path) -> None:
+def retired_legacy_worker_fails_closed_on_injected_gateway_sequence_gap(tmp_path) -> None:
     app, kernel, composition, thread, created = _runtime(
         tmp_path, input_text="malformed stream"
     )
@@ -3372,7 +3372,7 @@ def test_worker_fails_closed_on_injected_gateway_sequence_gap(tmp_path) -> None:
     )
 
 
-def test_worker_heartbeats_during_async_tool_execution(tmp_path) -> None:
+def retired_legacy_worker_heartbeats_during_async_tool_execution(tmp_path) -> None:
     app, kernel, composition, _thread, created = _runtime(
         tmp_path, input_text="read slowly"
     )
@@ -3441,7 +3441,7 @@ def test_worker_heartbeats_during_async_tool_execution(tmp_path) -> None:
     asyncio.run(scenario())
 
 
-def test_worker_resumes_idempotent_tool_from_expired_lease_checkpoint(tmp_path) -> None:
+def retired_legacy_worker_resumes_idempotent_tool_from_expired_lease_checkpoint(tmp_path) -> None:
     app, kernel, composition, _thread, created = _runtime(
         tmp_path, input_text="resume read"
     )

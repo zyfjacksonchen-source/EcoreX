@@ -112,7 +112,7 @@ def test_release_builder_emits_double_signed_verifiable_capability_pack(
     assert verified.manifest.pack_id == "image"
     assert [binding.tool_id for binding in verified.manifest.tools] == ["imagegen"]
     imagegen = builtin_capability_registry().get("imagegen")
-    assert verified.manifest.tools[0].tool_version == "1.1.0"
+    assert verified.manifest.tools[0].tool_version == imagegen.version
     assert verified.manifest.tools[0].spec_sha256 == tool_spec_digest(imagegen)
     assert verified.manifest.services == ()
     metadata = json.loads(built.metadata_path.read_text(encoding="utf-8"))
