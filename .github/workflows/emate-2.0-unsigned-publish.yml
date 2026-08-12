@@ -59,33 +59,31 @@ jobs:
           assert actual | {"feed-stage-receipt.json"} == {
               path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()
           }
+          assets = [(record["path"], Path(record["path"]).name) for record in records]
+          assert len({name for _, name in assets}) == len(assets)
+          Path("expected-assets.tsv").write_text(
+              "".join(f"{path}\t{name}\n" for path, name in assets)
+              + "feed-stage-receipt.json\tfeed-stage-receipt.json\n"
+          )
           build_id = hashlib.sha256(json.dumps(records, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
           assert build_id == receipt["feed_build_id"]
           PY
 
           tag="v$version"
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "release already exists: $tag" >&2
-            exit 1
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft \
+              --target "$source_sha" --title "e-Mate $version（未签名）" \
+              --notes "Windows 与 macOS 未签名手动安装版；签名版后续替换。候选源码：$source_sha"
           fi
-          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft \
-            --target "$source_sha" --title "e-Mate $version（未签名）" \
-            --notes "Windows 与 macOS 未签名手动安装版；签名版后续替换。候选源码：$source_sha"
-          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" \
-            "feed/e-Mate-Setup-$version-x64.exe" \
-            "feed/e-Mate-$version-arm64.dmg" "feed/e-Mate-$version-arm64.zip" \
-            "feed/e-Mate-$version-x64.dmg" "feed/e-Mate-$version-x64.zip" \
-            "feed/download-index.json" "feed/feed-stage-receipt.json"
-          VERSION="$version" gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
-            --jq '.assets | map(.name) | sort' > assets.json
-          VERSION="$version" python3 - <<'PY'
-          import json, os
-          version = os.environ["VERSION"]
-          assert json.load(open("assets.json")) == sorted([
-              f"e-Mate-Setup-{version}-x64.exe",
-              f"e-Mate-{version}-arm64.dmg", f"e-Mate-{version}-arm64.zip",
-              f"e-Mate-{version}-x64.dmg", f"e-Mate-{version}-x64.zip",
-              "download-index.json", "feed-stage-receipt.json",
-          ])
-          PY
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' > existing-assets.txt
+          while IFS=$'\t' read -r relative name; do
+            if ! grep -Fxq "$name" existing-assets.txt; then
+              gh release upload "$tag" --repo "$GITHUB_REPOSITORY" "feed/$relative"
+            fi
+          done < expected-assets.tsv
+          cut -f2 expected-assets.tsv | sort > expected-assets.txt
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' | sort > actual-assets.txt
+          diff -u expected-assets.txt actual-assets.txt
           gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false
