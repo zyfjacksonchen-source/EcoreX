@@ -676,6 +676,13 @@ def test_production_nginx_and_systemd_keep_replica_boundary_narrow() -> None:
     )[1].split("}\n", 1)[0]
     assert "proxy_pass $ecorex_gateway;" in usage_route
     assert "proxy_buffering off;" in usage_route
+    web_search_route = routes.split(
+        "location = /api/v1/web-search {", 1
+    )[1].split("}\n", 1)[0]
+    assert "proxy_pass $ecorex_gateway;" in web_search_route
+    assert "proxy_set_header Authorization $http_authorization;" in web_search_route
+    assert "proxy_request_buffering off;" in web_search_route
+    assert "proxy_buffering off;" in web_search_route
     assert routes.count("location ^~ /api/v1/bootstrap-index/ {") == 1
     bootstrap_route = routes.split(
         "location ^~ /api/v1/bootstrap-index/ {", 1
