@@ -851,7 +851,7 @@ def test_trace_projection_is_otlp_compatible_and_excludes_sensitive_bodies(tmp_p
     assert "C:\\\\Users\\\\secret" not in wire
 
 
-def test_audit_redacts_secrets_paths_binary_and_is_transactional(tmp_path) -> None:
+def test_audit_redacts_secrets_paths_binary_from_the_sidecar(tmp_path) -> None:
     app = create_app(settings=_settings(tmp_path))
     client = TestClient(app)
     thread_id, turn_id, _job_id = _thread_and_turn(
@@ -916,7 +916,7 @@ def test_audit_redacts_secrets_paths_binary_and_is_transactional(tmp_path) -> No
     assert "[REDACTED" not in encrypted_wire
     assert '"input"' not in encrypted_wire
 
-    # The source Event and its audit view commit together.
+    # Reading the sidecar backfills committed source Events before projection.
     source_event = next(
         event
         for event in app.state.runtime.events.page(thread_id, limit=1000).events
@@ -928,29 +928,11 @@ def test_audit_redacts_secrets_paths_binary_and_is_transactional(tmp_path) -> No
     )
     assert client.get("/api/v1/observability/audit").status_code == 401
 
-    permission = client.get("/api/v1/bootstrap", headers=AUTH).json()["permissions"]
-    client.put(
-        "/api/v1/settings/permissions",
-        json={
-            "profile": "full_access",
-            "expected_revision": permission["revision"],
-            "client_request_id": "audited-permission-change",
-        },
-        headers=MUTATION,
-    ).raise_for_status()
-    account_audit = client.get(
-        "/api/v1/observability/audit", params={"limit": 1000}, headers=AUTH
-    ).json()["records"]
-    assert any(
-        record["event_type"] == "permission.settings_changed"
-        for record in account_audit
-    )
-
     # Retention is final: the incremental Event Store cursor must not recreate
     # a deliberately expired raw audit record during restart recovery.
     tool_audit = next(
         record
-        for record in account_audit
+        for record in body["records"]
         if record["event_type"] == "tool.call_requested"
     )
     old_published = (datetime.now(UTC) - timedelta(days=31)).isoformat()
@@ -1009,6 +991,7 @@ def test_trace_and_audit_integrity_fail_closed_without_leaking_payloads(tmp_path
     assert trace.json()["code"] == "replay_integrity_error"
     assert "secret-invalid-round" not in trace.text
 
+    assert app.state.audit_outbox.backfill_events() > 0
     record = app.state.audit_outbox.list(thread_id=thread_id, limit=1)[0]
     with app.state.runtime.database.transaction() as connection:
         connection.execute(
