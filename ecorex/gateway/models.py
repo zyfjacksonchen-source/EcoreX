@@ -29,7 +29,7 @@ _MAX_JSON_NODES = 50_000
 _MAX_JSON_STRING = 1_000_000
 
 # Retained for the retired legacy projection path. Cow's live ToolManager owns
-# model-facing tool selection; the Gateway only enforces serialized byte bounds.
+# model-facing tool selection; the Gateway does not impose a second schema budget.
 TOOL_PROJECTION_BUDGET_VERSION = "1.0.0"
 MAX_MODEL_VISIBLE_TOOLS = 64
 MAX_DISCLOSED_WORKING_SET = 12
@@ -136,16 +136,11 @@ def validate_tool_projection_budget(
         if not isinstance(tool_id, str):
             raise ValueError("managed tool descriptor identity is invalid")
         projected_ids.append(tool_id)
-        if len(canonical_tool_descriptor_bytes(descriptor)) > MAX_TOOL_DESCRIPTOR_BYTES:
-            raise ValueError("managed tool descriptor exceeds the product byte budget")
     if len(projected_ids) != len(set(projected_ids)):
         raise ValueError("model-visible tool IDs must be unique")
     if not set(disclosed_tool_ids) <= set(projected_ids):
         raise ValueError("disclosed tool projection is incomplete")
-    total = len(canonical_tool_schema_batch_bytes(descriptors))
-    if total > MAX_TOOL_SCHEMA_BATCH_BYTES:
-        raise ValueError("managed tool catalog exceeds the product byte budget")
-    return total
+    return len(canonical_tool_schema_batch_bytes(descriptors))
 
 
 class GatewayModel(BaseModel):

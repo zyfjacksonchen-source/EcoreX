@@ -31,8 +31,6 @@ from ecorex.managed_model_policy import (
 
 from .models import (
     MAX_DISCLOSED_WORKING_SET,
-    MAX_TOOL_DESCRIPTOR_BYTES,
-    MAX_TOOL_SCHEMA_BATCH_BYTES,
     TOOL_PROJECTION_BUDGET_VERSION,
     GatewayEvent,
     GatewayEventType,
@@ -1228,28 +1226,18 @@ def _provider_tools(
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """Project trusted EcoreX descriptors into the only allowed tool shape."""
 
-    # Pydantic validates the local Gateway request, but this provider boundary
-    # deliberately repeats the limits.  ``model_copy(update=...)`` and future
-    # alternate transports must not be able to bypass the network fence.
+    # ``model_copy(update=...)`` and alternate transports still reach this
+    # boundary, so reject non-JSON descriptors without imposing a second tool
+    # catalog budget on Cow's ToolManager.
     if len(disclosed_tool_ids) > MAX_DISCLOSED_WORKING_SET:
         raise ResponsesProviderRejected(
             "managed disclosed tool projection exceeds its count budget"
         )
     try:
-        if any(
-            len(_canonical(descriptor)) > MAX_TOOL_DESCRIPTOR_BYTES
-            for descriptor in descriptors
-        ):
-            raise ResponsesProviderRejected(
-                "managed tool descriptor exceeds its byte budget"
-            )
-        batch_bytes = len(_canonical(descriptors)) if descriptors else 0
+        if descriptors:
+            _canonical(descriptors)
     except (TypeError, ValueError, UnicodeEncodeError):
         raise ResponsesProviderRejected("managed tool descriptor is invalid") from None
-    if batch_bytes > MAX_TOOL_SCHEMA_BATCH_BYTES:
-        raise ResponsesProviderRejected(
-            "managed tool projection exceeds its byte budget"
-        )
 
     provider_tools: list[dict[str, Any]] = []
     names: dict[str, str] = {}
