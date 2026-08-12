@@ -225,6 +225,7 @@ class OpenAICompatibleImageProvider:
                 submission=True,
                 model_id=job.request.model_id,
                 maximum=self._image_json_limit,
+                timeout_seconds=self.generation_timeout_seconds,
             )
         return self._completed(job, body, headers)
 

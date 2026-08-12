@@ -183,11 +183,12 @@ def test_generation_uses_fixed_inline_images_route_and_exact_model() -> None:
     asyncio.run(scenario())
 
 
-def test_generation_can_complete_after_two_minutes_without_widening_health_timeout(
+def test_image_operations_can_complete_after_two_minutes_without_widening_health_timeout(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
-        virtual_durations = iter((121.0, 1.0))
+        virtual_durations = iter((121.0, 121.0, 1.0))
         budgets: list[float] = []
 
         @asynccontextmanager
@@ -204,14 +205,25 @@ def test_generation_can_complete_after_two_minutes_without_widening_health_timeo
 
         monkeypatch.setattr(asyncio, "timeout", virtual_timeout)
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        provider = _provider(client)
-        result = await provider.submit(
+        content = ImageContentStore(tmp_path / "timeout-cas", max_bytes=8 * 1024 * 1024)
+        base = content.put(BASE, mime_type="image/png")
+        provider = _provider(client, input_store=content)
+        generated = await provider.submit(
             _job(), idempotency_key="provider-idempotency-0001"
+        )
+        edited = await provider.submit(
+            _job(
+                operation=ImageOperation.RETOUCH,
+                inputs=(base.sha256,),
+                instruction="Change the background to navy blue",
+                client_request_id="openai-image-request-0002",
+            ),
+            idempotency_key="provider-idempotency-0002",
         )
         await provider.health()
 
-        assert result.state is ProviderState.COMPLETED
-        assert budgets == [300.0, 120.0]
+        assert generated.state is edited.state is ProviderState.COMPLETED
+        assert budgets == [300.0, 300.0, 120.0]
         await client.aclose()
 
     asyncio.run(scenario())

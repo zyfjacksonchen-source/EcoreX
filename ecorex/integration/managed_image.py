@@ -431,7 +431,10 @@ class ManagedImageOrchestrationClient:
             await asyncio.sleep(min(self.poll_interval_seconds, remaining))
             current = await self.get(current.job_id)
         if current.status != "completed":
-            retryable = current.status == "dead_letter"
+            retryable = (
+                current.status == "dead_letter"
+                and current.last_error_code != "provider_uncertain"
+            )
             raise ManagedImageClientError(
                 current.last_error_code or f"managed_image_{current.status}",
                 retryable=retryable,
