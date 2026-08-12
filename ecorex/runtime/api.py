@@ -645,17 +645,6 @@ class _AsyncResourceCloser:
                 await result
 
 
-class _TransactionalEventSinkFanout:
-    """Commit multiple derived outboxes atomically with their source Event."""
-
-    def __init__(self, *sinks: Any) -> None:
-        self.sinks = tuple(sink for sink in sinks if sink is not None)
-
-    def record_in_transaction(self, connection: Any, event: Any) -> None:
-        for sink in self.sinks:
-            sink.record_in_transaction(connection, event)
-
-
 def _retouch_capability_available(settings: RuntimeSettings) -> bool:
     return (
         "image" in settings.installed_capability_packs
@@ -2110,10 +2099,9 @@ def create_app(
     if trace_outbox is not None and startup_convergence_allowed:
         trace_outbox.backfill_events()
         trace_outbox.enforce_retention()
-    kernel.events.event_sink = _TransactionalEventSinkFanout(
-        audit_outbox,
-        trace_outbox,
-    )
+    # Audit and trace are derived sidecars. Their durable cursors backfill the
+    # source Event stream without making Agent progress depend on either sink.
+    kernel.events.event_sink = None
     # Provider results that crossed the durable staging boundary are completed
     # locally before workers can lease turns.  Recovery never contacts a
     # Connector provider.
@@ -2129,7 +2117,7 @@ def create_app(
             audit_outbox,
             poll_seconds=settings.audit_dispatch_seconds,
         )
-        if settings.audit_publisher is not None and startup_convergence_allowed
+        if startup_convergence_allowed
         else None
     )
     app.state.replay_service = replay_service
@@ -4322,6 +4310,8 @@ def create_app(
         limit: int = Query(default=100, ge=1, le=1000),
     ) -> AuditListResponse:
         try:
+            audit_outbox.backfill_events()
+            audit_outbox.backfill_permissions()
             records = audit_outbox.list(
                 thread_id=thread_id,
                 status=status,
@@ -4337,6 +4327,8 @@ def create_app(
     )
     async def drain_audit(request: AuditDrainRequest) -> AuditDrainResponse:
         try:
+            await asyncio.to_thread(audit_outbox.backfill_events)
+            await asyncio.to_thread(audit_outbox.backfill_permissions)
             return await audit_outbox.drain(limit=request.limit)
         except AuditIntegrityError:
             raise

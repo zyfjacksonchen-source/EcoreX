@@ -970,6 +970,29 @@ def test_audit_redacts_secrets_paths_binary_and_is_transactional(tmp_path) -> No
     assert resurrected is None
 
 
+def test_audit_sidecar_failure_does_not_rollback_agent_events(
+    tmp_path, monkeypatch,
+) -> None:
+    app = create_app(settings=_settings(tmp_path))
+    outbox = app.state.audit_outbox
+    original = outbox.record_in_transaction
+
+    def fail_audit(*_args, **_kwargs):
+        raise RuntimeError("audit-sidecar-down")
+
+    monkeypatch.setattr(outbox, "record_in_transaction", fail_audit)
+    assert app.state.runtime.events.event_sink is None
+    with TestClient(app) as client:
+        thread_id, turn_id, _job_id = _thread_and_turn(client)
+
+    events = app.state.runtime.events.page(thread_id, limit=1000).events
+    assert any(event.turn_id == turn_id for event in events)
+
+    monkeypatch.setattr(outbox, "record_in_transaction", original)
+    assert outbox.backfill_events() > 0
+    assert outbox.list(thread_id=thread_id)
+
+
 def test_trace_and_audit_integrity_fail_closed_without_leaking_payloads(tmp_path) -> None:
     app = create_app(settings=_settings(tmp_path))
     client = TestClient(app, raise_server_exceptions=False)

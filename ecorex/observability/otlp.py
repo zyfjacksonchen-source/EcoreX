@@ -1154,6 +1154,7 @@ class TraceDispatcher:
         last_retention_day: str | None = None
         while not self._stop.is_set():
             try:
+                await asyncio.to_thread(self.outbox.backfill_events)
                 await asyncio.to_thread(
                     self.outbox.materialize, limit_segments=self.segment_batch_size
                 )
