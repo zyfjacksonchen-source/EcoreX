@@ -807,7 +807,9 @@ export function AppV1() {
               <Folder className="ex-workspace-symbol" aria-hidden="true" />
               <div className="ex-header-copy">
                 <div className="ex-title-row">
-                  <h1>{runtime.state.thread?.title || "新任务"}</h1>
+                  <h1 title={runtime.state.thread?.title || "新任务"}>
+                    {runtime.state.thread?.title || "新任务"}
+                  </h1>
                   {taskMenu}
                 </div>
                 <span className={`ex-connection is-${connected ? "online" : "retrying"}`}>

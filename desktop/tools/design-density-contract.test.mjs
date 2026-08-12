@@ -175,6 +175,15 @@ test("session summaries stay left aligned", () => {
   assert.match(taskRows, /text-align:\s*left;/);
 });
 
+test("long task titles stay compact and expose their full text", () => {
+  const title = rule(layout, ".ex-header-title h1");
+  assert.match(title, /max-width:\s*min\(32rem, 50vw\);/);
+  assert.match(title, /text-overflow:\s*ellipsis;/);
+  assert.match(title, /white-space:\s*nowrap;/);
+  const app = readFileSync(new URL("../src/v1/AppV1.tsx", import.meta.url), "utf8");
+  assert.match(app, /<h1 title=\{runtime\.state\.thread\?\.title \|\| "新任务"\}>/);
+});
+
 test("ordinary controls are frameless until hover, focus, or active state", () => {
   const idle = rule(primitives, ".ex-button,\n.ex-icon-button,");
   assert.match(idle, /border:\s*1px solid var\(--control-idle-border\);/);
