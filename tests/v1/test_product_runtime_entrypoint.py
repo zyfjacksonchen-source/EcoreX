@@ -1948,6 +1948,7 @@ def test_packaged_desktop_runtime_uses_app_payload_and_writable_data_root(
         assert composition.server_settings.workspace_roots == (
             (data_root / "workspace").resolve(),
         )
+        assert not (data_root / "slots").exists()
         assert composition.update is None
         assert composition.server_settings.first_install_registration_recorder is None
         assert composition.server_settings.first_install_runtime_ready_recorder is None

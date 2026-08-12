@@ -1792,7 +1792,7 @@ def _verified_applied_storage_schema_authorizer(
     successor generation.
     """
 
-    slots = SlotStore(install_root)
+    slots = SlotStore(install_root, create_storage=False)
     expected_artifact_id = f"core-{platform}-{architecture}"
 
     def authorize(observed_version: int, observed_schema_sha256: str) -> bool:
