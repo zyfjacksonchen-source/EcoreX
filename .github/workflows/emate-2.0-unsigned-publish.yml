@@ -1,0 +1,91 @@
+name: Publish verified unsigned e-Mate desktop packages
+
+on:
+  push:
+    branches:
+      - codex/publish-e-mate-*
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: emate-unsigned-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Promote the latest verified feed without rebuilding
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#codex/publish-e-mate-}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          source_branch="codex/e-mate-$version"
+          run_json="$(gh api \
+            --method GET \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/emate-2.0-desktop-release.yml/runs" \
+            -f branch="$source_branch" -f status=success -f per_page=1)"
+          run_id="$(jq -er '.workflow_runs[0].id' <<<"$run_json")"
+          source_sha="$(jq -er '.workflow_runs[0].head_sha' <<<"$run_json")"
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
+            --name "e-mate-$version-unsigned-manual-feed-base" --dir feed
+
+          VERSION="$version" SOURCE_SHA="$source_sha" python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path, PurePosixPath
+
+          root = Path("feed").resolve(strict=True)
+          receipt = json.loads((root / "feed-stage-receipt.json").read_text())
+          assert (receipt["schema_version"], receipt["document_type"], receipt["distribution_mode"], receipt["status"]) == (
+              2, "emate.desktop-feed-stage", "unsigned-manual", "activation-ready-unsigned-manual"
+          )
+          assert receipt["version"] == os.environ["VERSION"]
+          assert receipt["source_commit"] == os.environ["SOURCE_SHA"]
+          records = receipt["files"]
+          assert records == sorted(records, key=lambda item: item["path"])
+          actual = set()
+          for record in records:
+              relative = PurePosixPath(record["path"])
+              assert not relative.is_absolute() and ".." not in relative.parts
+              path = root / relative
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              assert path.stat().st_size == record["size_bytes"] and digest == record["sha256"]
+              actual.add(relative.as_posix())
+          assert actual | {"feed-stage-receipt.json"} == {
+              path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()
+          }
+          build_id = hashlib.sha256(json.dumps(records, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+          assert build_id == receipt["feed_build_id"]
+          PY
+
+          tag="v$version"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release already exists: $tag" >&2
+            exit 1
+          fi
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft \
+            --target "$source_sha" --title "e-Mate $version（未签名）" \
+            --notes "Windows 与 macOS 未签名手动安装版；签名版后续替换。候选源码：$source_sha"
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" \
+            "feed/e-Mate-Setup-$version-x64.exe" \
+            "feed/e-Mate-$version-arm64.dmg" "feed/e-Mate-$version-arm64.zip" \
+            "feed/e-Mate-$version-x64.dmg" "feed/e-Mate-$version-x64.zip" \
+            "feed/download-index.json" "feed/feed-stage-receipt.json"
+          VERSION="$version" gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets | map(.name) | sort' > assets.json
+          VERSION="$version" python3 - <<'PY'
+          import json, os
+          version = os.environ["VERSION"]
+          assert json.load(open("assets.json")) == sorted([
+              f"e-Mate-Setup-{version}-x64.exe",
+              f"e-Mate-{version}-arm64.dmg", f"e-Mate-{version}-arm64.zip",
+              f"e-Mate-{version}-x64.dmg", f"e-Mate-{version}-x64.zip",
+              "download-index.json", "feed-stage-receipt.json",
+          ])
+          PY
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false
