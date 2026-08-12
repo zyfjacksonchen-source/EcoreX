@@ -2603,6 +2603,8 @@
   width: 100%;
   min-height: 44px;
   max-height: 220px;
+  field-sizing: content;
+  overflow-y: auto;
   resize: none;
   border: 0;
   outline: 0;
