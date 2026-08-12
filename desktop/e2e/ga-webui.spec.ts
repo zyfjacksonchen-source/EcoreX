@@ -1392,7 +1392,9 @@ test("320px touch Composer keeps the Cow steer action reachable without horizont
       await expect(disposition).toBeVisible();
       await expect(disposition).toBeInViewport();
       await disposition.click();
-      await expect(page.getByText("继续当前任务", { exact: true })).toBeVisible();
+      await expect(
+        page.getByRole("region", { name: "对话" }).getByText("继续当前任务", { exact: true }),
+      ).toBeVisible();
       expect(await page.evaluate(() => (
         Math.max(document.documentElement.scrollWidth, document.body.scrollWidth)
         - document.documentElement.clientWidth
