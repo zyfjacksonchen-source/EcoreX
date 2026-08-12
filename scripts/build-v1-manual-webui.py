@@ -472,7 +472,7 @@ def _install_locked_runtime_overlay(
 ) -> None:
     target_platform = {
         ("macos", "arm64"): "macosx_11_0_arm64",
-        ("macos", "x64"): "macosx_10_13_x86_64",
+        ("macos", "x64"): "macosx_11_0_x86_64",
         ("windows", "x64"): "win_amd64",
     }.get((platform, architecture))
     if target_platform is None:

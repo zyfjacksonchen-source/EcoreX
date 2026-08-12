@@ -329,6 +329,30 @@ def test_manual_webui_runtime_overlay_tracks_the_complete_active_lock() -> None:
     assert len(versions) >= 55
 
 
+def test_manual_webui_runtime_overlay_targets_supported_intel_macos(
+    tmp_path: Path,
+) -> None:
+    builder = _builder()
+    commands: list[tuple[str, ...]] = []
+
+    def stop_after_command(command, **_kwargs):  # noqa: ANN001
+        commands.append(tuple(command))
+        raise RuntimeError("captured")
+
+    builder["_install_locked_runtime_overlay"].__globals__["_run"] = stop_after_command
+    with pytest.raises(RuntimeError, match="captured"):
+        builder["_install_locked_runtime_overlay"](
+            ROOT,
+            tmp_path / "core",
+            tmp_path,
+            platform="macos",
+            architecture="x64",
+        )
+
+    command = commands[0]
+    assert command[command.index("--platform") + 1] == "macosx_11_0_x86_64"
+
+
 def test_manual_webui_product_overlay_contains_the_cow_runtime_spine(
     tmp_path: Path,
 ) -> None:
