@@ -47,6 +47,10 @@ test("desktop loads the existing loopback Runtime and never packages a second re
   assert.match(main, /loadURL\(runtimeOrigin\)/);
   assert.match(main, /loadURL\(startupPage\(\)\)/);
   assert.match(main, /startBackendWithRetry/);
+  assert.match(main, /backend\.on\("exit", \(code\) =>/);
+  assert.match(main, /code === 86\) void restartRuntime\(\)/);
+  assert.match(main, /await mainWindow\?\.loadURL\(startupPage\(\)\)/);
+  assert.match(main, /if \(runtimeRestart\) return runtimeRestart/);
   assert.match(main, /buttons: \["重试", "退出"\]/);
   assert.match(main, /src", "v1", "assets", "emate-logo\.png"/);
   assert.match(main, /<img class="logo" src="\$\{logo\}"/);
