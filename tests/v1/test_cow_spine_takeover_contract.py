@@ -542,6 +542,9 @@ def test_cow_vision_uses_the_authenticated_managed_gateway(
     assert result.result["content"] == "a pixel"
     assert len(gateway.requests) == 1
     assert gateway.requests[0].model_id == "ecorex-chat"
+    assert gateway.requests[0].instructions == (
+        "You are the intelligent work Agent 小芯 inside the e-Mate Agent product."
+    )
     assert gateway.requests[0].input_items[0].images[0].mime_type == "image/png"
 
 

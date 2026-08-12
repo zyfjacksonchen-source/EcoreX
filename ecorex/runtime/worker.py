@@ -5713,7 +5713,7 @@ class _CowGatewayModel:
             model_policy=GatewayModelPolicy.model_validate(
                 ecorex_chat_gateway_policy(self.model).model_dump(mode="json")
             ),
-            instructions=_EMATE_MODEL_INSTRUCTIONS,
+            instructions=_EMATE_IDENTITY_INSTRUCTION,
             input_items=[
                 GatewayUserMessageInput(
                     message_id=f"{self.request_scope}:vision:{self._round}",
