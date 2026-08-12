@@ -241,6 +241,10 @@ class MemoryStorage:
                 logger.error(f"[MemoryStorage] Database unreadable: {e}")
                 self._quarantine_and_recreate()
 
+            # Never write probe objects into a damaged shared database: verify
+            # and, when necessary, preserve/quarantine it first.
+            self._check_integrity()
+
             # Check FTS5 support
             self.fts5_available = self._check_fts5_support()
             if not _HAS_UPSERT:
@@ -255,7 +259,6 @@ class MemoryStorage:
                 from common.log import logger
                 logger.debug("[MemoryStorage] FTS5 not available, using LIKE-based keyword search")
 
-            self._check_integrity()
         except Exception as e:
             from common.log import logger
             logger.error(f"[MemoryStorage] Unexpected error during database initialization: {e}")
