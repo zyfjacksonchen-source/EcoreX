@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import time
 from contextvars import ContextVar
 from functools import wraps
@@ -35,9 +36,29 @@ _DEFAULT_TIMEOUT_SECONDS = 2.0
 _PREPROCESS_TARGET_LONG_EDGE = 960
 _RAPIDOCR_DET_LIMIT_SIDE_LEN = 736
 _RAPIDOCR_ENGINES: Dict[str, Any] = {}
+_PACK_SERVICE: Any = None
+_PACK_SERVICE_LOCK = threading.RLock()
 _RUNTIME_ARTIFACT_RESOLVER: ContextVar[Optional[Callable[[str], Optional[str]]]] = (
     ContextVar("cow_ocr_runtime_artifact_resolver", default=None)
 )
+
+
+def bind_ocr_pack_service(service: Any) -> None:
+    """Bind the verified OCR Pack used by the public Cow tool."""
+
+    if service is not None and (
+        getattr(service, "service_id", None) != "ocr.extract"
+        or not callable(getattr(service, "extract", None))
+    ):
+        raise ValueError("OCR Pack service contract is incomplete")
+    global _PACK_SERVICE
+    with _PACK_SERVICE_LOCK:
+        _PACK_SERVICE = service
+
+
+def _ocr_pack_service() -> Any:
+    with _PACK_SERVICE_LOCK:
+        return _PACK_SERVICE
 
 
 def bind_runtime_artifact_resolver(resolver: Callable[[str], Optional[str]]):
@@ -418,7 +439,13 @@ class OcrTool(BaseTool):
                 if resolver is not None:
                     image = resolver(image) or image
                 image_bytes, source = _image_bytes_from_source(image, cwd=self.cwd)
-                ocr_payload = _local_ocr(image_bytes, _safe_timeout(args.get("timeout")))
+                timeout = _safe_timeout(args.get("timeout"))
+                service = _ocr_pack_service()
+                ocr_payload = (
+                    dict(service.extract(image_bytes, timeout_seconds=timeout))
+                    if service is not None
+                    else _local_ocr(image_bytes, timeout)
+                )
                 text_value = str(ocr_payload.get("text") or "")
                 for url in extract_urls_from_text(text_value):
                     if url.lower() not in {item.lower() for item in urls}:

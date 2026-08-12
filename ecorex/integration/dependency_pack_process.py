@@ -406,7 +406,7 @@ class PackOCRServiceAdapter:
             # has to load signed ONNX native libraries and model weights; keep
             # that startup bounded without making the default 2s request fail
             # before inference can begin.
-            timeout_seconds=min(30.0, max(15.0, float(timeout_seconds) + 8.0)),
+            timeout_seconds=min(30.0, max(22.0, float(timeout_seconds) + 8.0)),
         )
 
     async def aclose(self) -> None:

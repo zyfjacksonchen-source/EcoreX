@@ -1942,6 +1942,10 @@ def create_app(
         turn_workspace_resolver=cow_turn_workspace,
     )
     office_skill_backend = None
+    ocr_service = settings.capability_pack_services.get("ocr.extract")
+    from agent.tools.ocr.ocr import bind_ocr_pack_service
+
+    bind_ocr_pack_service(ocr_service)
     office_service = settings.capability_pack_services.get("office.formats")
     from agent.tools.office_artifacts.office_artifacts import bind_office_pack_service
 
