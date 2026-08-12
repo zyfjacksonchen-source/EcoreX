@@ -19,7 +19,13 @@ from ecorex.capabilities import (
     builtin_capability_registry,
 )
 from ecorex.capabilities.schema import validate_schema_instance
-from ecorex.gateway import GatewayAssistantMessageInput, GatewayEvent
+from ecorex.gateway import (
+    GatewayAssistantMessageInput,
+    GatewayEvent,
+    GatewayFunctionCallInput,
+    GatewayFunctionCallOutputInput,
+    GatewayUserMessageInput,
+)
 from ecorex.integration.image_tools import (
     ImageGenerationToolHandler,
     ImageToolError,
@@ -438,9 +444,13 @@ def test_real_worker_routes_one_batch_call_through_image_pool_and_public_facts(
         assert managed_prompts == ["first image", "fail second image"]
         assert peak == 2
         continuation = gateway.requests[1].ordered_input_items()
-        assert len(continuation) == 1
-        assert continuation[0].tool_call_id == "call_image_batch"
-        assert "partial_failed" in str(continuation[0].output)
+        assert [type(item) for item in continuation] == [
+            GatewayUserMessageInput,
+            GatewayFunctionCallInput,
+            GatewayFunctionCallOutputInput,
+        ]
+        assert continuation[-1].tool_call_id == "call_image_batch"
+        assert "partial_failed" in str(continuation[-1].output)
 
         events = kernel.events.page(thread.thread_id, limit=200).events
         failed = [

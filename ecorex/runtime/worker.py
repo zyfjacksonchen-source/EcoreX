@@ -5383,6 +5383,9 @@ class _CowGatewayModel:
         self.last_usage: dict[str, int] | None = None
         self.usage_events = usage_events if usage_events is not None else []
         self._user_images: deque[tuple[str, list[GatewayImageInput]]] = deque()
+        self._assigned_user_images: dict[
+            tuple[str, int], list[GatewayImageInput]
+        ] = {}
         self._user_images_lock = threading.Lock()
         self._round = 0
 
@@ -5421,28 +5424,46 @@ class _CowGatewayModel:
     def _image_assignments(
         self, messages: list[dict[str, Any]]
     ) -> dict[int, list[GatewayImageInput]]:
-        candidates = [
-            (index, self._text(message.get("content")))
-            for index, message in enumerate(messages)
-            if message.get("role") == "user"
-        ]
+        last_assistant = max(
+            (
+                index
+                for index, message in enumerate(messages)
+                if message.get("role") == "assistant"
+            ),
+            default=-1,
+        )
+        occurrences: dict[str, int] = {}
+        candidates: list[tuple[int, str, tuple[str, int]]] = []
+        for index, message in enumerate(messages):
+            if message.get("role") != "user":
+                continue
+            text = self._text(message.get("content"))
+            occurrence = occurrences.get(text, 0)
+            occurrences[text] = occurrence + 1
+            candidates.append((index, text, (text, occurrence)))
         assignments: dict[int, list[GatewayImageInput]] = {}
         with self._user_images_lock:
-            cursor = 0
-            for bound_text, images in self._user_images:
+            for index, _text, key in candidates:
+                if key in self._assigned_user_images:
+                    assignments[index] = self._assigned_user_images[key]
+            while self._user_images:
+                bound_text, images = self._user_images[0]
                 matched = next(
                     (
-                        offset
-                        for offset in range(cursor, len(candidates))
-                        if bound_text in candidates[offset][1]
+                        candidate
+                        for candidate in candidates
+                        if candidate[0] > last_assistant
+                        and candidate[2] not in self._assigned_user_images
+                        and bound_text in candidate[1]
                     ),
                     None,
                 )
                 if matched is None:
-                    continue
-                message_index = candidates[matched][0]
+                    break
+                message_index, _text, key = matched
+                self._assigned_user_images[key] = images
                 assignments[message_index] = images
-                cursor = matched + 1
+                self._user_images.popleft()
         return assignments
 
     @staticmethod

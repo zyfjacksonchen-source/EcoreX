@@ -11,7 +11,12 @@ from PIL import Image
 
 from agent.memory.config import MemoryConfig
 from agent.memory.conversation_store import ConversationStore
-from ecorex.gateway import GatewayEvent, GatewayImageInput, GatewayUserMessageInput
+from ecorex.gateway import (
+    GatewayEvent,
+    GatewayFunctionCallOutputInput,
+    GatewayImageInput,
+    GatewayUserMessageInput,
+)
 from ecorex.protocol import CreateThreadRequest, CreateTurnRequest
 from ecorex.runtime import AgentTurnWorker, RuntimeSettings, WorkerOutcome, create_app
 
@@ -253,7 +258,10 @@ def test_parent_completion_waits_for_real_started_subagent(tmp_path: Path) -> No
                     response_id=response_id,
                     delta="child finished",
                 )
-            elif request.previous_response_id is None:
+            elif not any(
+                isinstance(item, GatewayFunctionCallOutputInput)
+                for item in request.ordered_input_items()
+            ):
                 yield GatewayEvent(
                     seq=1,
                     event_type="tool_call.requested",
