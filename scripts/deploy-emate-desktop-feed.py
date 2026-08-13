@@ -372,7 +372,9 @@ def _validate_target(
         "candidate_target", "nginx_config_sha256", "files", "activation",
     }
     schema = receipt.get("schema_version")
-    expected_keys = base_keys | ({"distribution_mode"} if schema == 2 else set())
+    expected_keys = base_keys | (
+        {"distribution_mode", "r2_admission_sha256"} if schema == 2 else set()
+    )
     if schema not in {1, 2} or set(receipt) != expected_keys:
         raise FeedDeployError("stage_receipt_fields_invalid")
     if receipt.get("document_type") != "emate.desktop-feed-stage":
@@ -400,6 +402,11 @@ def _validate_target(
     for field in ("feed_build_id", "nginx_config_sha256"):
         if not isinstance(receipt.get(field), str) or not _SHA256.fullmatch(receipt[field]):
             raise FeedDeployError(f"{field}_invalid")
+    if schema == 2 and (
+        not isinstance(receipt.get("r2_admission_sha256"), str)
+        or not _SHA256.fullmatch(receipt["r2_admission_sha256"])
+    ):
+        raise FeedDeployError("r2_admission_sha256_invalid")
     target = f"releases/v{receipt['version']}-{receipt['feed_build_id'][:16]}"
     if receipt.get("candidate_target") != target or not _TARGET.fullmatch(target):
         raise FeedDeployError("candidate_target_invalid")

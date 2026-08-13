@@ -22,6 +22,7 @@ RELEASE_ID = "release-stable-test"
 BUILD_DIGEST = hashlib.sha256(b"build").hexdigest()
 MANIFEST = b'{"release":"test"}\n'
 MANIFEST_SHA256 = hashlib.sha256(MANIFEST).hexdigest()
+R2_ADMISSION_SHA256 = hashlib.sha256(b"r2-admission").hexdigest()
 def _record(root: Path, relative: str, role: str, source: str) -> dict[str, object]:
     payload = (root / relative).read_bytes()
     return {
@@ -81,6 +82,7 @@ def _previous_feed(
         "schema_version": 2 if unsigned_manual else 1,
         "document_type": "emate.desktop-feed-stage",
         **({"distribution_mode": "unsigned-manual"} if unsigned_manual else {}),
+        **({"r2_admission_sha256": R2_ADMISSION_SHA256} if unsigned_manual else {}),
         "status": "activation-ready-unsigned-manual" if unsigned_manual else "activation-ready",
         "version": version,
         "source_commit": "b" * 40,
@@ -194,6 +196,7 @@ def _feed(
         "schema_version": 2 if unsigned_manual else 1,
         "document_type": "emate.desktop-feed-stage",
         **({"distribution_mode": "unsigned-manual"} if unsigned_manual else {}),
+        **({"r2_admission_sha256": R2_ADMISSION_SHA256} if unsigned_manual else {}),
         "status": "activation-ready-unsigned-manual" if unsigned_manual else "activation-ready",
         "version": VERSION,
         "source_commit": COMMIT,
@@ -315,6 +318,41 @@ def test_unsigned_manual_activation_reads_back_only_download_index(tmp_path: Pat
     assert receipt["public_readback_sha256"] == hashlib.sha256(
         (candidate / "download-index.json").read_bytes()
     ).hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("unsigned_manual", "r2_sha256", "expected_error"),
+    [
+        (True, "not-a-sha256", "r2_admission_sha256_invalid"),
+        (False, R2_ADMISSION_SHA256, "stage_receipt_fields_invalid"),
+    ],
+)
+def test_r2_admission_digest_is_valid_only_for_schema2(
+    tmp_path: Path,
+    unsigned_manual: bool,
+    r2_sha256: str,
+    expected_error: str,
+) -> None:
+    root, candidate, stage = _feed(tmp_path, unsigned_manual=unsigned_manual)
+    receipt = {key: value for key, value in stage.items() if not key.startswith("_test_")}
+    receipt["r2_admission_sha256"] = r2_sha256
+    (candidate / "feed-stage-receipt.json").write_text(
+        json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            *_command(root, candidate, root / "activation-receipts/rejected.json"),
+            "--readback-command", "/bin/cat",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert expected_error in result.stderr
 
 
 def test_unsigned_manual_activation_accepts_legacy_manual_previous(

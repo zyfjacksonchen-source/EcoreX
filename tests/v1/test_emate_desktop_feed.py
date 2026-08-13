@@ -33,6 +33,7 @@ from ecorex.update import (
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "prepare-emate-desktop-feed.py"
+DEPLOY_SCRIPT = ROOT / "scripts" / "deploy-emate-desktop-feed.py"
 NGINX = ROOT / "deploy" / "e-mate" / "nginx" / "update-feed.conf"
 MANUAL_NGINX = ROOT / "deploy" / "e-mate" / "nginx" / "update-feed-unsigned-manual.conf"
 COMMIT = "a" * 40
@@ -474,6 +475,27 @@ def test_feed_gate_prepares_explicit_unsigned_manual_activation(tmp_path: Path) 
     )
     assert rejected.returncode == 1
     assert "unsigned-manual routes are incomplete" in rejected.stderr
+
+
+def test_unsigned_manual_prepare_receipt_passes_deploy_validation(tmp_path: Path) -> None:
+    _inputs(tmp_path)
+    completed = subprocess.run(
+        _command(tmp_path, "manual", MANUAL_NGINX, unsigned_manual=True),
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    candidate = tmp_path / "manual"
+    receipt = json.loads((candidate / "feed-stage-receipt.json").read_text())
+    target = tmp_path / Path(receipt["candidate_target"]).name
+    candidate.rename(target)
+    readback_name, readback = runpy.run_path(str(DEPLOY_SCRIPT))["_validate_target"](
+        target, receipt, target.stat().st_dev
+    )
+
+    assert readback_name == "download-index.json"
+    assert readback == (target / readback_name).read_bytes()
 
 
 def test_feed_gate_refuses_to_generate_without_exact_r2_admission(
