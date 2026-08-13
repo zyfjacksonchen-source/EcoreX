@@ -89,10 +89,16 @@ export function targetFromPlatformSignals({ source = "", architecture = "", rend
   if (/mac/.test(source)) {
     if (/(?:^|\W)(?:arm|arm64|aarch64)(?:\W|$)|apple silicon/.test(`${source} ${architecture}`)
       || /apple (?:m[1-9]|a[1-9][0-9])|apple gpu/.test(renderer)) return "macos-arm64";
-    if (/x86_64|x86-64|amd64/.test(`${source} ${architecture}`)) return "macos-x64";
+    if (/x86_64|x86-64|amd64/.test(`${source} ${architecture}`) || /intel/.test(renderer)) return "macos-x64";
     return null;
   }
   return /win/.test(source) ? "windows-x64" : null;
+}
+
+export function macInstallGuideHref(target) {
+  return target === "macos-x64" || target === "macos-arm64"
+    ? `./install-macos.html?target=${target}`
+    : "./install-macos.html";
 }
 
 export function isMacDesktop({ source = "" } = {}) {
@@ -225,6 +231,7 @@ function renderIndex(index, target) {
     link.textContent = "下载安装包";
     link.setAttribute("aria-label", `下载 ${download.label}`);
     card.append(title, meta, body);
+    card.append(link);
     if (download.platform === "macos") {
       const digest = document.createElement("details");
       const summary = document.createElement("summary");
@@ -233,13 +240,18 @@ function renderIndex(index, target) {
       value.textContent = download.sha256;
       digest.append(summary, value);
       card.append(digest);
+      const guide = document.createElement("a");
+      guide.className = "download-link";
+      guide.href = macInstallGuideHref(download.target);
+      guide.textContent = download.architecture === "x64" ? "查看 Intel Mac 安装图解" : "查看 Apple 芯片安装图解";
+      card.append(guide);
     }
-    card.append(link);
     grid.append(card);
   }
   const platform = preferredPlatform(target);
   setPlatform(platform);
   setPrimary(index, target);
+  document.querySelectorAll("[data-mac-install-guide]").forEach((link) => { link.href = macInstallGuideHref(target); });
   document.querySelectorAll("[data-platform]").forEach((button) => {
     button.addEventListener("click", () => {
       const nextPlatform = button.dataset.platform;
@@ -264,6 +276,18 @@ function renderFailure() {
 if (typeof document !== "undefined") {
   const source = `${navigator.userAgentData?.platform || ""} ${navigator.platform || ""} ${navigator.userAgent || ""}`;
   document.querySelectorAll("[data-mac-install-guide]").forEach((link) => { link.hidden = !isMacDesktop({ source }); });
+  const guideTarget = new URLSearchParams(location.search).get("target");
+  const guideCopy = guideTarget === "macos-x64"
+    ? { title: "Intel 芯片 Mac 安装 e-Mate", package: "请确认安装包文件名以 -x64.dmg 结尾，并只使用官方下载页。" }
+    : guideTarget === "macos-arm64"
+      ? { title: "Apple 芯片 Mac 安装 e-Mate", package: "请确认安装包文件名以 -arm64.dmg 结尾，并只使用官方下载页。" }
+      : null;
+  if (guideCopy) {
+    const title = document.querySelector("[data-mac-guide-title]");
+    const packageNote = document.querySelector("[data-mac-guide-package]");
+    if (title) title.textContent = guideCopy.title;
+    if (packageNote) packageNote.textContent = guideCopy.package;
+  }
   const copy = document.querySelector("[data-copy-macos-command]");
   copy?.addEventListener("click", async () => {
     const status = document.querySelector("[data-copy-status]");
@@ -272,7 +296,7 @@ if (typeof document !== "undefined") {
       await navigator.clipboard.writeText(command);
       if (status) status.textContent = "已复制，请粘贴到终端运行。";
     } catch {
-      if (status) status.textContent = "复制失败，请手动选择上方两行命令。";
+      if (status) status.textContent = "复制失败，请手动选择上方这一条命令。";
     }
   });
   if (document.querySelector("[data-downloads]")) {

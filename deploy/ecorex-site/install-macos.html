@@ -24,8 +24,8 @@
       <section class="feature-section" id="steps" aria-labelledby="guide-title">
         <div class="section-heading">
           <p>macOS 未签名安装说明</p>
-          <h1 id="guide-title">四步安全打开 e-Mate</h1>
-          <span>请只使用官方下载页提供的安装包。</span>
+          <h1 id="guide-title" data-mac-guide-title>四步安全打开 e-Mate</h1>
+          <span data-mac-guide-package>请只使用官方下载页提供的安装包。</span>
         </div>
         <div class="help-grid mac-guide-grid">
           <article>
@@ -62,15 +62,15 @@
         </div>
         <article class="download-card">
           <h3>先核对下载页标注的 SHA-256</h3>
-          <p id="mac-command-note">确认安装包摘要一致，并已将 e-Mate 拖入“应用程序”后，打开“终端”，依次运行：</p>
-          <p class="mac-command"><code data-macos-command-line>xattr -dr com.apple.quarantine "/Applications/e-Mate.app"</code><code data-macos-command-line>open -a "e-Mate"</code></p>
-          <button class="download-link" type="button" data-copy-macos-command aria-label="复制允许打开命令" aria-describedby="mac-command-note">复制两行命令</button>
+          <p id="mac-command-note">确认安装包摘要一致，并已将 e-Mate 拖入“应用程序”后，打开“终端”，运行这一条命令：</p>
+          <p class="mac-command"><code data-macos-command-line>xattr -dr com.apple.quarantine "/Applications/e-Mate.app" &amp;&amp; open -a "e-Mate"</code></p>
+          <button class="download-link" type="button" data-copy-macos-command aria-label="复制允许打开命令" aria-describedby="mac-command-note">复制一条命令</button>
           <p data-copy-status role="status" aria-live="polite"></p>
         </article>
       </section>
     </main>
 
     <footer class="footer"><span>e-Mate</span><a href="./#download-options">返回官方下载</a></footer>
-    <script type="module" src="./site.52ff2658dd14.js"></script>
+    <script type="module" src="./site.f54ae3896276.js"></script>
   </body>
 </html>

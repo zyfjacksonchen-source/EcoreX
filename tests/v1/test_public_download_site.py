@@ -82,8 +82,12 @@ def test_macos_unsigned_install_guide_is_local_accessible_and_safe() -> None:
     assert "按住 Control 键点按" in guide
     assert "仍要打开" in guide
     assert "先核对下载页标注的 SHA-256" in guide
-    assert 'xattr -dr com.apple.quarantine "/Applications/e-Mate.app"' in guide
-    assert 'open -a "e-Mate"' in guide
+    assert (
+        'xattr -dr com.apple.quarantine "/Applications/e-Mate.app" &amp;&amp; '
+        'open -a "e-Mate"'
+    ) in guide
+    assert "data-mac-guide-title" in guide
+    assert "data-mac-guide-package" in guide
     assert "sudo" not in guide
     assert "spctl --master-disable" not in guide
     assert 'data-copy-macos-command aria-label="复制允许打开命令"' in guide
@@ -228,12 +232,16 @@ assert.throws(() => contract.normalizeDownloadIndex({ ...raw, downloads: [{ ...r
 assert.equal(contract.targetFromPlatformSignals({ source: "Windows NT" }), "windows-x64");
 assert.equal(contract.targetFromPlatformSignals({ source: "MacIntel", architecture: "arm" }), "macos-arm64");
 assert.equal(contract.targetFromPlatformSignals({ source: "MacIntel", architecture: "x86_64" }), "macos-x64");
+assert.equal(contract.targetFromPlatformSignals({ source: "MacIntel", renderer: "Intel Iris Plus" }), "macos-x64");
 assert.equal(contract.targetFromPlatformSignals({ source: "MacIntel" }), null);
 assert.equal(contract.targetFromPlatformSignals({ source: "iPhone", architecture: "arm64" }), null);
 assert.equal(contract.targetFromPlatformSignals({ source: "iPad", renderer: "Apple M2" }), null);
 assert.equal(contract.isMacDesktop({ source: "MacIntel Mozilla/5.0 (Macintosh)" }), true);
 assert.equal(contract.isMacDesktop({ source: "Win32 Mozilla/5.0 (Windows NT 10.0)" }), false);
 assert.equal(contract.isMacDesktop({ source: "iPhone Mac OS X" }), false);
+assert.equal(contract.macInstallGuideHref("macos-x64"), "./install-macos.html?target=macos-x64");
+assert.equal(contract.macInstallGuideHref("macos-arm64"), "./install-macos.html?target=macos-arm64");
+assert.equal(contract.macInstallGuideHref("windows-x64"), "./install-macos.html");
 assert.deepEqual(contract.indexSources({ hostname: "127.0.0.1", pathname: "/" }), ["./download-index.json"]);
 assert.deepEqual(contract.indexSources({ hostname: "mvdcm.ecoremedia.net", pathname: "/e-mate/" }), ["https://dl.ecoremedia.net/e-mate/update/download-index.json?feed=2d7481d20f1fedd0"]);
 assert.deepEqual(contract.indexSources({ hostname: "dl.ecoremedia.net", pathname: "/ecorex-agent/" }), ["https://dl.ecoremedia.net/e-mate/update/download-index.json?feed=2d7481d20f1fedd0"]);
