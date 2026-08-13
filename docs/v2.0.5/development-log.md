@@ -557,3 +557,34 @@ environment failure until the product failure reproduces from known state.
   the 256-pixel live bounds, and bounded pixel drift between normalized macOS
   and Windows visible artwork. It passed `1/1`; all seven native ICO frame
   sizes were then inspected for transparent corners and non-empty centers.
+
+### 2026-08-13 CU-205-ECOREX-HISTORY-001
+
+- Real packaged data evidence identified the disappearing history as a brand
+  root split: macOS ECoreX retained its schema-v1 Runtime database under
+  `Library/Application Support/ECoreX`, while e-Mate uses `.emate`; Windows
+  uses the corresponding `APPDATA/ECoreX` root. This is a same-generation
+  v1-to-v2 recovery, not the old v0.3 sessions/messages import.
+- First desktop startup now makes a byte-stable snapshot of the old database,
+  upgrades only that private copy through the existing signed v1-to-v2 storage
+  migration, and late-merges the closed conversation graph into a copy of the
+  current e-Mate database. It retains current threads and copies only the
+  referenced execution/snapshot closure; managed sessions, credentials,
+  usage/audit, scheduler, and update state are not imported. Any identity or
+  uniqueness conflict fails closed instead of overwriting current history.
+- The old database and its WAL are never modified or deleted. The current
+  database is checkpointed before staging, the merged copy must pass SQLite
+  foreign keys and the full Runtime invariant auditor, and publication removes
+  only proven-empty target sidecars before an atomic database replacement.
+  A retained pre-restore snapshot and idempotent replay recover a crash after
+  publish but before its receipt.
+- The observed old profile has no Artifact rows. This change therefore rejects
+  a source containing Artifact/upload rows instead of silently restoring broken
+  attachment references; no unproven attachment format was invented.
+- Focused recovery and desktop-startup checks passed `5/5`, including source
+  byte preservation, existing-history retention, collision rollback, nonempty
+  WAL preservation, crash replay, macOS/Windows discovery, and invariant-valid
+  restored history. A disposable copy of the real old/new databases restored
+  5 threads, 12 turns, 31 items, and 1,437 events while preserving all 9 current
+  threads; the resulting Runtime invariant report was clean. No real profile
+  was changed.

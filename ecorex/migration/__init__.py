@@ -58,6 +58,12 @@ from .cowagent_data import (
     migrate_cowagent_data,
     migrate_legacy_knowledge_layout,
 )
+from .ecorex_history import (
+    ECoreXHistoryMigrationError,
+    ECoreXHistoryMigrationResult,
+    default_ecorex_data_roots,
+    restore_ecorex_history,
+)
 
 LegacyDesktopDataMigrationError = CowAgentDataMigrationError
 migrate_legacy_desktop_data = migrate_cowagent_data
@@ -89,6 +95,8 @@ __all__ = [
     "CowAgentDataMigrationError",
     "KNOWLEDGE_LAYOUT_RECEIPT_RELATIVE_PATH",
     "DuplicateLegacyIdError",
+    "ECoreXHistoryMigrationError",
+    "ECoreXHistoryMigrationResult",
     "DEFAULT_SOURCE_VERSION",
     "INVENTORY_NAME",
     "LegacyDatabaseError",
@@ -128,6 +136,7 @@ __all__ = [
     "decrypt_quarantine",
     "default_cowagent_data_roots",
     "default_emate_data_root",
+    "default_ecorex_data_roots",
     "create_migration_quarantine_router",
     "inventory_source",
     "export_v0292_legacy_identities",
@@ -137,6 +146,7 @@ __all__ = [
     "migrate_legacy_to_v1",
     "migrate_cowagent_data",
     "migrate_legacy_knowledge_layout",
+    "restore_ecorex_history",
     "migrate_legacy_desktop_data",
     "migrate_v030_to_v1",
     "MigrationQuarantineService",

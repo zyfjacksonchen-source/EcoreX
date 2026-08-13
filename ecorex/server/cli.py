@@ -20,9 +20,11 @@ from ecorex.observability.recovery import (
     quarantine_unreadable_observability,
 )
 from ecorex.migration import (
+    ECoreXHistoryMigrationError,
     LegacyDesktopDataMigrationError,
     default_emate_data_root,
     migrate_legacy_desktop_data,
+    restore_ecorex_history,
 )
 from ecorex.session import ManagedSessionError
 from ecorex.startup_diagnostics import write_runtime_startup_diagnostic
@@ -200,7 +202,8 @@ def _migrate_desktop_legacy_data(
                 "e-Mate desktop data root must be absolute"
             )
         migrate_legacy_desktop_data(target)
-    except (LegacyDesktopDataMigrationError, OSError):
+        restore_ecorex_history(target, environment=values)
+    except (ECoreXHistoryMigrationError, LegacyDesktopDataMigrationError, OSError):
         raise ProductRuntimeConfigurationError(
             "Product Runtime legacy desktop data migration failed",
             stage_code="legacy_desktop_data_migration",

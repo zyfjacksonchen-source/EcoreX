@@ -293,6 +293,11 @@ def test_desktop_startup_runs_import_before_runtime_composition(
         "migrate_legacy_desktop_data",
         lambda target: order.append(("migration", Path(target))),
     )
+    monkeypatch.setattr(
+        cli,
+        "restore_ecorex_history",
+        lambda target, **_kwargs: order.append(("history", Path(target))),
+    )
     monkeypatch.delenv("EMATE_DESKTOP", raising=False)
     monkeypatch.delenv("EMATE_DATA_DIR", raising=False)
 
@@ -319,5 +324,6 @@ def test_desktop_startup_runs_import_before_runtime_composition(
         )
     assert order == [
         ("migration", tmp_path / ".emate"),
+        ("history", tmp_path / ".emate"),
         ("runtime", None),
     ]
