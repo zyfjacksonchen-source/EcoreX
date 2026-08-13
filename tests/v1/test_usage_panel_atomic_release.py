@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import builtins
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,8 @@ import shutil
 import subprocess
 import sys
 import tomllib
+
+import pytest
 
 from ecorex import __version__ as PRODUCT_VERSION
 from ecorex.control_plane import usage_panel_service
@@ -22,6 +25,31 @@ def _deployer() -> dict:
     if scripts not in sys.path:
         sys.path.insert(0, scripts)
     return runpy.run_path(str(ROOT / "scripts/deploy-v030-production-usage-panel.py"))
+
+
+def test_remote_release_library_uses_only_the_server_stdlib(tmp_path: Path) -> None:
+    deployer = _deployer()
+    original_import = builtins.__import__
+
+    def stdlib_only(name, *args, **kwargs):
+        if name == "ecorex" or name.startswith("ecorex."):
+            raise AssertionError("remote release must not import the undeployed product package")
+        return original_import(name, *args, **kwargs)
+
+    namespace = {"__name__": "usage_panel_release_stdlib_test"}
+    builtins.__import__ = stdlib_only
+    try:
+        exec(deployer["_REMOTE_LIBRARY"], namespace)
+    finally:
+        builtins.__import__ = original_import
+
+    lock_path = tmp_path / "deployment.lock"
+    with namespace["DeploymentLock"](lock_path, timeout=0):
+        with pytest.raises(RuntimeError, match="deployment_lock_busy"):
+            with namespace["DeploymentLock"](lock_path, timeout=0):
+                pass
+    with namespace["DeploymentLock"](lock_path, timeout=0):
+        assert lock_path.is_file()
 
 
 def test_candidate_binds_exact_source_and_every_runtime_file() -> None:
