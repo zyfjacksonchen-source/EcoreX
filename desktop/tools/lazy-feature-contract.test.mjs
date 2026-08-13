@@ -89,7 +89,7 @@ test("connector management lives in the deferred capability workspace, not Compo
   assert.match(composer, /ComposerModelSelector = lazy\(loadComposerModelSelector\)/u);
   assert.match(skillsWorkspace, /ConnectorCatalogPanel/u);
   assert.match(skillsWorkspace, /category === "collaboration"/u);
-  assert.match(skillsWorkspace, /<ConnectorCatalogPanel \{\.\.\.connectorRuntime\} \/>/u);
+  assert.match(skillsWorkspace, /<ConnectorCatalogPanel[\s\S]*\{\.\.\.connectorRuntime\}[\s\S]*onConfigureTencentDocsMcp=/u);
 });
 
 test("lazy loading and error surfaces use the shared modal accessibility primitive", () => {

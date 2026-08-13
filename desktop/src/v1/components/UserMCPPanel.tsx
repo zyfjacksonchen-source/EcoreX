@@ -34,6 +34,7 @@ interface UserMCPPanelProps {
   onRefreshOAuth: () => Promise<Record<string, MCPOAuthStatusProjection>>;
   onBeginOAuth: (serviceId: string) => Promise<boolean>;
   onClearOAuth: (serviceId: string) => Promise<boolean>;
+  preset?: { key: number; displayName: string; endpoint: string; authKind: UserMCPAuthKind } | null;
 }
 
 interface MCPFormValue {
@@ -125,6 +126,7 @@ export function UserMCPPanel({
   onRefreshOAuth,
   onBeginOAuth,
   onClearOAuth,
+  preset = null,
 }: UserMCPPanelProps) {
   const [items, setItems] = useState<UserMCPServerProjection[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -171,6 +173,23 @@ export function UserMCPPanel({
     setForm(server ? formFor(server) : EMPTY_FORM);
     setNotice(null);
   };
+
+  useEffect(() => {
+    if (!preset || !loaded) return;
+    const existing = items.find((item) => item.endpoint === preset.endpoint);
+    if (existing) startEdit(existing);
+    else {
+      setEditingId("new");
+      setForm({
+        ...EMPTY_FORM,
+        displayName: preset.displayName,
+        endpoint: preset.endpoint,
+        authKind: preset.authKind,
+      });
+      setNotice(null);
+    }
+    window.requestAnimationFrame(() => document.querySelector(".ex-mcp-self-service")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }, [loaded, preset?.key]);
 
   const save = async () => {
     if (!editingId) return;

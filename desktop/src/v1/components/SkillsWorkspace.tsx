@@ -56,7 +56,7 @@ import { IconButton } from "./IconButton.tsx";
 
 interface SkillsWorkspaceProps {
   openChannelsKey?: number;
-  connectorRuntime: ConnectorCatalogPanelProps;
+  connectorRuntime: Omit<ConnectorCatalogPanelProps, "onConfigureTencentDocsMcp">;
   mcpClient: RuntimeClient;
   mcpProjectId: string | null;
   snapshot: ExtensionCatalogSnapshot | null;
@@ -235,6 +235,7 @@ export function SkillsWorkspace({
   const [hubUploadBundle, setHubUploadBundle] = useState<File | null>(null);
   const [selectedHubCard, setSelectedHubCard] = useState<SkillHubCardProjection | null>(null);
   const [hubUploadFileKey, setHubUploadFileKey] = useState(0);
+  const [tencentDocsMcpKey, setTencentDocsMcpKey] = useState(0);
   const items = snapshot?.items ?? [];
   const operationBusy = Object.keys(operations).length > 0;
   const catalogReady = loadState === "ready";
@@ -498,7 +499,10 @@ export function SkillsWorkspace({
           {category === "collaboration" ? (
             <>
               <section aria-label="能力中心通道" data-testid="capability-channels">
-                <ConnectorCatalogPanel {...connectorRuntime} />
+                <ConnectorCatalogPanel
+                  {...connectorRuntime}
+                  onConfigureTencentDocsMcp={() => setTencentDocsMcpKey((value) => value + 1)}
+                />
               </section>
               <UserMCPPanel
                 client={mcpClient}
@@ -508,6 +512,12 @@ export function SkillsWorkspace({
                 onRefreshOAuth={onRefreshMcpOAuth}
                 onBeginOAuth={onBeginMcpOAuth}
                 onClearOAuth={onClearMcpOAuth}
+                preset={tencentDocsMcpKey ? {
+                  key: tencentDocsMcpKey,
+                  displayName: "腾讯文档",
+                  endpoint: "https://docs.qq.com/openapi/mcp",
+                  authKind: "bearer",
+                } : null}
               />
             </>
           ) : null}

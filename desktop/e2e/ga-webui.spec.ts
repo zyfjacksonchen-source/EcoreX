@@ -617,7 +617,7 @@ test("skills workspace uses backend categories and keeps required skills locked"
   await openArtifactScenario(guardedPage);
   await guardedPage.getByRole("button", { name: "能力中心", exact: true }).click();
 
-  const workspace = guardedPage.getByRole("region", { name: "能力中心" });
+  const workspace = guardedPage.getByRole("region", { name: "能力中心", exact: true });
   const installedTab = workspace.getByRole("tab", { name: /已安装 3/u });
   await expect(installedTab).toBeVisible();
   await installedTab.click();
@@ -710,7 +710,7 @@ test("scheduled tasks and external connections enter the real conversation and c
 test("remote MCP self-service closes HTTPS, secret, test, lifecycle, and delete flows", async ({ guardedPage }) => {
   await openArtifactScenario(guardedPage);
   await guardedPage.getByRole("button", { name: "能力中心", exact: true }).click();
-  const workspace = guardedPage.getByRole("region", { name: "能力中心" });
+  const workspace = guardedPage.getByRole("region", { name: "能力中心", exact: true });
   await workspace.getByRole("tab", { name: /已安装/u }).click();
   await workspace.getByRole("button", { name: "通道", exact: true }).click();
 
@@ -790,6 +790,37 @@ test("remote MCP self-service closes HTTPS, secret, test, lifecycle, and delete 
   await oauthRow.getByRole("button", { name: "删除" }).click();
   await oauthRow.getByRole("button", { name: "确认删除并清除凭据" }).click();
   await expect(mcp.getByText("尚未添加远程 MCP")).toBeVisible();
+});
+
+test("Tencent Docs stable card configures the single Cow remote MCP path", async ({ guardedPage }) => {
+  await openArtifactScenario(guardedPage);
+  await guardedPage.getByRole("button", { name: "能力中心", exact: true }).click();
+  const workspace = guardedPage.getByRole("region", { name: "能力中心", exact: true });
+  await workspace.getByRole("tab", { name: /已安装/u }).click();
+  await workspace.getByRole("button", { name: "通道", exact: true }).click();
+
+  const channels = workspace.getByRole("region", { name: "能力中心通道" });
+  const tencentDocs = channels.locator("article.ex-connector-row").filter({ hasText: "腾讯文档" });
+  await expect(tencentDocs).not.toContainText("当前安装未包含这个连接所需的组件");
+  await tencentDocs.getByRole("button", { name: "使用远程 MCP 连接" }).click();
+
+  const mcp = workspace.getByRole("region", { name: "远程 MCP" });
+  await expect(mcp.getByLabel("显示名称")).toHaveValue("腾讯文档");
+  await expect(mcp.getByLabel("HTTPS 地址")).toHaveValue("https://docs.qq.com/openapi/mcp");
+  await expect(mcp.getByLabel("认证方式")).toHaveValue("bearer");
+  const secret = mcp.getByLabel("Bearer 令牌", { exact: true });
+  await expect(secret).toHaveAttribute("type", "password");
+  await secret.fill("ga-tencent-token-never-echoed");
+  await mcp.getByRole("button", { name: "保存配置" }).click();
+
+  const row = mcp.locator("article.ex-mcp-server-row").filter({ hasText: "腾讯文档" });
+  await row.getByRole("button", { name: "真实测试" }).click();
+  await row.getByRole("button", { name: "启用" }).click();
+  await expect(row.getByText("已启用", { exact: true })).toBeVisible();
+  await expect(workspace).not.toContainText("ga-tencent-token-never-echoed");
+  await row.getByRole("button", { name: "停用" }).click();
+  await row.getByRole("button", { name: "删除" }).click();
+  await row.getByRole("button", { name: "确认删除并清除凭据" }).click();
 });
 
 test("mobile task drawer continues a task by ID and closes after recovery", async ({ browser }) => {

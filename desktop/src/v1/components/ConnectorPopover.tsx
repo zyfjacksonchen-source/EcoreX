@@ -81,6 +81,7 @@ export interface ConnectorCatalogPanelProps {
   ) => Promise<boolean>;
   onClearError: () => void;
   onClearNotice: () => void;
+  onConfigureTencentDocsMcp: () => void;
 }
 
 const busyLabels: Record<ConnectorOperationState["kind"], string> = {
@@ -529,6 +530,7 @@ export function ConnectorCatalogPanel({
   onDeviceAuthorizationAction,
   onClearError,
   onClearNotice,
+  onConfigureTencentDocsMcp,
 }: ConnectorCatalogPanelProps) {
   const [confirmDisconnectId, setConfirmDisconnectId] = useState<string | null>(null);
   const confirmTimer = useRef<number | null>(null);
@@ -625,6 +627,7 @@ export function ConnectorCatalogPanel({
                   const operation = operations[connectorId] ?? null;
                   const channel = channels.get(connectorId) ?? null;
                   const isFeishu = connectorId === "feishu";
+                  const isTencentDocs = connectorId === "tencent-docs";
                   const selfServiceChannel = channel
                     && ["app_credentials", "api_token"].includes(channel.auth_kind)
                     && (isFeishu || channel.adapter_available || channel.instance)
@@ -642,7 +645,7 @@ export function ConnectorCatalogPanel({
                         : "当前安装暂不支持这个通道。"
                     : null;
                   const connectorUnavailable = connectorUnavailableMessage(item);
-                  const unavailable = isFeishu || deviceChannel
+                  const unavailable = isFeishu || isTencentDocs || deviceChannel
                     ? null
                     : channelUnavailable ?? (
                       selfServiceChannel && item.instances.length === 0 ? null : connectorUnavailable
@@ -705,6 +708,18 @@ export function ConnectorCatalogPanel({
                             </button>
                           </div>
                         ) : null}
+                        {isTencentDocs ? (
+                          <div className="ex-connector-connect-row">
+                            <button
+                              className="ex-button ex-connector-action is-primary"
+                              type="button"
+                              onClick={onConfigureTencentDocsMcp}
+                            >
+                              <Link2 aria-hidden="true" />
+                              使用远程 MCP 连接
+                            </button>
+                          </div>
+                        ) : null}
                         {selfServiceChannel ? (
                           <>
                             {isFeishu ? (
@@ -756,7 +771,7 @@ export function ConnectorCatalogPanel({
                             {unavailable}
                           </p>
                         ) : null}
-                        {!unavailable && !selfServiceChannel && !deviceChannel && !isFeishu ? (
+                        {!unavailable && !selfServiceChannel && !deviceChannel && !isFeishu && !isTencentDocs ? (
                           <div className="ex-connector-connect-row">
                             <button
                               className={`ex-button ex-connector-action${item.instances.length ? "" : " is-primary"}`}

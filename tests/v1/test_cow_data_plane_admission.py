@@ -285,9 +285,12 @@ for line in sys.stdin:
         )
         tool = manager.create_tool("echo")
         result = tool.execute({"text": "native-cow-mcp"})
+        continued = tool.execute({"text": "same-runtime-context"})
     finally:
         manager.shutdown_mcp()
 
     assert status["status"] == {"fixture": "ready"}
     assert result.status == "success"
     assert result.result == "native-cow-mcp"
+    assert continued.status == "success"
+    assert continued.result == "same-runtime-context"

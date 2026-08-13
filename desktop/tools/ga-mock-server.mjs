@@ -1401,7 +1401,7 @@ function connectorCatalog() {
     contract_version: "1.0",
     items: [
       { definition: definition("feishu", "飞书"), adapter_available: true, instances: [], unavailable_reason: null },
-      { definition: definition("tencent-docs", "腾讯文档"), adapter_available: true, instances: [], unavailable_reason: null },
+      { definition: definition("tencent-docs", "腾讯文档"), adapter_available: false, instances: [], unavailable_reason: "adapter_not_installed" },
       ...betaChannels.map(([connectorId, displayName]) => ({
         definition: definition(connectorId, displayName, "beta"),
         adapter_available: !["dingtalk", "telegram"].includes(connectorId),
