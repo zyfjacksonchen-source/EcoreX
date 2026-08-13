@@ -69,47 +69,6 @@ def test_v027_imagegen_binding_contract_does_not_force_tasks_batch_route():
     assert "shell/Python/PIL" in prompt
 
 
-def test_v027_imagegen_batch_emits_each_image_as_it_becomes_ready(tmp_path):
-    from agent.tools.base_tool import ToolResult
-    from agent.tools.imagegen.imagegen import ImageGenTool
-
-    class FakeBatchImageGen(ImageGenTool):
-        def execute(self, params):
-            if isinstance(params.get("tasks"), list):
-                return self._execute_batch(params, params["tasks"])
-            index = len(self.generated)
-            path = tmp_path / f"generated-{index}.png"
-            path.write_bytes(b"png")
-            self.generated.append(str(path))
-            return ToolResult.success({
-                "provider": "OpenAI",
-                "model": "gpt-image-2-pro",
-                "images": [{"url": str(path), "kind": "image", "index": index}],
-                "durationMs": 1,
-                "route": {"inputRoute": "text_to_image"},
-            })
-
-    tool = FakeBatchImageGen()
-    tool.generated = []
-    tool.tool_call_id = "call-imagegen-batch"
-    events = []
-    tool.emit_event = lambda event_type, payload: events.append((event_type, payload))
-
-    result = tool.execute({
-        "tasks": [
-            {"prompt": "first image"},
-            {"prompt": "second image"},
-        ],
-    })
-
-    assert result.status == "success"
-    assert [event_type for event_type, _payload in events] == ["file_to_send", "file_to_send"]
-    assert [payload["file_path"] for _event_type, payload in events] == tool.generated
-    assert all(payload["file_type"] == "image" for _event_type, payload in events)
-    assert all(payload["tool_call_id"] == "call-imagegen-batch" for _event_type, payload in events)
-    assert [item["url"] for item in result.result["images"]] == tool.generated
-
-
 def test_v025_lark_skill_uses_feishu_cli_contract(tmp_path):
     from agent.skills.manager import SkillManager
     from agent.skills.service import SkillService

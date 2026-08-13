@@ -6046,6 +6046,8 @@ class AgentTurnWorker:
                 url = f"/api/v1/artifacts/{artifact_id}/preview"
             if not url:
                 continue
+            # Read-only compatibility for Artifacts written by the retired batch
+            # facade. New imagegen calls never create this metadata.
             image_batch = content.get("image_batch")
             batch_id = str(
                 image_batch.get("batch_id")

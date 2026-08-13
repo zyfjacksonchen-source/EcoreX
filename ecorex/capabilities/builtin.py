@@ -345,50 +345,12 @@ def _image_task_properties():
 _IMAGE_INPUT = {
     "type": "object",
     "description": (
-        "CowAgent-compatible image generation/edit contract. Provide one prompt "
-        "or one tasks array, never both. The Runtime owns the fixed image model."
+        "Codex-style image generation/edit contract for one independent output. "
+        "For multiple assets or variants, call imagegen once per output. "
+        "The Runtime owns the fixed image model."
     ),
-    "properties": {
-        **_image_task_properties(),
-        "tasks": {
-            "type": "array",
-            "description": "Two to eight ordered image generation or edit tasks.",
-            "minItems": 2,
-            "maxItems": 8,
-            "items": {
-                "type": "object",
-                "properties": _image_task_properties(),
-                "required": ["prompt"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    "oneOf": [
-        {
-            "type": "object",
-            "properties": {
-                "prompt": {"type": "string", "minLength": 1, "maxLength": 20000}
-            },
-            "required": ["prompt"],
-        },
-        {
-            "type": "object",
-            "properties": {
-                "tasks": {
-                    "type": "array",
-                    "minItems": 2,
-                    "maxItems": 8,
-                    "items": {
-                        "type": "object",
-                        "properties": _image_task_properties(),
-                        "required": ["prompt"],
-                        "additionalProperties": False,
-                    },
-                }
-            },
-            "required": ["tasks"],
-        },
-    ],
+    "properties": _image_task_properties(),
+    "required": ["prompt"],
     "additionalProperties": False,
 }
 _IMAGE_OUTPUT = {
@@ -397,7 +359,7 @@ _IMAGE_OUTPUT = {
         "model": {"type": "string", "minLength": 1, "maxLength": 256},
         "images": {
             "type": "array",
-            "maxItems": 8,
+            "maxItems": 1,
             "items": {
                 "type": "object",
                 "properties": {
@@ -1547,11 +1509,11 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
         ),
         ToolSpec(
             tool_id="imagegen",
-            version="2.0.0",
+            version="2.1.0",
             display_name="图片生成与编辑",
             description=(
-                "使用固定图片模型生成或编辑图片；兼容 CowAgent 的 "
-                "prompt/image_url/quality/size/aspect_ratio 语义"
+                "使用固定图片模型生成或编辑一张图片；兼容 CowAgent 的 "
+                "prompt/image_url/quality/size/aspect_ratio 语义；多张结果需分别调用"
             ),
             input_schema=_IMAGE_INPUT,
             output_schema=_IMAGE_OUTPUT,

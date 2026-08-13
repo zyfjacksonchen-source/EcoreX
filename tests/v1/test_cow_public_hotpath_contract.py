@@ -652,32 +652,24 @@ def test_public_parent_turn_runs_subagent_through_same_managed_gateway(
     assert len(usage_events) == 3
 
 
-def test_cow_direct_context_reaches_image_batch_child_threads(monkeypatch) -> None:
+def test_cow_direct_context_reaches_independent_image_calls(monkeypatch) -> None:
     from common import ecorex_tool_permissions as permissions
 
     tool = ImageGenTool()
-    original_execute = tool.execute
     observed = []
 
     def execute(params):
-        if params.get("tasks"):
-            return original_execute(params)
         observed.append(permissions.get_tool_permission_broker())
         return ToolResult.success({"images": []})
 
     monkeypatch.setattr(tool, "execute", execute)
     token = permissions.bind_cow_direct_tools()
     try:
-        result = tool.execute(
-            {
-                "tasks": [{"prompt": "one"}, {"prompt": "two"}],
-                "max_parallel": 2,
-            }
-        )
+        results = [tool.execute({"prompt": prompt}) for prompt in ("one", "two")]
     finally:
         permissions.reset_cow_direct_tools(token)
 
-    assert result.status == "success"
+    assert all(result.status == "success" for result in results)
     assert observed == [permissions._COW_DIRECT_BROKER] * 2
 
 

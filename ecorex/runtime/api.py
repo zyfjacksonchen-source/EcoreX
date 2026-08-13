@@ -2434,7 +2434,6 @@ def create_app(
         account_id=settings.account_id,
         client=settings.image_orchestration_client,
         input_attachments=input_attachment_service,
-        batch_max_parallel=settings.image_execution_concurrency,
         workspace_root=(
             settings.workspace_root
             or (Path(settings.database_path).expanduser().resolve().parent / "workspace")

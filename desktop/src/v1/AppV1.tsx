@@ -999,7 +999,6 @@ export function AppV1() {
                   activeTurn={runtime.activeTurn}
                   isThinking={runtime.isThinking}
                   artifacts={runtime.artifacts}
-                  imageBatchFailures={runtime.imageBatchFailures}
                   artifactPreviewUrls={runtime.artifactPreviewUrls}
                   onArtifactAction={(artifact, action) => void handleArtifactAction(artifact, action)}
                   onArtifactPreviewVisible={runtime.prefetchArtifactPreview}

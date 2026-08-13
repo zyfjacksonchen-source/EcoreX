@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ArtifactProjection, ItemProjection } from "../api/contracts.ts";
-import type { FailedImageBatchSlot } from "./imageBatchFacts.ts";
 import {
   groupTimelineImageArtifacts,
   type TimelinePresentationBlock,
@@ -32,114 +31,100 @@ function artifact(id: string, family: ArtifactProjection["family"] = "image"): A
   };
 }
 
-function block(
+function itemBlock(item: ItemProjection): TimelineBlock {
+  return { kind: "item", key: item.item_id, item };
+}
+
+function artifactBlock(
   id: string,
-  projection: ArtifactProjection,
+  family: ArtifactProjection["family"] = "image",
   extra: Record<string, unknown> = {},
 ): TimelineBlock {
-  const item: ItemProjection = {
+  return itemBlock({
     item_id: `item-${id}`,
     thread_id: "thread-1",
     turn_id: "turn-1",
     kind: "artifact",
     status: "completed",
-    content: { artifact: projection, ...extra },
+    content: { artifact: artifact(id, family), ...extra },
     inherited: false,
     created_seq: 1,
     created_at: timestamp,
     updated_at: timestamp,
-  };
-  return { kind: "item", key: item.item_id, item };
+  });
 }
 
-function imageBatch(batchId: string, index: number, count: number) {
-  return {
-    image_batch: {
-      schema_version: 1,
-      batch_id: batchId,
-      parent_execution_id: `execution-${batchId}`,
-      index,
-      count,
-      task_id: `task-${batchId}-${index}`,
-    },
-  };
+function imageToolCall(id: string, status: ItemProjection["status"]): TimelineBlock {
+  return itemBlock({
+    item_id: `tool-${id}`,
+    thread_id: "thread-1",
+    turn_id: "turn-1",
+    kind: "tool_call",
+    status,
+    content: { tool_id: "imagegen", tool_call_id: id },
+    inherited: false,
+    created_seq: 1,
+    created_at: timestamp,
+    updated_at: timestamp,
+  });
 }
 
 function presentationKinds(blocks: TimelinePresentationBlock[]): string[] {
   return blocks.map((candidate) => candidate.kind);
 }
 
-function failedSlot(batchId: string, index: number, count: number): FailedImageBatchSlot {
-  return {
-    kind: "failed",
-    threadId: "thread-1",
-    turnId: "turn-1",
-    createdSeq: 5,
-    batchId,
-    parentExecutionId: `execution-${batchId}`,
-    index,
-    count,
-    taskId: `task-${batchId}-${index}`,
-    errorCode: "managed_image_unavailable",
-    retryable: true,
-  };
-}
-
-test("groups one complete backend batch and orders it by the backend index", () => {
+test("groups independent imagegen artifacts from one turn despite intervening tool calls", () => {
   const grouped = groupTimelineImageArtifacts([
-    block("three", artifact("three"), imageBatch("batch-one", 2, 3)),
-    block("one", artifact("one"), imageBatch("batch-one", 0, 3)),
-    block("two", artifact("two"), imageBatch("batch-one", 1, 3)),
-    block("document", artifact("document", "pdf")),
+    imageToolCall("one", "completed"),
+    artifactBlock("one"),
+    imageToolCall("two", "completed"),
+    artifactBlock("two"),
+    imageToolCall("three", "completed"),
+    artifactBlock("three"),
   ]);
 
-  assert.deepEqual(presentationKinds(grouped), ["image_gallery", "item"]);
+  assert.deepEqual(presentationKinds(grouped), ["item", "item", "item", "image_gallery"]);
+  const gallery = grouped.find((candidate) => candidate.kind === "image_gallery");
   assert.deepEqual(
-    grouped[0]?.kind === "image_gallery"
-      ? grouped[0].slots.map((candidate) => (
-          candidate.kind === "artifact" ? candidate.block.item.item_id : candidate.taskId
-        ))
+    gallery?.kind === "image_gallery"
+      ? gallery.slots.map((slot) => slot.block.item.item_id)
       : [],
     ["item-one", "item-two", "item-three"],
   );
 });
 
-test("merges a durable failed event with successful Artifact facts by index", () => {
+test("partial tool failure displays only the two successful artifact facts", () => {
   const grouped = groupTimelineImageArtifacts([
-    block("three", artifact("three"), imageBatch("partial", 2, 3)),
-    block("one", artifact("one"), imageBatch("partial", 0, 3)),
-  ], [failedSlot("partial", 1, 3)]);
+    imageToolCall("one", "completed"),
+    artifactBlock("one"),
+    imageToolCall("failed", "failed"),
+    imageToolCall("two", "completed"),
+    artifactBlock("two"),
+  ]);
 
-  assert.deepEqual(presentationKinds(grouped), ["image_gallery"]);
+  assert.deepEqual(presentationKinds(grouped), ["item", "item", "item", "image_gallery"]);
+  const gallery = grouped.find((candidate) => candidate.kind === "image_gallery");
   assert.deepEqual(
-    grouped[0]?.kind === "image_gallery"
-      ? grouped[0].slots.map((slot) => slot.kind)
+    gallery?.kind === "image_gallery"
+      ? gallery.slots.map((slot) => slot.block.item.item_id)
       : [],
-    ["artifact", "failed", "artifact"],
+    ["item-one", "item-two"],
   );
 });
 
-test("does not merge two independent consecutive image calls or legacy facts", () => {
-  const grouped = groupTimelineImageArtifacts([
-    block("one", artifact("one")),
-    block("batch-one", artifact("batch-one"), imageBatch("batch-one", 0, 2)),
-    block("batch-two", artifact("batch-two"), imageBatch("batch-two", 0, 2)),
-    block("two", artifact("two")),
-  ]);
-
-  assert.deepEqual(presentationKinds(grouped), ["item", "item", "item", "item"]);
+test("a failed imagegen call without an artifact does not create a gallery", () => {
+  const failed = imageToolCall("failed", "failed");
+  assert.deepEqual(groupTimelineImageArtifacts([failed]), [failed]);
 });
 
-test("keeps incomplete, duplicate-index and precise retouch facts on native paths", () => {
-  const grouped = groupTimelineImageArtifacts([
-    block("incomplete", artifact("incomplete"), imageBatch("incomplete", 0, 2)),
-    block("duplicate-a", artifact("duplicate-a"), imageBatch("duplicate", 0, 2)),
-    block("duplicate-b", artifact("duplicate-b"), imageBatch("duplicate", 0, 2)),
-    block("retouch", artifact("retouch"), {
-      retouch_job_id: "job-1",
-      ...imageBatch("retouch", 0, 2),
-    }),
-  ]);
+test("single images and retouch artifacts keep their native cards", () => {
+  const single = artifactBlock("single");
+  const retouch = artifactBlock("retouch", "image", { retouch_job_id: "job-1" });
+  const document = artifactBlock("document", "pdf");
 
-  assert.deepEqual(presentationKinds(grouped), ["item", "item", "item", "item"]);
+  assert.deepEqual(groupTimelineImageArtifacts([single, retouch, document]), [
+    single,
+    retouch,
+    document,
+  ]);
 });

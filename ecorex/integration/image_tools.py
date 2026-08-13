@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 import base64
 from collections.abc import Callable, Mapping
-from contextlib import nullcontext
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
@@ -63,14 +61,6 @@ class ImageToolPublicationBusy(ImageToolError):
 
     def __init__(self, message: str = "image artifact publication is busy") -> None:
         super().__init__(self.code, retryable=True)
-
-
-_BATCH_SESSION_ABORT_CODES = frozenset({
-    "managed_image_auth_invalid",
-    "managed_image_auth_rejected",
-    "managed_image_auth_unavailable",
-    "managed_image_session_changed",
-})
 
 
 class ImageGenerationToolHandler:
@@ -441,13 +431,10 @@ class RuntimeImageToolBackend:
         input_attachments: InputAttachmentService | None = None,
         fault_hook: Callable[[str, str], None] | None = None,
         publication_lease_seconds: float = 30,
-        batch_max_parallel: int = 2,
         workspace_root: Path | str | None = None,
     ) -> None:
         if not 0.15 <= publication_lease_seconds <= 300:
             raise ValueError("image publication lease must be between 0.15 and 300 seconds")
-        if not 1 <= batch_max_parallel <= 8:
-            raise ValueError("image batch parallelism must be between one and eight")
         self.database_path = (
             database_path.path
             if isinstance(database_path, SQLiteDatabase)
@@ -461,13 +448,11 @@ class RuntimeImageToolBackend:
         self.publications = _ImagePublicationRepository(database_path)
         self.fault_hook = fault_hook or (lambda _phase, _key: None)
         self.publication_lease_seconds = float(publication_lease_seconds)
-        self.batch_max_parallel = batch_max_parallel
         self.workspace_root = (
             Path(workspace_root).expanduser().resolve()
             if workspace_root is not None
             else None
         )
-        self._image_slots = asyncio.Semaphore(batch_max_parallel)
 
     async def generate_image(
         self,
@@ -475,193 +460,9 @@ class RuntimeImageToolBackend:
         context: ToolInvocationContext,
     ) -> dict[str, Any]:
         if "tasks" in arguments:
-            tasks = arguments["tasks"]
-            if set(arguments) != {"tasks"}:
-                raise ImageToolError("image batch cannot mix single-task fields")
-            return await self._generate_batch(tasks, context)
+            raise ImageToolError("imagegen_tasks_unsupported")
         task = self._canonical_task(arguments)
-        async with self._image_slots:
-            return await self._generate_single(task, context)
-
-    async def _generate_batch(
-        self,
-        tasks: Any,
-        context: ToolInvocationContext,
-    ) -> dict[str, Any]:
-        if (
-            not isinstance(tasks, list)
-            or not 2 <= len(tasks) <= 8
-            or any(not isinstance(task, Mapping) for task in tasks)
-            or context.execution_scope is None
-            or not isinstance(context.idempotency_key, str)
-            or not context.idempotency_key
-        ):
-            raise ImageToolError("image batch contract is invalid")
-
-        validated = [self._batch_task(task) for task in tasks]
-        parent_execution_id = context.tool_call_id or context.invocation_id
-        batch_id = "imgbatch_" + hashlib.sha256(
-            b"emate-image-batch-v1\0"
-            + context.idempotency_key.encode("utf-8")
-            + b"\0"
-            + "\0".join(task_sha256 for _task, task_sha256 in validated).encode(
-                "ascii"
-            )
-        ).hexdigest()[:32]
-
-        async def execute(
-            index: int, task: dict[str, Any], task_sha256: str
-        ) -> dict[str, Any]:
-            child_digest = hashlib.sha256(
-                b"emate-image-batch-child-v1\0"
-                + context.idempotency_key.encode("utf-8")
-                + b"\0"
-                + str(index).encode("ascii")
-                + b"\0"
-                + task_sha256.encode("ascii")
-            ).hexdigest()
-            task_id = "imgtask_" + child_digest[:32]
-            child_context = replace(
-                context,
-                invocation_id="invoke_" + child_digest[:32],
-                idempotency_key="imgbatch_" + child_digest,
-                tool_call_id=task_id,
-            )
-            image_batch = {
-                "schema_version": 1,
-                "batch_id": batch_id,
-                "parent_execution_id": parent_execution_id,
-                "index": index,
-                "count": len(validated),
-                "task_id": task_id,
-            }
-            try:
-                async with self._image_slots:
-                    result = await self._generate_single(
-                        task,
-                        child_context,
-                        image_batch=image_batch,
-                    )
-            except Exception as error:
-                code = getattr(error, "code", None)
-                if not isinstance(code, str) or not re.fullmatch(
-                    r"[a-z][a-z0-9_.:-]{0,127}", code
-                ):
-                    code = "image_batch_task_failed"
-                if code in _BATCH_SESSION_ABORT_CODES:
-                    raise ImageToolError(code) from error
-                error_fact = {
-                    "code": code,
-                    "retryable": bool(getattr(error, "retryable", False)),
-                }
-                await asyncio.to_thread(
-                    self._emit_batch_failure,
-                    child_context,
-                    image_batch,
-                    error_fact,
-                )
-                return {
-                    "index": index,
-                    "batch_id": batch_id,
-                    "parent_execution_id": parent_execution_id,
-                    "task_id": task_id,
-                    "task_sha256": task_sha256,
-                    "status": "failed",
-                    "result": None,
-                    "error": error_fact,
-                }
-            return {
-                "index": index,
-                "batch_id": batch_id,
-                "parent_execution_id": parent_execution_id,
-                "task_id": task_id,
-                "task_sha256": task_sha256,
-                "status": "completed",
-                "result": result,
-                "error": None,
-            }
-
-        operation_scope = getattr(getattr(self, "client", None), "operation_scope", None)
-        with operation_scope() if callable(operation_scope) else nullcontext():
-            children = [
-                asyncio.create_task(
-                    execute(index, task, task_sha256)
-                )
-                for index, (task, task_sha256) in enumerate(validated)
-            ]
-            try:
-                items = await asyncio.gather(*children)
-            except ImageToolError:
-                for child in children:
-                    child.cancel()
-                await asyncio.gather(*children, return_exceptions=True)
-                raise
-        completed_count = sum(item["status"] == "completed" for item in items)
-        failed_count = len(items) - completed_count
-        status = (
-            "completed"
-            if failed_count == 0
-            else "failed"
-            if completed_count == 0
-            else "partial_failed"
-        )
-        await asyncio.to_thread(
-            self._emit_batch_settled,
-            context,
-            {
-                "schema_version": 1,
-                "batch_id": batch_id,
-                "parent_execution_id": parent_execution_id,
-                "requested_count": len(items),
-                "completed_count": completed_count,
-                "failed_count": failed_count,
-                "status": status,
-            },
-        )
-        images = [
-            image
-            for item in items
-            if item["status"] == "completed" and isinstance(item["result"], Mapping)
-            for image in self._result_images(item["result"])
-        ]
-        model = next(
-            (
-                str(item["result"]["model"])
-                for item in items
-                if item["status"] == "completed"
-                and isinstance(item["result"], Mapping)
-                and isinstance(item["result"].get("model"), str)
-            ),
-            "gpt-image-2-pro",
-        )
-        return {
-            "schema_version": 1,
-            "result_type": "image_gallery",
-            "model": model,
-            "images": images,
-            "batch_id": batch_id,
-            "parent_execution_id": parent_execution_id,
-            "status": status,
-            "requested_count": len(items),
-            "completed_count": completed_count,
-            "failed_count": failed_count,
-            "max_parallel": self.batch_max_parallel,
-            "items": items,
-        }
-
-    @classmethod
-    def _batch_task(cls, raw: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
-        task = cls._canonical_task(raw)
-        canonical = json.dumps(
-            task,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode("utf-8")
-        return task, hashlib.sha256(
-            b"emate-image-batch-task-v2\0" + canonical
-        ).hexdigest()
+        return await self._generate_single(task, context)
 
     @staticmethod
     def _canonical_task(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -684,7 +485,7 @@ class RuntimeImageToolBackend:
             raise ImageToolError("image task contract is invalid")
         prompt = task.get("prompt", task.get("instruction"))
         if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 20_000:
-            raise ImageToolError("imagegen requires a prompt or tasks")
+            raise ImageToolError("imagegen requires a prompt")
         if (
             isinstance(task.get("prompt"), str)
             and isinstance(task.get("instruction"), str)
@@ -746,7 +547,8 @@ class RuntimeImageToolBackend:
     def _result_images(result: Mapping[str, Any]) -> list[dict[str, str]]:
         images = result.get("images")
         if isinstance(images, list):
-            return [dict(image) for image in images if isinstance(image, Mapping)]
+            first = next((image for image in images if isinstance(image, Mapping)), None)
+            return [dict(first)] if first is not None else []
         preview = result.get("preview_url")
         if not isinstance(preview, str) or not preview:
             return []
@@ -756,61 +558,10 @@ class RuntimeImageToolBackend:
                 image[field] = str(result[field])
         return [image]
 
-    def _emit_batch_failure(
-        self,
-        context: ToolInvocationContext,
-        image_batch: Mapping[str, Any],
-        error: Mapping[str, Any],
-    ) -> None:
-        scope = context.execution_scope
-        if scope is None:
-            raise ImageToolError("image batch failure requires execution scope")
-        with self.kernel.database.transaction() as connection:
-            self.kernel.events.append_in_transaction(
-                connection,
-                thread_id=scope.thread_id,
-                turn_id=scope.turn_id,
-                job_id=scope.job_id,
-                tool_call_id=context.tool_call_id,
-                event_type="artifact.image.batch_task_failed",
-                payload={
-                    "schema_version": 1,
-                    "image_batch": dict(image_batch),
-                    "error": dict(error),
-                },
-                correlation_id=context.idempotency_key,
-                idempotency_key=(
-                    f"{image_batch['batch_id']}:{image_batch['task_id']}:failed"
-                ),
-            )
-
-    def _emit_batch_settled(
-        self,
-        context: ToolInvocationContext,
-        payload: Mapping[str, Any],
-    ) -> None:
-        scope = context.execution_scope
-        if scope is None:
-            raise ImageToolError("image batch settlement requires execution scope")
-        with self.kernel.database.transaction() as connection:
-            self.kernel.events.append_in_transaction(
-                connection,
-                thread_id=scope.thread_id,
-                turn_id=scope.turn_id,
-                job_id=scope.job_id,
-                tool_call_id=context.tool_call_id,
-                event_type="artifact.image.batch_settled",
-                payload=dict(payload),
-                correlation_id=context.idempotency_key,
-                idempotency_key=f"{payload['batch_id']}:settled",
-            )
-
     async def _generate_single(
         self,
         arguments: Mapping[str, Any],
         context: ToolInvocationContext,
-        *,
-        image_batch: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         if context.execution_scope is None or not context.idempotency_key:
             raise ImageToolError("imagegen requires a durable Runtime execution scope")
@@ -854,7 +605,6 @@ class RuntimeImageToolBackend:
                 context,
                 publication_key,
                 cloud_job_id,
-                image_batch=image_batch,
             )
             return self._cow_result(result, turn.image_model_id)
         row = await asyncio.to_thread(self.publications.row, publication_key)
@@ -888,7 +638,6 @@ class RuntimeImageToolBackend:
                 context,
                 publication_key,
                 cloud_job_id,
-                image_batch=image_batch,
             )
             return self._cow_result(result, turn.image_model_id)
         assets, source_ids = await self._image_sources(
@@ -947,7 +696,6 @@ class RuntimeImageToolBackend:
                 context,
                 publication_key,
                 row["cloud_job_id"],
-                image_batch=image_batch,
             )
             return self._cow_result(result, turn.image_model_id)
         lease_stop, lease_heartbeat = self._start_publication_lease(
@@ -1035,7 +783,6 @@ class RuntimeImageToolBackend:
             context,
             publication_key,
             downloaded.job.job_id,
-            image_batch=image_batch,
         )
         return self._cow_result(result, downloaded.job.model_id)
 
@@ -1519,8 +1266,6 @@ class RuntimeImageToolBackend:
         context: ToolInvocationContext,
         publication_key: str,
         cloud_job_id: str | None,
-        *,
-        image_batch: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         scope = context.execution_scope
         if scope is None:
@@ -1539,8 +1284,6 @@ class RuntimeImageToolBackend:
                 "url": f"/api/v1/artifacts/{artifact.artifact_id}/preview",
             },
         }
-        if image_batch is not None:
-            payload["image_batch"] = dict(image_batch)
         with self.kernel.database.transaction() as connection:
             existing = connection.execute(
                 "SELECT * FROM items WHERE item_id=?", (item_id,)
@@ -1562,8 +1305,6 @@ class RuntimeImageToolBackend:
                 "sha256": artifact.sha256,
                 "image_job_id": cloud_job_id,
             }
-            if image_batch is not None:
-                event_payload["image_batch"] = dict(image_batch)
             self.kernel.events.append_in_transaction(
                 connection,
                 thread_id=scope.thread_id,
@@ -1586,8 +1327,6 @@ class RuntimeImageToolBackend:
             "preview_url": f"/api/v1/artifacts/{artifact.artifact_id}/preview",
             "summary": "图片已生成，并已在消息和工件列表中展示。",
         }
-        if image_batch is not None:
-            result["image_batch"] = dict(image_batch)
         return result
 
     @staticmethod

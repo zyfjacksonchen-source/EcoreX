@@ -24,7 +24,6 @@ import {
   artifactUiActions,
   type ArtifactUiAction,
 } from "../state/artifactActions.ts";
-import type { FailedImageBatchSlot } from "../state/imageBatchFacts.ts";
 import {
   artifactFamilyLabel,
   formatFileSize,
@@ -207,9 +206,10 @@ function OverflowActions(props: OverflowActionsProps) {
   return props.asSheet ? <ActionSheet {...props} /> : <MoreMenu {...props} />;
 }
 
-export type ImageArtifactGalleryViewSlot =
-  | { kind: "artifact"; artifact: ArtifactProjection }
-  | FailedImageBatchSlot;
+export type ImageArtifactGalleryViewSlot = {
+  kind: "artifact";
+  artifact: ArtifactProjection;
+};
 
 export function ImageArtifactGallery({
   slots,
@@ -226,19 +226,15 @@ export function ImageArtifactGallery({
   const trackRef = useRef<HTMLDivElement>(null);
   const count = slots.length;
   useEffect(() => setActiveIndex((index) => Math.min(index, count - 1)), [count]);
-  const previewableArtifacts = slots.flatMap((slot) => (
-    slot.kind === "artifact" && slot.artifact.actions.includes("preview")
-      ? [slot.artifact]
-      : []
-  ));
+  const previewableArtifacts = slots
+    .map((slot) => slot.artifact)
+    .filter((artifact) => artifact.actions.includes("preview"));
   const previewIdentity = previewableArtifacts
     .map((artifact) => `${artifact.artifact_id}:${artifact.revision_id}`)
     .join("|");
   useEffect(() => {
     previewableArtifacts.slice(0, 4).forEach(onPreviewVisible);
-    const activeArtifact = slots[activeIndex]?.kind === "artifact"
-      ? slots[activeIndex].artifact
-      : null;
+    const activeArtifact = slots[activeIndex]?.artifact ?? null;
     if (activeIndex >= 4 && activeArtifact?.actions.includes("preview")) {
       onPreviewVisible(activeArtifact);
     }
@@ -286,23 +282,19 @@ export function ImageArtifactGallery({
         onScroll={syncActiveSlide}
       >
         {slots.map((slot, index) => {
-          const artifact = slot.kind === "artifact" ? slot.artifact : null;
-          const ready = artifact?.status === "ready";
-          const failed = slot.kind === "failed"
-            || artifact?.status === "failed"
-            || artifact?.status === "deleted";
-          const displayName = artifact?.display_name ?? `批次图片 ${index + 1}`;
-          const previewUrl = artifact ? previewUrls[artifact.artifact_id] : null;
-          const canPreview = Boolean(ready && artifact?.actions.includes("preview"));
-          const media = artifact && ready && previewUrl ? (
+          const artifact = slot.artifact;
+          const ready = artifact.status === "ready";
+          const failed = artifact.status === "failed" || artifact.status === "deleted";
+          const displayName = artifact.display_name;
+          const previewUrl = previewUrls[artifact.artifact_id] ?? null;
+          const canPreview = ready && artifact.actions.includes("preview");
+          const media = ready && previewUrl ? (
             <img src={previewUrl} alt={artifact.display_name} />
           ) : failed ? (
-            <span className="ex-image-gallery-failure" role="img" aria-label={artifact?.status === "deleted" ? "图片已不可用" : "图片未完成"}>
+            <span className="ex-image-gallery-failure" role="img" aria-label={artifact.status === "deleted" ? "图片已不可用" : "图片未完成"}>
               <AlertCircle aria-hidden="true" />
-              <strong>{artifact?.status === "deleted" ? "图片已不可用" : "图片未完成"}</strong>
-              {slot.kind === "failed" ? (
-                <small>{slot.retryable ? "可以稍后重试此张图片。" : "本次未生成有效图片。"}</small>
-              ) : artifact?.quality_evidence.summary ? <small>{artifact.quality_evidence.summary}</small> : null}
+              <strong>{artifact.status === "deleted" ? "图片已不可用" : "图片未完成"}</strong>
+              {artifact.quality_evidence.summary ? <small>{artifact.quality_evidence.summary}</small> : null}
             </span>
           ) : (
             <span className="ex-image-generation-canvas" role="img" aria-label={ready ? "正在载入图片预览" : "正在生成图片"}>
@@ -313,17 +305,16 @@ export function ImageArtifactGallery({
           return (
             <article
               className="ex-image-gallery-slide"
-              data-emate-artifact-id={artifact?.artifact_id}
-              data-emate-artifact-revision={artifact?.revision_id}
-              data-emate-artifact-name={artifact?.display_name}
-              data-preview-artifact-id={canPreview ? artifact?.artifact_id : undefined}
-              data-artifact-status={slot.kind === "failed" ? "failed" : artifact?.status}
-              data-image-batch-task-id={slot.kind === "failed" ? slot.taskId : undefined}
+              data-emate-artifact-id={artifact.artifact_id}
+              data-emate-artifact-revision={artifact.revision_id}
+              data-emate-artifact-name={artifact.display_name}
+              data-preview-artifact-id={canPreview ? artifact.artifact_id : undefined}
+              data-artifact-status={artifact.status}
               role="group"
               aria-label={`${index + 1}/${count}：${displayName}`}
-              key={slot.kind === "failed" ? slot.taskId : artifact?.artifact_id}
+              key={artifact.artifact_id}
             >
-              {canPreview && artifact ? (
+              {canPreview ? (
                 <button
                   className="ex-image-gallery-media"
                   type="button"
@@ -333,8 +324,8 @@ export function ImageArtifactGallery({
                 >{media}</button>
               ) : <div className="ex-image-gallery-media">{media}</div>}
               <div className="ex-image-gallery-caption">
-                <span><strong>{displayName}</strong><small>{slot.kind === "failed" ? "生成失败" : artifact?.status === "pending" ? "正在生成" : ready ? "已完成" : artifact?.status === "failed" ? "生成失败" : "不可用"}</small></span>
-                {artifact && ready ? (
+                <span><strong>{displayName}</strong><small>{artifact.status === "pending" ? "正在生成" : ready ? "已完成" : artifact.status === "failed" ? "生成失败" : "不可用"}</small></span>
+                {ready ? (
                   <div role="group" aria-label={`图片操作：${artifact.display_name}`}>
                     {artifact.actions.includes("download") ? (
                       <IconButton label={`下载：${artifact.display_name}`} onClick={() => onAction(artifact, "download")}>

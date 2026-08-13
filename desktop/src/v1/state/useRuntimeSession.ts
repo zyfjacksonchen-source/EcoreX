@@ -52,13 +52,6 @@ import type {
 import { mergeArtifactProjections } from "./artifactActions.ts";
 import { ArtifactPreviewCache } from "./artifactPreviewCache.ts";
 import {
-  emptyImageBatchFacts,
-  loadImageBatchFactHistory,
-  mergeImageBatchFacts,
-  reduceImageBatchFacts,
-  selectFailedImageBatchSlots,
-} from "./imageBatchFacts.ts";
-import {
   initialRuntimeViewState,
   runtimeReducer,
   selectActiveTurn,
@@ -224,7 +217,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const pendingThreadMutations = useRef(new Map<string, PendingThreadMutation>());
   const pendingLiveReplayRequests = useRef(new Map<string, string>());
   const [artifacts, setArtifacts] = useState<ArtifactProjection[]>([]);
-  const [imageBatchFacts, setImageBatchFacts] = useState(emptyImageBatchFacts);
   const [artifactPreviewUrls, setArtifactPreviewUrls] = useState<Record<string, string>>({});
   const previewCache = useMemo(() => new ArtifactPreviewCache({
     fetchPreview: (artifactId, signal) => client.artifactBlob(
@@ -274,7 +266,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const applyEventBatch = useCallback((events: readonly EventEnvelope[]) => {
     if (events.length === 0) return;
     acknowledgeClientMessages(eventClientMessageIds(events));
-    setImageBatchFacts((current) => reduceImageBatchFacts(current, events));
     const action = { type: "events.received" as const, events };
     stateRef.current = runtimeReducer(stateRef.current, action);
     watermarkRef.current = stateRef.current.watermark;
@@ -287,7 +278,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
       bootstrap: stateRef.current.bootstrap,
     };
     watermarkRef.current = 0;
-    setImageBatchFacts(emptyImageBatchFacts());
     setConversationUsage(null);
     dispatch({ type: "thread.cleared" });
   }, []);
@@ -578,28 +568,12 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     };
   }, [bootstrapped, refreshSystemHealth]);
 
-  const hydrateImageBatchFacts = useCallback(async (
-    threadId: string,
-    throughSeq: number,
-    signal?: AbortSignal,
-  ) => {
-    const history = await loadImageBatchFactHistory(
-      threadId,
-      throughSeq,
-      (afterSeq, pageSignal) => client.eventPage(threadId, afterSeq, 1_000, pageSignal),
-      signal,
-    );
-    if (signal?.aborted || selectedThreadId.current !== threadId) return;
-    setImageBatchFacts((current) => mergeImageBatchFacts(history, current));
-  }, [client]);
-
   const refreshProjection = useCallback(async (threadId: string, signal?: AbortSignal) => {
     const projection = await client.projection(threadId, signal);
     if (selectedThreadId.current !== threadId) return null;
     applyProjection(projection);
-    await hydrateImageBatchFacts(threadId, projection.watermark, signal);
     return projection;
-  }, [applyProjection, client, hydrateImageBatchFacts]);
+  }, [applyProjection, client]);
 
   const refreshArtifacts = useCallback(async (currentThreadId: string, signal?: AbortSignal) => {
     const response = await client.listArtifacts(currentThreadId, signal);
@@ -657,16 +631,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   useEffect(() => {
     if (threadId) selectedThreadId.current = threadId;
   }, [threadId]);
-
-  useEffect(() => {
-    if (!threadId) return;
-    const controller = new AbortController();
-    setImageBatchFacts(emptyImageBatchFacts());
-    void hydrateImageBatchFacts(threadId, state.watermark, controller.signal).catch((error) => {
-      if (!controller.signal.aborted) setTransportError(errorMessage(error));
-    });
-    return () => controller.abort();
-  }, [hydrateImageBatchFacts, threadId]);
 
   useEffect(() => {
     if (!threadId) return;
@@ -900,7 +864,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
       pendingNewThreadMetadata.current = { conversation_kind: "general" };
       setNewConversationProject(null);
       clearArtifactView();
-      setImageBatchFacts(emptyImageBatchFacts());
       applyProjection(projection);
       return true;
     } catch (error) {
@@ -1827,7 +1790,6 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     pendingInteractions: selectPendingInteractions(state),
     refreshProjection,
     artifacts: effectiveArtifacts,
-    imageBatchFailures: selectFailedImageBatchSlots(imageBatchFacts),
     artifactPreviewUrls,
     sendMessage,
     uploadInputAttachment,

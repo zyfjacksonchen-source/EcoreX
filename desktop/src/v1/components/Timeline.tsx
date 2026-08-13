@@ -25,7 +25,6 @@ import type {
 } from "../api/contracts.ts";
 import { tryValidateArtifactProjection } from "../api/runtimeContract.ts";
 import { mergeArtifactProjections } from "../state/artifactActions.ts";
-import type { FailedImageBatchSlot } from "../state/imageBatchFacts.ts";
 import type { ImageArtifactGalleryViewSlot } from "./ArtifactShelf.tsx";
 import { retouchPresentation, type RetouchPresentation } from "../state/retouchPresentation.ts";
 import {
@@ -61,7 +60,6 @@ interface TimelineProps {
   activeTurn: TurnProjection | null;
   isThinking: boolean;
   artifacts: ArtifactProjection[];
-  imageBatchFailures: FailedImageBatchSlot[];
   artifactPreviewUrls: Record<string, string>;
   onArtifactAction: (artifact: ArtifactProjection, action: string) => void;
   onArtifactPreviewVisible: (artifact: ArtifactProjection) => void;
@@ -211,7 +209,6 @@ interface BlockProps {
   block: TimelineBlock;
   turn: TurnProjection;
   artifactByRevision: Map<string, ArtifactProjection>;
-  imageBatchFailures: FailedImageBatchSlot[];
   artifactPreviewUrls: Record<string, string>;
   onArtifactAction: (artifact: ArtifactProjection, action: string) => void;
   onArtifactPreviewVisible: (artifact: ArtifactProjection) => void;
@@ -355,10 +352,7 @@ const TurnRow = memo(function TurnRow({
   modelSwitch,
   ...blockProps
 }: TurnRowProps) {
-  const presentationBlocks = groupTimelineImageArtifacts(
-    entry.blocks,
-    blockProps.imageBatchFailures.filter((failure) => failure.turnId === entry.turn.turn_id),
-  );
+  const presentationBlocks = groupTimelineImageArtifacts(entry.blocks);
   const firstAssistant = entry.assistantBlocks.find((block) => (
     block.kind !== "interaction" || block.interaction.status !== "pending"
   ));
@@ -373,7 +367,6 @@ const TurnRow = memo(function TurnRow({
       return <TimelineBlockView key={block.key} block={block} turn={entry.turn} {...blockProps} />;
     }
     const slots = block.slots.flatMap<ImageArtifactGalleryViewSlot>((slot) => {
-      if (slot.kind === "failed") return [slot];
       const projected = artifactFrom(slot.block.item);
       if (!projected) return [];
       return [{
@@ -454,7 +447,6 @@ export function Timeline({
   activeTurn,
   isThinking,
   artifacts,
-  imageBatchFailures,
   artifactPreviewUrls,
   onArtifactAction,
   onArtifactPreviewVisible,
@@ -870,7 +862,6 @@ export function Timeline({
                 entry={entry}
                 modelSwitch={modelSwitches.get(entry.turn.turn_id) ?? null}
                 artifactByRevision={artifactByRevision}
-                imageBatchFailures={imageBatchFailures}
                 artifactPreviewUrls={artifactPreviewUrls}
                 onArtifactAction={onArtifactAction}
                 onArtifactPreviewVisible={onArtifactPreviewVisible}
