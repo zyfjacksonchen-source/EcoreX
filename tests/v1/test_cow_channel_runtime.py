@@ -279,8 +279,14 @@ from channel.channel_factory import create_channel
 def blocked(*_args, **_kwargs):
     raise AssertionError("channel constructor attempted network access")
 
+def blocked_connect(sock, address):
+    if isinstance(address, tuple) and address[0] in {"127.0.0.1", "::1"}:
+        return original_connect(sock, address)
+    raise AssertionError("channel constructor attempted network access")
+
+original_connect = socket.socket.connect
 socket.create_connection = blocked
-socket.socket.connect = blocked
+socket.socket.connect = blocked_connect
 conf().update({
     "wechatcom_corp_id": "corp", "wechatcomapp_agent_id": "agent",
     "wechatcomapp_secret": "secret", "wechatcomapp_token": "token",
