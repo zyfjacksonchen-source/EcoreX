@@ -449,3 +449,33 @@ environment failure until the product failure reproduces from known state.
   change that records that marker for new facts plus an explicit mapping for
   retained legacy records. Until then the existing data and service remain
   unchanged.
+
+### 2026-08-13 CU-205-USAGE-GENERATION-001 — producer contract resolved
+
+- Source/schema reconciliation confirmed there was no authoritative product
+  generation in `sync_events`, `usage_events`, `gateway_requests`, or the task
+  projection. `source_service` is a Token-fact origin only and is not used to
+  classify tasks. The repair therefore records immutable
+  `product_generation` and `product_version` at the two new-fact authorities:
+  Gateway requests and provider-usage facts.
+- Gateway v4→v5 and Admin Management v7→v8 are transactional, fingerprinted
+  migrations. Existing rows are retained byte-for-byte and gain the explicit
+  compatibility values `ecorex` / `legacy`; newly admitted 2.0.5 facts write
+  `emate` plus the exact package version. Identity triggers prevent later
+  generation/version rewrites. No date, task-name, table-presence, or Token
+  source heuristic is used.
+- `/api/data` accepts only `all`, `emate`, or `ecorex`. Task and Token rows use
+  the same filter and the all-view breakdown equals the two independent
+  generations without double-counting a request. The UI exposes “全部”, “新版
+  e-Mate”, and the honest compatibility label “旧版 EcoreX / 历史未标识”. The
+  selector is sent only to the data projection; Runtime-audit details are not
+  falsely presented as generation-filtered.
+- The task JSON contract is locked: identity/status/scenario/version fields are
+  strings; booleans remain booleans; event/Token counters remain integers; and
+  duration remains numeric or null. Exact v4→v5 and v7→v8 fixtures prove old
+  task/usage rows survive with the compatibility identity while new Gateway
+  and provider facts persist `emate` and the exact version.
+- Green evidence: the four affected test files passed `71` tests; the focused
+  generation/migration/producer set passed `17`; JavaScript syntax and
+  `git diff --check` passed. No production credential, database, service,
+  package, feed, deployment, or external request was used.
