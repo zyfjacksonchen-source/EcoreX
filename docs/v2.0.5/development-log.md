@@ -945,3 +945,35 @@ environment failure until the product failure reproduces from known state.
   object-level error. An existing immutable key with different size or SHA is
   a collision and is never overwritten. Commit `5fccae49` passed the three
   exact commit/collision regressions and the complete publisher set `10/10`.
+
+### 2026-08-14 CU-205-R2-RECEIPT-004
+
+- Same-byte recovery generated a valid four-object R2 admission receipt and a
+  private 2.0.5 Feed, then stopped before changing `current`: the prepare step
+  correctly wrote `r2_admission_sha256`, but the deployer's schema-v2 exact
+  field set rejected that required field as `stage_receipt_fields_invalid`.
+- Schema 2 now requires a lowercase 64-hex R2 admission digest. Schema 1 still
+  rejects the additional field, so the compatibility fix does not relax old
+  signed Feed receipts. The real prepare-to-deploy regression passed `3/3`;
+  deploy passed `19/19`, and the Feed set passed `11` with one environment
+  skip. No installer was rebuilt or re-uploaded and production remained on
+  2.0.4.
+
+### 2026-08-14 CU-205-MAC-AUTH-TERMINAL-001
+
+- The exact admitted arm64 DMG passed static identity, Runtime ownership, icon,
+  and legacy ECoreX history recovery. Its first UI hard gate then stopped the
+  candidate: the account login transaction was durably committed, but the
+  renderer remained disabled on “正在进入 e-Mate” for more than 40 seconds with
+  no success or visible failure state.
+- The shared client had no deadline on the login POST and allowed a single
+  credential-rotation bootstrap request to outlive its nominal 90-second poll.
+  Login submission and handoff now share one 30-second terminal budget, and
+  each bootstrap request is bound to the remaining deadline. The existing
+  success reload and failure cleanup paths remain responsible for navigation
+  and re-enabling controls; authentication and credential persistence are
+  unchanged.
+- The two previously failing deadline regressions passed `2/2`; the complete
+  Runtime client test passed `56/56`, and the login/layout contract passed
+  `3/3`. The stopped DMG is not a release candidate; a new frozen same-byte
+  build must prove successful login before Hard19 acceptance resumes.
