@@ -63,6 +63,7 @@ from ecorex.control_plane.production_storage import (
     ProductionStorageError,
     SQLiteBackupManager,
 )
+from ecorex.extensions import ExtensionError, LocalSkillBundleStore
 from ecorex.release.public_index import (
     MAX_PUBLIC_BOOTSTRAP_INDEX_BYTES,
     PublicBootstrapIndexError,
@@ -70,6 +71,7 @@ from ecorex.release.public_index import (
     validate_public_bootstrap_index,
 )
 from ecorex.update import Ed25519SignatureVerifier, VerificationError
+from ecorex.update.storage import StorageError, _payload_tree_records
 
 try:  # The read-only planner is intentionally importable on release workstations.
     import fcntl
@@ -2634,6 +2636,113 @@ def _stage_database_snapshot(source: Path, target: Path) -> None:
         raise CloudDeployError("stage_database_snapshot_failed") from None
 
 
+def _verified_skill_hub_cas_inventory(
+    root: Path,
+) -> tuple[tuple[str, ...], tuple[tuple[str, int, str], ...]]:
+    canonical_root = root.absolute()
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+
+    def require_directory(path: Path) -> None:
+        metadata = path.lstat()
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or bool(getattr(metadata, "st_file_attributes", 0) & reparse)
+            or path.resolve(strict=True) != path.absolute()
+            or (path != canonical_root and not _is_beneath(path, canonical_root))
+        ):
+            raise ExtensionError("Skill Hub CAS directory is invalid")
+
+    require_directory(canonical_root)
+    store = LocalSkillBundleStore(canonical_root, create=False)
+    sha_root = store.root / "sha256"
+    require_directory(sha_root)
+    root_entries = sorted(store.root.iterdir(), key=lambda path: path.name)
+    if len(root_entries) != 1 or root_entries[0] != sha_root:
+        raise ExtensionError("Skill Hub CAS root inventory is invalid")
+    prefixes = sorted(sha_root.iterdir(), key=lambda path: path.name)
+    if not prefixes:
+        raise ExtensionError("Skill Hub CAS is empty")
+    digests: list[str] = []
+    expected_directories = {"sha256"}
+    for prefix in prefixes:
+        require_directory(prefix)
+        if re.fullmatch(r"[0-9a-f]{2}", prefix.name) is None:
+            raise ExtensionError("Skill Hub CAS prefix is invalid")
+        expected_directories.add(prefix.relative_to(store.root).as_posix())
+        revisions = sorted(prefix.iterdir(), key=lambda path: path.name)
+        if not revisions:
+            raise ExtensionError("Skill Hub CAS prefix is empty")
+        for revision in revisions:
+            require_directory(revision)
+            digest = revision.name
+            if (
+                SHA256.fullmatch(digest) is None
+                or not digest.startswith(prefix.name)
+            ):
+                raise ExtensionError("Skill Hub CAS revision is invalid")
+            bundle = store.verify(digest)
+            revision_relative = revision.relative_to(store.root).as_posix()
+            files_relative = f"{revision_relative}/files"
+            expected_directories.update((revision_relative, files_relative))
+            for record in bundle.files:
+                expected_directories.update(
+                    f"{files_relative}/{parent.as_posix()}"
+                    for parent in PurePosixPath(record.path).parents
+                    if parent != PurePosixPath(".")
+                )
+            digests.append(digest)
+    directories: set[str] = set()
+    for current, children, _files in os.walk(store.root, followlinks=False):
+        current_path = Path(current)
+        require_directory(current_path)
+        directories.update(
+            (current_path / name).relative_to(store.root).as_posix()
+            for name in children
+        )
+        for name in children:
+            require_directory(current_path / name)
+    if directories != expected_directories:
+        raise ExtensionError("Skill Hub CAS directory inventory is invalid")
+    return (
+        tuple(digests),
+        tuple(_payload_tree_records(store.root)),
+    )
+
+
+def _stage_skill_hub_cas_snapshot(source: Path, target: Path) -> None:
+    try:
+        if (
+            not source.is_absolute()
+            or not target.is_absolute()
+            or not _is_beneath(source, ENCRYPTED_VOLUME_ROOT)
+            or not _is_beneath(target, ENCRYPTED_VOLUME_ROOT)
+            or target.exists()
+            or target.is_symlink()
+        ):
+            raise OSError
+        expected = _verified_skill_hub_cas_inventory(source)
+        # Preserve aliases so verification rejects them instead of dereferencing them.
+        shutil.copytree(source, target, symlinks=True)
+        if (
+            _verified_skill_hub_cas_inventory(source) != expected
+            or _verified_skill_hub_cas_inventory(target) != expected
+        ):
+            raise OSError
+        for current, _directories, files in os.walk(target, followlinks=False):
+            shutil.chown(current, user="ecorex-cloud", group="ecorex-cloud")
+            for name in files:
+                shutil.chown(
+                    Path(current) / name,
+                    user="ecorex-cloud",
+                    group="ecorex-cloud",
+                )
+        if _verified_skill_hub_cas_inventory(target) != expected:
+            raise OSError
+    except (OSError, ExtensionError, StorageError):
+        raise CloudDeployError("stage_control_plane_skill_cas_failed") from None
+
+
 def _prepare_stage_control_plane_storage(
     database: Path, backup_directory: Path, *, volume_id: str
 ) -> None:
@@ -2755,6 +2864,10 @@ def _isolated_stage_environment(
         control_target = control_directory / "control-plane.sqlite3"
         gateway_target = gateway_directory / "gateway.sqlite3"
         _stage_database_snapshot(control_source, control_target)
+        _stage_skill_hub_cas_snapshot(
+            control_source.parent / "skill-hub-cas",
+            control_directory / "skill-hub-cas",
+        )
         control_backup_directory = control_directory / "backups"
         _prepare_stage_control_plane_storage(
             control_target,

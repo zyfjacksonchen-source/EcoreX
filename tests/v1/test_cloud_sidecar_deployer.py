@@ -25,10 +25,30 @@ from ecorex.control_plane.schema import (
     ControlPlaneSchemaManager,
 )
 from ecorex.deployment import cloud_sidecar as deployment
+from ecorex.extensions import LocalSkillBundleStore
 
 
 def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _create_skill_cas(database: Path) -> str:
+    bundle = LocalSkillBundleStore(database.parent / "skill-hub-cas").ingest_directory(
+        Path(__file__).resolve().parents[2]
+        / "ecorex/control_plane/seed_skills/official-writing"
+    )
+    return bundle.artifact_sha256
+
+
+def _tree_identity(root: Path) -> tuple[tuple[str, int, str], ...]:
+    return tuple(
+        (
+            path.relative_to(root).as_posix(),
+            path.stat().st_ino,
+            _sha(path) if path.is_file() else "directory",
+        )
+        for path in sorted((root, *root.rglob("*")))
+    )
 
 
 def _spec(tmp_path: Path, artifact: Path | None = None) -> deployment.CloudDeploymentSpec:
@@ -2210,6 +2230,78 @@ def test_replace_previous_target_restores_state_when_commit_fails(
     assert not list((state_root / "rollback-target-receipts").glob("*.json"))
 
 
+@pytest.mark.parametrize(
+    "fault", ("missing", "empty", "extra-directory", "tampered", "symlink")
+)
+def test_stage_skill_hub_cas_snapshot_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    database = tmp_path / "control-plane" / "live.sqlite3"
+    database.parent.mkdir()
+    source = database.parent / "skill-hub-cas"
+    if fault == "empty":
+        source.mkdir()
+    elif fault in {"extra-directory", "tampered", "symlink"}:
+        digest = _create_skill_cas(database)
+        LocalSkillBundleStore(source, create=False).verify(digest)
+        if fault == "extra-directory":
+            (source / "unexpected").mkdir()
+        elif fault == "tampered":
+            skill = source / "sha256" / digest[:2] / digest / "files" / "SKILL.md"
+            skill.write_bytes(skill.read_bytes() + b"\n")
+        elif fault == "symlink":
+            skill = source / "sha256" / digest[:2] / digest / "files" / "SKILL.md"
+            outside = tmp_path / "outside"
+            outside.write_text("outside", encoding="utf-8")
+            skill.unlink()
+            skill.symlink_to(outside)
+
+    monkeypatch.setattr(deployment, "ENCRYPTED_VOLUME_ROOT", tmp_path)
+
+    with pytest.raises(
+        deployment.CloudDeployError, match="stage_control_plane_skill_cas_failed"
+    ):
+        deployment._stage_skill_hub_cas_snapshot(
+            source, tmp_path / "stage" / "skill-hub-cas"
+        )
+
+
+def test_stage_skill_hub_cas_snapshot_rejects_copy_tampering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "control-plane" / "live.sqlite3"
+    database.parent.mkdir()
+    digest = _create_skill_cas(database)
+    source = database.parent / "skill-hub-cas"
+    source_identity = _tree_identity(source)
+    inventory = deployment._verified_skill_hub_cas_inventory
+    calls = 0
+
+    def tamper_before_target_verification(root: Path):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            skill = root / "sha256" / digest[:2] / digest / "files" / "SKILL.md"
+            skill.write_bytes(skill.read_bytes() + b"\n")
+        return inventory(root)
+
+    monkeypatch.setattr(deployment, "ENCRYPTED_VOLUME_ROOT", tmp_path)
+    monkeypatch.setattr(
+        deployment,
+        "_verified_skill_hub_cas_inventory",
+        tamper_before_target_verification,
+    )
+
+    with pytest.raises(
+        deployment.CloudDeployError, match="stage_control_plane_skill_cas_failed"
+    ):
+        deployment._stage_skill_hub_cas_snapshot(
+            source, tmp_path / "stage" / "skill-hub-cas"
+        )
+
+    assert _tree_identity(source) == source_identity
+
+
 def test_stage_environment_clones_sqlite_and_removes_disposable_copies(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2224,7 +2316,10 @@ def test_stage_environment_clones_sqlite_and_removes_disposable_copies(
         with deployment.sqlite3.connect(database) as connection:
             connection.execute("CREATE TABLE records(value TEXT NOT NULL)")
             connection.execute("INSERT INTO records VALUES(?)", (value,))
+    skill_digest = _create_skill_cas(control)
+    skill_cas = control.parent / "skill-hub-cas"
     source_identity = (control.stat().st_ino, _sha(control))
+    skill_identity = _tree_identity(skill_cas)
     production_backup_identity = (
         production_backup.stat().st_ino,
         _sha(production_backup),
@@ -2264,6 +2359,16 @@ def test_stage_environment_clones_sqlite_and_removes_disposable_copies(
             staged_backups = Path(
                 overrides["control-plane"]["ECOREX_CP_BACKUP_DIRECTORY"]
             )
+            staged_skill_cas = staged_control.parent / "skill-hub-cas"
+            assert (
+                LocalSkillBundleStore(staged_skill_cas, create=False)
+                .verify(skill_digest)
+                .artifact_sha256
+                == skill_digest
+            )
+            assert staged_skill_cas.resolve() != (
+                control.parent / "skill-hub-cas"
+            ).resolve()
             empty_backups = staged_control.parent / "empty-backups"
             empty_backups.mkdir()
             with pytest.raises(ProductionStorageError, match="backup is missing"):
@@ -2300,6 +2405,7 @@ def test_stage_environment_clones_sqlite_and_removes_disposable_copies(
 
     assert all(not directory.exists() for directory in staged_directories)
     assert (control.stat().st_ino, _sha(control)) == source_identity
+    assert _tree_identity(skill_cas) == skill_identity
     assert (
         production_backup.stat().st_ino,
         _sha(production_backup),
@@ -2314,6 +2420,7 @@ def test_stage_backup_and_clone_tampering_still_fail_closed(
     control.parent.mkdir()
     gateway.parent.mkdir()
     ControlPlaneSchemaManager(control).migrate()
+    _create_skill_cas(control)
     with deployment.sqlite3.connect(gateway) as connection:
         connection.execute("CREATE TABLE records(value TEXT NOT NULL)")
 
@@ -2362,6 +2469,7 @@ def test_rollback_schema_gate_runs_all_roles_with_verified_clone_backup(
         database.parent.mkdir()
         with deployment.sqlite3.connect(database) as connection:
             connection.execute("CREATE TABLE records(value TEXT NOT NULL)")
+    skill_digest = _create_skill_cas(control)
     staged: dict[str, dict[str, str]] = {}
     calls: list[str] = []
 
@@ -2397,6 +2505,11 @@ def test_rollback_schema_gate_runs_all_roles_with_verified_clone_backup(
                 volume_id=environment["ECOREX_CP_STORAGE_VOLUME_ID"],
             )
             backup.latest(full_digest=True)
+            LocalSkillBundleStore(
+                Path(environment["ECOREX_CP_DATABASE_PATH"]).parent
+                / "skill-hub-cas",
+                create=False,
+            ).verify(skill_digest)
         calls.append(code)
 
     monkeypatch.setattr(deployment, "ENCRYPTED_VOLUME_ROOT", tmp_path)
