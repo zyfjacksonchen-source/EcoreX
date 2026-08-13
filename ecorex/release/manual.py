@@ -255,7 +255,8 @@ class ReleaseRunStore:
             prefix=".run.", suffix=".json", dir=self.root
         )
         try:
-            os.fchmod(descriptor, 0o600)
+            if fchmod := getattr(os, "fchmod", None):
+                fchmod(descriptor, 0o600)
             with os.fdopen(descriptor, "wb") as stream:
                 stream.write(payload)
                 stream.flush()

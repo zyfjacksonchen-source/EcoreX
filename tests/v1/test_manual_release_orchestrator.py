@@ -109,6 +109,12 @@ def test_state_machine_is_monotonic_resumable_and_identity_bound(tmp_path):
     assert ReleaseRunStore.open(tmp_path, SPEC.run_id).spec == SPEC
 
 
+def test_release_store_uses_windows_native_acl_without_fchmod(tmp_path, monkeypatch):
+    monkeypatch.delattr("ecorex.release.manual.os.fchmod", raising=False)
+    store = ReleaseRunStore(tmp_path, SPEC)
+    assert store.create()["status"] == "created"
+
+
 def test_prepare_boundary_requires_explicit_exact_confirmation(tmp_path):
     store = ReleaseRunStore(tmp_path, SPEC)
     store.create()
