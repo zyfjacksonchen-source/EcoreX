@@ -504,3 +504,42 @@ environment failure until the product failure reproduces from known state.
 - The focused asset check proves transparent corners, the exact live-area
   bounds, an opaque center, and sub-one-channel mean drift against the existing
   Windows brand artwork after normalization.
+### 2026-08-13 CU-205-WINDOWS-READINESS-001
+
+- Windows source readiness used temporary source checkpoint `89862285921e`
+  only; it is not the frozen 2.0.5 identity. The existing isolated worktree was
+  fast-forwarded by a complete Git bundle and never launched. The host retains
+  an installed 2.0.4 application for the final Session 1 upgrade replay.
+- A checksum-verified official Node `22.23.1` archive (SHA-256
+  `7df0bc9375723f4a86b3aa1b7cc73342423d9677a8df4538aca31a049e309c29`)
+  provides npm `10.9.8`. uv's cached CPython `3.11.9` created an acceptance-only
+  virtual environment, and the hash-locked dev profile synchronized all 66
+  packages. HOME, profile, app-data, data, and temp paths stayed under the
+  disposable acceptance root; no user configuration or scheduled task changed.
+- Source checks exposed three stale release-test boundaries and one real
+  Windows release-store defect. The package surface omitted its already
+  packaged `models.model_capabilities` dependency; the channel constructor
+  fixture blocked Windows' loopback `socketpair`; the release receipt still
+  tested the legacy enterprise catalog instead of Cow's 19 hard tools plus the
+  four Office tools; and `ReleaseRunStore` unconditionally called unavailable
+  `os.fchmod`, then could not close/delete the Windows temporary file.
+- Fixes `e01eed93`, `2581ba03`, `962dc44e`, and `bc724a80` respectively correct
+  those shared boundaries. The final receipt now requires exact Cow Hard19 plus
+  Office4, all with completed visible terminal states; enterprise Connector
+  policy is not substituted for Cow tools. POSIX retains descriptor chmod while
+  Windows uses its native inherited ACL. The complete receipt suite passed `7`
+  tests on Windows and `7` on macOS; the packaging suite passed `4`, and the
+  channel regression passed on both platforms.
+- On the temporary checkpoint, the selected Python source/package-shape sets
+  passed `32` and `31` cases apart from the two corrected test defects. Exact
+  Node type-check passed; Electron/updater/staging-shape checks passed `21` with
+  one POSIX-permission case correctly skipped on Windows, and Runtime codegen
+  passed both cases after binding the isolated Python executable. Browser
+  state/search/fetch, OCR, Office Artifact/schema, Scheduler/Skill, channel,
+  Feed, and Windows postsign paths were included in the passing source set.
+- No candidate was built. Final proof still requires the one frozen source
+  SHA, its immutable Windows Bootstrap and release directory, installer plus
+  `latest.yml` and blockmap, and a Session 1 installed 2.0.4 to 2.0.5 upgrade
+  followed by real Hard19+Office4, Browser, OCR, Office, Scheduler, Skill, and
+  channel replay. Production `latest.yml` remains intentionally untouched until
+  same-byte Feed publication.
