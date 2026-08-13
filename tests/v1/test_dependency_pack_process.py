@@ -29,6 +29,7 @@ from ecorex.integration.dependency_pack_process import (
 )
 from ecorex.integration.dependency_pack_worker import _verify_ooxml_archive
 from ecorex.integration.pack_python import PackPythonIdentity
+from ecorex.release.process_boundary import BoundedProcessResult
 from ecorex.update import SignatureEnvelope
 
 
@@ -227,6 +228,59 @@ def test_ocr_executes_only_from_verified_installed_pack_snapshot(
         assert "4827" in result["text"]
         assert sys.modules.get("numpy") is numpy_before
         assert sys.modules.get("rapidocr_onnxruntime") is rapidocr_before
+    finally:
+        process.close()
+
+
+def test_ocr_cold_worker_gets_one_bounded_attempt_beyond_30_seconds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = VerifiedDependencyPackProcessAdapter(
+        _verified_dependency_pack(
+            tmp_path,
+            "ocr",
+            {"ecorex-dependency-pack.json": b"{}"},
+        ),
+        python_executable=Path(sys.executable),
+        python_identity=_identity(),
+    )
+    process._expected_files = {}
+    process._root.mkdir()
+    worker = tmp_path / "worker.py"
+    worker.write_text("", encoding="utf-8")
+    monkeypatch.setattr(process, "_verify_snapshot", lambda: None)
+    monkeypatch.setattr(process, "_verify_artifact", lambda: None)
+    monkeypatch.setattr(process, "_verified_worker", lambda: worker)
+    calls: list[float] = []
+
+    def invoke_once(*_args, **kwargs):
+        calls.append(kwargs["timeout_seconds"])
+        assert 31.9 < kwargs["timeout_seconds"] <= 38.0
+        return BoundedProcessResult(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "schema_version": 1,
+                    "pack_id": "ocr",
+                    "status": "success",
+                    "result": {"provider": "rapidocr_onnxruntime", "text": "OCR"},
+                }
+            ).encode(),
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(
+        "ecorex.release.process_boundary.run_bounded_process",
+        invoke_once,
+    )
+    try:
+        result = PackOCRServiceAdapter(process).extract(
+            b"cold-image",
+            timeout_seconds=2.0,
+        )
+        assert result["text"] == "OCR"
+        assert calls == [38.0]
     finally:
         process.close()
 

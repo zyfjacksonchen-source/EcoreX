@@ -28,6 +28,8 @@ _MAX_FILES = 50_000
 _MAX_REQUEST_BYTES = 12 * 1024 * 1024
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 _MAX_WORKER_BYTES = 256 * 1024
+_MAX_OPERATION_TIMEOUT_SECONDS = 30.0
+_MAX_PROCESS_TIMEOUT_SECONDS = 38.0
 OFFICE_READ_JOB_MEMORY_LIMIT_BYTES = (
     dependency_pack_worker.OFFICE_READ_JOB_MEMORY_LIMIT_BYTES
 )
@@ -95,7 +97,7 @@ class VerifiedDependencyPackProcessAdapter:
 
         if not isinstance(operation, str) or not operation or len(operation) > 64:
             raise DependencyPackProcessError("dependency_pack_operation_invalid")
-        if not 0.5 <= float(timeout_seconds) <= 30:
+        if not 0.5 <= float(timeout_seconds) <= _MAX_OPERATION_TIMEOUT_SECONDS:
             raise DependencyPackProcessError("dependency_pack_timeout_invalid")
         request = json.dumps(
             {
@@ -122,7 +124,10 @@ class VerifiedDependencyPackProcessAdapter:
             # modules before the operation-specific timeout can begin. Keep
             # that startup bounded without turning a healthy first call into
             # a false timeout on slower Windows disks or antivirus scans.
-            process_timeout = min(30.0, max(15.0, float(timeout_seconds) + 8.0))
+            process_timeout = min(
+                _MAX_PROCESS_TIMEOUT_SECONDS,
+                max(15.0, float(timeout_seconds) + 8.0),
+            )
             office_read = self.pack.manifest.pack_id == "office" and operation in {
                 "read",
                 "edit",
@@ -402,11 +407,10 @@ class PackOCRServiceAdapter:
         return self.process.invoke(
             "extract",
             {"content_base64": base64.b64encode(content).decode("ascii")},
-            # The user bound covers inference. A cold isolated worker also
-            # has to load signed ONNX native libraries and model weights; keep
-            # that startup bounded without making the default 2s request fail
-            # before inference can begin.
-            timeout_seconds=min(30.0, max(22.0, float(timeout_seconds) + 8.0)),
+            # The worker loads signed ONNX libraries and model weights before
+            # inference in the same one-shot process. Keep one bounded attempt;
+            # the shared process boundary adds its separate 8s Python startup.
+            timeout_seconds=_MAX_OPERATION_TIMEOUT_SECONDS,
         )
 
     async def aclose(self) -> None:
