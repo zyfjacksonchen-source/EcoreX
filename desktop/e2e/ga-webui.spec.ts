@@ -1007,6 +1007,11 @@ test("settings persist output location and expose Cow knowledge and memory files
   await expect(dialog.getByRole("heading", { name: "记忆", exact: true })).toBeVisible();
   await expect(dialog.getByRole("heading", { name: "知识", exact: true })).toBeHidden();
   const memorySection = dialog.getByRole("heading", { name: "记忆", exact: true }).locator("..");
+  const learningSwitch = memorySection.getByRole("switch", { name: "记忆学习与夜间梦境" });
+  await expect(learningSwitch).toBeEnabled();
+  await expect(learningSwitch).toHaveAttribute("aria-checked", "true");
+  await learningSwitch.click();
+  await expect(learningSwitch).toHaveAttribute("aria-checked", "false");
   await expect(memorySection.getByRole("tab", { name: "记忆文件" })).toBeVisible();
   await memorySection.getByRole("button", { name: /factory\.md/u }).click();
   await expect(memorySection.getByText("e-Mate 内置记忆", { exact: false })).toBeVisible();
@@ -1015,7 +1020,7 @@ test("settings persist output location and expose Cow knowledge and memory files
   await expect(memorySection.getByText(/专业严谨/u)).toBeVisible();
 
   const state = await guardedPage.evaluate(async () => fetch("/__ga/state").then((response) => response.json()));
-  expect(state).toMatchObject({ output_location: "workspace" });
+  expect(state).toMatchObject({ output_location: "workspace", memory_learning_enabled: false });
 });
 
 test("account menu exposes the user name and performs a real lease-bound logout", async ({ guardedPage }) => {
@@ -1523,29 +1528,28 @@ test("image artifact opens fitted, keeps zoom controls, and restores keyboard fo
   await expect(artifactButton).toBeFocused();
 });
 
-test("a durable partial image batch survives refresh as one accessible gallery", async ({ guardedPage }) => {
+test("a durable partial image batch survives refresh without synthetic failure slots", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "image-gallery");
   const gallery = guardedPage.getByRole("region", { name: /图片画廊/ });
   await expect(gallery).toBeVisible();
-  await expect(gallery).toHaveAttribute("aria-label", "图片画廊，第 1 张，共 3 张");
+  await expect(gallery).toHaveAttribute("aria-label", "图片画廊，第 1 张，共 2 张");
   await expect(guardedPage.locator('[data-artifact-status="ready"]')).toHaveCount(2);
   await expect(guardedPage.locator('[data-artifact-status="ready"]').first()).toContainText("已完成");
   const failedSlot = guardedPage.locator('[data-image-batch-task-id="image-batch-task-ga-1"]');
-  await expect(failedSlot).toHaveAttribute("data-artifact-status", "failed");
-  await expect(failedSlot).toContainText("生成失败");
+  await expect(failedSlot).toHaveCount(0);
   await expect(guardedPage.getByRole("button", { name: "打开：批次图片_01.png" })).toHaveCount(0);
   await expect(guardedPage.getByRole("button", { name: "下载：批次图片_01.png" })).toBeVisible();
 
   await guardedPage.getByRole("button", { name: "下一张图片" }).click();
-  await expect(gallery).toHaveAttribute("aria-label", "图片画廊，第 2 张，共 3 张");
-  await gallery.focus();
-  await guardedPage.keyboard.press("ArrowRight");
-  await expect(gallery).toHaveAttribute("aria-label", "图片画廊，第 3 张，共 3 张");
+  await expect(gallery).toHaveAttribute("aria-label", "图片画廊，第 2 张，共 2 张");
   await expect(guardedPage.getByRole("button", { name: "下一张图片" })).toBeDisabled();
-
+  await gallery.focus();
+  await guardedPage.keyboard.press("ArrowLeft");
+  await expect(gallery).toHaveAttribute("aria-label", "图片画廊，第 1 张，共 2 张");
+  await guardedPage.keyboard.press("ArrowRight");
+  await expect(gallery).toHaveAttribute("aria-label", "图片画廊，第 2 张，共 2 张");
   await guardedPage.getByRole("button", { name: "上一张图片" }).click();
-  await guardedPage.getByRole("button", { name: "上一张图片" }).click();
-  await expect(gallery).toHaveAttribute("aria-label", "图片画廊，第 1 张，共 3 张");
+  await expect(gallery).toHaveAttribute("aria-label", "图片画廊，第 1 张，共 2 张");
   await guardedPage.getByRole("button", { name: "预览图片：批次图片_01.png" }).click();
   await expect(guardedPage.getByRole("dialog", { name: "批次图片_01.png" })).toBeVisible();
   expect(await guardedPage.evaluate(() => (
@@ -1558,8 +1562,8 @@ test("a durable partial image batch survives refresh as one accessible gallery",
   const openThread = guardedPage.getByRole("button", { name: /^打开任务：/ }).first();
   await expect(openThread).toBeVisible();
   await openThread.click();
-  await expect(gallery).toHaveAttribute("aria-label", "图片画廊，第 1 张，共 3 张");
-  await expect(failedSlot).toHaveAttribute("data-artifact-status", "failed");
+  await expect(gallery).toHaveAttribute("aria-label", "图片画廊，第 1 张，共 2 张");
+  await expect(failedSlot).toHaveCount(0);
 });
 
 test("forced colors and reduced motion retain a visible keyboard focus treatment", async ({ browser }) => {

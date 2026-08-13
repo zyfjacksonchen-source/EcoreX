@@ -899,6 +899,7 @@ function scenarioState(name) {
     memoryRevision: 1,
     memoryResettableCount: 2,
     memoryReset: null,
+    memoryLearningEnabled: true,
     knowledgeDocuments: new Map([
       ["README.md", { content: "# e-Mate 知识库\n\n[项目说明](项目/说明.md)", updated_at: NOW }],
       ["项目/说明.md", { content: "# 项目说明\n\n真实知识目录。", updated_at: NOW }],
@@ -1985,6 +1986,7 @@ async function handleApi(holder, req, res, url) {
       permission_profile: state.permissionProfile,
       output_location: state.outputLocation,
       memory_resettable_count: state.memoryResettableCount,
+      memory_learning_enabled: state.memoryLearningEnabled,
       authenticated: state.authenticated,
       session_logout_count: state.sessionLogoutCount,
       last_turn_model: state.projection?.turns.at(-1)?.agent_model_id ?? null,
@@ -2032,6 +2034,14 @@ async function handleApi(holder, req, res, url) {
   }
   if (path === "/api/v1/memory" && req.method === "GET") {
     return json(res, 200, memorySnapshot(state));
+  }
+  if (path === "/api/v1/memory/learning" && req.method === "GET") {
+    return json(res, 200, { enabled: state.memoryLearningEnabled });
+  }
+  if (path === "/api/v1/memory/learning" && req.method === "PUT") {
+    const request = await body(req);
+    state.memoryLearningEnabled = request.enabled;
+    return json(res, 200, { enabled: state.memoryLearningEnabled });
   }
   if (path === "/api/v1/knowledge/tree" && req.method === "GET") {
     return json(res, 200, knowledgeTree(state, url.searchParams.get("query") || ""));
