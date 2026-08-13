@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { fileURLToPath } = require("node:url");
-const { BackendManager, runtimeResponds } = require("./backend.cjs");
+const { BackendManager, runtimeDiagnosticCode, runtimeResponds } = require("./backend.cjs");
 const { externalHttpUrl } = require("./navigation-policy.cjs");
 const { readRuntimeBearerToken, TaskNotificationMonitor } = require("./task-notifications.cjs");
 const { initDesktopUpdater } = require("./updater.cjs");
@@ -176,12 +176,13 @@ async function startBackendWithRetry(window) {
     try {
       return await backend.start();
     } catch (error) {
-      console.error(`[e-Mate] Runtime startup failed: ${error instanceof Error ? error.message : "Unknown failure."}`);
+      const diagnosticCode = runtimeDiagnosticCode(error);
+      console.error(`[e-Mate] Runtime startup failed (${diagnosticCode}).`);
       const result = await dialog.showMessageBox(window, {
         type: "error",
         title: `${PRODUCT_NAME} 启动失败`,
         message: `${PRODUCT_NAME} Runtime 无法启动。`,
-        detail: "安装包和原有数据保持不变。你可以重试，或退出后联系企业管理员。",
+        detail: `安装包和原有数据保持不变。诊断码：${diagnosticCode}。你可以重试，或退出后联系企业管理员。`,
         buttons: ["重试", "退出"],
         defaultId: 0,
         cancelId: 1,
@@ -223,7 +224,7 @@ async function restartRuntime() {
 
 async function openThreadFromNotification(threadId) {
   if (!mainWindow || mainWindow.isDestroyed()) {
-    const window = createWindow(backend.origin);
+    const window = createWindow();
     await window.loadURL(backend.origin);
   }
   focusWindow();
@@ -253,7 +254,7 @@ async function startTaskNotifications(runtimeOrigin) {
   }
 }
 
-function createWindow(runtimeOrigin) {
+function createWindow(runtimeOrigin = () => backend.origin) {
   const window = new BrowserWindow({
     width: 1280,
     height: 840,
@@ -277,10 +278,11 @@ function createWindow(runtimeOrigin) {
     CONTEXT_PARAMS.set(window.webContents, pending);
   });
   window.webContents.on("will-navigate", (event, url) => {
-    if (url !== runtimeOrigin && !url.startsWith(`${runtimeOrigin}/`)) event.preventDefault();
+    const origin = runtimeOrigin();
+    if (url !== origin && !url.startsWith(`${origin}/`)) event.preventDefault();
   });
   window.webContents.setWindowOpenHandler(({ url }) => {
-    const externalUrl = externalHttpUrl(url, runtimeOrigin);
+    const externalUrl = externalHttpUrl(url, runtimeOrigin());
     if (externalUrl) void shell.openExternal(externalUrl);
     return { action: "deny" };
   });
@@ -380,7 +382,7 @@ async function launch() {
   backend.on("exit", (code) => {
     if (!quitting && code === 86) void restartRuntime();
   });
-  const window = createWindow(backend.origin);
+  const window = createWindow();
   const runtimeStartup = startBackendWithRetry(window);
   await window.loadURL(startupPage());
   updater = initDesktopUpdater(() => mainWindow);
@@ -412,7 +414,7 @@ if (!singleInstance) {
 app.on("activate", () => {
   if (mainWindow) focusWindow();
   else if (backend) {
-    const window = createWindow(backend.origin);
+    const window = createWindow();
     void window.loadURL(backend.origin);
   }
 });

@@ -57,10 +57,10 @@ def write_runtime_startup_diagnostic(
 ) -> bool:
     """Best-effort write of a fixed safe stage emitted by the child Runtime.
 
-    The caller supplies neither a filename nor an install root.  Both are
-    derived from the canonical ``slots/<slot>/payload`` current directory and
-    the Bootstrap-issued token, so a user-controlled environment cannot select
-    an arbitrary write target.
+    The caller supplies neither a filename nor an install root.  The target is
+    either derived from the canonical ``slots/<slot>/payload`` layout or from
+    the packaged desktop data root injected by Electron.  The opaque launch
+    token remains the only filename input.
     """
 
     if _STAGE.fullmatch(stage) is None:
@@ -73,9 +73,20 @@ def write_runtime_startup_diagnostic(
         payload = Path(cwd if cwd is not None else os.getcwd()).resolve(strict=True)
         slot = payload.parent
         slots = slot.parent
-        if payload.name != "payload" or slots.name != "slots":
+        if payload.name != "payload":
             return False
-        root = slots.parent
+        if slots.name == "slots":
+            root = slots.parent
+        elif source.get("EMATE_PACKAGED_RUNTIME") == "1":
+            raw_root = source.get("EMATE_DATA_DIR")
+            if not isinstance(raw_root, str) or not raw_root:
+                return False
+            root = Path(raw_root)
+            if not root.is_absolute():
+                return False
+            root = root.resolve(strict=True)
+        else:
+            return False
         directory = root / STARTUP_DIAGNOSTIC_DIRECTORY
         metadata = directory.lstat()
         if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):

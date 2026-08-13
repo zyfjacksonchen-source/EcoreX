@@ -9,6 +9,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import backendContract from "../electron/backend.cjs";
+import navigationPolicy from "../electron/navigation-policy.cjs";
 import updateContract from "../electron/update-contract.cjs";
 
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -56,6 +57,44 @@ server.listen(port, "127.0.0.1", () => console.log(server.address().port));
 process.on("SIGTERM", () => server.close(() => process.exit(0)));
 `;
 
+const stageFailureProgram = String.raw`
+const fs = require("node:fs");
+const path = require("node:path");
+const root = process.env.EMATE_DATA_DIR;
+const attemptsPath = path.join(root, "startup-test-attempts");
+const attempts = fs.existsSync(attemptsPath) ? Number(fs.readFileSync(attemptsPath, "utf8")) : 0;
+if (attempts < 2) {
+  const token = process.env.ECOREX_RUNTIME_STARTUP_DIAGNOSTIC_TOKEN;
+  const stage = attempts === 0 ? "credential_vault" : "legacy_desktop_data_migration";
+  fs.writeFileSync(attemptsPath, String(attempts + 1));
+  fs.writeFileSync(path.join(root, ".runtime-startup", token + ".json"), JSON.stringify({
+    schema_version: 1,
+    stage,
+    token,
+  }), { flag: "wx" });
+  process.exit(64);
+}
+${ownedRuntimeProgram}
+`;
+
+const bindRaceRuntimeProgram = String.raw`
+const fs = require("node:fs");
+const path = require("node:path");
+const root = process.env.EMATE_DATA_DIR;
+const marker = path.join(root, "startup-test-bind-race");
+if (!fs.existsSync(marker)) {
+  const token = process.env.ECOREX_RUNTIME_STARTUP_DIAGNOSTIC_TOKEN;
+  fs.writeFileSync(marker, "observed");
+  fs.writeFileSync(path.join(root, ".runtime-startup", token + ".json"), JSON.stringify({
+    schema_version: 1,
+    stage: "http_server_bind",
+    token,
+  }), { flag: "wx" });
+  process.exit(64);
+}
+${ownedRuntimeProgram}
+`;
+
 const startOwnedRuntime = (nonce, { port = 0, unknown = false, ownerDelayMs = 0 } = {}) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, ["-e", ownedRuntimeProgram], {
     detached: true,
@@ -90,14 +129,14 @@ const loopbackPortOpen = (port) => new Promise((resolve) => {
   socket.once("error", () => resolve(false));
 });
 
-const stageTestRuntime = async (resources, identity) => {
+const stageTestRuntime = async (resources, identity, program = ownedRuntimeProgram) => {
   const runtime = path.join(resources, "runtime");
   const payload = path.join(runtime, "payload");
   const command = path.join(payload, "bin", process.platform === "win32" ? "ecorex.exe" : "ecorex");
   await mkdir(path.dirname(command), { recursive: true });
   await link(process.execPath, command);
   await Promise.all([
-    writeFile(path.join(payload, "serve"), ownedRuntimeProgram),
+    writeFile(path.join(payload, "serve"), program),
     writeFile(path.join(runtime, ".slot.json"), JSON.stringify(identity)),
     writeFile(path.join(runtime, "release-manifest.json"), "{}"),
   ]);
@@ -151,7 +190,9 @@ test("desktop loads the existing loopback Runtime and never packages a second re
   assert.match(main, /await backend\?\.stop\(\)/);
   assert.match(main, /finally \{\s+shutdownComplete = true;\s+app\.quit\(\)/);
   assert.match(main, /buttons: \["重试", "退出"\]/);
-  assert.match(main, /console\.error\(`\[e-Mate\] Runtime startup failed:/);
+  assert.match(main, /console\.error\(`\[e-Mate\] Runtime startup failed \(\$\{diagnosticCode\}\)\.`\)/);
+  assert.match(main, /function createWindow\(runtimeOrigin = \(\) => backend\.origin\)/);
+  assert.match(main, /const origin = runtimeOrigin\(\)/);
   assert.match(main, /src", "v1", "assets", "emate-logo\.png"/);
   assert.match(main, /titleBarStyle: "hiddenInset"/);
   assert.match(main, /trafficLightPosition: \{ x: 14, y: 18 \}/);
@@ -183,7 +224,7 @@ test("desktop loads the existing loopback Runtime and never packages a second re
   assert.match(backend, /runtime-owner\.json/);
   assert.match(backend, /x-ecorex-runtime-owner/);
   assert.match(backend, /ECOREX_BOOTSTRAPPED === "1"/);
-  assert.match(backend, /startupFailure = new Error\(`e-Mate Runtime stopped during startup/);
+  assert.match(backend, /stage \? `runtime_stage_\$\{stage\}` : runtimeExitDiagnosticCode\(code\)/);
   assert.doesNotMatch(backend, /if \(code !== 0\) startupFailure/);
   assert.match(backend, /while \(!startupFailure\)/);
   assert.doesNotMatch(backend, /Date\.now\(\) \+ 5 \* 60_000/);
@@ -378,11 +419,89 @@ test("desktop never rotates a receipt or kills an unknown loopback listener", as
       port: unknown.port,
     });
 
-    await assert.rejects(backend.start(), /not owned by e-Mate/);
+    await assert.rejects(
+      backend.start(),
+      (error) => error?.diagnosticCode === "runtime_port_occupied",
+    );
     assert.equal(await readFile(receiptPath, "utf8"), receipt);
     assert.equal(await loopbackPortOpen(unknown.port), true);
   } finally {
     await stopTestRuntime(unknown?.child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("desktop moves an unknown occupied port and one bind race to a working loopback origin", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-port-fallback-"));
+  const resources = path.join(root, "resources");
+  const dataDir = path.join(root, "data");
+  const identity = runtimeIdentity();
+  const unknown = http.createServer((_request, response) => {
+    response.writeHead(404);
+    response.end();
+  });
+  let backend;
+  try {
+    await stageTestRuntime(resources, identity, bindRaceRuntimeProgram);
+    await new Promise((resolve) => unknown.listen(0, "127.0.0.1", resolve));
+    const occupiedPort = unknown.address().port;
+    backend = new backendContract.BackendManager({
+      packaged: true,
+      resourcesPath: resources,
+      dataDir,
+      port: occupiedPort,
+      allowPortFallback: true,
+    });
+
+    const origin = await backend.start();
+
+    assert.notEqual(origin, `http://127.0.0.1:${occupiedPort}`);
+    assert.equal(origin, backend.origin);
+    assert.equal(await loopbackPortOpen(occupiedPort), true);
+    assert.equal(await readFile(path.join(dataDir, "startup-test-bind-race"), "utf8"), "observed");
+    assert.equal(navigationPolicy.externalHttpUrl(`${origin}/threads/1`, origin), null);
+    assert.equal(navigationPolicy.externalHttpUrl("https://example.com/", origin), "https://example.com/");
+  } finally {
+    await backend?.stop().catch(() => {});
+    if (unknown.listening) await new Promise((resolve) => unknown.close(resolve));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("desktop replaces safe startup diagnostics on retry and removes them after success", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-diagnostics-"));
+  const resources = path.join(root, "resources");
+  const dataDir = path.join(root, "data");
+  const diagnosticPath = path.join(dataDir, "diagnostics", "runtime-startup.json");
+  let backend;
+  try {
+    await stageTestRuntime(resources, runtimeIdentity(), stageFailureProgram);
+    const port = await backendContract.availableLoopbackPort();
+    backend = new backendContract.BackendManager({ packaged: true, resourcesPath: resources, dataDir, port });
+
+    await assert.rejects(backend.start(), (error) => error?.diagnosticCode === "runtime_stage_credential_vault");
+    const first = JSON.parse(await readFile(diagnosticPath, "utf8"));
+    assert.deepEqual(first, {
+      schema_version: 1,
+      status: "failed",
+      diagnostic_code: "runtime_stage_credential_vault",
+      phase: "runtime",
+      stage: "credential_vault",
+      exit_code: 64,
+    });
+
+    await assert.rejects(
+      backend.start(),
+      (error) => error?.diagnosticCode === "runtime_stage_legacy_desktop_data_migration",
+    );
+    const second = JSON.parse(await readFile(diagnosticPath, "utf8"));
+    assert.equal(second.diagnostic_code, "runtime_stage_legacy_desktop_data_migration");
+    assert.equal(JSON.stringify(second).includes(root), false);
+
+    assert.equal(await backend.start(), backend.origin);
+    await assert.rejects(readFile(diagnosticPath, "utf8"), (error) => error?.code === "ENOENT");
+  } finally {
+    await backend?.stop().catch(() => {});
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -411,7 +530,10 @@ test("Runtime spawn errors reject without an unhandled error race", async (conte
       port: 0,
     });
 
-    await assert.rejects(backend.start(), /could not be launched/);
+    await assert.rejects(
+      backend.start(),
+      (error) => error?.diagnosticCode === "runtime_spawn_eacces",
+    );
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(backendContract.runtimeOwnerReceipt(dataDir), null);
   } finally {
@@ -440,7 +562,10 @@ test("legacy owner receipts are neither adopted nor killed", async () => {
       port: legacy.port,
     });
 
-    await assert.rejects(backend.start(), /not owned by e-Mate/);
+    await assert.rejects(
+      backend.start(),
+      (error) => error?.diagnosticCode === "runtime_port_occupied",
+    );
     assert.equal(await loopbackPortOpen(legacy.port), true);
   } finally {
     await stopTestRuntime(legacy?.child);

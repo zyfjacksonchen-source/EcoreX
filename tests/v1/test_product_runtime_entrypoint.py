@@ -81,7 +81,10 @@ from ecorex.session import (
     SignedManagedSessionLease,
     token_digest,
 )
-from ecorex.startup_diagnostics import STARTUP_DIAGNOSTIC_TOKEN_ENV
+from ecorex.startup_diagnostics import (
+    STARTUP_DIAGNOSTIC_TOKEN_ENV,
+    write_runtime_startup_diagnostic,
+)
 from ecorex.update import (
     ReleaseArtifact,
     ReleaseChannel,
@@ -2387,6 +2390,35 @@ def test_cli_emits_only_safe_nonce_bound_startup_stage(
     assert diagnostic == {
         "schema_version": 1,
         "stage": "capability_pack_binding",
+        "token": token,
+    }
+
+
+def test_direct_packaged_runtime_emits_safe_nonce_bound_startup_stage(
+    tmp_path: Path,
+) -> None:
+    payload = tmp_path / "resources/runtime/payload"
+    payload.mkdir(parents=True)
+    data_root = tmp_path / "user-data"
+    diagnostic_root = data_root / ".runtime-startup"
+    diagnostic_root.mkdir(parents=True)
+    token = "B" * 43
+
+    assert write_runtime_startup_diagnostic(
+        "credential_vault",
+        cwd=payload,
+        environment={
+            STARTUP_DIAGNOSTIC_TOKEN_ENV: token,
+            "EMATE_PACKAGED_RUNTIME": "1",
+            "EMATE_DATA_DIR": str(data_root),
+        },
+    )
+
+    assert json.loads(
+        (diagnostic_root / f"{token}.json").read_text(encoding="utf-8")
+    ) == {
+        "schema_version": 1,
+        "stage": "credential_vault",
         "token": token,
     }
 

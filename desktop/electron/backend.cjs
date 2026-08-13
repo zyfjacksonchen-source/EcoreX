@@ -7,8 +7,113 @@ const net = require("node:net");
 const path = require("node:path");
 
 const DEFAULT_RUNTIME_PORT = 8765;
+const MAX_RUNTIME_PORT_ATTEMPTS = 3;
+const STARTUP_DIAGNOSTIC_TOKEN_ENV = "ECOREX_RUNTIME_STARTUP_DIAGNOSTIC_TOKEN";
+const SAFE_DIAGNOSTIC = /^[a-z][a-z0-9_]{0,127}$/;
 const SAFE_RUNTIME_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
+
+class RuntimeStartupError extends Error {
+  constructor(diagnosticCode, { exitCode = null, phase = "runtime", stage = null } = {}) {
+    super("e-Mate Runtime could not start.");
+    this.name = "RuntimeStartupError";
+    this.diagnosticCode = SAFE_DIAGNOSTIC.test(diagnosticCode) ? diagnosticCode : "runtime_startup_failed";
+    this.exitCode = Number.isSafeInteger(exitCode) ? exitCode : null;
+    this.phase = ["package", "port", "runtime", "spawn"].includes(phase) ? phase : "runtime";
+    this.stage = typeof stage === "string" && SAFE_DIAGNOSTIC.test(stage) ? stage : null;
+  }
+}
+
+function diagnosticDirectory(dataDir) {
+  return path.join(dataDir, ".runtime-startup");
+}
+
+function prepareRuntimeDiagnosticDirectory(dataDir) {
+  const directory = diagnosticDirectory(dataDir);
+  try {
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const metadata = fs.lstatSync(directory);
+    return metadata.isDirectory() && !metadata.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function consumeRuntimeStartupStage(dataDir, token) {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
+  const target = path.join(diagnosticDirectory(dataDir), `${token}.json`);
+  try {
+    const metadata = fs.lstatSync(target);
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size < 1 || metadata.size > 512) return null;
+    const value = JSON.parse(fs.readFileSync(target, "utf8"));
+    return (
+      value?.schema_version === 1
+      && value.token === token
+      && typeof value.stage === "string"
+      && SAFE_DIAGNOSTIC.test(value.stage)
+      && Object.keys(value).length === 3
+    ) ? value.stage : null;
+  } catch {
+    return null;
+  } finally {
+    try { fs.unlinkSync(target); } catch { /* Missing or protected advisory evidence is ignored. */ }
+  }
+}
+
+function runtimeDiagnosticCode(error) {
+  return error instanceof RuntimeStartupError ? error.diagnosticCode : "runtime_startup_failed";
+}
+
+function runtimeExitDiagnosticCode(exitCode) {
+  if (!Number.isSafeInteger(exitCode)) return "runtime_exit_terminated";
+  return exitCode < 0 ? `runtime_exit_n${Math.abs(exitCode)}` : `runtime_exit_${exitCode}`;
+}
+
+function writeRuntimeFailureDiagnostic(dataDir, error) {
+  const normalized = error instanceof RuntimeStartupError ? error : new RuntimeStartupError("runtime_startup_failed");
+  const directory = path.join(dataDir, "diagnostics");
+  let temporary = null;
+  try {
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const metadata = fs.lstatSync(directory);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) return false;
+    const target = path.join(directory, "runtime-startup.json");
+    temporary = `${target}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`;
+    fs.writeFileSync(temporary, `${JSON.stringify({
+      schema_version: 1,
+      status: "failed",
+      diagnostic_code: normalized.diagnosticCode,
+      phase: normalized.phase,
+      stage: normalized.stage,
+      exit_code: normalized.exitCode,
+    })}\n`, { mode: 0o600 });
+    fs.renameSync(temporary, target);
+    return true;
+  } catch {
+    try { if (temporary) fs.unlinkSync(temporary); } catch { /* No partial diagnostic remains. */ }
+    return false;
+  }
+}
+
+function clearRuntimeFailureDiagnostic(dataDir) {
+  try { fs.unlinkSync(path.join(dataDir, "diagnostics", "runtime-startup.json")); } catch { /* No stale diagnostic. */ }
+}
+
+function availableLoopbackPort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once("error", reject);
+    server.listen({ host: "127.0.0.1", port: 0, exclusive: true }, () => {
+      const address = server.address();
+      const port = address && typeof address === "object" ? address.port : null;
+      server.close(() => {
+        if (!Number.isSafeInteger(port) || port < 1) reject(new Error("loopback_port_unavailable"));
+        else resolve(port);
+      });
+    });
+  });
+}
 
 function runtimeIdentity(runtimeRoot) {
   try {
@@ -254,12 +359,13 @@ async function stopRuntimePid(pid, port) {
 }
 
 class BackendManager extends EventEmitter {
-  constructor({ packaged, resourcesPath, dataDir, port = DEFAULT_RUNTIME_PORT }) {
+  constructor({ packaged, resourcesPath, dataDir, port, allowPortFallback = port === undefined }) {
     super();
     this.packaged = packaged;
     this.resourcesPath = resourcesPath;
     this.dataDir = dataDir;
-    this.port = port;
+    this.port = port ?? DEFAULT_RUNTIME_PORT;
+    this.allowPortFallback = allowPortFallback;
     this.child = null;
     this.runtimePid = null;
     this.starting = null;
@@ -272,9 +378,16 @@ class BackendManager extends EventEmitter {
   async start() {
     if (this.child) return this.origin;
     if (this.starting) return this.starting;
+    clearRuntimeFailureDiagnostic(this.dataDir);
     this.starting = this.#start();
     try {
       return await this.starting;
+    } catch (error) {
+      const normalized = error instanceof RuntimeStartupError
+        ? error
+        : new RuntimeStartupError("runtime_startup_failed");
+      writeRuntimeFailureDiagnostic(this.dataDir, normalized);
+      throw normalized;
     } finally {
       this.starting = null;
     }
@@ -286,18 +399,18 @@ class BackendManager extends EventEmitter {
     let spec;
     if (this.packaged) {
       spec = packagedRuntimeSpec(this.resourcesPath, this.dataDir, this.port);
-      if (!spec) throw new Error("The packaged e-Mate Runtime is missing.");
+      if (!spec) throw new RuntimeStartupError("runtime_package_missing", { phase: "package" });
     } else {
       const payload = process.cwd();
       const isVerifiedPayload = process.env.ECOREX_BOOTSTRAPPED === "1"
         && path.basename(payload) === "payload"
         && path.basename(path.dirname(path.dirname(payload))) === "slots";
       if (!isVerifiedPayload) {
-        throw new Error("Development Runtime must be launched through the signed e-Mate Bootstrap.");
+        throw new RuntimeStartupError("runtime_development_authority_invalid", { phase: "package" });
       }
       const runtimeRoot = path.dirname(payload);
       const identity = runtimeIdentity(runtimeRoot);
-      if (!identity) throw new Error("Development Runtime identity is invalid.");
+      if (!identity) throw new RuntimeStartupError("runtime_development_identity_invalid", { phase: "package" });
       spec = {
         command: developmentPython(),
         args: ["-m", "ecorex.server.cli", "serve", "--host", "127.0.0.1", "--port", String(this.port)],
@@ -335,11 +448,40 @@ class BackendManager extends EventEmitter {
       }
     }
     if (await loopbackPortOccupied(this.port)) {
-      throw new Error(`Loopback port ${this.port} is occupied by a process not owned by e-Mate.`);
+      if (!this.allowPortFallback) throw new RuntimeStartupError("runtime_port_occupied", { phase: "port" });
+      this.port = await availableLoopbackPort();
+      spec = this.packaged
+        ? packagedRuntimeSpec(this.resourcesPath, this.dataDir, this.port)
+        : { ...spec, args: [...spec.args.slice(0, -1), String(this.port)] };
+      if (!spec) throw new RuntimeStartupError("runtime_package_missing", { phase: "package" });
     }
-    const ownerNonce = crypto.randomBytes(32).toString("base64url");
-    spec.environment.ECOREX_RUNTIME_OWNER_NONCE = ownerNonce;
+    for (let attempt = 0; attempt < MAX_RUNTIME_PORT_ATTEMPTS; attempt += 1) {
+      try {
+        return await this.#launch(spec);
+      } catch (error) {
+        if (
+          !this.allowPortFallback
+          || !(error instanceof RuntimeStartupError)
+          || error.stage !== "http_server_bind"
+          || attempt + 1 >= MAX_RUNTIME_PORT_ATTEMPTS
+        ) throw error;
+        this.port = await availableLoopbackPort();
+        spec = this.packaged
+          ? packagedRuntimeSpec(this.resourcesPath, this.dataDir, this.port)
+          : { ...spec, args: [...spec.args.slice(0, -1), String(this.port)] };
+        if (!spec) throw new RuntimeStartupError("runtime_package_missing", { phase: "package" });
+      }
+    }
+    throw new RuntimeStartupError("runtime_port_retry_exhausted");
+  }
 
+  async #launch(spec) {
+    const ownerNonce = crypto.randomBytes(32).toString("base64url");
+    const diagnosticToken = crypto.randomBytes(32).toString("base64url");
+    if (prepareRuntimeDiagnosticDirectory(this.dataDir)) {
+      spec.environment[STARTUP_DIAGNOSTIC_TOKEN_ENV] = diagnosticToken;
+    }
+    spec.environment.ECOREX_RUNTIME_OWNER_NONCE = ownerNonce;
     const child = spawn(spec.command, spec.args, {
       cwd: spec.cwd,
       env: spec.environment,
@@ -348,23 +490,31 @@ class BackendManager extends EventEmitter {
       detached: spec.detached,
     });
     let startupFailure = null;
-    child.once("error", () => {
-      startupFailure = new Error("e-Mate Runtime could not be launched.");
+    child.once("error", (error) => {
+      const code = typeof error?.code === "string" && /^[A-Z0-9_]{1,32}$/.test(error.code)
+        ? `runtime_spawn_${error.code.toLowerCase()}`
+        : "runtime_spawn_failed";
+      startupFailure = new RuntimeStartupError(code, { phase: "spawn" });
     });
     child.once("exit", (code) => {
       if (this.child === child) this.child = null;
-      startupFailure = new Error(`e-Mate Runtime stopped during startup (${code ?? "terminated"}).`);
+      const stage = consumeRuntimeStartupStage(this.dataDir, diagnosticToken);
+      startupFailure = new RuntimeStartupError(
+        stage ? `runtime_stage_${stage}` : runtimeExitDiagnosticCode(code),
+        { exitCode: code, stage },
+      );
       this.emit("exit", code);
     });
     if (!Number.isSafeInteger(child.pid) || child.pid < 1) {
-      throw new Error("e-Mate Runtime could not be launched.");
+      await new Promise((resolve) => child.once("error", resolve));
+      throw startupFailure ?? new RuntimeStartupError("runtime_spawn_failed", { phase: "spawn" });
     }
     this.child = child;
     this.runtimePid = child.pid;
     issueRuntimeOwnerReceipt(this.dataDir, child.pid, spec.runtimeIdentity, ownerNonce);
-
     while (!startupFailure) {
       if (await runtimeResponds(this.port, this.dataDir, spec.runtimeIdentity)) {
+        consumeRuntimeStartupStage(this.dataDir, diagnosticToken);
         this.emit("ready", this.origin);
         return this.origin;
       }
@@ -395,11 +545,16 @@ class BackendManager extends EventEmitter {
 module.exports = {
   BackendManager,
   DEFAULT_RUNTIME_PORT,
+  RuntimeStartupError,
+  availableLoopbackPort,
+  consumeRuntimeStartupStage,
   issueRuntimeOwnerReceipt,
   packagedRuntimeSpec,
   runtimeIdentity,
+  runtimeDiagnosticCode,
   runtimeOwnerNonce,
   runtimeOwnerReceipt,
   runtimeResponds,
   runtimeTerminationSpec,
+  writeRuntimeFailureDiagnostic,
 };

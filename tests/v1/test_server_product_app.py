@@ -289,6 +289,24 @@ def _installed_managed_session(
     return service, lease
 
 
+def test_product_runtime_uses_the_selected_loopback_port_for_all_oauth_origins(
+    tmp_path: Path,
+) -> None:
+    signed = _write_signed_bundle(tmp_path)
+    settings = replace(_settings(tmp_path, signed), port=49317)
+
+    app = create_product_app(settings)
+
+    assert settings.origin == "http://127.0.0.1:49317"
+    assert app.state.runtime_settings.webui_origins == (settings.origin,)
+    assert app.state.runtime_settings.connector_oauth_return_uri == (
+        settings.origin + "/api/v1/connectors/oauth/callback"
+    )
+    assert app.state.cow_mcp_service.manager.mcp_oauth_redirect_uri == (
+        settings.origin + "/mcp/oauth/callback"
+    )
+
+
 def test_product_app_serves_verified_bundle_and_same_origin_runtime(tmp_path):
     from agent.tools.scheduler import integration as scheduler_integration
 
