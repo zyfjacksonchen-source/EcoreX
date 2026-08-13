@@ -15,6 +15,15 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from ecorex.control_plane.management import AdminManagementRepository
 from ecorex.control_plane.management_schema import AdminManagementSchemaManager
+from ecorex.control_plane.production_storage import (
+    PersistentVolumeGuard,
+    ProductionStorageError,
+    SQLiteBackupManager,
+)
+from ecorex.control_plane.schema import (
+    ControlPlaneSchemaError,
+    ControlPlaneSchemaManager,
+)
 from ecorex.deployment import cloud_sidecar as deployment
 
 
@@ -2206,11 +2215,20 @@ def test_stage_environment_clones_sqlite_and_removes_disposable_copies(
 ) -> None:
     control = tmp_path / "control-plane" / "live.sqlite3"
     gateway = tmp_path / "gateway" / "live.sqlite3"
+    production_backups = tmp_path / "control-plane-backups"
+    production_backups.mkdir()
+    production_backup = production_backups / "production-only"
+    production_backup.write_bytes(b"do-not-touch")
     for database, value in ((control, "control"), (gateway, "gateway")):
         database.parent.mkdir()
         with deployment.sqlite3.connect(database) as connection:
             connection.execute("CREATE TABLE records(value TEXT NOT NULL)")
             connection.execute("INSERT INTO records VALUES(?)", (value,))
+    source_identity = (control.stat().st_ino, _sha(control))
+    production_backup_identity = (
+        production_backup.stat().st_ino,
+        _sha(production_backup),
+    )
 
     monkeypatch.setattr(deployment, "ENCRYPTED_VOLUME_ROOT", tmp_path)
     monkeypatch.setattr(deployment.shutil, "chown", lambda *_args, **_kwargs: None)
@@ -2220,6 +2238,8 @@ def test_stage_environment_clones_sqlite_and_removes_disposable_copies(
         "_service_environment",
         lambda service, _slot: {
             "ECOREX_CP_DATABASE_PATH": str(control),
+            "ECOREX_CP_BACKUP_DIRECTORY": str(production_backups),
+            "ECOREX_CP_STORAGE_VOLUME_ID": "stage-volume",
         }
         if service == "control-plane"
         else {"ECOREX_GATEWAY_DATABASE_PATH": str(gateway)},
@@ -2241,6 +2261,28 @@ def test_stage_environment_clones_sqlite_and_removes_disposable_copies(
             assert overrides["image"][
                 "ECOREX_IMAGE_ADMIN_MANAGEMENT_DATABASE_PATH"
             ] == str(staged_control)
+            staged_backups = Path(
+                overrides["control-plane"]["ECOREX_CP_BACKUP_DIRECTORY"]
+            )
+            empty_backups = staged_control.parent / "empty-backups"
+            empty_backups.mkdir()
+            with pytest.raises(ProductionStorageError, match="backup is missing"):
+                SQLiteBackupManager(
+                    staged_control,
+                    empty_backups,
+                    volume_id="stage-volume",
+                ).latest(full_digest=True)
+            staged_receipt = SQLiteBackupManager(
+                staged_control,
+                staged_backups,
+                volume_id="stage-volume",
+            ).latest(full_digest=True)
+            assert staged_receipt.database_sha256 == _sha(
+                staged_backups / f"{staged_receipt.backup_id}.sqlite3"
+            )
+            PersistentVolumeGuard(
+                staged_control, volume_id="stage-volume"
+            ).validate_wal()
             with deployment.sqlite3.connect(staged_control) as connection:
                 assert connection.execute("SELECT value FROM records").fetchone() == (
                     "control",
@@ -2257,6 +2299,121 @@ def test_stage_environment_clones_sqlite_and_removes_disposable_copies(
             raise RuntimeError("simulated stage failure")
 
     assert all(not directory.exists() for directory in staged_directories)
+    assert (control.stat().st_ino, _sha(control)) == source_identity
+    assert (
+        production_backup.stat().st_ino,
+        _sha(production_backup),
+    ) == production_backup_identity
+
+
+def test_stage_backup_and_clone_tampering_still_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    control = tmp_path / "control-plane" / "live.sqlite3"
+    gateway = tmp_path / "gateway" / "live.sqlite3"
+    control.parent.mkdir()
+    gateway.parent.mkdir()
+    ControlPlaneSchemaManager(control).migrate()
+    with deployment.sqlite3.connect(gateway) as connection:
+        connection.execute("CREATE TABLE records(value TEXT NOT NULL)")
+
+    monkeypatch.setattr(deployment, "ENCRYPTED_VOLUME_ROOT", tmp_path)
+    monkeypatch.setattr(deployment.shutil, "chown", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(deployment, "_fsync_directory", lambda _path: None)
+    monkeypatch.setattr(
+        deployment,
+        "_service_environment",
+        lambda service, _slot: {
+            "ECOREX_CP_DATABASE_PATH": str(control),
+            "ECOREX_CP_STORAGE_VOLUME_ID": "stage-volume",
+        }
+        if service == "control-plane"
+        else {"ECOREX_GATEWAY_DATABASE_PATH": str(gateway)},
+    )
+
+    with deployment._isolated_stage_environment("blue") as overrides:
+        staged_control = Path(overrides["control-plane"]["ECOREX_CP_DATABASE_PATH"])
+        staged_backups = Path(
+            overrides["control-plane"]["ECOREX_CP_BACKUP_DIRECTORY"]
+        )
+        manager = SQLiteBackupManager(
+            staged_control,
+            staged_backups,
+            volume_id="stage-volume",
+        )
+        receipt = manager.latest(full_digest=True)
+        manifest = staged_backups / f"{receipt.backup_id}.json"
+        manifest.write_bytes(manifest.read_bytes() + b"\n")
+        with pytest.raises(ProductionStorageError, match="receipt is invalid"):
+            manager.latest(full_digest=True)
+
+        with deployment.sqlite3.connect(staged_control) as connection:
+            connection.execute("CREATE TABLE control_unsafe_state(value TEXT)")
+        with pytest.raises(ControlPlaneSchemaError, match="fingerprint"):
+            ControlPlaneSchemaManager(staged_control).validate()
+
+
+def test_rollback_schema_gate_runs_all_roles_with_verified_clone_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    control = tmp_path / "control-plane" / "live.sqlite3"
+    gateway = tmp_path / "gateway" / "live.sqlite3"
+    for database in (control, gateway):
+        database.parent.mkdir()
+        with deployment.sqlite3.connect(database) as connection:
+            connection.execute("CREATE TABLE records(value TEXT NOT NULL)")
+    staged: dict[str, dict[str, str]] = {}
+    calls: list[str] = []
+
+    def service_environment(service: str, _slot: str) -> dict[str, str]:
+        base = (
+            {
+                "ECOREX_CP_DATABASE_PATH": str(control),
+                "ECOREX_CP_STORAGE_VOLUME_ID": "stage-volume",
+            }
+            if service == "control-plane"
+            else {"ECOREX_GATEWAY_DATABASE_PATH": str(gateway)}
+            if service == "gateway"
+            else {}
+        )
+        return {**base, **staged.get(service, {})}
+
+    def write_environment(
+        _slot: str,
+        _release: Path,
+        *,
+        overrides: dict[str, dict[str, str]] | None = None,
+        **_kwargs,
+    ) -> None:
+        staged.clear()
+        if overrides is not None:
+            staged.update(overrides)
+
+    def run_service(_command, *, code, environment, **_kwargs) -> None:
+        if code == "control_plane_recovery_schema_incompatible":
+            backup = SQLiteBackupManager(
+                Path(environment["ECOREX_CP_DATABASE_PATH"]),
+                Path(environment["ECOREX_CP_BACKUP_DIRECTORY"]),
+                volume_id=environment["ECOREX_CP_STORAGE_VOLUME_ID"],
+            )
+            backup.latest(full_digest=True)
+        calls.append(code)
+
+    monkeypatch.setattr(deployment, "ENCRYPTED_VOLUME_ROOT", tmp_path)
+    monkeypatch.setattr(deployment.shutil, "chown", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(deployment, "_fsync_directory", lambda _path: None)
+    monkeypatch.setattr(deployment, "_service_environment", service_environment)
+    monkeypatch.setattr(deployment, "_write_slot_environment", write_environment)
+    monkeypatch.setattr(deployment, "_run_service_command", run_service)
+
+    deployment._check_rollback_target_schema(tmp_path / "release", "blue")
+
+    assert calls == [
+        "control_plane_recovery_schema_incompatible",
+        "gateway_recovery_schema_incompatible",
+        "image_api_recovery_schema_incompatible",
+        "image_worker_recovery_schema_incompatible",
+    ]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires production-style symlinks")

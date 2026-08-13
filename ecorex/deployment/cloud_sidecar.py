@@ -58,6 +58,11 @@ from ecorex.control_plane.management import (
 )
 from ecorex.control_plane.management_models import CreateAdminUserRequest
 from ecorex.control_plane.models import ControlPrincipal
+from ecorex.control_plane.production_storage import (
+    PersistentVolumeGuard,
+    ProductionStorageError,
+    SQLiteBackupManager,
+)
 from ecorex.release.public_index import (
     MAX_PUBLIC_BOOTSTRAP_INDEX_BYTES,
     PublicBootstrapIndexError,
@@ -2629,6 +2634,37 @@ def _stage_database_snapshot(source: Path, target: Path) -> None:
         raise CloudDeployError("stage_database_snapshot_failed") from None
 
 
+def _prepare_stage_control_plane_storage(
+    database: Path, backup_directory: Path, *, volume_id: str
+) -> None:
+    """Give the disposable clone the same storage proof checked in production."""
+
+    try:
+        backup_directory.mkdir(mode=0o700)
+        shutil.chown(backup_directory, user="ecorex-cloud", group="ecorex-cloud")
+        with sqlite3.connect(database, timeout=30, isolation_level=None) as connection:
+            mode = connection.execute("PRAGMA journal_mode=WAL").fetchone()
+            if mode != ("wal",):
+                raise ProductionStorageError("isolated stage WAL is unavailable")
+        volume = PersistentVolumeGuard(database, volume_id=volume_id)
+        volume.install_or_validate()
+        source_digest = _sha256_file(database)
+        backup = SQLiteBackupManager(
+            database, backup_directory, volume_id=volume_id
+        )
+        receipt = backup.create(reason="operator")
+        if _sha256_file(database) != source_digest:
+            raise ProductionStorageError("isolated stage backup changed clone")
+        for path in (volume.marker_path, *backup_directory.iterdir()):
+            shutil.chown(path, user="ecorex-cloud", group="ecorex-cloud")
+            os.chmod(path, 0o600)
+        if backup.latest(full_digest=True) != receipt:
+            raise ProductionStorageError("isolated stage backup receipt changed")
+        _fsync_directory(backup_directory)
+    except (OSError, sqlite3.Error, ProductionStorageError):
+        raise CloudDeployError("stage_control_plane_backup_failed") from None
+
+
 def _new_stage_directory(database: Path, *, prefix: str) -> Path:
     root = database.parent / ".ecorex-cloud-stage"
     if not _is_beneath(root, ENCRYPTED_VOLUME_ROOT):
@@ -2703,6 +2739,7 @@ def _isolated_stage_environment(
     try:
         control_source = Path(control_environment["ECOREX_CP_DATABASE_PATH"])
         gateway_source = Path(gateway_environment["ECOREX_GATEWAY_DATABASE_PATH"])
+        control_volume_id = control_environment["ECOREX_CP_STORAGE_VOLUME_ID"]
     except KeyError:
         raise CloudDeployError("stage_database_configuration_invalid") from None
     directories: list[Path] = []
@@ -2718,12 +2755,18 @@ def _isolated_stage_environment(
         control_target = control_directory / "control-plane.sqlite3"
         gateway_target = gateway_directory / "gateway.sqlite3"
         _stage_database_snapshot(control_source, control_target)
+        control_backup_directory = control_directory / "backups"
+        _prepare_stage_control_plane_storage(
+            control_target,
+            control_backup_directory,
+            volume_id=control_volume_id,
+        )
         _stage_database_snapshot(gateway_source, gateway_target)
         control_path = str(control_target)
         yield {
             "control-plane": {
                 "ECOREX_CP_DATABASE_PATH": control_path,
-                "ECOREX_CP_BACKUP_DIRECTORY": str(control_directory / "backups"),
+                "ECOREX_CP_BACKUP_DIRECTORY": str(control_backup_directory),
                 "ECOREX_CP_SHARE_SPOOL_DIRECTORY": str(control_directory / "share-spool"),
                 "ECOREX_CP_PUBLIC_BOOTSTRAP_INDEX_PATH": str(
                     control_directory / "public" / "public-bootstrap-index.json"
