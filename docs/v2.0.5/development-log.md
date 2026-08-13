@@ -860,3 +860,35 @@ environment failure until the product failure reproduces from known state.
   Electron set passed `18/18`; the public static gate, Ruff, and diff checks
   passed. No package was built or uploaded, no Feed was generated from real
   artifacts, and no server pointer was activated by this change.
+
+### 2026-08-13 CU-205-DESKTOP-UPDATE-LOCAL-001
+
+- Same-byte macOS acceptance found that `desktop_update` was registered in the
+  cloud Cow catalog. The cloud Runtime wrote no local Electron request, yet the
+  tool returned success and the model falsely claimed that installation had
+  started. The 2.0.5 candidate was stopped before promotion.
+- The tool is now registered only when the current process is the packaged
+  Electron-owned Runtime named by the nonce and owner PID. Electron remains the
+  sole updater and atomically acknowledges the owner/tool-call-bound request;
+  the Agent returns only `accepted` with `completed=false`. Cloud, stale owner,
+  missing acknowledgement, invalid receipt, and rejection fail closed.
+- Commit `c3b2de98` passed the packaged Python exact/affected set `6/6`, the
+  Electron watcher set `2/2`, and the merged focused check. No second updater,
+  cloud bridge, build, or publication path was added.
+
+### 2026-08-13 CU-205-WIN-MSVC-CLOSURE-001
+
+- Static inspection of the same-byte Windows candidate proved that
+  `_greenlet.cp311-win_amd64.pyd` imports `MSVCP140.dll`, while the final Core
+  omitted that app-local DLL. Test machines with the system VC runtime masked
+  the incomplete package; this matches the reported clean-user startup class
+  without claiming it as the user's uncollected diagnostic.
+- The formal Runtime builder had reused the 0.3.2 Core and bypassed the current
+  stager's native closure. The release DAG now reuses the existing Windows
+  `_build_native` handoff, Microsoft Authenticode/toolchain/source-bound
+  receipt validator, and copies only its verified `msvcp140.dll`. A standard
+  library PE import check and final Core ZIP hash check prevent recurrence.
+- Commit `7251c2e8` passed exact/stager/drill `7/7` and the affected set
+  `33/33`; Ruff and diff checks passed. The merged focused Windows closure and
+  workflow checks passed `5/5`. No global VC Redist installation, alternate
+  launcher, dependency, package build, or production mutation was introduced.
