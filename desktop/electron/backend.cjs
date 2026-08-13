@@ -1,9 +1,10 @@
-const { spawn } = require("node:child_process");
+const { execFileSync, spawn } = require("node:child_process");
 const { EventEmitter } = require("node:events");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
+const os = require("node:os");
 const path = require("node:path");
 
 const DEFAULT_RUNTIME_PORT = 8765;
@@ -12,6 +13,34 @@ const STARTUP_DIAGNOSTIC_TOKEN_ENV = "ECOREX_RUNTIME_STARTUP_DIAGNOSTIC_TOKEN";
 const SAFE_DIAGNOSTIC = /^[a-z][a-z0-9_]{0,127}$/;
 const SAFE_RUNTIME_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
+let resolvedMacPath = null;
+
+function runtimePath(targetPlatform = process.platform) {
+  if (targetPlatform !== "darwin") return process.env.PATH || "";
+  if (resolvedMacPath !== null) return resolvedMacPath;
+  const parts = (process.env.PATH || "").split(":");
+  try {
+    const shell = process.env.SHELL || "/bin/zsh";
+    const output = execFileSync(shell, ["-ilc", 'echo -n "__PATH__$PATH"'], {
+      encoding: "utf8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const marker = output.lastIndexOf("__PATH__");
+    if (marker >= 0) parts.push(...output.slice(marker + 8).trim().split(":"));
+  } catch { /* Common executable locations below remain available. */ }
+  parts.push(
+    path.join(os.homedir(), ".local/bin"),
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+  );
+  resolvedMacPath = [...new Set(parts.map((part) => part.trim()).filter(Boolean))].join(":");
+  return resolvedMacPath;
+}
 
 class RuntimeStartupError extends Error {
   constructor(diagnosticCode, { exitCode = null, phase = "runtime", stage = null } = {}) {
@@ -169,6 +198,7 @@ function packagedRuntimeSpec(resourcesPath, dataDir, port, targetPlatform = proc
       cwd: payload,
       environment: {
         ...process.env,
+        PATH: runtimePath(targetPlatform),
         ECOREX_BOOTSTRAPPED: "1",
         COW_DATA_DIR: dataDir,
         COW_DESKTOP: "1",

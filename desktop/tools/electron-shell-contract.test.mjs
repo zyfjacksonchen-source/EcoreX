@@ -595,6 +595,8 @@ test("packaged desktop directly launches the immutable Runtime on macOS and Wind
     assert.equal(mac.environment.EMATE_DATA_DIR, dataDir);
     assert.equal(mac.environment.COW_DATA_DIR, dataDir);
     assert.equal(mac.environment.COW_DESKTOP, "1");
+    assert.ok(mac.environment.PATH.split(":").includes("/opt/homebrew/bin"));
+    assert.ok(mac.environment.PATH.split(":").includes(path.join(os.homedir(), ".local/bin")));
     assert.equal(mac.environment.PLAYWRIGHT_BROWSERS_PATH, path.join(runtime, "payload", "ms-playwright"));
     assert.equal(mac.environment.EMATE_PACKAGED_RUNTIME, "1");
     assert.equal(mac.windowsHide, true);
@@ -606,6 +608,7 @@ test("packaged desktop directly launches the immutable Runtime on macOS and Wind
     assert.deepEqual(windows.args, ["serve", "--host", "127.0.0.1", "--port", "9988"]);
     assert.equal(windows.environment.EMATE_DATA_DIR, dataDir);
     assert.equal(windows.environment.COW_DATA_DIR, dataDir);
+    assert.equal(windows.environment.PATH, process.env.PATH || "");
     assert.equal(windows.environment.PLAYWRIGHT_BROWSERS_PATH, path.join(runtime, "payload", "ms-playwright"));
     assert.equal(windows.windowsHide, true);
     assert.equal(windows.detached, false);
