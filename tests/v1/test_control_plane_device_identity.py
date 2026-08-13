@@ -388,6 +388,22 @@ async def _exercise_self_service_password_route(identity) -> None:
     assert repository.authenticate_password(
         "USER@EXAMPLE.COM", "replacement-password"
     ).account_id == "acct-1"
+    with sqlite3.connect(database) as connection:
+        revision = connection.execute(
+            "SELECT users.auth_revision,credentials.credential_version "
+            "FROM admin_ops_users users JOIN admin_ops_password_credentials "
+            "credentials USING(account_id) WHERE users.account_id='acct-1'"
+        ).fetchone()
+        password_audit = connection.execute(
+            "SELECT actor_subject,action,target_id FROM admin_ops_audit "
+            "WHERE action='account.password.changed'"
+        ).fetchall()
+    assert revision == (1, 2)
+    assert password_audit == [("acct-1", "account.password.changed", "acct-1")]
+    repository.verify_integrity()
+    database_bytes = database.read_bytes()
+    assert b"original-password" not in database_bytes
+    assert b"replacement-password" not in database_bytes
     await client.aclose()
 
 

@@ -129,6 +129,31 @@ test("settings and external connections stay on real product contracts", () => {
   assert.doesNotMatch(app, /<IconButton label="通知">/u);
 });
 
+test("Settings reserves the native traffic-light area only on macOS", () => {
+  assert.match(
+    features,
+    /:root\[data-desktop-platform="darwin"\]\s+\.ex-settings-page-header\s*\{[^}]*padding-left:\s*76px;/u,
+  );
+  assert.doesNotMatch(
+    features,
+    /:root\[data-desktop-platform="win32"\]\s+\.ex-settings-page-header/u,
+  );
+});
+
+test("Settings reports password success only after the authenticated Runtime receipt", () => {
+  const passwordFlow = settings.slice(
+    settings.indexOf("const changePassword"),
+    settings.indexOf("const chooseAvatar"),
+  );
+  const receipt = passwordFlow.indexOf("await client.changeSessionPassword");
+  const success = passwordFlow.indexOf("密码已更新，正在返回登录页");
+  const reload = passwordFlow.indexOf("window.location.reload()");
+  assert.ok(receipt >= 0 && receipt < success && success < reload);
+  assert.match(settings, /authenticated \? \([\s\S]*?<form className="ex-password-form"/u);
+  assert.match(settings, /autoComplete="current-password"[\s\S]*?disabled=\{passwordBusy\}/u);
+  assert.match(settings, /autoComplete="new-password"[\s\S]*?disabled=\{passwordBusy\}/u);
+});
+
 test("Feishu document OAuth and message Bot remain separate user flows", () => {
   assert.match(connectorPopover, /<strong>文档与云空间授权<\/strong>/u);
   assert.match(connectorPopover, /<strong>消息 Bot<\/strong>/u);
