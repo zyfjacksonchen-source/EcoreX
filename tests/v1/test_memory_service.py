@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import json
+from pathlib import Path
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +16,142 @@ from ecorex.runtime.api import RuntimeSettings
 from ecorex.runtime.errors import SchemaVersionError
 from ecorex.runtime.schema_catalog import product_schema_inventory
 from ecorex.runtime.schema_fragments.memory import MEMORY_SCHEMA_FRAGMENT
+
+
+def test_cow_learning_switch_drives_idle_memory_and_persists_restart(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    import threading
+    import time
+    import config as config_module
+    import agent.evolution.executor as executor
+    import agent.evolution.trigger as trigger
+    from agent.evolution.config import EvolutionConfig
+    from agent.memory.config import MemoryConfig
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"unrelated":"kept"}\n', encoding="utf-8")
+    monkeypatch.setattr(config_module, "config", config_module.Config({}))
+    service = MemoryService(
+        tmp_path / "runtime.db",
+        workspace_root=tmp_path / "workspace",
+        config_path=config_path,
+    )
+    assert service.learning_settings().enabled is True
+
+    workspace = tmp_path / "workspace"
+    agent = SimpleNamespace(
+        messages=[
+            {"role": "user", "content": "以后周报都用三点式。"},
+            {"role": "assistant", "content": "记住了。"},
+        ],
+        messages_lock=threading.Lock(),
+        tools=[],
+        model=object(),
+        memory_manager=SimpleNamespace(config=MemoryConfig(workspace_root=str(workspace))),
+        skill_manager=None,
+        _evo_last_active=time.time() - 61,
+        _evo_turns=1,
+    )
+
+    review_runs = 0
+
+    class ReviewAgent:
+        def run_stream(self, *_args, **_kwargs):
+            nonlocal review_runs
+            review_runs += 1
+            daily = workspace / "memory" / f"{datetime.now().date().isoformat()}.md"
+            with daily.open("a", encoding="utf-8") as stream:
+                stream.write(f"- 用户偏好三点式周报（学习 {review_runs}）。\n")
+            return "已学习三点式周报偏好。"
+
+    class Bridge:
+        agents = {"thread-1": agent}
+        default_agent = agent
+
+        def create_agent(self, **_kwargs):
+            return ReviewAgent()
+
+        def remember_scheduled_output(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setattr(executor, "_builtin_skill_names", lambda: set())
+    monkeypatch.setattr(trigger, "run_evolution_for_session", executor.run_evolution_for_session)
+    trigger._scan_once(Bridge(), EvolutionConfig(True, 1, 1, 12))
+    evolution = workspace / "memory" / "evolution" / f"{datetime.now().date().isoformat()}.md"
+    assert evolution.is_file()
+    assert "已学习三点式周报偏好" in evolution.read_text(encoding="utf-8")
+
+    assert service.set_learning_enabled(False).enabled is False
+    before = evolution.read_text(encoding="utf-8")
+    agent._evo_turns = 1
+    trigger._scan_once(Bridge(), EvolutionConfig(False, 1, 1, 12))
+    assert evolution.read_text(encoding="utf-8") == before
+    assert json.loads(config_path.read_text(encoding="utf-8")) == {
+        "self_evolution_enabled": False,
+        "unrelated": "kept",
+    }
+    assert service.set_learning_enabled(True).enabled is True
+    agent._evo_turns = 1
+    agent._evo_last_active = time.time() - 61
+    agent._evo_done_msg_count = 0
+    trigger._scan_once(Bridge(), EvolutionConfig(True, 1, 1, 12))
+    after_reenable = evolution.read_text(encoding="utf-8")
+    assert len(after_reenable) > len(before)
+    assert review_runs == 2
+    service.set_learning_enabled(False)
+    trigger._scan_once(Bridge(), EvolutionConfig(False, 1, 1, 12))
+    assert evolution.read_text(encoding="utf-8") == after_reenable
+    restarted = MemoryService(
+        tmp_path / "runtime.db",
+        workspace_root=workspace,
+        config_path=config_path,
+    )
+    assert restarted.learning_settings().enabled is False
+
+
+def test_cow_learning_switch_stops_nightly_dream(tmp_path: Path, monkeypatch) -> None:
+    import threading
+    import config as config_module
+    from agent.memory.summarizer import MemoryFlushManager
+    from bridge.agent_initializer import AgentInitializer
+
+    workspace = tmp_path / "workspace"
+    (workspace / "memory").mkdir(parents=True)
+    today = datetime.now().date().isoformat()
+    (workspace / "memory" / f"{today}.md").write_text(
+        "- 用户偏好简洁回答。\n", encoding="utf-8"
+    )
+
+    class DreamModel:
+        def call(self, _request):
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "[MEMORY]\n- 用户偏好简洁回答。\n[DREAM]\n整理了简洁回答偏好。",
+                }]
+            }
+
+    flush = MemoryFlushManager(workspace, llm_model=DreamModel())
+    flush.create_daily_summary = lambda _messages: False
+    agent = SimpleNamespace(
+        memory_manager=SimpleNamespace(flush_manager=flush),
+        messages=[{"role": "user", "content": "记住这个偏好"}],
+        messages_lock=threading.Lock(),
+    )
+    initializer = AgentInitializer(object(), SimpleNamespace(default_agent=agent, agents={}))
+    monkeypatch.setattr(config_module, "config", config_module.Config({"self_evolution_enabled": True}))
+    initializer._flush_all_agents()
+    dream = workspace / "memory" / "dreams" / f"{today}.md"
+    assert "用户偏好简洁回答" in (workspace / "MEMORY.md").read_text(encoding="utf-8")
+    assert "整理了简洁回答偏好" in dream.read_text(encoding="utf-8")
+    before = dream.read_text(encoding="utf-8")
+    config_module.conf()["self_evolution_enabled"] = False
+    (workspace / "memory" / f"{today}.md").write_text(
+        "- 用户偏好详细回答。\n", encoding="utf-8"
+    )
+    initializer._flush_all_agents()
+    assert dream.read_text(encoding="utf-8") == before
 
 
 class Clock:
@@ -299,7 +438,12 @@ def test_migration_era_memory_schema_requires_signed_migration_without_repair(
     assert row == ("legacy-memory", "中文")
 
 
-def test_memory_api_requires_product_security_and_returns_authoritative_snapshot(tmp_path) -> None:
+def test_memory_api_requires_product_security_and_returns_authoritative_snapshot(
+    tmp_path, monkeypatch,
+) -> None:
+    import config as config_module
+
+    monkeypatch.setattr(config_module, "config", config_module.Config({}))
     token = "r" * 32
     csrf = "c" * 32
     app = create_app(
@@ -318,6 +462,29 @@ def test_memory_api_requires_product_security_and_returns_authoritative_snapshot
         "Origin": "http://testserver",
         "X-EcoreX-CSRF": csrf,
     }
+
+    learning = client.get("/api/v1/memory/learning", headers=auth)
+    assert learning.json() == {"enabled": True}
+    assert client.put(
+        "/api/v1/memory/learning", headers=auth, json={"enabled": False}
+    ).status_code == 403
+    updated = client.put(
+        "/api/v1/memory/learning", headers=mutation, json={"enabled": False}
+    )
+    assert updated.json() == {"enabled": False}
+    assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8")) == {
+        "self_evolution_enabled": False
+    }
+    config_module.conf()["self_evolution_enabled"] = True
+    create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "restart.db",
+            runtime_bearer_token=token,
+            csrf_token=csrf,
+            webui_origins=("http://testserver",),
+        )
+    )
+    assert config_module.conf()["self_evolution_enabled"] is False
 
     snapshot = client.get("/api/v1/memory", headers=auth)
     assert snapshot.status_code == 200

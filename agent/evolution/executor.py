@@ -50,40 +50,6 @@ _running_lock = threading.Lock()
 _running_count = 0
 
 
-def _authorize_background_evolution(session_id: str) -> bool:
-    """Fail fast unless unattended evolution has the host permissions it may use.
-
-    Evolution runs without a visible permission prompt. If it reached the normal
-    interactive permission broker through write/edit/bash tools, a background
-    review could sit until the prompt timed out. Treat it as a noninteractive
-    host capability instead: full-access or remembered grants may run; smart-ask
-    and read-only modes skip cleanly.
-    """
-    try:
-        from common.ecorex_tool_permissions import get_tool_permission_broker
-
-        broker = get_tool_permission_broker()
-        checks = [
-            ("fs_write", {"path": "workspace memory/knowledge/output"}),
-            ("skill_write", {"action": "self_evolution", "name": "workspace skills"}),
-            ("bash", {"command": "self-evolution workspace helper command"}),
-        ]
-        for tool_name, args in checks:
-            decision = broker.authorize_noninteractive(tool_name, args)
-            if not decision.get("allowed"):
-                logger.info(
-                    f"[Evolution] skipped session={session_id}: background {tool_name} "
-                    f"permission denied ({decision.get('reason')})"
-                )
-                return False
-        return True
-    except Exception as exc:
-        logger.warning(
-            f"[Evolution] skipped session={session_id}: permission broker unavailable ({exc})"
-        )
-        return False
-
-
 def _builtin_skill_names() -> set:
     """Names of skills shipped with the product (project-root ``skills/``).
 
@@ -384,9 +350,6 @@ def run_evolution_for_session(
     cfg = get_evolution_config()
     if not cfg.enabled:
         return False
-    if not _authorize_background_evolution(session_id):
-        return False
-
     # Concurrency gate: bound how many evolution passes run at once.
     global _running_count
     with _running_lock:
@@ -430,7 +393,8 @@ def run_evolution_for_session(
 
         # Resolve workspace + files to snapshot for undo.
         from agent.memory.config import get_default_memory_config
-        mem_cfg = get_default_memory_config()
+        mem_cfg = getattr(getattr(agent, "memory_manager", None), "config", None)
+        mem_cfg = mem_cfg or get_default_memory_config()
         workspace_dir = mem_cfg.get_workspace()
         if user_id:
             memory_file = Path(workspace_dir) / "memory" / "users" / user_id / "MEMORY.md"

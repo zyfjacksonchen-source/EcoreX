@@ -35,6 +35,7 @@ import type {
   MemoryContentDocument,
   MemoryContentPage,
   MemoryContentView,
+  MemoryLearningSettings,
   PasswordSessionChangeResponse,
   MCPOAuthChallengeProjection,
   MCPOAuthStatusResponse,
@@ -701,6 +702,38 @@ export class RuntimeClient {
       { signal },
       false,
       14,
+    );
+  }
+
+  memoryLearningSettings(signal?: AbortSignal): Promise<MemoryLearningSettings> {
+    return this.json(
+      "/api/v1/memory/learning",
+      { signal },
+      false,
+      (value) => {
+        if (value === null || typeof value !== "object" || Array.isArray(value)) {
+          throw new Error("运行服务与页面不兼容，请刷新或更新 e-Mate。");
+        }
+        const fields = Object.keys(value);
+        if (fields.length !== 1 || fields[0] !== "enabled" || typeof (value as { enabled?: unknown }).enabled !== "boolean") {
+          throw new Error("运行服务与页面不兼容，请刷新或更新 e-Mate。");
+        }
+        return value as MemoryLearningSettings;
+      },
+    );
+  }
+
+  setMemoryLearningEnabled(enabled: boolean): Promise<MemoryLearningSettings> {
+    return this.json(
+      "/api/v1/memory/learning",
+      { method: "PUT", body: JSON.stringify({ enabled }) },
+      true,
+      (value) => {
+        if (value === null || typeof value !== "object" || Array.isArray(value) || typeof (value as { enabled?: unknown }).enabled !== "boolean") {
+          throw new Error("运行服务与页面不兼容，请刷新或更新 e-Mate。");
+        }
+        return value as MemoryLearningSettings;
+      },
     );
   }
 

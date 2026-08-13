@@ -857,6 +857,10 @@ export interface MemoryMutationResponse {
   reset: MemoryResetProjection;
 }
 
+export interface MemoryLearningSettings {
+  enabled: boolean;
+}
+
 export type MemoryContentView = GeneratedMemoryContentView;
 
 export interface MemoryContentItem {

@@ -19,6 +19,10 @@ test("settings keep upstream local configuration semantics", () => {
   assert.doesNotMatch(workspace, /resettable_count|一键重置|onResetMemory|onUndoMemoryReset/u);
   assert.match(workspace, /MEMORY\.md/u);
   assert.match(workspace, /每日记忆/u);
+  assert.match(workspace, /记忆学习与夜间梦境/u);
+  assert.match(workspace, /role="switch"/u);
+  assert.match(client, /\/api\/v1\/memory\/learning/u);
+  assert.match(client, /setMemoryLearningEnabled/u);
   assert.match(settings, /本地 Skill/u);
   assert.match(settings, /MCP/u);
   assert.match(settings, /消息通道/u);

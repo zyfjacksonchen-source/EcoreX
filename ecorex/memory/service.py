@@ -12,9 +12,11 @@ from datetime import UTC, datetime, timedelta
 import hashlib
 import hmac
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
+import threading
 from typing import Any
 from collections.abc import Callable
 
@@ -31,6 +33,7 @@ from .errors import (
 
 
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{7,255}$")
+_LEARNING_CONFIG_KEY = "self_evolution_enabled"
 
 
 def _now() -> datetime:
@@ -102,6 +105,14 @@ class MemorySnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryLearningSettings:
+    enabled: bool
+
+    def to_dict(self) -> dict[str, bool]:
+        return {"enabled": self.enabled}
+
+
+@dataclass(frozen=True, slots=True)
 class MemoryContentItem:
     item_id: str
     name: str
@@ -162,6 +173,7 @@ class MemoryService:
         fault_hook: Callable[[str, str], None] | None = None,
         blob_loader: Callable[[str], bytes] | None = None,
         workspace_root: str | Path | None = None,
+        config_path: str | Path | None = None,
         initialize: bool = True,
     ) -> None:
         if not timedelta(minutes=1) <= undo_window <= timedelta(days=30):
@@ -171,6 +183,12 @@ class MemoryService:
         self.clock = clock
         self.fault_hook = fault_hook or (lambda _phase, _reset_id: None)
         self.blob_loader = blob_loader
+        self.config_path = (
+            Path(config_path).expanduser().resolve()
+            if config_path is not None
+            else None
+        )
+        self._config_lock = threading.RLock()
         self.workspace_root = (
             Path(workspace_root).expanduser().resolve()
             if workspace_root is not None
@@ -199,6 +217,51 @@ class MemoryService:
         """Alias used by the healthy startup convergence coordinator."""
 
         self.initialize()
+
+    def learning_settings(self) -> MemoryLearningSettings:
+        from agent.evolution.config import DEFAULT_ENABLED, _as_bool
+        from config import conf
+
+        value = conf().get(_LEARNING_CONFIG_KEY)
+        if self.config_path is not None and self.config_path.is_file():
+            loaded = json.loads(self.config_path.read_text(encoding="utf-8-sig"))
+            if not isinstance(loaded, dict):
+                raise ValueError("Cow config must be an object")
+            value = loaded.get(_LEARNING_CONFIG_KEY)
+        return MemoryLearningSettings(
+            enabled=_as_bool(value, DEFAULT_ENABLED)
+        )
+
+    def set_learning_enabled(self, enabled: bool) -> MemoryLearningSettings:
+        if not isinstance(enabled, bool):
+            raise ValueError("memory learning enabled must be a boolean")
+        with self._config_lock:
+            settings: dict[str, Any] = {}
+            if self.config_path is not None and self.config_path.is_file():
+                loaded = json.loads(self.config_path.read_text(encoding="utf-8-sig"))
+                if not isinstance(loaded, dict):
+                    raise ValueError("Cow config must be an object")
+                settings = loaded
+            settings[_LEARNING_CONFIG_KEY] = enabled
+            if self.config_path is not None:
+                self.config_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = self.config_path.with_name(
+                    f".{self.config_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+                )
+                try:
+                    with temporary.open("x", encoding="utf-8") as stream:
+                        json.dump(settings, stream, ensure_ascii=False, indent=2, sort_keys=True)
+                        stream.write("\n")
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    temporary.chmod(0o600)
+                    os.replace(temporary, self.config_path)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            from config import conf
+
+            conf()[_LEARNING_CONFIG_KEY] = enabled
+            return MemoryLearningSettings(enabled=enabled)
 
     @staticmethod
     def _request_fingerprint(operation: str, target: str) -> str:

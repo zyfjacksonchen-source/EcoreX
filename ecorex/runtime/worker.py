@@ -5818,8 +5818,10 @@ class _CowAgentBridge:
         self.default_agent: Any | None = None
         self.agents: dict[str, Any] = {}
         self._model: ContextVar[_CowGatewayModel] = ContextVar("cow_gateway_model")
+        self._background_model: _CowGatewayModel | None = None
 
     def bind_model(self, model: _CowGatewayModel):
+        self._background_model = model
         return self._model.set(model)
 
     def reset_model(self, token: Any) -> None:
@@ -5828,9 +5830,12 @@ class _CowAgentBridge:
     def create_agent(self, system_prompt: str, tools: list[Any] | None = None, **kwargs: Any):
         from agent.protocol.agent import Agent
 
+        model = self._model.get(None) or self._background_model
+        if model is None:
+            raise RuntimeError("Cow model is not bound")
         return Agent(
             system_prompt=system_prompt,
-            model=self._model.get(),
+            model=model,
             tools=tools,
             max_steps=kwargs.get("max_steps", 20),
             output_mode=kwargs.get("output_mode", "logger"),
@@ -6712,6 +6717,7 @@ class AgentTurnWorker:
         receiver: str,
         conversation_store: Any,
         project_context: dict[str, str] | None,
+        record_evolution: bool = True,
     ) -> str:
         from bridge.agent_initializer import AgentInitializer
         from agent.tools.subagent.subagent import (
@@ -6736,6 +6742,10 @@ class AgentTurnWorker:
         )
 
         bridge = self._cow_bridge
+        if record_evolution:
+            from agent.evolution.trigger import start_evolution_trigger
+
+            start_evolution_trigger(bridge)
         model_token = bridge.bind_model(model)
         tool_token = bind_cow_direct_tools()
         ocr_artifact_token = bind_runtime_artifact_resolver(
@@ -6776,6 +6786,7 @@ class AgentTurnWorker:
                 receiver=receiver,
                 conversation_store=conversation_store,
                 project_context=project_context,
+                record_evolution=False,
             )
         )
         try:
@@ -6785,6 +6796,7 @@ class AgentTurnWorker:
                 workspace_root=workspace,
                 mcp_oauth_redirect_uri=self.mcp_oauth_redirect_uri,
             )
+            previous_agent = bridge.agents.get(thread_id)
             agent = AgentInitializer(object(), bridge).initialize_agent(
                 session_id=thread_id,
                 workspace_root=workspace,
@@ -6792,6 +6804,16 @@ class AgentTurnWorker:
                 conversation_store=conversation_store,
                 conversation_max_turns=_COW_MAX_CONTEXT_TURNS,
             )
+            if previous_agent is not None:
+                for name in (
+                    "_evo_last_active",
+                    "_evo_turns",
+                    "_evo_done_msg_count",
+                    "_evo_channel_type",
+                    "_evo_receiver",
+                ):
+                    if hasattr(previous_agent, name):
+                        setattr(agent, name, getattr(previous_agent, name))
             if channel_context:
                 self._attach_scheduler_context(agent, thread_id, channel_context)
             else:
@@ -6809,6 +6831,7 @@ class AgentTurnWorker:
             bridge.agents[thread_id] = agent
             agent._current_session_id = thread_id
             agent._current_request_id = turn_id
+            agent._evo_running = record_evolution
             from agent.tools.subagent.subagent import wait_for_children_for_parent
 
             try:
@@ -6822,6 +6845,19 @@ class AgentTurnWorker:
                 cancel_event.set()
                 raise
             finally:
+                agent._evo_running = False
+                if record_evolution:
+                    from config import conf
+
+                    if conf().get("self_evolution_enabled", True):
+                        from agent.evolution.trigger import note_user_turn
+
+                        note_user_turn(agent, channel_type=channel_type, receiver=receiver)
+                    else:
+                        agent._evo_last_active = 0
+                        agent._evo_turns = 0
+                        with agent.messages_lock:
+                            agent._evo_done_msg_count = len(agent.messages)
                 wait_for_children_for_parent(
                     workspace,
                     thread_id,

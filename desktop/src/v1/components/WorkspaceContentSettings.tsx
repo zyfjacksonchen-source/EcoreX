@@ -23,6 +23,7 @@ import type {
   MemoryContentDocument,
   MemoryContentPage,
   MemoryContentView,
+  MemoryLearningSettings,
 } from "../api/contracts.ts";
 import type { RuntimeClient } from "../api/runtimeClient.ts";
 import { userFacingError } from "../state/userLanguage.ts";
@@ -357,6 +358,8 @@ export function MemorySettings({
   const [document, setDocument] = useState<MemoryContentDocument | null>(null);
   const [loading, setLoading] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
+  const [learning, setLearning] = useState<MemoryLearningSettings | null>(null);
+  const [learningBusy, setLearningBusy] = useState(false);
 
   const loadPage = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -395,8 +398,28 @@ export function MemorySettings({
     if (!active) return;
     const controller = new AbortController();
     void loadPage(controller.signal);
+    void client.memoryLearningSettings(controller.signal)
+      .then((value) => { if (!controller.signal.aborted) setLearning(value); })
+      .catch((cause: unknown) => {
+        if (!(cause instanceof DOMException && cause.name === "AbortError")) {
+          setContentError(userFacingError(cause));
+        }
+      });
     return () => controller.abort();
-  }, [active, loadPage]);
+  }, [active, client, loadPage]);
+
+  const toggleLearning = async () => {
+    if (!learning || learningBusy) return;
+    setLearningBusy(true);
+    setContentError(null);
+    try {
+      setLearning(await client.setMemoryLearningEnabled(!learning.enabled));
+    } catch (cause) {
+      setContentError(userFacingError(cause));
+    } finally {
+      setLearningBusy(false);
+    }
+  };
 
   const totalPages = Math.max(1, Math.ceil((contentPage?.total ?? 0) / 10));
 
@@ -410,6 +433,22 @@ export function MemorySettings({
         </div>
       </div>
       <p className="ex-settings-note">直接读取工作区中的 MEMORY.md、每日记忆和进化记录；Agent 与此页面使用同一份文件。</p>
+      <div className="ex-settings-row">
+        <div>
+          <strong>记忆学习与夜间梦境</strong>
+          <p>开启后按 Cow 的空闲触发和夜间整理规则学习；关闭后不调度、不执行。</p>
+        </div>
+        <button
+          className="ex-skill-switch"
+          type="button"
+          role="switch"
+          aria-label="记忆学习与夜间梦境"
+          aria-checked={learning?.enabled === true}
+          aria-busy={learningBusy}
+          disabled={!learning || learningBusy}
+          onClick={() => void toggleLearning()}
+        ><span /></button>
+      </div>
       {contentError ? <div className="ex-settings-error" role="alert"><span>{contentError}</span><button className="ex-button" type="button" onClick={() => setContentError(null)}>关闭</button></div> : null}
       <div className="ex-content-tabs" role="tablist" aria-label="记忆视图">
         <button className="ex-button" type="button" role="tab" aria-selected={view === "files"} onClick={() => { setView("files"); setPage(1); }}>记忆文件</button>

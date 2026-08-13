@@ -835,6 +835,11 @@ class AgentInitializer:
 
     def _flush_all_agents(self):
         """Flush memory for all active agent sessions, then run Deep Dream."""
+        from config import conf
+
+        if not conf().get("self_evolution_enabled", True):
+            logger.info("[DeepDream] Nightly memory learning is disabled")
+            return
         agents = []
         if self.agent_bridge.default_agent:
             agents.append(("default", self.agent_bridge.default_agent))

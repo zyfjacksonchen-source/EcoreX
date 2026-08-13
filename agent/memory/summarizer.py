@@ -207,53 +207,21 @@ def _is_empty_sentinel(text: str) -> bool:
 
 
 def _authorize_memory_write(target_path: Path, workspace_dir: Path, purpose: str) -> bool:
-    """Apply the shared host filesystem boundary before memory writes."""
+    """Keep Cow memory writes inside its own workspace."""
     try:
-        from common.ecorex_tool_permissions import get_tool_permission_broker
-
-        decision = get_tool_permission_broker().authorize_file_access(
-            "write",
-            str(target_path),
-            cwd=str(workspace_dir),
-        )
-        if decision.get("allowed", True):
-            return True
-        logger.info(
-            f"[MemoryFlush] Memory write blocked by permissions "
-            f"(purpose={purpose}, path={target_path}): {decision.get('reason', 'denied')}"
-        )
-        return False
-    except Exception as exc:
+        target_path.resolve().relative_to(workspace_dir.resolve())
+        return True
+    except (OSError, ValueError) as exc:
         logger.warning(
-            f"[MemoryFlush] Permission broker unavailable; memory write blocked "
+            f"[MemoryFlush] Memory write escaped workspace "
             f"(purpose={purpose}, path={target_path}): {exc}"
         )
         return False
 
 
 def _authorize_memory_read(target_path: Path, workspace_dir: Path, purpose: str) -> bool:
-    """Apply the shared host filesystem boundary before memory reads."""
-    try:
-        from common.ecorex_tool_permissions import get_tool_permission_broker
-
-        decision = get_tool_permission_broker().authorize_file_access(
-            "read",
-            str(target_path),
-            cwd=str(workspace_dir),
-        )
-        if decision.get("allowed", True):
-            return True
-        logger.info(
-            f"[MemoryFlush] Memory read blocked by permissions "
-            f"(purpose={purpose}, path={target_path}): {decision.get('reason', 'denied')}"
-        )
-        return False
-    except Exception as exc:
-        logger.warning(
-            f"[MemoryFlush] Permission broker unavailable; memory read blocked "
-            f"(purpose={purpose}, path={target_path}): {exc}"
-        )
-        return False
+    """Keep Cow memory reads inside its own workspace."""
+    return _authorize_memory_write(target_path, workspace_dir, purpose)
 
 
 

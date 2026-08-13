@@ -1985,8 +1985,13 @@ def create_app(
         kernel.database,
         blob_loader=artifact_service.blobs.read_bytes,
         workspace_root=settings.workspace_root,
+        config_path=Path(settings.database_path).expanduser().resolve().parent
+        / "config.json",
         initialize=startup_convergence_allowed,
     )
+    from config import conf as cow_conf
+
+    cow_conf()["self_evolution_enabled"] = memory_service.learning_settings().enabled
     app.state.memory_service = memory_service
     app.include_router(create_memory_router(memory_service))
     workspace_content_service = WorkspaceContentService(

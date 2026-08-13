@@ -109,12 +109,42 @@ class MemoryContentDocumentResponse(MemoryContentItemResponse):
     content: str = Field(max_length=10 * 1024 * 1024)
 
 
+class MemoryLearningSettingsRequest(_StrictModel):
+    enabled: bool
+
+
+class MemoryLearningSettingsResponse(_StrictResponseModel):
+    enabled: bool
+
+
 def create_memory_router(service: MemoryService) -> APIRouter:
     router = APIRouter(prefix="/api/v1/memory", tags=["memory"])
 
     @router.get("", response_model=MemorySnapshotResponse)
     def snapshot() -> MemorySnapshotResponse:
         return MemorySnapshotResponse.model_validate(service.snapshot().to_dict())
+
+    @router.get("/learning", response_model=MemoryLearningSettingsResponse)
+    def learning_settings() -> MemoryLearningSettingsResponse:
+        return MemoryLearningSettingsResponse.model_validate(
+            service.learning_settings().to_dict()
+        )
+
+    @router.put("/learning", response_model=MemoryLearningSettingsResponse)
+    def set_learning_settings(
+        request: MemoryLearningSettingsRequest,
+    ) -> MemoryLearningSettingsResponse:
+        try:
+            value = service.set_learning_enabled(request.enabled)
+        except (OSError, ValueError):
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "memory_learning_config_unavailable",
+                    "message": "记忆学习设置暂时无法保存。",
+                },
+            ) from None
+        return MemoryLearningSettingsResponse.model_validate(value.to_dict())
 
     @router.get("/files", response_model=MemoryContentPageResponse)
     def content_files(
@@ -230,6 +260,7 @@ def create_memory_router(service: MemoryService) -> APIRouter:
 __all__ = [
     "MemoryContentDocumentResponse",
     "MemoryContentPageResponse",
+    "MemoryLearningSettingsResponse",
     "MemoryMutationResponse",
     "MemoryResetProjectionResponse",
     "MemorySnapshotResponse",

@@ -100,11 +100,15 @@ def _scan_loop(agent_bridge) -> None:
 
 
 def _scan_once(agent_bridge, cfg) -> None:
+    if not cfg.enabled:
+        return
     now = time.time()
     # Snapshot to avoid holding the dict while running long evolutions.
     sessions = list(getattr(agent_bridge, "agents", {}).items())
     for session_id, agent in sessions:
         try:
+            if getattr(agent, "_evo_running", False):
+                continue
             last_active = getattr(agent, "_evo_last_active", 0)
             turns = int(getattr(agent, "_evo_turns", 0))
             # Enough signal = enough turns OR enough context pressure.
