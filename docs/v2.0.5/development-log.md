@@ -802,3 +802,22 @@ environment failure until the product failure reproduces from known state.
   Office4 separate, then adds `desktop_update` as a changed-item hard gate on
   both Windows and macOS: visible tool call, CDN-only download, byte
   verification, installation, automatic relaunch, and visible 2.0.5 identity.
+
+### 2026-08-13 CU-205-LEGACY-FEED-ROLLBACK-001
+
+- The first exact 2.0.5 private-stage preflight exposed a rollback-only
+  contract mismatch before the production pointer changed. The installed
+  2.0.4 unsigned Feed was created before Windows automatic-update metadata was
+  restored, so its immutable activation receipt truthfully names only
+  `download-index.json`. New 2.0.5 candidates require both `latest.yml` and
+  `download-index.json`.
+- The deployer now permits the old one-pointer shape only while validating an
+  already-installed previous schema-v2 unsigned-manual target. The incoming
+  candidate still must have the new two-pointer contract. Both old and new
+  targets still pass their exact receipt inventory, size, and SHA-256 checks;
+  a missing or modified old pointer fails before activation.
+- The legacy-previous regression changed from `activation_contract_invalid`
+  to green. The exact compatibility/tamper/missing/candidate boundary passed
+  `4/4`; the affected activation, compensation, and rollback set passed
+  `26/26`. No production receipt was rewritten and no current pointer was
+  changed by this repair.
