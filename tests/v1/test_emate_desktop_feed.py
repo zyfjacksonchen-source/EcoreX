@@ -775,7 +775,7 @@ def test_locked_electron_updater_preserves_absolute_r2_download_urls() -> None:
 const assert = require('node:assert/strict');
 const { resolveFiles } = require(process.argv[1]);
 const url = process.argv[2];
-const files = resolveFiles({ files: [{ url, sha512: 'x', size: 1 }] }, 'https://dl.ecoremedia.net/e-mate/update/');
+const files = resolveFiles({ files: [{ url, sha512: 'x', size: 1 }] }, new URL('https://dl.ecoremedia.net/e-mate/update/'));
 assert.equal(files[0].url.href, url);
 """
     result = subprocess.run(
