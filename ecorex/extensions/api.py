@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 from typing import Literal
 
 from fastapi import APIRouter, FastAPI, HTTPException
@@ -87,7 +88,7 @@ def register_extension_routes(app: FastAPI, service: ExtensionService) -> None:
         return _snapshot(service)
 
     @router.post("/local-skills", response_model=ExtensionMutationResponse, status_code=201)
-    def install_local_skill(request: LocalSkillInstallRequest) -> ExtensionMutationResponse:
+    async def install_local_skill(request: LocalSkillInstallRequest) -> ExtensionMutationResponse:
         try:
             payload = base64.b64decode(request.bundle_base64, validate=True)
         except (binascii.Error, ValueError):
@@ -101,9 +102,17 @@ def register_extension_routes(app: FastAPI, service: ExtensionService) -> None:
                 expected_revision=request.expected_revision,
                 client_request_id=request.client_request_id,
             )
+            if extension.status != "enabled":
+                extension = await service.enable(
+                    extension.extension_id,
+                    expected_revision=extension.revision,
+                    client_request_id="local-enable:" + hashlib.sha256(
+                        request.client_request_id.encode()
+                    ).hexdigest()[:32],
+                )
         except ExtensionError as error:
             raise _http_error(error) from error
-        return _mutation(service, extension)
+        return await asyncio.to_thread(_mutation, service, extension)
 
     @router.post("/{extension_id}/enable", response_model=ExtensionMutationResponse)
     async def enable(

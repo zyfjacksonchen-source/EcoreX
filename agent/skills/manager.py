@@ -69,6 +69,14 @@ class SkillManager:
 
     def refresh_skills(self):
         """Reload all skills from builtin and custom directories, then sync config."""
+        try:
+            from ecorex.extensions.live_authority import live_extension_skill_roots
+
+            live_roots = live_extension_skill_roots()
+            if live_roots is not None:
+                self.extra_dirs = list(live_roots)
+        except Exception:
+            pass
         self._refresh_managed_builtin_overlays()
         self.builtin_catalog_names = self._load_builtin_catalog_names()
         self.skills = self.loader.load_all_skills(
@@ -267,6 +275,14 @@ class SkillManager:
         :param name: skill name
         :return: True if enabled (default True if not in config)
         """
+        try:
+            from ecorex.extensions.live_authority import live_skill_enabled
+
+            live = live_skill_enabled(name)
+            if live is not None:
+                return live
+        except Exception:
+            pass
         entry = self.skills_config.get(name)
         return True if entry is None else bool(entry.get("enabled", True))
 
@@ -279,6 +295,18 @@ class SkillManager:
         """
         if name not in self.skills_config:
             raise ValueError(f"skill '{name}' not found in config")
+        try:
+            from ecorex.extensions.live_authority import (
+                live_skill_enabled,
+                set_live_skill_enabled,
+            )
+
+            if live_skill_enabled(name) is not None:
+                set_live_skill_enabled(name, enabled)
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
         self.skills_config[name]["enabled"] = bool(enabled)
         self._save_skills_config()
 

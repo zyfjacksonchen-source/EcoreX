@@ -2341,6 +2341,7 @@ def create_app(
             scheduler_handler.task_store,
             lambda _task: False,
         )
+        scheduler_handler.scheduler_service = scheduler_service
         scheduler_lifecycle = _SchedulerLifecycle(
             scheduler_service,
             execute_scheduled_task,

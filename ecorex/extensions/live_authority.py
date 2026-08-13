@@ -34,18 +34,55 @@ def bind_live_extension_service(service: Any) -> None:
 def live_skill_enabled(name: str) -> bool | None:
     """Return current Extension state, or ``None`` when no authority/item exists."""
 
-    extension_id = _extension_id(name)
-    if extension_id is None:
-        return None
     with _LOCK:
         service = _SERVICE() if _SERVICE is not None else None
     if service is None:
         return None
     try:
-        projection = service.projection(extension_id)
+        projection = _skill_projection(service, name)
     except Exception:
         return None
-    return projection.status is ExtensionStatus.ENABLED
+    return projection.status == ExtensionStatus.ENABLED.value
+
+
+def live_extension_skill_roots() -> tuple[str, ...] | None:
+    """Return verified CAS roots for enabled user/Hub Skills.
+
+    Cow owns Skill discovery.  The Extension registry only contributes the
+    read-only local package roots which the user explicitly enabled; it does
+    not rewrite Skill content or introduce a second prompt/schema path.
+    """
+
+    with _LOCK:
+        service = _SERVICE() if _SERVICE is not None else None
+    if service is None:
+        return None
+    if service.local_bundle_store is None:
+        return ()
+    roots: list[str] = []
+    try:
+        items = service.snapshot().items
+    except Exception:
+        return None
+    for item in items:
+        if (
+            item.kind != "skill"
+            or item.source != "local_bundle"
+            or item.status != ExtensionStatus.ENABLED.value
+            or item.readiness != "ready"
+            or not item.active_digest
+        ):
+            continue
+        try:
+            skill_file, _record = service.local_bundle_store.resolve_verified_file(
+                item.active_digest, "SKILL.md"
+            )
+        except Exception:
+            continue
+        root = str(skill_file.parent)
+        if root not in roots:
+            roots.append(root)
+    return tuple(roots)
 
 
 def live_extension_generation() -> int | None:
@@ -62,14 +99,14 @@ def live_extension_generation() -> int | None:
 def set_live_skill_enabled(name: str, enabled: bool) -> bool:
     """Mutate one Skill only through the bound ExtensionService authority."""
 
-    extension_id = _extension_id(name)
     with _LOCK:
         service = _SERVICE() if _SERVICE is not None else None
-    if extension_id is None or service is None:
+    if service is None:
         raise RuntimeError("live ExtensionService authority is unavailable")
-    projection = service.projection(extension_id)
+    projection = _skill_projection(service, name)
+    extension_id = projection.extension_id
     desired = bool(enabled)
-    if (projection.status is ExtensionStatus.ENABLED) is desired:
+    if (projection.status == ExtensionStatus.ENABLED.value) is desired:
         return desired
     request_id = (
         f"legacy-skill-bridge:{extension_id}:{projection.revision}:"
@@ -121,9 +158,27 @@ def _extension_id(name: str) -> str | None:
     return "skill." + SKILL_ALIASES.get(slug, slug)
 
 
+def _skill_projection(service: Any, name: str) -> Any:
+    extension_id = _extension_id(name)
+    if extension_id is not None:
+        try:
+            return service.projection(extension_id)
+        except Exception:
+            pass
+    normalized = " ".join(str(name or "").casefold().split())
+    for item in service.snapshot().items:
+        if (
+            item.kind == "skill"
+            and " ".join(str(item.display_name).casefold().split()) == normalized
+        ):
+            return item
+    raise KeyError(name)
+
+
 __all__ = [
     "bind_live_extension_service",
     "live_extension_generation",
+    "live_extension_skill_roots",
     "live_skill_enabled",
     "set_live_skill_enabled",
 ]

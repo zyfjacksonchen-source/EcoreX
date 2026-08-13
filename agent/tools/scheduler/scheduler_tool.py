@@ -68,7 +68,8 @@ class SchedulerTool(BaseTool):
         "使用方法：\n"
         "- 创建：action='create', name='任务名', message/ai_task='内容', schedule_type='once/interval/cron', schedule_value='...'\n"
         "- 查询：action='list' / action='get', task_id='任务ID'\n"
-        "- 管理：action='delete/enable/disable', task_id='任务ID'\n\n"
+        "- 修改：action='edit', task_id='任务ID'，仅传需要修改的字段\n"
+        "- 管理：action='run_now/delete/enable/disable', task_id='任务ID'\n\n"
         "调度类型：\n"
         "- once: 一次性任务，支持相对时间(+5s,+10m,+1h,+1d)或ISO时间\n"
         "- interval: 固定间隔(秒)，如3600表示每小时\n"
@@ -80,8 +81,8 @@ class SchedulerTool(BaseTool):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["create", "list", "get", "delete", "enable", "disable"],
-                "description": "操作类型: create(创建), list(列表), get(查询), delete(删除), enable(启用), disable(禁用)"
+                "enum": ["create", "list", "get", "edit", "run_now", "delete", "enable", "disable"],
+                "description": "操作类型: create(创建), list(列表), get(查询), edit(修改), run_now(立即运行), delete(删除), enable(启用), disable(禁用)"
             },
             "task_id": {
                 "type": "string",
@@ -165,6 +166,12 @@ class SchedulerTool(BaseTool):
                 return ToolResult.success(result)
             elif action == "get":
                 result = self._get_task(**kwargs)
+                return ToolResult.success(result)
+            elif action == "edit":
+                result = self._edit_task(**kwargs)
+                return ToolResult.success(result)
+            elif action == "run_now":
+                result = self._run_now(**kwargs)
                 return ToolResult.success(result)
             elif action == "delete":
                 result = self._delete_task(**kwargs)
@@ -374,6 +381,72 @@ class SchedulerTool(BaseTool):
         
         self.task_store.delete_task(task_id)
         return f"✅ 任务 '{task['name']}' ({task_id}) 已删除"
+
+    def _edit_task(self, **kwargs) -> str:
+        """Edit the supplied fields while preserving the delivery target."""
+
+        task_id = kwargs.get("task_id")
+        if not task_id:
+            return "错误: 缺少任务ID (task_id)"
+        task = self.task_store.get_task(task_id)
+        if not task:
+            return f"错误: 任务 '{task_id}' 不存在"
+        updates = {}
+        if "name" in kwargs:
+            name = str(kwargs.get("name") or "").strip()
+            if not name:
+                return "错误: 任务名称不能为空"
+            updates["name"] = name
+
+        message_present = "message" in kwargs
+        ai_task_present = "ai_task" in kwargs
+        if message_present or ai_task_present:
+            message = str(kwargs.get("message") or "").strip()
+            ai_task = str(kwargs.get("ai_task") or "").strip()
+            if bool(message) == bool(ai_task):
+                return "错误: message 和 ai_task 必须且只能提供一个"
+            action = dict(task.get("action") or {})
+            action.pop("content", None)
+            action.pop("task_description", None)
+            action["type"] = "send_message" if message else "agent_task"
+            action["content" if message else "task_description"] = message or ai_task
+            updates["action"] = action
+
+        schedule_type_present = "schedule_type" in kwargs
+        schedule_value_present = "schedule_value" in kwargs
+        if schedule_type_present != schedule_value_present:
+            return "错误: 修改调度时必须同时提供 schedule_type 和 schedule_value"
+        if schedule_type_present:
+            schedule = self._parse_schedule(
+                str(kwargs.get("schedule_type") or ""),
+                str(kwargs.get("schedule_value") or ""),
+            )
+            if not schedule:
+                return "错误: 无效的调度配置"
+            updates["schedule"] = schedule
+            next_run = self._calculate_next_run({"schedule": schedule})
+            if next_run is None:
+                return "错误: 无法计算下次执行时间"
+            updates["next_run_at"] = next_run.isoformat()
+
+        if not updates:
+            return "错误: 没有可修改的字段"
+        self.task_store.update_task(task_id, updates)
+        return f"✅ 任务 '{updates.get('name', task['name'])}' ({task_id}) 已更新"
+
+    def _run_now(self, **kwargs) -> str:
+        task_id = kwargs.get("task_id")
+        if not task_id:
+            return "错误: 缺少任务ID (task_id)"
+        task = self.task_store.get_task(task_id)
+        if not task:
+            return f"错误: 任务 '{task_id}' 不存在"
+        service = getattr(self, "scheduler_service", None)
+        if service is None:
+            return "错误: 定时任务执行服务未初始化"
+        if not service.run_now(task_id):
+            return f"错误: 任务 '{task_id}' 本次执行失败，原调度保持不变"
+        return f"✅ 任务 '{task['name']}' ({task_id}) 已立即执行"
     
     def _enable_task(self, **kwargs) -> str:
         """Enable a task"""

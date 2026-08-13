@@ -1,4 +1,4 @@
-import { CalendarClock, ListChecks, PauseCircle, PlayCircle, Trash2 } from "lucide-react";
+import { CalendarClock, ListChecks, PauseCircle, Pencil, PlayCircle, Trash2, Zap } from "lucide-react";
 import type { ReactNode } from "react";
 
 import type {
@@ -12,6 +12,8 @@ import NewConversationProjectSelector from "./NewConversationProjectSelector.tsx
 const SCHEDULE_ACTIONS = [
   [CalendarClock, "创建定时任务", "告诉小芯执行时间、内容和发送通道", "请帮我创建一个定时任务。先向我确认执行时间、任务内容和发送通道，再调用定时任务能力保存："],
   [ListChecks, "查看定时任务", "从 Runtime 读取当前任务，不在页面伪造状态", "请调用定时任务能力，列出我当前的全部定时任务和下次执行时间。"],
+  [Pencil, "修改定时任务", "修改名称、内容或执行时间并保留原投递目标", "请调用定时任务能力，先列出当前任务，再让我选择一个任务并说明要修改的字段。"],
+  [Zap, "立即运行一次", "不改变原计划的下次执行时间", "请调用定时任务能力，先列出当前任务，再让我选择一个任务立即运行一次。"],
   [PauseCircle, "暂停定时任务", "选择任务后由 Runtime 立即停用", "请调用定时任务能力，先列出当前启用的定时任务，再让我选择要暂停的任务。"],
   [PlayCircle, "恢复定时任务", "选择任务后由 Runtime 重新启用", "请调用定时任务能力，先列出当前暂停的定时任务，再让我选择要恢复的任务。"],
   [Trash2, "删除定时任务", "删除前由小芯再次向你确认", "请调用定时任务能力，先列出当前定时任务，再让我选择要删除的任务；删除前必须再次确认。"],

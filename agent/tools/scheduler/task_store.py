@@ -29,7 +29,7 @@ class TaskStore:
             store_path = os.path.join(home, "cow", "scheduler", "tasks.json")
         
         self.store_path = store_path
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
     
     def _ensure_store_dir(self):
         """Ensure the storage directory exists"""
@@ -50,10 +50,29 @@ class TaskStore:
             try:
                 with open(self.store_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    return data.get("tasks", {})
-            except Exception as e:
-                print(f"Error loading tasks: {e}")
-                return {}
+                tasks = data.get("tasks")
+                if not isinstance(tasks, dict):
+                    raise ValueError("scheduler tasks must be an object")
+                return tasks
+            except Exception as primary_error:
+                backup_path = f"{self.store_path}.bak"
+                try:
+                    with open(backup_path, 'r', encoding='utf-8') as f:
+                        backup = json.load(f)
+                    tasks = backup.get("tasks")
+                    if not isinstance(tasks, dict):
+                        raise ValueError("scheduler backup tasks must be an object")
+                    temporary_path = f"{self.store_path}.recover"
+                    with open(temporary_path, 'w', encoding='utf-8') as f:
+                        json.dump(backup, f, ensure_ascii=False, indent=2)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(temporary_path, self.store_path)
+                    return tasks
+                except Exception as backup_error:
+                    raise RuntimeError(
+                        "scheduler task store and backup are invalid"
+                    ) from backup_error
     
     def save_tasks(self, tasks: Dict[str, dict]):
         """
@@ -75,15 +94,20 @@ class TaskStore:
                     except Exception:
                         pass
                 
-                # Save tasks
+                # Save atomically so a process interruption cannot truncate
+                # the only durable scheduler copy.
                 data = {
                     "version": 1,
                     "updated_at": datetime.now().isoformat(),
                     "tasks": tasks
                 }
                 
-                with open(self.store_path, 'w', encoding='utf-8') as f:
+                temporary_path = f"{self.store_path}.tmp"
+                with open(temporary_path, 'w', encoding='utf-8') as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temporary_path, self.store_path)
             except Exception as e:
                 print(f"Error saving tasks: {e}")
                 raise
@@ -98,17 +122,15 @@ class TaskStore:
         Returns:
             True if successful
         """
-        tasks = self.load_tasks()
-        task_id = task.get("id")
-        
-        if not task_id:
-            raise ValueError("Task must have an 'id' field")
-        
-        if task_id in tasks:
-            raise ValueError(f"Task with id '{task_id}' already exists")
-        
-        tasks[task_id] = task
-        self.save_tasks(tasks)
+        with self.lock:
+            tasks = self.load_tasks()
+            task_id = task.get("id")
+            if not task_id:
+                raise ValueError("Task must have an 'id' field")
+            if task_id in tasks:
+                raise ValueError(f"Task with id '{task_id}' already exists")
+            tasks[task_id] = task
+            self.save_tasks(tasks)
         return True
     
     def update_task(self, task_id: str, updates: dict) -> bool:
@@ -122,16 +144,13 @@ class TaskStore:
         Returns:
             True if successful
         """
-        tasks = self.load_tasks()
-        
-        if task_id not in tasks:
-            raise ValueError(f"Task '{task_id}' not found")
-        
-        # Update fields
-        tasks[task_id].update(updates)
-        tasks[task_id]["updated_at"] = datetime.now().isoformat()
-        
-        self.save_tasks(tasks)
+        with self.lock:
+            tasks = self.load_tasks()
+            if task_id not in tasks:
+                raise ValueError(f"Task '{task_id}' not found")
+            tasks[task_id].update(updates)
+            tasks[task_id]["updated_at"] = datetime.now().isoformat()
+            self.save_tasks(tasks)
         return True
     
     def delete_task(self, task_id: str) -> bool:
@@ -144,13 +163,12 @@ class TaskStore:
         Returns:
             True if successful
         """
-        tasks = self.load_tasks()
-        
-        if task_id not in tasks:
-            raise ValueError(f"Task '{task_id}' not found")
-        
-        del tasks[task_id]
-        self.save_tasks(tasks)
+        with self.lock:
+            tasks = self.load_tasks()
+            if task_id not in tasks:
+                raise ValueError(f"Task '{task_id}' not found")
+            del tasks[task_id]
+            self.save_tasks(tasks)
         return True
     
     def get_task(self, task_id: str) -> Optional[dict]:

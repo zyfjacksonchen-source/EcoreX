@@ -145,6 +145,19 @@ class SchedulerService:
                     f"[Scheduler] Error processing task {task.get('id')}: "
                     f"{_public_scheduler_error_message(e)}"
                 )
+
+    def run_now(self, task_id: str) -> bool:
+        """Execute one task immediately without changing its next schedule."""
+
+        task = self.task_store.get_task(task_id)
+        if task is None:
+            raise ValueError(f"Task '{task_id}' not found")
+        if not self._execute_task(task):
+            return False
+        self.task_store.update_task(task_id, {
+            "last_run_at": datetime.now().isoformat(),
+        })
+        return True
     
     def _is_task_due(self, task: dict, now: datetime) -> bool:
         """
