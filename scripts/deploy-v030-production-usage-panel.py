@@ -161,6 +161,7 @@ def _build_candidate(
 _REMOTE_LIBRARY = r'''
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -176,9 +177,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from ecorex.update.locking import ProductFileLock
-
-
 SERVICE = "ecorex-usage-panel-api.service"
 PAYLOAD_NAMES = (
     "usage_panel_api.py",
@@ -190,6 +188,45 @@ PAYLOAD_NAMES = (
 CANDIDATE_NAMES = frozenset(PAYLOAD_NAMES + ("release-manifest.json", "release-receipt.json"))
 STATIC_NAMES = ("index.html", "app.js", "styles.css", "data.js")
 MAX_FILE_BYTES = 8 * 1024 * 1024
+
+
+class DeploymentLock:
+    def __init__(self, path, timeout=0):
+        if timeout != 0:
+            raise ValueError("deployment_lock_timeout_invalid")
+        self.path = Path(path)
+        self.descriptor = None
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(self.path, flags, 0o600)
+        except OSError:
+            raise RuntimeError("deployment_lock_invalid") from None
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise RuntimeError("deployment_lock_invalid")
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (BlockingIOError, OSError):
+                raise RuntimeError("deployment_lock_busy") from None
+            self.descriptor = descriptor
+            return self
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def __exit__(self, exc_type, exc, traceback):
+        del exc_type, exc, traceback
+        descriptor = self.descriptor
+        self.descriptor = None
+        if descriptor is None:
+            raise RuntimeError("deployment_lock_not_owned")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
 
 
 def _sha256(value):
@@ -503,7 +540,7 @@ def activate(
     state = None
     previous = None
     try:
-        with ProductFileLock(lock_path, timeout=0):
+        with DeploymentLock(lock_path, timeout=0):
           try:
             previous, server_source, server_metadata, preflight = _preflight(
                 root, service_active, health_check
