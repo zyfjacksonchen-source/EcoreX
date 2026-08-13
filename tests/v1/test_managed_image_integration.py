@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import hashlib
 import io
@@ -297,10 +298,13 @@ def test_client_accepts_same_account_refresh_between_execute_operations(
     asyncio.run(scenario())
 
 
-def test_client_rejects_refresh_during_one_execute_operation(tmp_path: Path) -> None:
+def test_client_continues_policy_equivalent_refresh_during_one_execute_operation(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
         app, _store, _cas, provider, image_worker = _cloud(tmp_path)
-        state = {"snapshot": _snapshot("tenant-001")}
+        initial = _snapshot("tenant-001")
+        state = {"snapshot": initial}
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport) as http:
             client = ManagedImageOrchestrationClient(
@@ -318,26 +322,27 @@ def test_client_rejects_refresh_during_one_execute_operation(tmp_path: Path) -> 
                 job: ManagedImageJob, *, timeout_seconds: float | None = None
             ) -> ManagedImageJob:
                 await image_worker.run_once("cloud-worker-mid-operation-refresh")
-                state["snapshot"] = _snapshot(
-                    "tenant-001",
+                state["snapshot"] = replace(
+                    initial,
                     generation=8,
                     lease_digest="c" * 64,
+                    lease_id="lease-refreshed",
+                    issued_at=datetime.now(UTC),
                     revision=2,
                 )
                 return await original_poll(job, timeout_seconds=timeout_seconds)
 
             client.poll = poll_after_refresh  # type: ignore[method-assign]
-            with pytest.raises(ManagedImageClientError) as fenced:
-                await client.execute(
-                    ImageSubmitRequest(
-                        ImageOperation.GENERATE,
-                        "gpt-image-2",
-                        "managed-client-mid-operation-refresh-0001",
-                        "create an office dashboard",
-                        deadline_seconds=30,
-                    )
+            downloaded = await client.execute(
+                ImageSubmitRequest(
+                    ImageOperation.GENERATE,
+                    "gpt-image-2",
+                    "managed-client-mid-operation-refresh-0001",
+                    "create an office dashboard",
+                    deadline_seconds=30,
                 )
-            assert fenced.value.code == "managed_image_session_changed"
+            )
+            assert downloaded.content == PNG
             assert provider.submits == 1
 
     asyncio.run(scenario())

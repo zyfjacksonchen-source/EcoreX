@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -13,14 +14,14 @@ import re
 import sqlite3
 import threading
 import time
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 from urllib.parse import urlsplit
 
 import httpx
 
 from ecorex.image_orchestrator import ImageOperation, ImageSubmitRequest
 from ecorex.runtime.database import SQLiteDatabase
-from ecorex.session import ManagedSessionService
+from ecorex.session import ManagedSessionService, ManagedSessionSnapshot
 
 
 _JOB_ID = re.compile(r"^imgjob_[0-9a-f]{32}$")
@@ -29,6 +30,20 @@ _MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 _ERROR_CODE = re.compile(r"^[a-z][a-z0-9_.:-]{0,127}$")
 _MIME = frozenset({"image/png", "image/jpeg", "image/webp", "image/avif"})
 _TERMINAL = frozenset({"completed", "cancelled", "failed", "dead_letter"})
+
+
+def _session_continuity(snapshot: ManagedSessionSnapshot) -> tuple[object, ...]:
+    """Logical session identity that credential-only refreshes cannot change."""
+
+    return (
+        snapshot.account_id,
+        snapshot.organization_id,
+        frozenset(snapshot.roles),
+        frozenset(snapshot.model_allowlist),
+        tuple(sorted(snapshot.quota.items())),
+        frozenset(snapshot.admin_denies),
+        snapshot.expires_at,
+    )
 
 
 def _strict_json_int(value: Any) -> int:
@@ -289,7 +304,7 @@ class ManagedImageOrchestrationClient:
         self._account_id: str | None = None
         self._binding_lock = threading.Lock()
         self._operation_binding: ContextVar[
-            tuple[str, int, str, int] | None
+            tuple[object, ...] | None
         ] = ContextVar("managed_image_operation_binding", default=None)
         self._owns_client = client is None
         self.client = client or httpx.AsyncClient(
@@ -303,18 +318,13 @@ class ManagedImageOrchestrationClient:
         if self._owns_client:
             await self.client.aclose()
 
-    def _session(self) -> tuple[Any, tuple[str, int, str, int], str]:
+    def _session(self) -> tuple[ManagedSessionSnapshot, tuple[object, ...], str]:
         try:
             snapshot = self.session.snapshot()
             token = self.session.bearer_token()
         except Exception:
             raise ManagedImageClientError("managed_image_auth_unavailable", retryable=True) from None
-        binding = (
-            snapshot.account_id,
-            snapshot.generation,
-            snapshot.lease_digest,
-            snapshot.revision,
-        )
+        binding = _session_continuity(snapshot)
         with self._binding_lock:
             if self._account_id is None:
                 self._account_id = snapshot.account_id
@@ -331,19 +341,25 @@ class ManagedImageOrchestrationClient:
             raise ManagedImageClientError("managed_image_auth_invalid", retryable=False)
         return snapshot, binding, token
 
-    def _verify_session(self, expected: tuple[str, int, str, int]) -> None:
+    def _verify_session(self, expected: tuple[object, ...]) -> None:
         try:
             snapshot = self.session.snapshot()
         except Exception:
             raise ManagedImageClientError("managed_image_session_changed", retryable=False) from None
-        actual = (
-            snapshot.account_id,
-            snapshot.generation,
-            snapshot.lease_digest,
-            snapshot.revision,
-        )
+        actual = _session_continuity(snapshot)
         if actual != expected:
             raise ManagedImageClientError("managed_image_session_changed", retryable=False)
+
+    @contextmanager
+    def operation_scope(self) -> Iterator[None]:
+        """Freeze one logical session across all child requests in an operation."""
+
+        _snapshot, binding, _token = self._session()
+        operation = self._operation_binding.set(binding)
+        try:
+            yield
+        finally:
+            self._operation_binding.reset(operation)
 
     async def upload_input(self, asset: ManagedImageInputAsset) -> None:
         response, _account = await self._request(

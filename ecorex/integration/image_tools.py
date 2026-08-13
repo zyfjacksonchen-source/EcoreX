@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import hashlib
@@ -62,6 +63,14 @@ class ImageToolPublicationBusy(ImageToolError):
 
     def __init__(self, message: str = "image artifact publication is busy") -> None:
         super().__init__(self.code, retryable=True)
+
+
+_BATCH_SESSION_ABORT_CODES = frozenset({
+    "managed_image_auth_invalid",
+    "managed_image_auth_rejected",
+    "managed_image_auth_unavailable",
+    "managed_image_session_changed",
+})
 
 
 class ImageGenerationToolHandler:
@@ -539,6 +548,8 @@ class RuntimeImageToolBackend:
                     r"[a-z][a-z0-9_.:-]{0,127}", code
                 ):
                     code = "image_batch_task_failed"
+                if code in _BATCH_SESSION_ABORT_CODES:
+                    raise ImageToolError(code) from error
                 error_fact = {
                     "code": code,
                     "retryable": bool(getattr(error, "retryable", False)),
@@ -570,12 +581,21 @@ class RuntimeImageToolBackend:
                 "error": None,
             }
 
-        items = await asyncio.gather(
-            *(
-                execute(index, task, task_sha256)
+        operation_scope = getattr(getattr(self, "client", None), "operation_scope", None)
+        with operation_scope() if callable(operation_scope) else nullcontext():
+            children = [
+                asyncio.create_task(
+                    execute(index, task, task_sha256)
+                )
                 for index, (task, task_sha256) in enumerate(validated)
-            )
-        )
+            ]
+            try:
+                items = await asyncio.gather(*children)
+            except ImageToolError:
+                for child in children:
+                    child.cancel()
+                await asyncio.gather(*children, return_exceptions=True)
+                raise
         completed_count = sum(item["status"] == "completed" for item in items)
         failed_count = len(items) - completed_count
         status = (

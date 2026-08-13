@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import hashlib
@@ -152,6 +153,43 @@ def test_image_batch_is_bounded_ordered_idempotent_and_reports_partial_failure()
     asyncio.run(scenario())
 
 
+def test_image_batch_admits_all_children_under_one_managed_session_scope() -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.active_scopes = 0
+            self.admissions = 0
+
+        @contextmanager
+        def operation_scope(self):
+            self.admissions += 1
+            self.active_scopes += 1
+            try:
+                yield
+            finally:
+                self.active_scopes -= 1
+
+    async def scenario() -> None:
+        backend = _backend()
+        client = Client()
+        backend.client = client
+
+        async def fake_single(self, arguments, context, *, image_batch=None):
+            assert client.active_scopes == 1
+            await asyncio.sleep(0)
+            return {"preview_url": "/preview/" + arguments["prompt"]}
+
+        backend._generate_single = MethodType(fake_single, backend)
+        result = await backend.generate_image(
+            {"tasks": [{"prompt": "one"}, {"prompt": "two"}, {"prompt": "three"}]},
+            _context(),
+        )
+
+        assert client.admissions == 1
+        assert result["completed_count"] == 3
+
+    asyncio.run(scenario())
+
+
 def test_image_batch_parent_cancellation_fails_closed() -> None:
     async def scenario() -> None:
         backend = _backend()
@@ -197,6 +235,43 @@ def test_image_batch_parent_cancellation_fails_closed() -> None:
             )
         with pytest.raises(ImageToolError, match="prompt or tasks"):
             await handler({}, handler_context)
+
+    asyncio.run(scenario())
+
+
+def test_image_batch_session_revocation_cancels_outstanding_children() -> None:
+    async def scenario() -> None:
+        backend = _backend()
+        first_started = asyncio.Event()
+        first_cancelled = False
+
+        async def fake_single(self, arguments, context, *, image_batch=None):
+            nonlocal first_cancelled
+            if arguments["prompt"] == "revoked":
+                await first_started.wait()
+                raise ImageToolError("managed_image_session_changed")
+            first_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                first_cancelled = True
+                raise
+
+        backend._generate_single = MethodType(fake_single, backend)
+        with pytest.raises(ImageToolError) as aborted:
+            await backend.generate_image(
+                {
+                    "tasks": [
+                        {"prompt": "in flight"},
+                        {"prompt": "revoked"},
+                        {"prompt": "not admitted"},
+                    ]
+                },
+                _context(),
+            )
+
+        assert aborted.value.code == "managed_image_session_changed"
+        assert first_cancelled is True
 
     asyncio.run(scenario())
 
