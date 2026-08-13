@@ -53,6 +53,7 @@ Allowed status values: `pending`, `passed`, `failed`, `blocked`.
 | Bug ID | Found by case | Source commit | Reproduction | Severity | Fix branch | Fix commit | Verification | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `CU-205-STARTUP-001` | macOS fresh-profile startup | `63a591d81ddc38ab2793236943f559a02f25eee9` | Deterministic delayed-owner contract | P1 | `codex/e-mate-2.0.5` | `cf14a545` | Exact regression plus all 14 Electron shell contracts passed | Same-data-dir, same-identity receipt could be rejected while its HMAC endpoint was still starting; unknown and cross-identity listeners remain rejected |
+| `CU-205-WIN-UPDATER-001` | Windows exact 2.0.4 installed update path | `63a591d81ddc38ab2793236943f559a02f25eee9` | Both production hosts returned 404 for `latest.yml` while the unsigned-manual gate deliberately omitted it | P1 | `codex/fix-windows-updater-205` | `c744813e` | Exact Feed red test, 16 Electron contracts, 13 deploy/rollback tests, and public download contracts passed | The single electron-updater feed now uses the domestic CDN; Windows metadata remains atomic while unsigned macOS stays manual |
 | `CU-205-FILE-001` | `CU-MAC-OFFICE` | `63a591d81ddc38ab2793236943f559a02f25eee9` | `205-表格验收.xlsx` was created, but the final row was plain text with no open/preview action | P1 | `codex/205-artifact-file-open` | `5aed338a` | Exact Cow projection regression, secure open/materialize checks, 18 Web Artifact contracts, and TypeScript passed | Cow path metadata is now admitted once into the existing account/thread-scoped Artifact store; office cards open natively while PDF/image cards retain in-app preview |
 | `CU-205-OCR-001` | macOS exact 2.0.4 OCR cold profile | `63a591d81ddc38ab2793236943f559a02f25eee9` | First call failed after 31.90s with `DependencyPackProcessError`; the same attachment succeeded on the second call in 15.45s | P1 | `codex/fix-ocr-cold-timeout-205` | `2436e951` | Exact cold-deadline regression plus all 10 dependency Pack process tests passed | One verified OCR Pack process now receives a 38s hard wall-clock bound: 30s operation plus 8s Pack-Python startup; there is no retry or fallback execution path |
 | `MAC-OFFICE-001` | `CU-MAC-OFFICE` | `63a591d81ddc38ab2793236943f559a02f25eee9` | Word create authoring inputs failed twice after the initial create probe | Pending triage | Assigned separately | — | Pending | Exact 2.0.4 arm64 DMG SHA-256 `c9dc0022a831f053081f3c0776f1480c2939811ec1ffde2d7f9a7996e4fa2582`; ConversationStore retained the complete tool chain |
@@ -195,3 +196,24 @@ environment failure until the product failure reproduces from known state.
   exact regression passed, then the complete affected
   `tests/v1/test_dependency_pack_process.py` suite passed all `10` tests;
   `git diff --check` passed. No App, package, feed, or deployment was run.
+
+### 2026-08-13 CU-205-WIN-UPDATER-001
+
+- Exact 2.0.4 configured electron-updater against the `mvdcm` generic feed,
+  while the production `latest.yml` route was 404 on both `mvdcm` and `dl`.
+  The installer could therefore never discover an installed Windows upgrade.
+- Root cause was the shared release gate: `--unsigned-manual` incorrectly
+  removed Windows `latest.yml` together with unsigned macOS metadata, and the
+  matching nginx/deploy contracts required that Windows pointer to remain 404.
+- Fix `c744813e` keeps the existing electron-updater and one atomic candidate.
+  Windows `latest.yml`, installer, and blockmap are verified against the same
+  handoff and recorded in the same Feed receipt; only `latest-mac.yml` remains
+  absent. The updater, electron-builder publish config, download index, and
+  public download page now use `https://dl.ecoremedia.net/e-mate/update/`.
+  GitHub and GH proxy download branches were removed from the public page.
+- Red checks failed on the missing Windows pointer, stale updater URL, and
+  stale download-index origin. Green checks: the exact Feed regression passed;
+  all `16` Electron shell/update contracts passed; the complete deploy,
+  rollback, and compensation suite passed `13`; the affected public download
+  checks passed. `git diff --check` passed. No package, signer, deployment, or
+  production mutation was started.
