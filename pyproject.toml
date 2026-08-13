@@ -76,6 +76,7 @@ exclude = ["desktop*", "tests*"]
 
 [tool.setuptools.package-data]
 "ecorex.control_plane.admin_web" = ["static/*"]
+"ecorex.control_plane.usage_panel_web" = ["*.html", "*.js", "*.css"]
 "ecorex.control_plane" = ["seed_skills/official-writing/*"]
 
 [tool.setuptools.dynamic]
