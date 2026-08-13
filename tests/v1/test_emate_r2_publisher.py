@@ -7,6 +7,7 @@ from pathlib import Path
 import runpy
 from threading import Event, Lock
 from types import SimpleNamespace
+from urllib.error import HTTPError
 
 import pytest
 
@@ -247,6 +248,8 @@ def test_public_gate_checks_head_size_and_exact_first_and_last_ranges(
 
     def open_request(request, *, timeout: int):
         assert timeout == 30
+        assert request.headers["User-agent"] == "e-Mate-Desktop-Publisher/1.0"
+        assert request.headers["Accept"] == "*/*"
         if request.get_method() == "HEAD":
             return _Response(200, {"Content-Length": "64", "Accept-Ranges": "bytes"})
         requested = request.headers["Range"]
@@ -264,3 +267,53 @@ def test_public_gate_checks_head_size_and_exact_first_and_last_ranges(
     module["_verify_public"](record, artifact, opener=open_request)
 
     assert ranges == ["bytes=0-15", "bytes=48-63"]
+
+
+def test_public_head_http_error_keeps_safe_artifact_category(tmp_path: Path) -> None:
+    module = _module()
+    artifact = tmp_path / "artifact.exe"
+    artifact.write_bytes(b"artifact")
+    record = {
+        "file_name": "artifact.exe",
+        "url": "https://access-secret@private.example/artifact.exe",
+        "size_bytes": artifact.stat().st_size,
+    }
+
+    def denied(request, *, timeout: int):
+        raise HTTPError(request.full_url, 403, "access-secret", {}, None)
+
+    with pytest.raises(RuntimeError) as caught:
+        module["_verify_public_once"](record, artifact, opener=denied)
+
+    assert str(caught.value) == "r2_public_head_failed:artifact.exe"
+    assert "access-secret" not in str(caught.value)
+
+
+def test_public_probe_failure_rerun_skips_three_uploaded_packages_and_adds_blockmap(
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    module["_upload"].__globals__["_transfer_config"] = lambda: SimpleNamespace(
+        max_concurrency=1, use_threads=False
+    )
+    args = _inputs(tmp_path)
+    client = FakeS3()
+    fail_once = Event()
+
+    def probe(record: dict[str, object], _path: Path) -> None:
+        if record["target"] == "windows-x64" and not fail_once.is_set():
+            fail_once.set()
+            raise RuntimeError(
+                f"r2_public_head_failed:{record['file_name']}"
+            )
+
+    with pytest.raises(RuntimeError, match="r2_public_head_failed"):
+        module["publish"](args, client=client, public_probe=probe)
+
+    assert len(client.uploaded) == 3
+    receipt = module["publish"](args, client=client, public_probe=probe)
+
+    assert client.uploaded[3:] == [
+        f"e-Mate-Setup-{VERSION}-x64.exe.blockmap"
+    ]
+    assert receipt["status"] == "verified"

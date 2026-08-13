@@ -21,6 +21,7 @@ BUCKET = "emate-desktop-downloads"
 PUBLIC_ORIGIN = "https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev"
 _VERSION = re.compile(r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,179}$")
+_PUBLIC_HEADERS = {"User-Agent": "e-Mate-Desktop-Publisher/1.0", "Accept": "*/*"}
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -233,29 +234,49 @@ def _verify_public_once(
     *,
     opener: Callable[..., Any],
 ) -> None:
-    with opener(Request(str(record["url"]), method="HEAD"), timeout=30) as response:
-        if (
-            response.status != 200
-            or response.headers.get("Content-Length") != str(record["size_bytes"])
-            or response.headers.get("Accept-Ranges", "").casefold() != "bytes"
-        ):
-            raise RuntimeError(f"r2_public_head_failed:{record['file_name']}")
+    try:
+        with opener(
+            Request(str(record["url"]), headers=_PUBLIC_HEADERS, method="HEAD"),
+            timeout=30,
+        ) as response:
+            if (
+                response.status != 200
+                or response.headers.get("Content-Length")
+                != str(record["size_bytes"])
+                or response.headers.get("Accept-Ranges", "").casefold() != "bytes"
+            ):
+                raise RuntimeError(f"r2_public_head_failed:{record['file_name']}")
+    except Exception:
+        raise RuntimeError(
+            f"r2_public_head_failed:{record['file_name']}"
+        ) from None
     size = int(record["size_bytes"])
     spans = ((0, min(15, size - 1)), (max(0, size - 16), size - 1))
     with path.open("rb") as source:
         for start, end in spans:
             request = Request(
-                str(record["url"]), headers={"Range": f"bytes={start}-{end}"}
+                str(record["url"]),
+                headers={
+                    **_PUBLIC_HEADERS,
+                    "Range": f"bytes={start}-{end}",
+                },
             )
-            with opener(request, timeout=30) as response:
-                payload = response.read(end - start + 2)
-                if (
-                    response.status != 206
-                    or response.headers.get("Content-Range")
-                    != f"bytes {start}-{end}/{size}"
-                    or len(payload) != end - start + 1
-                ):
-                    raise RuntimeError(f"r2_public_range_failed:{record['file_name']}")
+            try:
+                with opener(request, timeout=30) as response:
+                    payload = response.read(end - start + 2)
+                    if (
+                        response.status != 206
+                        or response.headers.get("Content-Range")
+                        != f"bytes {start}-{end}/{size}"
+                        or len(payload) != end - start + 1
+                    ):
+                        raise RuntimeError(
+                            f"r2_public_range_failed:{record['file_name']}"
+                        )
+            except Exception:
+                raise RuntimeError(
+                    f"r2_public_range_failed:{record['file_name']}"
+                ) from None
             source.seek(start)
             if payload != source.read(end - start + 1):
                 raise RuntimeError(f"r2_public_bytes_failed:{record['file_name']}")
