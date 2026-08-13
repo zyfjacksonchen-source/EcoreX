@@ -46,10 +46,6 @@ const imageGallery = await readFile(
   new URL("../src/v1/state/timelineImageGallery.ts", import.meta.url),
   "utf-8",
 );
-const imageBatchFacts = await readFile(
-  new URL("../src/v1/state/imageBatchFacts.ts", import.meta.url),
-  "utf-8",
-);
 
 test("the chat DOM virtualizes durable turn projections", () => {
   assert.match(timeline, /from "react-virtuoso"/u);
@@ -191,14 +187,13 @@ test("streaming Markdown renders the frame-batched text without a second delay",
   assert.match(richMessage, /\{text\}/u);
 });
 
-test("one complete backend image batch uses the native placeholder and accessible gallery controls", () => {
-  assert.match(timeline, /groupTimelineImageArtifacts\([\s\S]*entry\.blocks,[\s\S]*imageBatchFailures/u);
-  assert.match(imageGallery, /artifact\?\.family !== "image"/u);
+test("multiple independent image results use accessible gallery controls", () => {
+  assert.match(timeline, /groupTimelineImageArtifacts\(entry\.blocks\)/u);
+  assert.match(imageGallery, /artifact\?\.family === "image" && artifact\.status === "ready"/u);
   assert.match(imageGallery, /typeof block\.item\.content\.retouch_job_id === "string"/u);
-  assert.match(imageGallery, /block\.item\.content\.image_batch/u);
-  assert.match(imageGallery, /fact\.schema_version !== 1/u);
-  assert.match(imageGallery, /new Set\(images\.map\(\(fact\) => fact\.index\)\)\.size/u);
-  assert.match(imageGallery, /sort\(\(left, right\) => left\.index - right\.index\)/u);
+  assert.match(imageGallery, /if \(images\.length < 2\) return \[\.\.\.blocks\]/u);
+  assert.match(imageGallery, /slots: images\.map\(\(block\) => \(\{ kind: "artifact", block \}\)\)/u);
+  assert.doesNotMatch(imageGallery, /image_batch|batchFailures|schema_version/u);
   assert.match(artifactShelf, /"ArrowLeft"/u);
   assert.match(artifactShelf, /"ArrowRight"/u);
   assert.match(artifactShelf, /data-artifact-status/u);
@@ -208,13 +203,10 @@ test("one complete backend image batch uses the native placeholder and accessibl
   assert.match(features, /prefers-reduced-motion[\s\S]*\.ex-image-gallery-track/u);
 });
 
-test("partial image batches project only durable backend failure facts", () => {
-  assert.match(runtimeSession, /setImageBatchFacts\(\(current\) => reduceImageBatchFacts\(current, events\)\)/u);
-  assert.match(runtimeSession, /client\.eventPage\(threadId, afterSeq, 1_000, pageSignal\)/u);
-  assert.match(imageBatchFacts, /event\.event_type !== "artifact\.image\.batch_task_failed"/u);
-  assert.match(imageBatchFacts, /event\.event_type !== "artifact\.image\.batch_settled"/u);
-  assert.match(imageBatchFacts, /if \(batchFailures\.length !== settlement\.failedCount\) return \[\]/u);
-  assert.match(artifactShelf, /data-image-batch-task-id/u);
+test("failed image calls do not synthesize gallery placeholders", () => {
+  assert.doesNotMatch(runtimeSession, /imageBatchFacts|artifact\.image\.batch_/u);
+  assert.doesNotMatch(timeline, /imageBatchFailures/u);
+  assert.doesNotMatch(artifactShelf, /data-image-batch-task-id/u);
 });
 
 test("continuing by task ID keeps the current transcript until the target is verified", () => {
