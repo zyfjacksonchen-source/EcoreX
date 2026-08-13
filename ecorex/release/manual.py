@@ -320,7 +320,7 @@ def validate_codex_browser_receipt(
         "dynamic_component_terminal_state",
         "scroll_follow",
         "long_session_virtualization",
-        "production_image_concurrency",
+        "production_image_calls",
         "skill_mcp_runtime_projection",
         "update_notification_handoff",
         "interaction_round_trip",
@@ -366,7 +366,7 @@ def _valid_browser_observations(
         "model_stream",
         "tool_call",
         "builtin_capabilities",
-        "image_concurrency",
+        "image_calls",
         "long_session",
         "runtime_projection",
         "release_change",
@@ -376,7 +376,7 @@ def _valid_browser_observations(
     model = value.get("model_stream")
     tool = value.get("tool_call")
     builtins = value.get("builtin_capabilities")
-    image = value.get("image_concurrency")
+    image = value.get("image_calls")
     session = value.get("long_session")
     projection = value.get("runtime_projection")
     change = value.get("release_change")
@@ -421,21 +421,36 @@ def _valid_browser_observations(
         and set(builtins) == set(BUILTIN_TOOL_IDS)
         and all(
             isinstance(item, Mapping)
-            and set(item) == {"status", "terminal_visible"}
+            and set(item)
+            == {
+                "status", "tool_call_id", "executor", "tool_result_present",
+                "terminal_visible", "next_turn_referenced",
+            }
+            and text(item.get("tool_call_id"))
+            and text(item.get("executor"))
+            and item.get("tool_result_present") is True
             and item.get("terminal_visible") is True
+            and item.get("next_turn_referenced") is True
             and item.get("status") == "completed"
             for item in builtins.values()
         )
         and isinstance(image, Mapping)
         and set(image)
-        == {"model_id", "job_ids", "completed_count", "overlap_observed", "chat_responsive_during_jobs"}
-        and image.get("model_id") == "gpt-image-2"
-        and isinstance(image.get("job_ids"), list)
-        and all(text(item) for item in image["job_ids"])
-        and len(image["job_ids"]) == len(set(image["job_ids"])) == 2
+        == {
+            "requested_model_id", "actual_model_id", "tool_call_ids", "artifact_ids",
+            "completed_count", "single_artifact_per_call", "context_continued",
+        }
+        and image.get("requested_model_id") == "gpt-image-2"
+        and image.get("actual_model_id") == "gpt-image-2-pro"
+        and isinstance(image.get("tool_call_ids"), list)
+        and all(text(item) for item in image["tool_call_ids"])
+        and len(image["tool_call_ids"]) == len(set(image["tool_call_ids"])) == 2
+        and isinstance(image.get("artifact_ids"), list)
+        and all(text(item) for item in image["artifact_ids"])
+        and len(image["artifact_ids"]) == len(set(image["artifact_ids"])) == 2
         and image.get("completed_count") == 2
-        and image.get("overlap_observed") is True
-        and image.get("chat_responsive_during_jobs") is True
+        and image.get("single_artifact_per_call") is True
+        and image.get("context_continued") is True
         and isinstance(session, Mapping)
         and set(session)
         == {"turn_count", "mounted_turn_count", "history_restored", "jump_to_latest", "follow_pause_resume"}
@@ -491,7 +506,7 @@ def browser_request(store: ReleaseRunStore) -> dict[str, Any]:
             "dynamic_component_terminal_state",
             "scroll_follow",
             "long_session_virtualization",
-            "production_image_concurrency",
+            "production_image_calls",
             "skill_mcp_runtime_projection",
             "update_notification_handoff",
             "interaction_round_trip",
@@ -514,9 +529,9 @@ def browser_request(store: ReleaseRunStore) -> dict[str, Any]:
                 "assert": "all Cow hard tools and all four Office tools complete with a visible terminal state",
             },
             {
-                "id": "image-concurrency",
-                "action": "start two real production image generations from the UI",
-                "assert": "both finish independently while ordinary chat remains responsive",
+                "id": "image-calls",
+                "action": "invoke imagegen twice through the production UI",
+                "assert": "each Cow tool call yields one real Artifact and the second call keeps context",
             },
             {
                 "id": "long-session",
@@ -533,8 +548,8 @@ def browser_request(store: ReleaseRunStore) -> dict[str, Any]:
             "versions": "installed Runtime, visible UI, public manifest and admin service must all equal expected_version",
             "model_stream": "record nonce, ecorex-chat/max request identity, at least two incremental frames and one terminal frame",
             "tool_call": "record a read-only call id and exact pending/running/completed sequence",
-            "builtin_capabilities": "record completed or explicit expected-unconfigured terminal state for every required_builtin_tool_id",
-            "image_concurrency": "record gpt-image-2, two unique completed production job ids, overlap and chat responsiveness",
+            "builtin_capabilities": "record tool call, executor, result, visible terminal state and next-turn reference for every required_builtin_tool_id",
+            "image_calls": "record two independent gpt-image-2 calls, gpt-image-2-pro routing, one Artifact each and context continuity",
             "long_session": "record at least 100 turns, fewer mounted turns, restore, jump and follow pause/resume",
             "runtime_projection": "record visible Skill/MCP counts and equality with Runtime API",
             "release_change": "name and match one release-specific behavior",

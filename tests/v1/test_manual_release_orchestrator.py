@@ -66,15 +66,24 @@ def _observations() -> dict[str, object]:
             "read_only": True,
         },
         "builtin_capabilities": {
-            tool_id: {"status": "completed", "terminal_visible": True}
+            tool_id: {
+                "status": "completed",
+                "tool_call_id": f"call-{tool_id}",
+                "executor": "cow-tool-manager",
+                "tool_result_present": True,
+                "terminal_visible": True,
+                "next_turn_referenced": True,
+            }
             for tool_id in BUILTIN_TOOL_IDS
         },
-        "image_concurrency": {
-            "model_id": "gpt-image-2",
-            "job_ids": ["image-1", "image-2"],
+        "image_calls": {
+            "requested_model_id": "gpt-image-2",
+            "actual_model_id": "gpt-image-2-pro",
+            "tool_call_ids": ["image-call-1", "image-call-2"],
+            "artifact_ids": ["image-artifact-1", "image-artifact-2"],
             "completed_count": 2,
-            "overlap_observed": True,
-            "chat_responsive_during_jobs": True,
+            "single_artifact_per_call": True,
+            "context_continued": True,
         },
         "long_session": {
             "turn_count": 120,
@@ -168,7 +177,7 @@ def test_comprehensive_codex_browser_receipt_is_digest_bound(tmp_path):
             evidence_root=evidence_root,
         )
     receipt["observations"]["builtin_capabilities"]["bash"] = shell
-    receipt["observations"]["image_concurrency"]["overlap_observed"] = False
+    receipt["observations"]["image_calls"]["single_artifact_per_call"] = False
     with pytest.raises(ManualReleaseError, match="codex_browser_observations_invalid"):
         validate_codex_browser_receipt(
             receipt,
@@ -186,7 +195,7 @@ def test_browser_request_requires_real_production_model_images_and_long_session(
         "model-stream",
         "tool-lifecycle",
         "builtin-matrix",
-        "image-concurrency",
+        "image-calls",
         "long-session",
         "runtime-management",
     }
