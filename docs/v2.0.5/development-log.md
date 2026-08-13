@@ -543,3 +543,17 @@ environment failure until the product failure reproduces from known state.
   followed by real Hard19+Office4, Browser, OCR, Office, Scheduler, Skill, and
   channel replay. Production `latest.yml` remains intentionally untouched until
   same-byte Feed publication.
+
+### 2026-08-13 CU-205-WINDOWS-ICON-001
+
+- Windows previously packaged the original fully opaque square artwork in all
+  seven ICO frames, while macOS now used a transparent native rounded
+  silhouette. The Windows asset therefore appeared visibly square on desktop,
+  Start, and taskbar surfaces which do not apply a mask for the application.
+- The existing orange/black e-Mate robot pixels were reused without redrawing.
+  Each 16, 24, 32, 48, 64, 128, and 256 pixel ICO frame is now generated at the
+  same proportional live area as the macOS icon, on a transparent canvas.
+- The shared asset regression verifies transparent corners, an opaque center,
+  the 256-pixel live bounds, and bounded pixel drift between normalized macOS
+  and Windows visible artwork. It passed `1/1`; all seven native ICO frame
+  sizes were then inspected for transparent corners and non-empty centers.
