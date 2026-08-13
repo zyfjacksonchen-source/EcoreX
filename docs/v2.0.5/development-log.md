@@ -423,3 +423,29 @@ environment failure until the product failure reproduces from known state.
   missing load); the focused switch test proves the loaded tool set is byte-for-
   byte unchanged and retains all four Office tools. No package, feed, deploy, or
   external network path was started.
+
+### 2026-08-13 CU-205-USAGE-GENERATION-001 — blocked before edit
+
+- Requested outcome: retain historical EcoreX records while adding an
+  `e-Mate / EcoreX` filter and computing task, completion, and Token summaries
+  independently for both product generations.
+- The production Usage panel is protected by HTTP Basic Authentication. The
+  approved in-app Browser refused this origin at its authentication boundary,
+  so no panel page or `/api/data` payload was read. Credentials were not put in
+  a URL, shell command, repository file, or log, and no production mutation was
+  attempted.
+- The current source projection is insufficient to classify historical tasks
+  without guessing. A task exposes user/date/request/session/status/duration,
+  scenario/tool and Token fields, but no product generation, client version,
+  Runtime version, or source-release identity. `sync_events` and managed
+  `gateway_requests` are merged by request key, so table presence is not a
+  stable product-generation field. Legacy Token baselines and managed Gateway
+  facts can be distinguished by `source_service`, but that does not classify
+  task completion records.
+- Per the production-data rule, implementation is blocked rather than using a
+  date cutoff, task label, source string, or missing-Gateway heuristic. The
+  smallest unblocking evidence is a redacted real `/api/data` task/usage field
+  shape containing an authoritative generation/version marker, or a producer
+  change that records that marker for new facts plus an explicit mapping for
+  retained legacy records. Until then the existing data and service remain
+  unchanged.
