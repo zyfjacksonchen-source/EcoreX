@@ -257,7 +257,7 @@ def test_v024_public_cow_office_tools_create_edit_and_emit_artifacts(
             tool = manager.create_tool(tool_name)
             tool.apply_config({"cwd": str(tmp_path)})
             content = {
-                "sections": [{"heading": "Summary", "paragraphs": ["v1"]}],
+                "sections": [{"heading": "Summary"}],
                 "sheets": [{"name": "Data", "rows": [["version", 1]]}],
                 "slides": [{"title": "Summary", "bullets": ["v1"]}],
             }[field]

@@ -54,7 +54,7 @@ def validated_authoring_request(
                 "heading": _text(section.get("heading") or "", 512, empty=True),
                 "paragraphs": [
                     _text(value, 4096)
-                    for value in _list(section.get("paragraphs"), 128)
+                    for value in _list(section.get("paragraphs") or [], 128, empty=True)
                 ],
             }
             for section in sections
