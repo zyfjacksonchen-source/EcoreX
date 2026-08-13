@@ -513,6 +513,7 @@ export function Timeline({
   const resumeAtBottomRef = useRef(false);
   const followedThreadIdRef = useRef<string | null>(null);
   const pausedAnchorRef = useRef<{ turnId: string; viewportOffset: number } | null>(null);
+  const syncFollowStateRef = useRef<(layoutChanged?: boolean) => void>(() => {});
   const mountRef = useRef<HTMLDivElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const directoryListRef = useRef<HTMLDivElement>(null);
@@ -627,9 +628,13 @@ export function Timeline({
         if (followPausedByUserRef.current) capturePausedAnchor();
       }, TIMELINE_SCROLL_SETTLE_MS);
     };
-    const syncFollowState = () => {
+    const syncFollowState = (layoutChanged = false) => {
       const atBottom = readAtBottom();
-      if (followPausedByUserRef.current && atBottom && resumeAtBottomRef.current) {
+      if (
+        followPausedByUserRef.current
+        && atBottom
+        && (resumeAtBottomRef.current || layoutChanged)
+      ) {
         followPausedByUserRef.current = false;
         followLatestRef.current = true;
         resumeAtBottomRef.current = false;
@@ -680,8 +685,10 @@ export function Timeline({
     scrollParent.addEventListener("wheel", pauseFollowOnWheel, { passive: true });
     scrollParent.addEventListener("touchmove", pauseFollowOnTouch, { passive: true });
     scrollParent.addEventListener("touchend", releaseTouchFollow, { passive: true });
+    syncFollowStateRef.current = syncFollowState;
     syncFollowState();
     return () => {
+      syncFollowStateRef.current = () => {};
       if (pausedAnchorTimer.current !== null) {
         window.clearTimeout(pausedAnchorTimer.current);
         pausedAnchorTimer.current = null;
@@ -853,6 +860,7 @@ export function Timeline({
             totalListHeightChanged={() => {
               if (followPausedByUserRef.current) restorePausedAnchor();
               else if (followLatestRef.current) scrollParent.scrollTop = scrollParent.scrollHeight;
+              syncFollowStateRef.current(true);
             }}
             components={{ Footer: footer }}
             itemContent={(_index, entry) => (

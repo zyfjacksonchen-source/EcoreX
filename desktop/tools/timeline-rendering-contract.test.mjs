@@ -114,6 +114,21 @@ test("jump to latest is a transient centered circular affordance", () => {
   assert.match(features, /\.ex-timeline-jump-button\s*\{[\s\S]*width:\s*32px[\s\S]*border-radius:\s*var\(--radius-pill\)/u);
 });
 
+test("timeline relayout remeasures the real bottom without stealing an upward scroll", () => {
+  assert.match(
+    timeline,
+    /totalListHeightChanged=\{\(\) => \{[\s\S]{0,300}syncFollowStateRef\.current\(true\)/u,
+  );
+  assert.match(
+    timeline,
+    /followPausedByUserRef\.current\s*&& atBottom\s*&& \(resumeAtBottomRef\.current \|\| layoutChanged\)/u,
+  );
+  assert.match(
+    timeline,
+    /else if \(followPausedByUserRef\.current\) \{[\s\S]{0,200}setShowJumpToLatest\(true\)/u,
+  );
+});
+
 test("the conversation directory reuses virtualized turn identity and scrolling", () => {
   assert.match(timeline, /aria-label="对话目录"/u);
   assert.match(timeline, /timelineTurns\.map\(\(entry, index\) =>/u);
