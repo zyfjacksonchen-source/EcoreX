@@ -62,6 +62,7 @@ Allowed status values: `pending`, `passed`, `failed`, `blocked`.
 | `CU-205-MODEL-SWITCH-001` | macOS exact 2.0.4 model-switch continuity | `63a591d81ddc38ab2793236943f559a02f25eee9` | The same three-image conversation succeeded on Luna, then DeepSeek and Doubao both failed before any tool call with `provider_rejected` | P1 | `codex/fix-model-switch-image-context-205` | `f693156a` (integrated as `a07bc35b`) | Exact history-envelope regression plus affected Chat Completions, multimodal, and image fallback checks passed `19` | Both providers accepted `system` and rejected `developer` in bounded direct protocol probes; all three Artifact URLs and complete Cow history remain present. |
 | `CU-205-TIMELINE-BOTTOM-001` | macOS exact 2.0.4 model-switch UI | `63a591d81ddc38ab2793236943f559a02f25eee9` | After model-switch reprojection the composer and real bottom were visible, but the floating `回到底部` button remained | P1 | `codex/fix-model-switch-image-context-205` | `56f61374` (integrated as `c721ecdb`) | Timeline plus interaction renderer contracts passed `23` | Virtuoso height changes now remeasure the same real scroll parent; an active upward scroll remains paused and is not forced to the bottom. |
 | `CU-205-IMAGE-BATCH-SESSION-001` | macOS exact 2.0.4 three-image edit | `63a591d81ddc38ab2793236943f559a02f25eee9` | One `imagegen(tasks=[3])` returned two Artifacts and failed item 3 with `managed_image_session_changed` after 328.32 seconds | P1 | `codex/fix-model-switch-image-context-205` | `67496696` | Managed-image client and batch facade passed `24` affected tests | A normal credential refresh changed generation `4→5` and lease revision `1000441→1000442` at 12:28:05 while preserving account and signed policy; the old exact-revision fence rejected the remaining child. |
+| `CU-205-SETTINGS-INSET-001` | macOS exact 2.0.4 Settings | `63a591d81ddc38ab2793236943f559a02f25eee9` | Opening Settings consistently placed its title under the native red/yellow/green controls | P1 | `codex/fix-settings-inset-password-205` | `d3ad5f3a` | Exact renderer red/green plus `17` affected layout/product contracts passed | The full-screen Settings workspace omitted the macOS native-chrome inset; the shared header now reuses the existing Darwin-only `76px` safe area and Windows receives no offset. |
 
 Use `CU-205-<AREA>-NNN` for product findings. Do not allocate an ID for an
 environment failure until the product failure reproduces from known state.
@@ -308,3 +309,28 @@ environment failure until the product failure reproduces from known state.
   result may remain `gpt-image-2` / e-Mate Image 2. The original batch made one
   tool call at 12:11:33, completed all three independent Artifacts at 12:15:55
   in 261.04 seconds, and made no second tool call or retry.
+
+### 2026-08-13 CU-205-SETTINGS-INSET-001
+
+- Exact 2.0.4 Computer Use consistently showed the native macOS traffic lights
+  overlapping the Settings title. Root cause: the fixed, full-window Settings
+  workspace replaced the normal sidebar/header chrome but its shared header had
+  no Darwin safe inset.
+- Fix `d3ad5f3a` adds the same `76px` macOS-only inset already used by the
+  native sidebar brand to `.ex-settings-page-header`. It does not special-case
+  the title and introduces no Windows offset or JavaScript layout branch.
+- Red check: the renderer contract failed because no Darwin Settings-header
+  inset existed. Green checks: the exact product-language contract passed all
+  `14` tests; the affected product and login/layout pair passed `17` tests.
+- The same change set tightened the existing password acceptance contract. An
+  isolated account exercised the real HTTPS account route: the old password
+  stopped authenticating, the new password authenticated, all previous access
+  was revoked, credential version advanced `1→2` while the stable user policy
+  revision stayed `1`, and one `account.password.changed` audit entry preserved
+  chain integrity. Neither password appeared in the SQLite bytes. The complete
+  affected device-identity test file passed `9` tests.
+- The renderer contract proves the success message and reload occur only after
+  the authenticated Runtime receipt; the UI does not manufacture success.
+  Production account credentials were not touched. The frozen 2.0.5 candidate
+  must perform one user-handoff password change and immediate restoration of
+  the original password, because Computer Use must not type credentials.
