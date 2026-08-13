@@ -188,6 +188,9 @@ PAYLOAD_NAMES = (
 CANDIDATE_NAMES = frozenset(PAYLOAD_NAMES + ("release-manifest.json", "release-receipt.json"))
 STATIC_NAMES = ("index.html", "app.js", "styles.css", "data.js")
 MAX_FILE_BYTES = 8 * 1024 * 1024
+READINESS_TIMEOUT_SECONDS = 30
+READINESS_POLL_SECONDS = 1
+HEALTH_REQUEST_TIMEOUT_SECONDS = 2
 
 
 class DeploymentLock:
@@ -343,14 +346,43 @@ def _restart_service():
     )
     if restarted.returncode != 0:
         raise RuntimeError("service_restart_failed")
-    for _ in range(30):
+    deadline = time.monotonic() + READINESS_TIMEOUT_SECONDS
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError("service_not_ready")
         active = subprocess.run(
-            ["systemctl", "is-active", SERVICE], check=False, capture_output=True, timeout=10
+            ["systemctl", "is-active", SERVICE],
+            check=False,
+            capture_output=True,
+            timeout=max(0.1, min(10, remaining)),
         )
-        if active.returncode == 0 and active.stdout.strip() == b"active":
+        if (
+            active.returncode == 0
+            and active.stdout.strip() == b"active"
+            and _health_ready(
+                timeout=max(0.1, min(HEALTH_REQUEST_TIMEOUT_SECONDS, remaining))
+            )
+        ):
             return
-        time.sleep(1)
-    raise RuntimeError("service_not_active")
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(READINESS_POLL_SECONDS, remaining))
+
+
+def _health_ready(timeout=HEALTH_REQUEST_TIMEOUT_SECONDS):
+    try:
+        with urllib.request.urlopen(
+            "http://127.0.0.1:18105/api/health", timeout=timeout
+        ) as response:
+            value = json.loads(response.read(65537).decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(value, dict)
+        and value.get("ok") is True
+        and value.get("service") == "ecorex-usage-panel-api"
+    )
 
 
 def _load(url, label):

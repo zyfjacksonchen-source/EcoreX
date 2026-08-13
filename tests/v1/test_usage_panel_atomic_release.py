@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from types import SimpleNamespace
 
 import pytest
 
@@ -102,6 +103,57 @@ def test_candidate_upload_uses_paramiko_exclusive_writable_mode() -> None:
     with pytest.raises(OSError, match="remote candidate collision"):
         deployer["_upload_candidate"](sftp, "/releases/.incoming-test", files)
     assert sftp.files == preserved
+
+
+def test_restart_waits_for_http_readiness_after_systemd_is_active() -> None:
+    deployer = _deployer()
+    namespace = {"__name__": "usage_panel_release_readiness_test"}
+    exec(deployer["_REMOTE_LIBRARY"], namespace)
+    commands = []
+
+    class Result:
+        returncode = 0
+        stdout = b"active\n"
+
+    namespace["subprocess"] = SimpleNamespace(
+        run=lambda argv, **_kwargs: commands.append(argv) or Result()
+    )
+    readiness = iter((False, False, True))
+    namespace["_health_ready"] = lambda **_kwargs: next(readiness)
+    namespace["time"] = SimpleNamespace(
+        monotonic=namespace["time"].monotonic,
+        sleep=lambda _seconds: None,
+    )
+
+    namespace["_restart_service"]()
+
+    assert commands[0] == ["systemctl", "restart", "ecorex-usage-panel-api.service"]
+    assert commands[1:] == [
+        ["systemctl", "is-active", "ecorex-usage-panel-api.service"],
+        ["systemctl", "is-active", "ecorex-usage-panel-api.service"],
+        ["systemctl", "is-active", "ecorex-usage-panel-api.service"],
+    ]
+
+
+def test_restart_readiness_has_one_bounded_deadline() -> None:
+    deployer = _deployer()
+    namespace = {"__name__": "usage_panel_release_readiness_timeout_test"}
+    exec(deployer["_REMOTE_LIBRARY"], namespace)
+    clock = iter((100.0, 100.0, 131.0, 131.0))
+
+    class Result:
+        returncode = 0
+        stdout = b"active\n"
+
+    namespace["subprocess"] = SimpleNamespace(run=lambda _argv, **_kwargs: Result())
+    namespace["time"] = SimpleNamespace(
+        monotonic=lambda: next(clock),
+        sleep=lambda _seconds: None,
+    )
+    namespace["_health_ready"] = lambda **_kwargs: False
+
+    with pytest.raises(RuntimeError, match="service_not_ready"):
+        namespace["_restart_service"]()
 
 
 def test_candidate_binds_exact_source_and_every_runtime_file() -> None:
@@ -226,7 +278,7 @@ def test_failed_activation_restores_static_pointer_and_service_source(tmp_path: 
     def fail_once() -> None:
         restarts.append("restart")
         if len(restarts) == 1:
-            raise RuntimeError("service_restart_failed")
+            raise RuntimeError("service_not_ready")
 
     result = namespace["activate"](
         root=root,
@@ -245,6 +297,8 @@ def test_failed_activation_restores_static_pointer_and_service_source(tmp_path: 
 
     assert result["status"] == "rolled_back"
     assert result["stage"] == "restart"
+    assert result["reason"] == "service_not_ready"
+    assert result["rollback_reason"] is None
     assert result["rolled_back"] is True
     assert len(restarts) == 2
     assert (root / "current").resolve() == previous
@@ -253,6 +307,23 @@ def test_failed_activation_restores_static_pointer_and_service_source(tmp_path: 
     backup = Path(result["backup"])
     assert (backup / "server" / "usage_panel_api.py").read_bytes() == old_server
     assert (backup / "static" / "index.html").read_bytes() == old_files["index.html"]
+    receipt = deployer["_receipt"](
+        SimpleNamespace(
+            expected_source_sha="a" * 40,
+            expected_version="2.0.5",
+            expected_projection="projection-1",
+        ),
+        {
+            "release_name": "v2.0.5-aaaaaaaaaaaa-bbbbbbbbbbbb",
+            "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+            "receipt_sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+            "inventory": inventory,
+        },
+        result,
+    )
+    assert receipt["status"] == "rolled_back"
+    assert receipt["production"]["rolled_back"] is True
+    assert receipt["production"]["rollback_reason"] is None
 
     release = releases / "v2.0.5-aaaaaaaaaaaa-bbbbbbbbbbbb"
     shutil.copytree(release, incoming)
