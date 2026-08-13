@@ -896,6 +896,120 @@ def _state() -> Mapping[str, Any] | None:
     return _normalized_slot_state(value, "deployment_state_invalid")
 
 
+_ROLLBACK_SCHEMA_ROLES = {
+    "control-plane": "passed",
+    "gateway": "passed",
+    "image-api": "passed",
+    "image-worker": "passed",
+}
+_ROLLBACK_STAGE_DOCUMENT = "ecorex.rollback-target-stage"
+_ROLLBACK_REPLACEMENT_DOCUMENT = "ecorex.rollback-target-replacement"
+
+
+def _slot_state_sha256(state: Mapping[str, Any]) -> str:
+    normalized = _normalized_slot_state(state, "deployment_state_invalid")
+    return hashlib.sha256(_canonical_json(normalized) + b"\n").hexdigest()
+
+
+def _rollback_stage_receipt_path(release_id: str) -> Path:
+    if SAFE_RELEASE_ID.fullmatch(release_id) is None:
+        raise CloudDeployError("rollback_target_stage_receipt_invalid")
+    return STATE_ROOT / "rollback-target-stages" / f"{release_id}.json"
+
+
+def _rollback_stage_receipt(
+    *,
+    spec: CloudDeploymentSpec,
+    manifest: Mapping[str, Any],
+    current: Mapping[str, Any],
+    target_slot: str,
+    release: Path,
+    staged_at_unix: int | None = None,
+) -> dict[str, Any]:
+    normalized = _normalized_slot_state(current, "deployment_state_invalid")
+    if (
+        target_slot not in SLOTS
+        or target_slot == normalized["active_slot"]
+        or manifest.get("version") is None
+    ):
+        raise CloudDeployError("rollback_target_invalid")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "document_type": _ROLLBACK_STAGE_DOCUMENT,
+        "status": "passed",
+        "release_id": spec.release_id,
+        "version": str(manifest["version"]),
+        "source_commit": spec.source_commit,
+        "dependency_lock_manifest_sha256": spec.dependency_lock_manifest_sha256,
+        "artifact_manifest_sha256": spec.artifact_manifest_sha256,
+        "artifact_authentication": _artifact_authentication(
+            dataclasses.replace(spec, artifact_root=release)
+        ),
+        "target_slot": target_slot,
+        "active_state_sha256": _slot_state_sha256(normalized),
+        "active_release_id": normalized["active_release_id"],
+        "active_slot": normalized["active_slot"],
+        "schema_roles": dict(_ROLLBACK_SCHEMA_ROLES),
+        "staged_at_unix": (
+            int(time.time()) if staged_at_unix is None else staged_at_unix
+        ),
+    }
+
+
+def _write_rollback_stage_receipt(receipt: Mapping[str, Any]) -> None:
+    path = _rollback_stage_receipt_path(str(receipt.get("release_id", "")))
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
+    _fsync_directory(path.parent)
+    _atomic_write(path, _canonical_json(receipt) + b"\n", mode=0o600)
+    _fsync_directory(path.parent)
+
+
+def _read_rollback_stage_receipt(
+    spec: CloudDeploymentSpec, current: Mapping[str, Any]
+) -> dict[str, Any]:
+    path = _rollback_stage_receipt_path(spec.release_id)
+    if not path.exists() and not path.is_symlink():
+        raise CloudDeployError("rollback_target_not_staged")
+    try:
+        parent = path.parent.lstat()
+        metadata = path.lstat()
+        payload = path.read_bytes()
+    except OSError:
+        raise CloudDeployError("rollback_target_stage_receipt_invalid") from None
+    if (
+        path.parent.is_symlink()
+        or not stat.S_ISDIR(parent.st_mode)
+        or path.parent.resolve(strict=True) != path.parent
+        or path.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or (os.name != "nt" and stat.S_IMODE(metadata.st_mode) & 0o077)
+        or not 1 <= len(payload) <= 64 * 1024
+    ):
+        raise CloudDeployError("rollback_target_stage_receipt_invalid")
+    try:
+        value = json.loads(payload.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        raise CloudDeployError("rollback_target_stage_receipt_invalid") from None
+    staged_at = value.get("staged_at_unix") if isinstance(value, Mapping) else None
+    normalized = _normalized_slot_state(current, "deployment_state_invalid")
+    if (
+        not isinstance(value, Mapping)
+        or value.get("schema_version") != SCHEMA_VERSION
+        or value.get("document_type") != _ROLLBACK_STAGE_DOCUMENT
+        or value.get("status") != "passed"
+        or value.get("release_id") != spec.release_id
+        or value.get("target_slot") not in SLOTS
+        or value.get("target_slot") == normalized["active_slot"]
+        or value.get("active_state_sha256") != _slot_state_sha256(normalized)
+        or isinstance(staged_at, bool)
+        or not isinstance(staged_at, int)
+        or staged_at < 1
+        or payload != _canonical_json(value) + b"\n"
+    ):
+        raise CloudDeployError("rollback_target_stage_receipt_invalid")
+    return dict(value)
+
+
 def _validate_legacy_migration_plan(
     spec: CloudDeploymentSpec, state: Mapping[str, Any] | None
 ) -> None:
@@ -1442,13 +1556,21 @@ def _seal_release_directory(path: Path, identity: tuple[int, int]) -> None:
         raise CloudDeployError("release_directory_seal_failed") from None
 
 
-def _install_release(spec: CloudDeploymentSpec, manifest: Mapping[str, Any]) -> Path:
+def _install_release(
+    spec: CloudDeploymentSpec,
+    manifest: Mapping[str, Any],
+    *,
+    historical_release: bool = False,
+) -> Path:
     del manifest
     destination = RELEASE_ROOT / spec.release_id
     if destination.exists() or destination.is_symlink():
         identity = _release_directory_identity(destination)
         staged_spec = dataclasses.replace(spec, artifact_root=destination)
-        _validate_artifact(staged_spec)
+        if historical_release:
+            _validate_artifact(staged_spec, historical_release=True)
+        else:
+            _validate_artifact(staged_spec)
         _seal_release_directory(destination, identity)
         return destination
     temporary = RELEASE_ROOT / f".{spec.release_id}.staging-{os.getpid()}"
@@ -1459,7 +1581,10 @@ def _install_release(spec: CloudDeploymentSpec, manifest: Mapping[str, Any]) -> 
         shutil.copytree(spec.artifact_root, temporary, symlinks=False)
         identity = _release_directory_identity(temporary)
         staged_spec = dataclasses.replace(spec, artifact_root=temporary)
-        _validate_artifact(staged_spec)
+        if historical_release:
+            _validate_artifact(staged_spec, historical_release=True)
+        else:
+            _validate_artifact(staged_spec)
         _seal_release_directory(temporary, identity)
         # The sealed, fully verified inode is published by one atomic rename.
         # Do not introduce a fallible post-publication step that could leave a
@@ -2285,7 +2410,9 @@ def _write_slot_environment(
     release: Path,
     *,
     overrides: Mapping[str, Mapping[str, str]] | None = None,
+    product_version: str = PRODUCT_VERSION,
 ) -> None:
+    _product_version_key(product_version)
     _prepare_slot_runtime_directory(slot)
     ports = PORTS[slot]
     values = {
@@ -2293,8 +2420,8 @@ def _write_slot_environment(
             "ECOREX_CP_BIND_HOST": "127.0.0.1",
             "ECOREX_CP_BIND_PORT": str(ports["control_plane"]),
             "ECOREX_CP_INSTANCE_ID": f"ecorex-cloud-{slot}",
-            "ECOREX_CP_RELEASE_REPLICA_NAMESPACE": f"v{PRODUCT_VERSION}",
-            "ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION": PRODUCT_VERSION,
+            "ECOREX_CP_RELEASE_REPLICA_NAMESPACE": f"v{product_version}",
+            "ECOREX_CP_RELEASE_REPLICA_PRODUCT_VERSION": product_version,
         },
         "gateway": {
             "ECOREX_GATEWAY_BIND_HOST": "127.0.0.1",
@@ -2660,6 +2787,40 @@ def _recovery_schema_check(
                     "recovery_source_schema_incompatible"
                 ) from None
             raise CloudDeployError("recovery_target_schema_incompatible") from None
+
+
+def _check_rollback_target_schema(
+    release: Path, slot: str, *, product_version: str = PRODUCT_VERSION
+) -> None:
+    """Check all rollback roles against disposable copies of the live stores."""
+
+    with _isolated_stage_environment(slot) as overrides:
+        _write_slot_environment(
+            slot,
+            release,
+            overrides=overrides,
+            product_version=product_version,
+        )
+        try:
+            _recovery_schema_check(release, slot, source=False)
+        finally:
+            _write_slot_environment(
+                slot, release, product_version=product_version
+            )
+
+
+def _verify_staged_slot_release(slot: str, release: Path) -> None:
+    if slot not in SLOTS:
+        raise CloudDeployError("rollback_target_slot_invalid")
+    link = SLOT_ROOT / slot / "current"
+    try:
+        if (
+            not link.is_symlink()
+            or link.resolve(strict=True) != release.resolve(strict=True)
+        ):
+            raise OSError
+    except OSError:
+        raise CloudDeployError("rollback_target_slot_invalid") from None
 
 
 def _unit(service: str, slot: str) -> str:
@@ -3722,6 +3883,231 @@ def stage(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, Any]:
         }
 
 
+def _validate_rollback_manifest(manifest: Mapping[str, Any]) -> None:
+    if _product_version_key(manifest.get("version")) >= _product_version_key(
+        PRODUCT_VERSION
+    ):
+        raise CloudDeployError("rollback_target_version_invalid")
+
+
+def _verify_rollback_stage_identity(
+    *,
+    spec: CloudDeploymentSpec,
+    manifest: Mapping[str, Any],
+    current: Mapping[str, Any],
+    release: Path,
+    receipt: Mapping[str, Any],
+) -> str:
+    target_slot = str(receipt.get("target_slot", ""))
+    staged_at = receipt.get("staged_at_unix")
+    if not isinstance(staged_at, int) or isinstance(staged_at, bool):
+        raise CloudDeployError("rollback_target_stage_receipt_invalid")
+    expected = _rollback_stage_receipt(
+        spec=spec,
+        manifest=manifest,
+        current=current,
+        target_slot=target_slot,
+        release=release,
+        staged_at_unix=staged_at,
+    )
+    if receipt != expected:
+        raise CloudDeployError("rollback_target_stage_receipt_invalid")
+    return target_slot
+
+
+def stage_rollback_target(
+    spec: CloudDeploymentSpec, *, confirmation: str
+) -> Mapping[str, Any]:
+    """Admit one historical artifact as the inactive, schema-safe rollback target."""
+
+    spec.validate()
+    _target_preflight(spec, confirmation)
+    _validate_attestation(spec)
+    with _deployment_lock():
+        if _transition_journal() is not None:
+            raise CloudDeployError("activation_recovery_required")
+        current = _state()
+        if (
+            current is None
+            or current.get("previous_target_type") != "slot"
+            or current.get("previous_slot") not in SLOTS
+            or current.get("previous_slot") == current.get("active_slot")
+        ):
+            raise CloudDeployError("rollback_target_missing")
+        manifest = _validate_artifact(spec, historical_release=True)
+        _validate_rollback_manifest(manifest)
+        target_slot = str(current["previous_slot"])
+        release = _install_release(spec, manifest, historical_release=True)
+        product_version = str(manifest["version"])
+        _write_slot_environment(
+            target_slot, release, product_version=product_version
+        )
+        _verify_staged_runtime(release)
+        _verify_nginx_wiring(spec)
+        _check_rollback_target_schema(
+            release, target_slot, product_version=product_version
+        )
+        _verify_staged_slot_release(target_slot, release)
+        receipt = _rollback_stage_receipt(
+            spec=spec,
+            manifest=manifest,
+            current=current,
+            target_slot=target_slot,
+            release=release,
+        )
+        _write_rollback_stage_receipt(receipt)
+        return receipt
+
+
+def _rollback_replacement_receipt(
+    *,
+    spec: CloudDeploymentSpec,
+    manifest: Mapping[str, Any],
+    current: Mapping[str, Any],
+    updated: Mapping[str, Any],
+    target_slot: str,
+    release: Path,
+) -> dict[str, Any]:
+    base = {
+        "schema_version": SCHEMA_VERSION,
+        "document_type": _ROLLBACK_REPLACEMENT_DOCUMENT,
+        "status": "committed",
+        "release_id": spec.release_id,
+        "version": str(manifest["version"]),
+        "source_commit": spec.source_commit,
+        "dependency_lock_manifest_sha256": spec.dependency_lock_manifest_sha256,
+        "artifact_manifest_sha256": spec.artifact_manifest_sha256,
+        "artifact_authentication": _artifact_authentication(
+            dataclasses.replace(spec, artifact_root=release)
+        ),
+        "schema_roles": dict(_ROLLBACK_SCHEMA_ROLES),
+        "target_slot": target_slot,
+        "active_release_id": current["active_release_id"],
+        "active_slot": current["active_slot"],
+        "previous_release_id_before": current["previous_release_id"],
+        "previous_release_id_after": spec.release_id,
+        "active_state_sha256_before": _slot_state_sha256(current),
+        "active_state_sha256_after": _slot_state_sha256(updated),
+        "committed_at_unix": int(time.time()),
+    }
+    operation_id = hashlib.sha256(_canonical_json(base)).hexdigest()
+    return {**base, "receipt_file": f"{operation_id}.json"}
+
+
+def _write_rollback_replacement_receipt(receipt: Mapping[str, Any]) -> Path:
+    filename = receipt.get("receipt_file")
+    if (
+        not isinstance(filename, str)
+        or re.fullmatch(r"[0-9a-f]{64}\.json", filename) is None
+    ):
+        raise CloudDeployError("rollback_target_replacement_receipt_invalid")
+    path = STATE_ROOT / "rollback-target-receipts" / filename
+    if path.exists() or path.is_symlink():
+        raise CloudDeployError("rollback_target_replacement_receipt_collision")
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
+    _fsync_directory(path.parent)
+    _atomic_write(path, _canonical_json(receipt) + b"\n", mode=0o600)
+    _fsync_directory(path.parent)
+    return path
+
+
+def _remove_rollback_replacement_receipt(path: Path) -> None:
+    if not path.exists() and not path.is_symlink():
+        return
+    try:
+        metadata = path.lstat()
+        if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+            raise OSError
+        path.unlink()
+        _fsync_directory(path.parent)
+    except OSError:
+        raise CloudDeployError("rollback_target_replacement_restore_failed") from None
+
+
+def replace_previous_target(
+    spec: CloudDeploymentSpec, *, confirmation: str
+) -> Mapping[str, Any]:
+    """Replace only the recorded rollback identity with a staged safe artifact."""
+
+    spec.validate()
+    _target_preflight(spec, confirmation)
+    _validate_attestation(spec)
+    with _deployment_lock():
+        if _transition_journal() is not None:
+            raise CloudDeployError("activation_recovery_required")
+        current = _state()
+        if current is None:
+            raise CloudDeployError("rollback_state_missing")
+        stage_receipt = _read_rollback_stage_receipt(spec, current)
+        manifest = _validate_artifact(spec, historical_release=True)
+        _validate_rollback_manifest(manifest)
+        target_slot = str(stage_receipt["target_slot"])
+        candidate = _rollback_slot_state(
+            current,
+            release_id=spec.release_id,
+            slot=target_slot,
+            artifact_manifest_sha256=spec.artifact_manifest_sha256,
+        )
+        release = _verify_transition_release(spec, candidate)
+        _verify_rollback_stage_identity(
+            spec=spec,
+            manifest=manifest,
+            current=current,
+            release=release,
+            receipt=stage_receipt,
+        )
+        _verify_staged_slot_release(target_slot, release)
+        _check_rollback_target_schema(
+            release,
+            target_slot,
+            product_version=str(manifest["version"]),
+        )
+        if _state() != current:
+            raise CloudDeployError("rollback_target_active_state_changed")
+        updated = _normalized_slot_state(
+            {
+                **current,
+                "previous_target_type": "slot",
+                "previous_release_id": spec.release_id,
+                "previous_slot": target_slot,
+            },
+            "deployment_state_invalid",
+        )
+        receipt = _rollback_replacement_receipt(
+            spec=spec,
+            manifest=manifest,
+            current=current,
+            updated=updated,
+            target_slot=target_slot,
+            release=release,
+        )
+        state_path = STATE_ROOT / "active.json"
+        try:
+            original_payload = state_path.read_bytes()
+        except OSError:
+            raise CloudDeployError("deployment_state_invalid") from None
+        receipt_path = STATE_ROOT / "rollback-target-receipts" / str(
+            receipt["receipt_file"]
+        )
+        try:
+            _atomic_write(
+                state_path, _canonical_json(updated) + b"\n", mode=0o600
+            )
+            _fsync_directory(STATE_ROOT)
+            _write_rollback_replacement_receipt(receipt)
+        except (CloudDeployError, OSError):
+            try:
+                _atomic_write(state_path, original_payload, mode=0o600)
+                _fsync_directory(STATE_ROOT)
+                _remove_rollback_replacement_receipt(receipt_path)
+            except (CloudDeployError, OSError):
+                raise CloudDeployError(
+                    "rollback_target_replacement_restore_failed"
+                ) from None
+            raise CloudDeployError("rollback_target_replacement_commit_failed") from None
+        return receipt
+
+
 def rollback(spec: CloudDeploymentSpec, *, confirmation: str) -> Mapping[str, Any]:
     """Return traffic to the recorded known-good slot without schema downgrade."""
 
@@ -3826,18 +4212,36 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--spec", type=Path, required=True)
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--stage", action="store_true")
+    action.add_argument("--stage-rollback", action="store_true")
     action.add_argument("--apply", action="store_true")
     action.add_argument("--rollback", action="store_true")
+    action.add_argument("--replace-previous", action="store_true")
     parser.add_argument("--confirm-target", default="")
     arguments = parser.parse_args(argv)
     try:
         spec = CloudDeploymentSpec.from_json(arguments.spec)
-        if not arguments.stage and not arguments.apply and not arguments.rollback:
+        if not any(
+            (
+                arguments.stage,
+                arguments.stage_rollback,
+                arguments.apply,
+                arguments.rollback,
+                arguments.replace_previous,
+            )
+        ):
             print(json.dumps(build_plan(spec).to_dict(), ensure_ascii=False, sort_keys=True))
             return 0
         if not SHA256.fullmatch(arguments.confirm_target):
             raise CloudDeployError("target_confirmation_required")
-        if arguments.rollback:
+        if arguments.replace_previous:
+            receipt = replace_previous_target(
+                spec, confirmation=arguments.confirm_target
+            )
+        elif arguments.stage_rollback:
+            receipt = stage_rollback_target(
+                spec, confirmation=arguments.confirm_target
+            )
+        elif arguments.rollback:
             receipt = rollback(spec, confirmation=arguments.confirm_target)
         elif arguments.stage:
             receipt = stage(spec, confirmation=arguments.confirm_target)

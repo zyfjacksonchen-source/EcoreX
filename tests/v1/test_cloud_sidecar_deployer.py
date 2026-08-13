@@ -1946,6 +1946,261 @@ def test_stage_health_checks_inactive_slot_without_switching_routes(
     ]
 
 
+def test_rollback_target_stage_persists_exact_four_role_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec, _ = _signed_artifact(tmp_path, version="2.0.4")
+    state_root = tmp_path / "state"
+    release = tmp_path / "installed" / spec.release_id
+    release.mkdir(parents=True)
+    current = _slot_state(
+        "ecorex-cloud-v2.0.5-active",
+        "green",
+        previous_target_type="slot",
+        previous_release_id="ecorex-cloud-v2.0.4-original",
+        previous_slot="blue",
+    )
+    checked: list[tuple[Path, str]] = []
+    monkeypatch.setattr(deployment, "STATE_ROOT", state_root)
+    monkeypatch.setattr(deployment.CloudDeploymentSpec, "validate", lambda _self: None)
+    monkeypatch.setattr(deployment, "_target_preflight", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_validate_attestation", lambda *_args: None)
+    monkeypatch.setattr(
+        deployment, "_deployment_lock", lambda: deployment.contextlib.nullcontext()
+    )
+    monkeypatch.setattr(deployment, "_transition_journal", lambda: None)
+    monkeypatch.setattr(deployment, "_state", lambda: current)
+    monkeypatch.setattr(
+        deployment,
+        "_validate_artifact",
+        lambda _spec, *, historical_release=False: {
+            "version": "2.0.4",
+            "source_commit": spec.source_commit,
+            "dependency_lock_manifest_sha256": spec.dependency_lock_manifest_sha256,
+        }
+        if historical_release
+        else pytest.fail("ordinary admission used for rollback artifact"),
+    )
+    monkeypatch.setattr(
+        deployment,
+        "_install_release",
+        lambda _spec, _manifest, *, historical_release=False: release
+        if historical_release
+        else pytest.fail("rollback artifact installed as ordinary candidate"),
+    )
+    monkeypatch.setattr(
+        deployment, "_write_slot_environment", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(deployment, "_verify_staged_runtime", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_verify_nginx_wiring", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_verify_staged_slot_release", lambda *_args: None)
+    monkeypatch.setattr(
+        deployment,
+        "_check_rollback_target_schema",
+        lambda root, slot, **_kwargs: checked.append((root, slot)),
+    )
+
+    receipt = deployment.stage_rollback_target(
+        spec, confirmation=spec.target_machine_id_sha256
+    )
+
+    assert checked == [(release, "blue")]
+    assert receipt["schema_roles"] == {
+        "control-plane": "passed",
+        "gateway": "passed",
+        "image-api": "passed",
+        "image-worker": "passed",
+    }
+    durable = deployment._rollback_stage_receipt_path(spec.release_id)
+    assert durable.read_bytes() == deployment._canonical_json(receipt) + b"\n"
+
+
+def test_replace_previous_target_changes_only_rollback_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec, _ = _signed_artifact(tmp_path, version="2.0.4")
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    release = tmp_path / "installed" / spec.release_id
+    release.mkdir(parents=True)
+    current = _slot_state(
+        "ecorex-cloud-v2.0.5-active",
+        "green",
+        previous_target_type="slot",
+        previous_release_id="ecorex-cloud-v2.0.4-original",
+        previous_slot="blue",
+    )
+    (state_root / "active.json").write_bytes(deployment._canonical_json(current) + b"\n")
+    forbidden: list[str] = []
+    monkeypatch.setattr(deployment, "STATE_ROOT", state_root)
+    monkeypatch.setattr(deployment.CloudDeploymentSpec, "validate", lambda _self: None)
+    monkeypatch.setattr(deployment, "_target_preflight", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_validate_attestation", lambda *_args: None)
+    monkeypatch.setattr(
+        deployment, "_deployment_lock", lambda: deployment.contextlib.nullcontext()
+    )
+    monkeypatch.setattr(deployment, "_transition_journal", lambda: None)
+    monkeypatch.setattr(
+        deployment,
+        "_validate_artifact",
+        lambda _spec, *, historical_release=False: {
+            "version": "2.0.4",
+            "source_commit": spec.source_commit,
+            "dependency_lock_manifest_sha256": spec.dependency_lock_manifest_sha256,
+        }
+        if historical_release
+        else pytest.fail("ordinary candidate admission used"),
+    )
+    monkeypatch.setattr(deployment, "_verify_transition_release", lambda *_args: release)
+    monkeypatch.setattr(deployment, "_verify_staged_slot_release", lambda *_args: None)
+    monkeypatch.setattr(
+        deployment, "_check_rollback_target_schema", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        deployment, "_systemctl", lambda *_args: forbidden.append("systemctl")
+    )
+    monkeypatch.setattr(
+        deployment, "_switch_nginx", lambda *_args: forbidden.append("nginx")
+    )
+    deployment._write_rollback_stage_receipt(
+        deployment._rollback_stage_receipt(
+            spec=spec,
+            manifest={
+                "version": "2.0.4",
+                "source_commit": spec.source_commit,
+                "dependency_lock_manifest_sha256": spec.dependency_lock_manifest_sha256,
+            },
+            current=current,
+            target_slot="blue",
+            release=release,
+        )
+    )
+
+    receipt = deployment.replace_previous_target(
+        spec, confirmation=spec.target_machine_id_sha256
+    )
+    updated = json.loads((state_root / "active.json").read_bytes())
+
+    assert forbidden == []
+    immutable = set(current) - {
+        "previous_target_type",
+        "previous_release_id",
+        "previous_slot",
+    }
+    assert {key: updated[key] for key in immutable} == {
+        key: current[key] for key in immutable
+    }
+    assert updated["previous_release_id"] == spec.release_id
+    assert receipt["status"] == "committed"
+    assert (state_root / "rollback-target-receipts" / receipt["receipt_file"]).is_file()
+
+
+def test_replace_previous_target_rejects_unstaged_original_204(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec, _ = _signed_artifact(tmp_path, version="2.0.4")
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    current = _slot_state(
+        "ecorex-cloud-v2.0.5-active",
+        "green",
+        previous_target_type="slot",
+        previous_release_id="ecorex-cloud-v2.0.4-original",
+        previous_slot="blue",
+    )
+    original = deployment._canonical_json(current) + b"\n"
+    (state_root / "active.json").write_bytes(original)
+    monkeypatch.setattr(deployment, "STATE_ROOT", state_root)
+    monkeypatch.setattr(deployment.CloudDeploymentSpec, "validate", lambda _self: None)
+    monkeypatch.setattr(deployment, "_target_preflight", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_validate_attestation", lambda *_args: None)
+    monkeypatch.setattr(
+        deployment, "_deployment_lock", lambda: deployment.contextlib.nullcontext()
+    )
+    monkeypatch.setattr(deployment, "_transition_journal", lambda: None)
+
+    with pytest.raises(deployment.CloudDeployError, match="rollback_target_not_staged"):
+        deployment.replace_previous_target(
+            spec, confirmation=spec.target_machine_id_sha256
+        )
+
+    assert (state_root / "active.json").read_bytes() == original
+
+
+def test_replace_previous_target_restores_state_when_commit_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec, _ = _signed_artifact(tmp_path, version="2.0.4")
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    release = tmp_path / "installed" / spec.release_id
+    release.mkdir(parents=True)
+    current = _slot_state(
+        "ecorex-cloud-v2.0.5-active",
+        "green",
+        previous_target_type="slot",
+        previous_release_id="ecorex-cloud-v2.0.4-original",
+        previous_slot="blue",
+    )
+    original = deployment._canonical_json(current) + b"\n"
+    (state_root / "active.json").write_bytes(original)
+    monkeypatch.setattr(deployment, "STATE_ROOT", state_root)
+    monkeypatch.setattr(deployment.CloudDeploymentSpec, "validate", lambda _self: None)
+    monkeypatch.setattr(deployment, "_target_preflight", lambda *_args: None)
+    monkeypatch.setattr(deployment, "_validate_attestation", lambda *_args: None)
+    monkeypatch.setattr(
+        deployment, "_deployment_lock", lambda: deployment.contextlib.nullcontext()
+    )
+    monkeypatch.setattr(deployment, "_transition_journal", lambda: None)
+    monkeypatch.setattr(
+        deployment,
+        "_validate_artifact",
+        lambda _spec, *, historical_release=False: {
+            "version": "2.0.4",
+            "source_commit": spec.source_commit,
+            "dependency_lock_manifest_sha256": spec.dependency_lock_manifest_sha256,
+        },
+    )
+    monkeypatch.setattr(deployment, "_verify_transition_release", lambda *_args: release)
+    monkeypatch.setattr(deployment, "_verify_staged_slot_release", lambda *_args: None)
+    monkeypatch.setattr(
+        deployment, "_check_rollback_target_schema", lambda *_args, **_kwargs: None
+    )
+    deployment._write_rollback_stage_receipt(
+        deployment._rollback_stage_receipt(
+            spec=spec,
+            manifest={
+                "version": "2.0.4",
+                "source_commit": spec.source_commit,
+                "dependency_lock_manifest_sha256": spec.dependency_lock_manifest_sha256,
+            },
+            current=current,
+            target_slot="blue",
+            release=release,
+        )
+    )
+    writes = 0
+    original_atomic_write = deployment._atomic_write
+
+    def fail_after_state_replace(path: Path, payload: bytes, mode: int = 0o640) -> None:
+        nonlocal writes
+        original_atomic_write(path, payload, mode)
+        if path == state_root / "active.json":
+            writes += 1
+            if writes == 1:
+                raise OSError("simulated post-replace failure")
+
+    monkeypatch.setattr(deployment, "_atomic_write", fail_after_state_replace)
+
+    with pytest.raises(deployment.CloudDeployError, match="replacement_commit_failed"):
+        deployment.replace_previous_target(
+            spec, confirmation=spec.target_machine_id_sha256
+        )
+
+    assert (state_root / "active.json").read_bytes() == original
+    assert not list((state_root / "rollback-target-receipts").glob("*.json"))
+
+
 def test_stage_environment_clones_sqlite_and_removes_disposable_copies(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
