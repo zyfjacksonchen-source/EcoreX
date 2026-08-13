@@ -681,7 +681,8 @@ export function Timeline({
         schedulePausedAnchorCapture();
       }
     };
-    scrollParent.addEventListener("scroll", syncFollowState, { passive: true });
+    const syncFollowStateOnScroll = () => syncFollowState();
+    scrollParent.addEventListener("scroll", syncFollowStateOnScroll, { passive: true });
     scrollParent.addEventListener("wheel", pauseFollowOnWheel, { passive: true });
     scrollParent.addEventListener("touchmove", pauseFollowOnTouch, { passive: true });
     scrollParent.addEventListener("touchend", releaseTouchFollow, { passive: true });
@@ -693,7 +694,7 @@ export function Timeline({
         window.clearTimeout(pausedAnchorTimer.current);
         pausedAnchorTimer.current = null;
       }
-      scrollParent.removeEventListener("scroll", syncFollowState);
+      scrollParent.removeEventListener("scroll", syncFollowStateOnScroll);
       scrollParent.removeEventListener("wheel", pauseFollowOnWheel);
       scrollParent.removeEventListener("touchmove", pauseFollowOnTouch);
       scrollParent.removeEventListener("touchend", releaseTouchFollow);
