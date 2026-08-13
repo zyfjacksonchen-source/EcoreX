@@ -381,12 +381,13 @@ async function launch() {
     if (!quitting && code === 86) void restartRuntime();
   });
   const window = createWindow(backend.origin);
+  const runtimeStartup = startBackendWithRetry(window);
   await window.loadURL(startupPage());
   updater = initDesktopUpdater(() => mainWindow);
   setupIpc();
   buildMenu();
   createTray();
-  const runtimeOrigin = await startBackendWithRetry(window);
+  const runtimeOrigin = await runtimeStartup;
   if (!runtimeOrigin) return;
   await window.loadURL(runtimeOrigin);
   await startTaskNotifications(runtimeOrigin);

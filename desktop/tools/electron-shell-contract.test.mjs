@@ -124,6 +124,14 @@ test("desktop identity and unsigned release targets are explicit", async () => {
   assert.ok(pkg.build.files.includes("src/v1/assets/emate-logo.png"));
 });
 
+test("desktop starts the Runtime before waiting for the startup page", async () => {
+  const main = await load("electron/main.cjs");
+  const launchBody = main.match(/async function launch\(\) \{(?<body>[\s\S]*?)\n\}\n\nconst singleInstance/)?.groups?.body ?? "";
+  assert.match(launchBody, /const runtimeStartup = startBackendWithRetry\(window\);/);
+  assert.ok(launchBody.indexOf("const runtimeStartup") < launchBody.indexOf("await window.loadURL(startupPage())"));
+  assert.match(launchBody, /const runtimeOrigin = await runtimeStartup;/);
+});
+
 test("desktop loads the existing loopback Runtime and never packages a second renderer", async () => {
   const [main, backend, preload, staging] = await Promise.all([
     load("electron/main.cjs"),
