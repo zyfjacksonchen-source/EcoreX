@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 import subprocess
@@ -160,6 +161,45 @@ def test_native_weixin_cancel_and_refresh_control_the_same_cow_channel(
     assert manager.restarted == ["weixin"]
     assert cancelled["status"] == "cancelled"
     assert manager.removed == ["weixin"]
+
+
+def test_native_weixin_new_authorization_restarts_an_expired_cow_login(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = SimpleNamespace(
+        login_status="waiting_scan",
+        _current_qr_url="https://weixin.qq.com/q/expired",
+    )
+    manager = _Manager()
+    manager.channels["weixin"] = channel
+    native = CowChannelService(manager=manager, config={"channel_type": "weixin"})
+    native.started = True
+    service = ChannelSelfService(
+        owner=ChannelCredentialOwner("account", "organization"),
+        vault=InMemoryCredentialVault(),
+        native_service=native,
+    )
+    monkeypatch.setattr(
+        "ecorex.connectors.cow_channel._qr_png_data_url",
+        lambda _value: "data:image/png;base64,cXIx",
+    )
+
+    first = service.begin_authorization("weixin", request_id="begin-first")
+    native._weixin_flow_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    channel.login_status = "idle"
+    channel._current_qr_url = ""
+
+    def restart(name: str) -> None:
+        manager.restarted.append(name)
+        channel.login_status = "waiting_scan"
+        channel._current_qr_url = "https://weixin.qq.com/q/restarted"
+
+    monkeypatch.setattr(manager, "restart", restart)
+    second = service.begin_authorization("weixin", request_id="begin-second")
+
+    assert second["flow_id"] != first["flow_id"]
+    assert second["verification_url"].endswith("/restarted")
+    assert manager.restarted == ["weixin"]
 
 
 def test_cow_channel_ui_edits_the_live_config_and_manager(tmp_path: Path) -> None:

@@ -319,12 +319,18 @@ class CowChannelService:
                 if current.status in {"pending", "scanned"}:
                     return current if current.verification_url else self._await_weixin_qr()
             self._new_weixin_flow()
-            if self.manager.get_channel("weixin") is None:
+            channel = self.manager.get_channel("weixin")
+            if channel is None:
                 if not self.started:
                     raise ChannelDeviceAuthorizationError(
                         "weixin_runtime_not_started", 503
                     )
                 self.enable("weixin")
+            elif (
+                getattr(channel, "login_status", "") == "idle"
+                and not getattr(channel, "_current_qr_url", "")
+            ):
+                self.manager.restart("weixin")
             return self._await_weixin_qr()
 
     def poll_authorization(
