@@ -175,7 +175,8 @@ async function startBackendWithRetry(window) {
   while (!quitting) {
     try {
       return await backend.start();
-    } catch {
+    } catch (error) {
+      console.error(`[e-Mate] Runtime startup failed: ${error instanceof Error ? error.message : "Unknown failure."}`);
       const result = await dialog.showMessageBox(window, {
         type: "error",
         title: `${PRODUCT_NAME} 启动失败`,

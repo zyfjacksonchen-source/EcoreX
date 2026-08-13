@@ -319,6 +319,22 @@ class BackendManager extends EventEmitter {
       await stopRuntimePid(existing.pid, this.port);
     }
     if (await loopbackPortOccupied(this.port)) {
+      const expected = runtimeOwnerReceipt(this.dataDir);
+      if (sameRuntimeIdentity(expected?.runtime_identity, spec.runtimeIdentity)) {
+        const deadline = Date.now() + 15_000;
+        while (Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          const starting = await probeRuntimeOwner(this.port, this.dataDir);
+          if (sameRuntimeIdentity(starting?.runtime_identity, spec.runtimeIdentity)) {
+            this.runtimePid = starting.pid;
+            this.emit("ready", this.origin);
+            return this.origin;
+          }
+          if (!await loopbackPortOccupied(this.port)) break;
+        }
+      }
+    }
+    if (await loopbackPortOccupied(this.port)) {
       throw new Error(`Loopback port ${this.port} is occupied by a process not owned by e-Mate.`);
     }
     const ownerNonce = crypto.randomBytes(32).toString("base64url");

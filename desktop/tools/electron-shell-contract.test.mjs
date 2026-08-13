@@ -32,9 +32,15 @@ const http = require("node:http");
 const nonce = process.env.TEST_RUNTIME_NONCE || process.env.ECOREX_RUNTIME_OWNER_NONCE;
 const portArgument = process.argv.indexOf("--port");
 const port = Number(process.env.TEST_RUNTIME_PORT || process.argv[portArgument + 1]);
+const ownerReadyAt = Date.now() + Number(process.env.TEST_RUNTIME_OWNER_DELAY_MS || 0);
 const server = http.createServer((request, response) => {
   if (process.env.TEST_RUNTIME_UNKNOWN === "1") {
     response.writeHead(404);
+    response.end();
+    return;
+  }
+  if (Date.now() < ownerReadyAt) {
+    response.writeHead(503);
     response.end();
     return;
   }
@@ -50,7 +56,7 @@ server.listen(port, "127.0.0.1", () => console.log(server.address().port));
 process.on("SIGTERM", () => server.close(() => process.exit(0)));
 `;
 
-const startOwnedRuntime = (nonce, { port = 0, unknown = false } = {}) => new Promise((resolve, reject) => {
+const startOwnedRuntime = (nonce, { port = 0, unknown = false, ownerDelayMs = 0 } = {}) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, ["-e", ownedRuntimeProgram], {
     detached: true,
     env: {
@@ -58,6 +64,7 @@ const startOwnedRuntime = (nonce, { port = 0, unknown = false } = {}) => new Pro
       TEST_RUNTIME_NONCE: nonce,
       TEST_RUNTIME_PORT: String(port),
       TEST_RUNTIME_UNKNOWN: unknown ? "1" : "0",
+      TEST_RUNTIME_OWNER_DELAY_MS: String(ownerDelayMs),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -136,6 +143,7 @@ test("desktop loads the existing loopback Runtime and never packages a second re
   assert.match(main, /await backend\?\.stop\(\)/);
   assert.match(main, /finally \{\s+shutdownComplete = true;\s+app\.quit\(\)/);
   assert.match(main, /buttons: \["重试", "退出"\]/);
+  assert.match(main, /console\.error\(`\[e-Mate\] Runtime startup failed:/);
   assert.match(main, /src", "v1", "assets", "emate-logo\.png"/);
   assert.match(main, /titleBarStyle: "hiddenInset"/);
   assert.match(main, /trafficLightPosition: \{ x: 14, y: 18 \}/);
@@ -272,6 +280,34 @@ test("desktop adopts an exact crash-left Runtime before rotating its owner recei
     assert.equal(await backend.start(), `http://127.0.0.1:${owned.port}`);
     assert.equal(backend.child, null);
     assert.equal(backendContract.runtimeOwnerNonce(dataDir), nonce);
+    await backend.stop();
+    assert.equal(await loopbackPortOpen(owned.port), false);
+  } finally {
+    await stopTestRuntime(owned?.child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("desktop waits for an exact owned Runtime whose owner proof is still starting", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "emate-runtime-starting-owner-"));
+  const resources = path.join(root, "resources");
+  const dataDir = path.join(root, "data");
+  const identity = runtimeIdentity();
+  const nonce = Buffer.alloc(32, 15).toString("base64url");
+  let owned;
+  try {
+    await stageTestRuntime(resources, identity);
+    owned = await startOwnedRuntime(nonce, { ownerDelayMs: 2000 });
+    backendContract.issueRuntimeOwnerReceipt(dataDir, owned.child.pid, identity, nonce);
+    const backend = new backendContract.BackendManager({
+      packaged: true,
+      resourcesPath: resources,
+      dataDir,
+      port: owned.port,
+    });
+
+    assert.equal(await backend.start(), `http://127.0.0.1:${owned.port}`);
+    assert.equal(backend.child, null);
     await backend.stop();
     assert.equal(await loopbackPortOpen(owned.port), false);
   } finally {
