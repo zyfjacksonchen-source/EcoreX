@@ -2,10 +2,11 @@
 """Build the signed e-Mate 2.0 Runtime seed for unsigned desktop packages.
 
 This is the narrow successor to the v0.3.2 manual WebUI release.  It reuses
-the already published native/Python dependency closure, replaces product code
-and Web assets from one exact source commit, rebuilds Bootstrap, and signs the
-inner release with an ephemeral in-memory Ed25519 key.  It never creates an
-app/DMG/PKG, invokes a developer identity, notarizes, uploads, or publishes.
+the published Python closure, adds the caller-bound current Windows MSVC
+runtime, replaces product code and Web assets from one exact source commit,
+rebuilds Bootstrap, and signs the inner release with an ephemeral in-memory
+Ed25519 key.  It never creates an app/DMG/PKG, invokes a developer identity,
+notarizes, uploads, or publishes.
 """
 
 from __future__ import annotations
@@ -20,8 +21,10 @@ import os
 from pathlib import Path, PurePosixPath
 import platform as host_platform
 import re
+import runpy
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -122,6 +125,94 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _pe_imports(path: Path) -> tuple[str, ...]:
+    try:
+        payload = path.read_bytes()
+        if payload[:2] != b"MZ":
+            return ()
+        pe = struct.unpack_from("<I", payload, 0x3C)[0]
+        if payload[pe : pe + 4] != b"PE\0\0":
+            raise ValueError
+        section_count, optional_size = struct.unpack_from("<H12xH", payload, pe + 6)
+        optional = pe + 24
+        magic = struct.unpack_from("<H", payload, optional)[0]
+        directory = optional + ({0x10B: 96, 0x20B: 112}[magic])
+        import_rva = struct.unpack_from("<I", payload, directory + 8)[0]
+        sections = optional + optional_size
+
+        def file_offset(rva: int) -> int:
+            for index in range(section_count):
+                offset = sections + index * 40
+                virtual_size, virtual_address, raw_size, raw_offset = struct.unpack_from(
+                    "<IIII", payload, offset + 8
+                )
+                if virtual_address <= rva < virtual_address + max(virtual_size, raw_size):
+                    relative = rva - virtual_address
+                    if relative < raw_size:
+                        return raw_offset + relative
+            raise ValueError
+
+        if import_rva == 0:
+            return ()
+        descriptor = file_offset(import_rva)
+        imports: list[str] = []
+        for _ in range(4096):
+            fields = struct.unpack_from("<IIIII", payload, descriptor)
+            if fields == (0, 0, 0, 0, 0):
+                return tuple(imports)
+            name_offset = file_offset(fields[3])
+            end = payload.index(b"\0", name_offset, name_offset + 260)
+            imports.append(payload[name_offset:end].decode("ascii"))
+            descriptor += 20
+    except (KeyError, OSError, UnicodeDecodeError, ValueError, struct.error):
+        _fail("manual_webui_windows_pe_invalid")
+    _fail("manual_webui_windows_pe_invalid")
+
+
+def _require_windows_msvc_closure(core: Path) -> None:
+    pack_python = core / "bin" / "pack-python"
+    available = {
+        path.name.casefold()
+        for path in pack_python.iterdir()
+        if path.is_file() and not path.is_symlink()
+    }
+    required = {
+        dependency.casefold()
+        for path in pack_python.rglob("*")
+        if path.is_file() and path.suffix.casefold() in {".dll", ".exe", ".pyd"}
+        for dependency in _pe_imports(path)
+        if re.fullmatch(r"msvcp[0-9]+(?:_[0-9]+)?\.dll", dependency.casefold())
+    }
+    if not required or not required.issubset(available):
+        _fail("manual_webui_windows_msvc_closure_invalid")
+
+
+def _validated_windows_native_runtime(
+    source: Path, native: Path
+) -> tuple[Path, dict[str, str]]:
+    try:
+        stager = runpy.run_path(str(source / "platform-staging" / "stager.py"))
+        stager["_validate_windows_native_receipt"](
+            native,
+            toolchain_manifest=(
+                source / "platform-staging/native/windows/toolchain-manifest.json"
+            ),
+            source_root=source / "platform-staging/native/windows",
+            github_hosted_compatibility=True,
+        )
+        library = (native / "msvcp140.dll").resolve(strict=True)
+        receipt = (native / "native-build-receipt.json").resolve(strict=True)
+        if library.parent != native.resolve(strict=True) or receipt.parent != library.parent:
+            raise ValueError
+        evidence = {
+            "msvcp140_sha256": _sha256(library),
+            "native_build_receipt_sha256": _sha256(receipt),
+        }
+    except Exception:
+        _fail("manual_webui_windows_native_runtime_invalid")
+    return library, evidence
+
+
 def _verify_release_evidence_bounds(metadata_path: Path, sbom_path: Path) -> None:
     if (
         not 1 <= metadata_path.stat().st_size <= MAX_RELEASE_METADATA_BYTES
@@ -147,6 +238,28 @@ def _verify_release_core_bounds(built: Any) -> None:
             or expanded_size > MAX_CORE_EXPANDED_BYTES
         ):
             _fail("manual_webui_release_core_bound_invalid")
+
+
+def _verify_release_windows_msvc(built: Any, expected_sha256: str) -> None:
+    try:
+        artifact = next(
+            item
+            for item in built.manifest.artifacts
+            if item.artifact_id == "core-windows-x64"
+        )
+        with zipfile.ZipFile(built.artifact_paths[artifact.artifact_id]) as archive:
+            members = [
+                item
+                for item in archive.infolist()
+                if item.filename == "bin/pack-python/msvcp140.dll"
+            ]
+            if len(members) != 1 or members[0].is_dir():
+                raise ValueError
+            digest = hashlib.sha256(archive.read(members[0])).hexdigest()
+    except (KeyError, OSError, StopIteration, ValueError, zipfile.BadZipFile):
+        _fail("manual_webui_windows_msvc_closure_invalid")
+    if digest != expected_sha256:
+        _fail("manual_webui_windows_msvc_closure_invalid")
 
 
 def _canonical_json(value: object) -> bytes:
@@ -753,6 +866,7 @@ def _prepare_stages(
     base_artifacts: Mapping[str, Path],
     root: Path,
     release_keys: Mapping[str, str],
+    windows_msvcp: Path | None = None,
 ) -> dict[tuple[str, str], dict[str, Path]]:
     targets: dict[tuple[str, str], dict[str, Path]] = {}
     for platform, architecture in TARGETS:
@@ -786,6 +900,14 @@ def _prepare_stages(
             target_root,
             platform=platform,
         )
+        if platform == "windows":
+            if windows_msvcp is None:
+                _fail("manual_webui_windows_native_runtime_invalid")
+            destination = core / "bin/pack-python/msvcp140.dll"
+            if destination.exists() or destination.is_symlink():
+                _fail("manual_webui_windows_native_runtime_invalid")
+            shutil.copyfile(windows_msvcp, destination)
+            _require_windows_msvc_closure(core)
         _replace_product_imports(imports[0], source)
         _replace_builtin_skills(core, source)
         _runtime_config(
@@ -1310,6 +1432,9 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     staged = temporary / "verified-output"
     staged.mkdir()
     try:
+        windows_msvcp, windows_native_evidence = _validated_windows_native_runtime(
+            args.source.resolve(strict=True), args.windows_native.resolve(strict=True)
+        )
         base_manifest, base_artifacts, publication_keys, windows_helper = _load_base(
             args.base_windows.resolve(strict=True),
             args.base_macos.resolve(strict=True),
@@ -1343,6 +1468,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             base_artifacts,
             temporary / "stages",
             release_keys,
+            windows_msvcp,
         )
         bootstraps = _go_bootstraps(
             args.go,
@@ -1364,6 +1490,9 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         )
         _verify_release_evidence_bounds(built.metadata_path, built.sbom_path)
         _verify_release_core_bounds(built)
+        _verify_release_windows_msvc(
+            built, windows_native_evidence["msvcp140_sha256"]
+        )
         verifier = Ed25519SignatureVerifier({key_id: public})
         verify_manifest_signature(built.manifest, verifier)
         for artifact in built.manifest.artifacts:
@@ -1419,6 +1548,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 "developer_id": False,
                 "notarized": False,
             },
+            "windows_native_runtime": windows_native_evidence,
             "artifacts": package_evidence,
         }
         (staged / "manual-webui-build-receipt.json").write_bytes(
@@ -1437,6 +1567,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--web-dist", required=True, type=Path)
     parser.add_argument("--base-windows", required=True, type=Path)
     parser.add_argument("--base-macos", required=True, type=Path)
+    parser.add_argument("--windows-native", required=True, type=Path)
     parser.add_argument("--predecessor-trust", required=True, type=Path)
     parser.add_argument("--go", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)

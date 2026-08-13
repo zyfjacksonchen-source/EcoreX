@@ -11,8 +11,51 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  windows-native-runtime:
+    name: locked Windows native Runtime closure
+    if: ${{ github.repository == 'zyfjacksonchen-source/EcoreX' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/e-mate-2.0.5' }}
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the exact source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Python toolchain
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+          cache: pip
+
+      - name: Build the caller-bound Windows native closure
+        env:
+          ECOREX_GITHUB_HOSTED_WINDOWS_NATIVE_COMPATIBILITY: "1"
+        run: |
+          python scripts/install-v1-python-profile.py --profile platform-stage
+          python - <<'PY'
+          from pathlib import Path
+          import runpy
+          stager = runpy.run_path('platform-staging/stager.py')
+          output = stager['_build_native'](
+              'windows', 'x64', Path('.runtime/windows-native')
+          )
+          assert output == Path('.runtime/windows-native/output')
+          PY
+
+      - name: Upload the verified Windows native closure
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e-mate-${{ github.sha }}-windows-native-runtime
+          path: .runtime/windows-native/output
+          if-no-files-found: error
+          retention-days: 14
+
   runtime:
     name: signed Runtime seed
+    needs: windows-native-runtime
     if: ${{ github.repository == 'zyfjacksonchen-source/EcoreX' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/e-mate-2.0.5' }}
     runs-on: macos-15
     outputs:
@@ -65,6 +108,12 @@ jobs:
           python scripts/install-v1-python-profile.py --profile runtime
           npm ci --prefix desktop
           npm run build:web --prefix desktop
+
+      - name: Download the verified Windows native closure
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: e-mate-${{ github.sha }}-windows-native-runtime
+          path: .runtime/windows-native
 
       - name: Gate the accepted e-Mate source contracts
         run: |
@@ -130,6 +179,7 @@ jobs:
             --web-dist "$GITHUB_WORKSPACE/desktop/dist" \
             --base-windows "$GITHUB_WORKSPACE/.runtime/base/EcoreX_0.3.2-webui-windows-x64.zip" \
             --base-macos "$GITHUB_WORKSPACE/.runtime/base/EcoreX_0.3.2-webui-macos-universal.zip" \
+            --windows-native "$GITHUB_WORKSPACE/.runtime/windows-native" \
             --predecessor-trust "$GITHUB_WORKSPACE/release/v1/desktop-predecessor-trust.json" \
             --go "$(command -v go)" \
             --output "$GITHUB_WORKSPACE/.runtime/seed"

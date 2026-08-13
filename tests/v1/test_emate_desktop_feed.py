@@ -702,6 +702,12 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
     assert "push:" not in workflow.split("permissions:", 1)[0]
     assert "github.event_name == 'workflow_dispatch'" in workflow
     assert "github.ref == 'refs/heads/codex/e-mate-2.0.5'" in workflow
+    assert "name: locked Windows native Runtime closure" in workflow
+    assert "runs-on: windows-2022" in workflow
+    assert "stager['_build_native']" in workflow
+    assert "ECOREX_GITHUB_HOSTED_WINDOWS_NATIVE_COMPATIBILITY: \"1\"" in workflow
+    assert "needs: windows-native-runtime" in workflow
+    assert '--windows-native "$GITHUB_WORKSPACE/.runtime/windows-native"' in workflow
     assert "needs.runtime.outputs.version" in workflow
     assert 'package["version"] == branch_version == __version__' in workflow
     assert '--expected-version "${{ needs.runtime.outputs.version }}"' in workflow

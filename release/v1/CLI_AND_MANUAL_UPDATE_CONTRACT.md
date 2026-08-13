@@ -85,15 +85,15 @@ python3 scripts/build-v1-manual-webui.py \
   --web-dist SOURCE/desktop/dist \
   --base-windows BASE/EcoreX_0.3.2-webui-windows-x64.zip \
   --base-macos BASE/EcoreX_0.3.2-webui-macos-universal.zip \
+  --windows-native WINDOWS_NATIVE_OUTPUT \
+  --predecessor-trust SOURCE/release/v1/desktop-predecessor-trust.json \
   --go TOOLCHAIN/bin/go \
   --output OUTPUT
 ```
 
-The builder rejects a dirty/wrong commit, wrong version, stale Web dist,
-unexpected archive member, wrong base digest, missing target, failed Go test,
-failed Bootstrap self-test, unsigned artifact or existing output. It writes the
-output by one directory rename and reports a stable machine error code. Never
-delete an accepted output to retry a network publication.
+The builder rejects a dirty/wrong commit or version, stale Web dist, wrong base/native receipt, unresolved app-local MSVC import, missing target, failed Go/Bootstrap test, unsigned artifact or existing output.
+It writes the output by one directory rename and reports a stable machine error code.
+Never delete an accepted output to retry a network publication.
 
 The release state order is fixed:
 

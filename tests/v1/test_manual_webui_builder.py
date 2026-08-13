@@ -9,6 +9,7 @@ from pathlib import Path
 import runpy
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -26,6 +27,93 @@ SCRIPT = ROOT / "scripts" / "build-v1-manual-webui.py"
 
 def _builder() -> dict[str, object]:
     return runpy.run_path(str(SCRIPT))
+
+
+def _pe_with_import(name: str) -> bytes:
+    payload = bytearray(0x400)
+    payload[:2] = b"MZ"
+    struct.pack_into("<I", payload, 0x3C, 0x80)
+    payload[0x80:0x84] = b"PE\0\0"
+    struct.pack_into("<H12xH", payload, 0x86, 1, 0xF0)
+    optional = 0x98
+    struct.pack_into("<H106xI8xI", payload, optional, 0x20B, 16, 0x1000)
+    section = optional + 0xF0
+    struct.pack_into("<IIII", payload, section + 8, 0x200, 0x1000, 0x200, 0x200)
+    struct.pack_into("<I", payload, 0x20C, 0x1050)
+    payload[0x250 : 0x251 + len(name)] = name.encode("ascii") + b"\0"
+    return bytes(payload)
+
+
+def test_manual_webui_requires_pe_imported_msvc_beside_pack_python(
+    tmp_path: Path,
+) -> None:
+    builder = _builder()
+    pack_python = tmp_path / "core/bin/pack-python"
+    extension = pack_python / "Lib/site-packages/greenlet/_greenlet.pyd"
+    extension.parent.mkdir(parents=True)
+    extension.write_bytes(_pe_with_import("MSVCP140.dll"))
+
+    with pytest.raises(
+        builder["ManualWebUIBuildError"],
+        match="manual_webui_windows_msvc_closure_invalid",
+    ):
+        builder["_require_windows_msvc_closure"](tmp_path / "core")
+
+    (pack_python / "msvcp140.dll").write_bytes(b"microsoft-signed-runtime")
+    builder["_require_windows_msvc_closure"](tmp_path / "core")
+
+
+def test_manual_webui_release_core_keeps_bound_msvc(tmp_path: Path) -> None:
+    builder = _builder()
+    archive = tmp_path / "core.zip"
+    payload = b"caller-bound-msvcp140"
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("bin/pack-python/msvcp140.dll", payload)
+    artifact = SimpleNamespace(artifact_id="core-windows-x64")
+    built = SimpleNamespace(
+        manifest=SimpleNamespace(artifacts=(artifact,)),
+        artifact_paths={artifact.artifact_id: archive},
+    )
+
+    builder["_verify_release_windows_msvc"](
+        built, hashlib.sha256(payload).hexdigest()
+    )
+    with pytest.raises(
+        builder["ManualWebUIBuildError"],
+        match="manual_webui_windows_msvc_closure_invalid",
+    ):
+        builder["_verify_release_windows_msvc"](built, "0" * 64)
+
+
+def test_manual_webui_reuses_stager_native_receipt_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    builder = _builder()
+    native = tmp_path / "native"
+    native.mkdir()
+    (native / "msvcp140.dll").write_bytes(b"microsoft-signed-runtime")
+    (native / "native-build-receipt.json").write_text("{}", encoding="utf-8")
+    calls = []
+
+    def validate(output, **kwargs):  # noqa: ANN001
+        calls.append((output, kwargs))
+
+    monkeypatch.setattr(
+        builder["runpy"],
+        "run_path",
+        lambda path: {"_validate_windows_native_receipt": validate},
+    )
+
+    library, evidence = builder["_validated_windows_native_runtime"](ROOT, native)
+
+    assert library == native / "msvcp140.dll"
+    assert evidence["msvcp140_sha256"] == hashlib.sha256(library.read_bytes()).hexdigest()
+    assert calls[0][0] == native
+    assert calls[0][1]["toolchain_manifest"] == (
+        ROOT / "platform-staging/native/windows/toolchain-manifest.json"
+    )
+    assert calls[0][1]["source_root"] == ROOT / "platform-staging/native/windows"
+    assert calls[0][1]["github_hosted_compatibility"] is True
 
 
 def test_manual_webui_builder_pins_and_rechecks_base_package(
@@ -535,7 +623,6 @@ def test_manual_webui_product_probe_isolated_from_signed_core(
         "resolve_pack_python",
         lambda *args, **kwargs: (Path(sys.executable), None),
     )
-
     python_zip = tmp_path / "python311.zip"
     with zipfile.ZipFile(python_zip, "w"):
         pass
@@ -626,6 +713,9 @@ def retired_legacy_manual_webui_rebuilds_browser_pack_from_current_cow_source(
         "resolve_pack_python",
         lambda *args, **kwargs: (Path(sys.executable), None),
     )
+    monkeypatch.setitem(
+        function_globals, "_require_windows_msvc_closure", lambda *args: None
+    )
 
     python_zip = tmp_path / "python311.zip"
     with zipfile.ZipFile(python_zip, "w"):
@@ -659,6 +749,8 @@ def retired_legacy_manual_webui_rebuilds_browser_pack_from_current_cow_source(
         write_member(archive, "browser-runtime.json", runtime_manifest)
         write_member(archive, "browser-runtime.zip", runtime_archive)
 
+    (tmp_path / "msvcp140.dll").write_bytes(b"verified-msvc-runtime")
+
     stages = builder["_prepare_stages"](
         ROOT,
         {
@@ -667,6 +759,7 @@ def retired_legacy_manual_webui_rebuilds_browser_pack_from_current_cow_source(
         },
         tmp_path / "stages",
         {},
+        tmp_path / "msvcp140.dll",
     )
     pack = stages[("windows", "x64")]["browser"]
     source = ROOT / "release" / "capability-packs"
