@@ -243,8 +243,8 @@ assert.equal(contract.macInstallGuideHref("macos-x64"), "./install-macos.html?ta
 assert.equal(contract.macInstallGuideHref("macos-arm64"), "./install-macos.html?target=macos-arm64");
 assert.equal(contract.macInstallGuideHref("windows-x64"), "./install-macos.html");
 assert.deepEqual(contract.indexSources({ hostname: "127.0.0.1", pathname: "/" }), ["./download-index.json"]);
-assert.deepEqual(contract.indexSources({ hostname: "mvdcm.ecoremedia.net", pathname: "/e-mate/" }), ["https://dl.ecoremedia.net/e-mate/update/download-index.json?feed=2d7481d20f1fedd0"]);
-assert.deepEqual(contract.indexSources({ hostname: "dl.ecoremedia.net", pathname: "/ecorex-agent/" }), ["https://dl.ecoremedia.net/e-mate/update/download-index.json?feed=2d7481d20f1fedd0"]);
+assert.deepEqual(contract.indexSources({ hostname: "mvdcm.ecoremedia.net", pathname: "/e-mate/" }), ["/e-mate/update/download-index.json?feed=df1fef67bf032a47"]);
+assert.deepEqual(contract.indexSources({ hostname: "dl.ecoremedia.net", pathname: "/ecorex-agent/" }), ["/e-mate/update/download-index.json?feed=df1fef67bf032a47"]);
 """
     source = next(SITE.glob("site.*.js"))
     result = subprocess.run(

@@ -145,7 +145,7 @@ async function fetchIndex(url) {
 
 export function indexSources({ hostname = location.hostname, pathname = location.pathname } = {}) {
   if (/^(?:localhost|127\.0\.0\.1|\[::1\])$/.test(hostname)) return ["./download-index.json"];
-  return ["https://dl.ecoremedia.net/e-mate/update/download-index.json?feed=2d7481d20f1fedd0"];
+  return ["/e-mate/update/download-index.json?feed=df1fef67bf032a47"];
 }
 
 async function loadIndex() {
