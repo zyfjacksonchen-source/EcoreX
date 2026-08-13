@@ -923,44 +923,38 @@ function scenarioState(name) {
 
   if (name === "thread-switch") {
     const threadSpecs = [
-      ["thr_current_ga", "当前季度任务", "当前任务原始内容", 0],
-      ["thr_target_ga", "已恢复的年度任务", "年度任务已从恢复点载入", 0],
-      ["thr_slow_ga", "较慢的历史任务", "较慢任务内容", 450],
-      ["thr_fast_ga", "较新的快速任务", "快速任务最终内容", 0],
+      ["thr_current_ga", "当前季度任务", "当前任务原始内容", 0, 48],
+      ["thr_target_ga", "已恢复的年度任务", "年度任务已从恢复点载入", 0, 2],
+      ["thr_slow_ga", "较慢的历史任务", "较慢任务内容", 450, 12],
+      ["thr_fast_ga", "较新的快速任务", "快速任务最终内容", 0, 3],
     ];
-    for (const [threadId, title, input, delay] of threadSpecs) {
+    for (const [threadId, title, input, delay, turnCount] of threadSpecs) {
       const selectedThread = thread(threadId, title);
-      const selectedTurn = turn(
-        `turn-${threadId}`,
-        "completed",
-        input,
-        "ecorex-chat",
-        "gpt-image-2",
-        threadId,
-      );
+      const turns = [];
+      const items = [];
+      for (let index = 1; index <= turnCount; index += 1) {
+        const turnId = `turn-${threadId}-${index}`;
+        const turnInput = index === turnCount ? input : `${title}历史内容 ${index}`;
+        turns.push(turn(turnId, "completed", turnInput, "ecorex-chat", "gpt-image-2", threadId));
+        items.push(
+          { ...item(`item-user-${threadId}-${index}`, turnId, "user", turnInput, threadId), created_seq: index * 2 - 1 },
+          { ...item(`item-assistant-${threadId}-${index}`, turnId, "assistant", `“${title}”第 ${index} 轮已恢复。`, threadId), created_seq: index * 2 },
+        );
+      }
       const selectedProjection = {
         thread: selectedThread,
-        turns: [selectedTurn],
-        items: [
-          item(`item-user-${threadId}`, selectedTurn.turn_id, "user", input, threadId),
-          item(
-            `item-assistant-${threadId}`,
-            selectedTurn.turn_id,
-            "assistant",
-            `“${title}”已恢复，可以从上次的位置继续。`,
-            threadId,
-          ),
-        ],
+        turns,
+        items,
         jobs: [],
         interactions: [],
-        watermark: 2,
+        watermark: turnCount * 2,
       };
       base.threads.push(selectedThread);
       base.projections.set(threadId, selectedProjection);
       if (delay) base.projectionDelays.set(threadId, delay);
     }
     base.projection = base.projections.get("thr_current_ga");
-    base.seq = 2;
+    base.seq = 96;
     return base;
   }
 

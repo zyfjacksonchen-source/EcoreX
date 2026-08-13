@@ -531,6 +531,30 @@ test("rapid task switching is last-wins even when the older projection arrives l
   await expect(guardedPage.getByText("较慢任务内容", { exact: true })).toBeHidden();
 });
 
+test("switching between different-height conversations resets timeline measurement twice", async ({ guardedPage }) => {
+  await openThreadScenario(guardedPage, "thread-switch");
+  const timeline = guardedPage.locator(".ex-timeline");
+  const list = timeline.locator(".ex-timeline-inner > div:not(.ex-live-status)").first();
+  const composer = guardedPage.locator(".ex-workspace-bottom .ex-composer");
+  await expect(timeline.locator('[data-turn-id="turn-thr_current_ga-48"]')).toBeVisible();
+  await list.evaluate((element) => { element.dataset.measurementOwner = "current"; });
+  const composerBox = await composer.boundingBox();
+
+  await guardedPage.getByRole("button", { name: "打开任务：已恢复的年度任务" }).click();
+  await expect(timeline.locator('[data-turn-id="turn-thr_target_ga-2"]')).toBeVisible();
+  await expect(list).not.toHaveAttribute("data-measurement-owner", "current");
+  await expect(composer).toHaveJSProperty("isConnected", true);
+  expect(await composer.boundingBox()).toEqual(composerBox);
+
+  await timeline.locator(".ex-timeline-inner > div:not(.ex-live-status)").first().evaluate((element) => {
+    element.dataset.measurementOwner = "target";
+  });
+  await guardedPage.getByRole("button", { name: "打开任务：当前季度任务" }).click();
+  await expect(timeline.locator('[data-turn-id="turn-thr_current_ga-48"]')).toBeVisible();
+  await expect(timeline.locator(".ex-timeline-inner > div:not(.ex-live-status)").first()).not.toHaveAttribute("data-measurement-owner", "target");
+  expect(await composer.boundingBox()).toEqual(composerBox);
+});
+
 test("sidebar keeps v0.3 view-more behavior without hiding current or running sessions", async ({ guardedPage }) => {
   await openThreadScenario(guardedPage, "many-threads");
 

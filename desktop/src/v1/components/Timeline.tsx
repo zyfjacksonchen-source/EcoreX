@@ -835,6 +835,7 @@ export function Timeline({
         </div>
         {scrollParent ? (
           <Virtuoso
+            key={timelineThreadId}
             ref={virtuosoRef}
             data={timelineTurns}
             customScrollParent={scrollParent}

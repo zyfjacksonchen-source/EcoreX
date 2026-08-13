@@ -169,6 +169,10 @@ test("streaming output has one automatic scroll owner", () => {
   );
 });
 
+test("switching conversations gives Virtuoso a fresh measurement owner", () => {
+  assert.match(timeline, /<Virtuoso[\s\S]{0,180}key=\{timelineThreadId\}/u);
+});
+
 test("assistant office Markdown is lazy, bounded, and cannot load raw HTML or images", () => {
   assert.match(timeline, /lazy\(\(\) => import\("\.\/OfficeMarkdown\.tsx"\)\)/u);
   assert.match(timeline, /<Suspense fallback=/u);
