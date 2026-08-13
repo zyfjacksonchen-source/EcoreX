@@ -54,6 +54,7 @@ Allowed status values: `pending`, `passed`, `failed`, `blocked`.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `CU-205-STARTUP-001` | macOS fresh-profile startup | `63a591d81ddc38ab2793236943f559a02f25eee9` | Deterministic delayed-owner contract | P1 | `codex/e-mate-2.0.5` | `cf14a545` | Exact regression plus all 14 Electron shell contracts passed | Same-data-dir, same-identity receipt could be rejected while its HMAC endpoint was still starting; unknown and cross-identity listeners remain rejected |
 | `CU-205-FILE-001` | `CU-MAC-OFFICE` | `63a591d81ddc38ab2793236943f559a02f25eee9` | `205-表格验收.xlsx` was created, but the final row was plain text with no open/preview action | P1 | `codex/205-artifact-file-open` | `5aed338a` | Exact Cow projection regression, secure open/materialize checks, 18 Web Artifact contracts, and TypeScript passed | Cow path metadata is now admitted once into the existing account/thread-scoped Artifact store; office cards open natively while PDF/image cards retain in-app preview |
+| `CU-205-OCR-001` | macOS exact 2.0.4 OCR cold profile | `63a591d81ddc38ab2793236943f559a02f25eee9` | First call failed after 31.90s with `DependencyPackProcessError`; the same attachment succeeded on the second call in 15.45s | P1 | `codex/fix-ocr-cold-timeout-205` | `2436e951` | Exact cold-deadline regression plus all 10 dependency Pack process tests passed | One verified OCR Pack process now receives a 38s hard wall-clock bound: 30s operation plus 8s Pack-Python startup; there is no retry or fallback execution path |
 | `MAC-OFFICE-001` | `CU-MAC-OFFICE` | `63a591d81ddc38ab2793236943f559a02f25eee9` | Word create authoring inputs failed twice after the initial create probe | Pending triage | Assigned separately | — | Pending | Exact 2.0.4 arm64 DMG SHA-256 `c9dc0022a831f053081f3c0776f1480c2939811ec1ffde2d7f9a7996e4fa2582`; ConversationStore retained the complete tool chain |
 | `CU-205-PDF-PREVIEW-001` | Windows exact 2.0.4 Office baseline | `63a591d81ddc38ab2793236943f559a02f25eee9` | `office_pdf` create/edit/inspect passed; the model-visible `render_preview` action deterministically returned `OfficePdfRuntimeError` | P1 | `codex/fix-pdf-preview-capability` | `97df920a` | Exact schema regression plus verified Pack create/edit/inspect regression passed | The exact Office Pack exports only `office.formats`; neither its Windows archive nor Core carries PyMuPDF, Poppler, or LibreOffice. Desktop preview already uses `ArtifactPreviewDialog` and the Runtime artifact preview Blob. |
 
@@ -173,3 +174,24 @@ environment failure until the product failure reproduces from known state.
   unrelated package-closure fixture because this local validation environment
   could not resolve the declared `regex` distribution file. No package,
   installer, feed, or deployment was changed for this development fix.
+
+### 2026-08-13 CU-205-OCR-001
+
+- On the exact 2.0.4 macOS arm64 DMG, OCR of one attachment failed on its
+  first cold call after 31.90 seconds with `DependencyPackProcessError`; the
+  unchanged second call succeeded in 15.45 seconds. This isolated the failure
+  to cold process startup rather than image input or OCR output handling.
+- Root cause: Cow `OcrTool` correctly used the verified `ocr.extract` Pack,
+  but the OCR adapter and shared dependency-process boundary collapsed ONNX
+  model loading, Pack-Python startup, and inference into the same 30-second
+  wall-clock ceiling. The shared boundary already intended an 8-second
+  interpreter allowance, but its own 30-second cap discarded that allowance.
+- Fix `2436e951` keeps the single Cow -> verified Pack path and one execution:
+  OCR receives the existing 30-second operation budget, while the shared
+  process supervisor applies a hard 38-second total ceiling. Pack exceptions
+  still fail closed; there is no retry, host OCR fallback, or duplicate call.
+- Red check: the cold-worker regression observed a 30.0-second deadline and
+  failed its measured `31.9 < timeout <= 38.0` contract. Green checks: that
+  exact regression passed, then the complete affected
+  `tests/v1/test_dependency_pack_process.py` suite passed all `10` tests;
+  `git diff --check` passed. No App, package, feed, or deployment was run.
