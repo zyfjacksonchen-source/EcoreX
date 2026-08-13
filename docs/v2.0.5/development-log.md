@@ -602,3 +602,37 @@ environment failure until the product failure reproduces from known state.
   48-turn conversation to a 2-turn conversation and back, observed the expected
   measurement owner each time, and verified unchanged composer geometry; it
   passed `1/1` in 1.9 seconds. TypeScript and the Vite source build also passed.
+
+### 2026-08-13 CU-205-COW-RUNTIME-LATENCY-001
+
+- The comparison source is official CowAgent 2.1.5 exact
+  `e3ac1b952500f60934862c6bf0bd0de91b415ed8`. Its `AgentBridge.get_agent`
+  initializes one Agent only when a session is first seen, then reuses that
+  live instance. e-Mate instead rebuilt the complete Agent, tools, Skills,
+  memory, prompt, and restored history before every Turn.
+- e-Mate now keeps one Cow Agent per thread. Later Turns update only the
+  turn-scoped Gateway model, memory-summary model, request identity, and Cow
+  tool context. The workspace-bound ToolManager and MCP OAuth redirect remain
+  initialized on the first Turn; no tool or schema was removed.
+- Turn admission now uses the last validated immutable local model catalog.
+  Remote `/models` refresh remains on bootstrap/model discovery, while the
+  Gateway continues to fence execution against its active revision. The red
+  regression observed one additional `/models` call per submitted Turn; the
+  fixed path observes zero.
+- In-process create, queue, and replace producers now wake the durable Worker
+  immediately. A wake that arrives just before the Worker begins its idle wait
+  is preserved instead of being cleared. With a deliberately exaggerated
+  five-second poll and a local fake provider, the unfixed path had not reached
+  the Gateway after 750 ms. The fixed single-run profile measured first/warm
+  admission at 104.18/40.89 ms and submission-to-Gateway at 406.47/148.10 ms.
+- The three focused regressions failed `3/3` against unmodified `9e4f8cdd` and
+  passed `3/3` after the fix. The deterministic Agent regression injects a
+  100 ms initializer: before the fix it runs twice; after the fix initialization
+  count is one and the later Turn stays below 50 ms. The final Agent/catalog/
+  supervisor/MCP focused set passed `10/10` in 10.53 seconds without a real
+  model or network request.
+- The affected three-file suite passed `21` cases and retained one unrelated
+  baseline failure: a stale managed-session assertion still expects a remote
+  `shell` hard deny while the Cow boundary intentionally projects none. The
+  same assertion fails unchanged on baseline `9e4f8cdd`. No build, package,
+  publication, or CI run was started.
