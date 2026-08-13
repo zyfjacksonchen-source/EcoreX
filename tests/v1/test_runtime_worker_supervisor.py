@@ -167,6 +167,59 @@ def test_asgi_lifespan_runs_durable_worker_and_closes_gateway(tmp_path) -> None:
     assert app.state.model_gateway_lifecycle is None
 
 
+def test_turn_submission_wakes_the_idle_cow_worker(tmp_path) -> None:
+    gateway = CompletingGateway()
+    app = create_app(
+        settings=_settings(
+            tmp_path,
+            model_gateway=gateway,
+            allow_unmanaged_model_gateway_for_testing=True,
+            model_worker_poll_seconds=5,
+        )
+    )
+    auth, mutation = _headers()
+
+    with TestClient(app) as client:
+        deadline = time.monotonic() + 1
+        while (
+            app.state.model_worker_supervisor.snapshot().last_outcome
+            is not WorkerOutcome.IDLE
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.005)
+        assert app.state.model_worker_supervisor.snapshot().last_outcome is WorkerOutcome.IDLE
+
+        thread = client.post(
+            "/api/v1/threads", json={"title": "wake"}, headers=mutation
+        ).json()
+        started = time.monotonic()
+        created = client.post(
+            f"/api/v1/threads/{thread['thread_id']}/turns",
+            json={"input": "wake now", "client_message_id": "wake-1"},
+            headers=mutation,
+        )
+        while not gateway.requests and time.monotonic() - started < 0.75:
+            time.sleep(0.005)
+
+        assert created.status_code == 202
+        assert gateway.requests
+        assert time.monotonic() - started < 0.75
+
+
+def test_worker_does_not_discard_a_wake_sent_before_idle_wait() -> None:
+    async def scenario() -> None:
+        supervisor = AgentWorkerSupervisor(
+            IdleWorker(CompletingGateway()),  # type: ignore[arg-type]
+            concurrency=1,
+            idle_poll_seconds=5,
+            close_gateway_on_stop=False,
+        )
+        supervisor.notify()
+        await asyncio.wait_for(supervisor._wait_for_work(), timeout=0.1)
+
+    asyncio.run(scenario())
+
+
 def test_unexpected_slot_exit_restores_full_desired_concurrency() -> None:
     async def scenario() -> None:
         supervisor = AgentWorkerSupervisor(

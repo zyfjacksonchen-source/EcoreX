@@ -1532,12 +1532,12 @@ def create_app(
         return current
 
     async def refresh_runtime_model_catalog() -> ManagedModelCatalog:
-        """Refresh the tested Gateway revision before projecting/admitting.
+        """Refresh the tested Gateway revision for bootstrap/model discovery.
 
-        The returned object is also the synchronous provider source consumed
-        inside the linearized Turn admission lock.  Network I/O is completed
-        before taking that lock, so a Turn captures exactly one revision
-        without holding local mutation fencing across an await.
+        Turn admission consumes the last validated immutable snapshot through
+        ``current_runtime_model_catalog``.  The Gateway independently fences
+        execution against its active revision, so user submission never needs
+        to wait for this remote catalog read.
         """
 
         if not managed_mode or not isinstance(
@@ -4136,9 +4136,8 @@ def create_app(
     ) -> TurnMutationResponse:
         require_model_task_service()
         try:
-            await refresh_runtime_model_catalog()
             request = bind_input_attachments(request)
-            return composition.admit_turn(
+            accepted = composition.admit_turn(
                 request,
                 lambda prepared: kernel.create_turn(
                     thread_id,
@@ -4147,6 +4146,9 @@ def create_app(
                 ),
                 thread_id=thread_id,
             )
+            if worker_supervisor is not None:
+                worker_supervisor.notify()
+            return accepted
         except CapabilityIntentError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except ModelCatalogError as error:
@@ -4192,11 +4194,10 @@ def create_app(
     ) -> TurnMutationResponse:
         require_model_task_service()
         try:
-            await refresh_runtime_model_catalog()
             turn_request = bind_input_attachments(
                 CreateTurnRequest.model_validate(request.model_dump())
             )
-            return composition.admit_turn(
+            accepted = composition.admit_turn(
                 turn_request,
                 lambda prepared: kernel.queue_turn(
                     thread_id,
@@ -4205,6 +4206,9 @@ def create_app(
                 ),
                 thread_id=thread_id,
             )
+            if worker_supervisor is not None:
+                worker_supervisor.notify()
+            return accepted
         except CapabilityIntentError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except ModelCatalogError as error:
@@ -4222,7 +4226,6 @@ def create_app(
     ) -> ReplaceTurnResponse:
         require_model_task_service()
         try:
-            await refresh_runtime_model_catalog()
             turn_request = bind_input_attachments(
                 CreateTurnRequest.model_validate(request.model_dump(exclude={"reason"}))
             )
@@ -4244,11 +4247,14 @@ def create_app(
 
         try:
             parent_turn = kernel.get_turn(turn_id)
-            return composition.admit_turn(
+            accepted = composition.admit_turn(
                 turn_request,
                 accept_replacement,
                 thread_id=parent_turn.thread_id,
             )
+            if worker_supervisor is not None:
+                worker_supervisor.notify()
+            return accepted
         except CapabilityIntentError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except ModelCatalogError as error:

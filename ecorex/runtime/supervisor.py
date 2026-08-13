@@ -356,7 +356,9 @@ class AgentWorkerSupervisor:
     async def _wait_for_work(self) -> None:
         if self._stopping:
             return
-        self._wake.clear()
+        if self._wake.is_set():
+            self._wake.clear()
+            return
         try:
             await asyncio.wait_for(
                 self._wake.wait(), timeout=self.idle_poll_seconds

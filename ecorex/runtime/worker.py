@@ -6790,30 +6790,30 @@ class AgentTurnWorker:
             )
         )
         try:
-            from agent.tools import ToolManager
+            agent = bridge.agents.get(thread_id)
+            if agent is None:
+                from agent.tools import ToolManager
 
-            ToolManager(
-                workspace_root=workspace,
-                mcp_oauth_redirect_uri=self.mcp_oauth_redirect_uri,
-            )
-            previous_agent = bridge.agents.get(thread_id)
-            agent = AgentInitializer(object(), bridge).initialize_agent(
-                session_id=thread_id,
-                workspace_root=workspace,
-                builtin_skill_root=self.builtin_skill_root,
-                conversation_store=conversation_store,
-                conversation_max_turns=_COW_MAX_CONTEXT_TURNS,
-            )
-            if previous_agent is not None:
-                for name in (
-                    "_evo_last_active",
-                    "_evo_turns",
-                    "_evo_done_msg_count",
-                    "_evo_channel_type",
-                    "_evo_receiver",
-                ):
-                    if hasattr(previous_agent, name):
-                        setattr(agent, name, getattr(previous_agent, name))
+                ToolManager(
+                    workspace_root=workspace,
+                    mcp_oauth_redirect_uri=self.mcp_oauth_redirect_uri,
+                )
+                agent = AgentInitializer(object(), bridge).initialize_agent(
+                    session_id=thread_id,
+                    workspace_root=workspace,
+                    builtin_skill_root=self.builtin_skill_root,
+                    conversation_store=conversation_store,
+                    conversation_max_turns=_COW_MAX_CONTEXT_TURNS,
+                )
+                bridge.agents[thread_id] = agent
+            else:
+                # Cow owns one live Agent per session. The managed Gateway
+                # model is turn-scoped, so only swap that transport binding.
+                agent.model = model
+                manager = getattr(agent, "memory_manager", None)
+                flush_manager = getattr(manager, "flush_manager", None)
+                if flush_manager is not None:
+                    flush_manager.llm_model = model.fork("memory-summary")
             if channel_context:
                 self._attach_scheduler_context(agent, thread_id, channel_context)
             else:
@@ -6828,7 +6828,6 @@ class AgentTurnWorker:
                 for tool in agent.tools:
                     if getattr(tool, "name", "") == "scheduler":
                         attach_scheduler_to_tool(tool, scheduler_context)
-            bridge.agents[thread_id] = agent
             agent._current_session_id = thread_id
             agent._current_request_id = turn_id
             agent._evo_running = record_evolution

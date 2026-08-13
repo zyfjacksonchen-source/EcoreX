@@ -704,10 +704,11 @@ def test_gateway_catalog_revision_is_shared_by_bootstrap_turn_and_frozen_history
     database = tmp_path / "runtime-catalog-revision.db"
     service = _service(database, public, clock, vault)
     _install(service, _lease(private, now=now))
-    active = {"revision": 1}
+    active = {"revision": 1, "catalog_requests": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/models"):
+            active["catalog_requests"] += 1
             revision = active["revision"]
             return httpx.Response(
                 200,
@@ -783,6 +784,7 @@ def test_gateway_catalog_revision_is_shared_by_bootstrap_turn_and_frozen_history
 
     with TestClient(app) as client:
         first_bootstrap = client.get("/api/v1/bootstrap", headers=_headers()).json()
+        first_catalog_requests = active["catalog_requests"]
         thread = client.post(
             "/api/v1/threads",
             json={"client_request_id": "catalog-revision-thread"},
@@ -794,6 +796,7 @@ def test_gateway_catalog_revision_is_shared_by_bootstrap_turn_and_frozen_history
             headers=_headers(mutation=True),
         )
         assert first.status_code == 202
+        assert active["catalog_requests"] == first_catalog_requests
         first_turn_id = first.json()["turn"]["turn_id"]
         first_snapshot_id, first_models = frozen_catalog(first_turn_id)
         assert first_bootstrap["models"]["snapshot_id"] == first_snapshot_id
@@ -805,6 +808,7 @@ def test_gateway_catalog_revision_is_shared_by_bootstrap_turn_and_frozen_history
 
         active["revision"] = 2
         second_bootstrap = client.get("/api/v1/bootstrap", headers=_headers()).json()
+        second_catalog_requests = active["catalog_requests"]
         second_thread = client.post(
             "/api/v1/threads",
             json={"client_request_id": "catalog-revision-thread-two"},
@@ -816,6 +820,7 @@ def test_gateway_catalog_revision_is_shared_by_bootstrap_turn_and_frozen_history
             headers=_headers(mutation=True),
         )
         assert second.status_code == 202
+        assert active["catalog_requests"] == second_catalog_requests
         second_snapshot_id, second_models = frozen_catalog(
             second.json()["turn"]["turn_id"]
         )
