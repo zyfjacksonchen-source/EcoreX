@@ -746,3 +746,16 @@ environment failure until the product failure reproduces from known state.
   `EMATE_DATA_DIR`; these stronger existing paths were not replaced. Developer
   ID signing, hardened Runtime, and notarization also remain outside this
   unsigned release train as previously selected, rather than being simulated.
+
+### 2026-08-13 CU-205-LOCAL-SKILL-AUTHORITY-001
+
+- The first frozen source gate stopped because `SkillManager.is_skill_enabled`
+  still consulted an e-Mate enterprise projection before its Cow local
+  `skills_config`. A valid local Skill could therefore be disabled remotely,
+  contrary to the CowAgent data-plane boundary.
+- The enterprise lookup is deleted. Local enablement is again owned only by
+  Cow's local configuration; disabling or removing a distributed Extension
+  root affects discovery of that root, not the meaning of the local enabled
+  flag. No replacement policy or compatibility path was added.
+- The exact CI regression changed from red to green. Focused and affected
+  Scheduler/Skill/Hub checks passed `34` cases on the isolated fix branch.
