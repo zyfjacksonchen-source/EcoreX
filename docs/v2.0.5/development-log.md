@@ -33,6 +33,18 @@ pass.
 
 Allowed status values: `pending`, `passed`, `failed`, `blocked`.
 
+The frozen macOS and Windows candidates use one fixed acceptance contract:
+
+- invoke each Cow Hard19 tool from the real desktop UI and retain the
+  `tool_call -> executor -> tool_result -> terminal-visible -> next-turn`
+  evidence chain; a catalog/schema probe or model-only answer is not a pass;
+- exercise complex cross-tool and cross-turn chains, including model/thread
+  switching, context continuation, failure recovery, and stateful Browser;
+- replay every behavior changed in the 2.0.5 train against the same immutable
+  candidate bytes; and
+- verify Office4 separately from Hard19 so extra tools never hide a missing
+  first-party capability.
+
 | Case ID | Platform | Scenario | Status | Bug ID | Tested commit | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | CU-MAC-OFFICE | macOS | Word, Excel, PowerPoint, PDF create/edit/open/preview | failed | `MAC-OFFICE-001` | exact 2.0.4 arm64 DMG `c9dc0022…` | Word create probe succeeded, but two authoring attempts raised `OfficeAuthoringContractError`; repair assigned separately |
