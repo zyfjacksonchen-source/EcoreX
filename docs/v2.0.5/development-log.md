@@ -54,6 +54,7 @@ Allowed status values: `pending`, `passed`, `failed`, `blocked`.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `CU-205-STARTUP-001` | macOS fresh-profile startup | `63a591d81ddc38ab2793236943f559a02f25eee9` | Deterministic delayed-owner contract | P1 | `codex/e-mate-2.0.5` | `cf14a545` | Exact regression plus all 14 Electron shell contracts passed | Same-data-dir, same-identity receipt could be rejected while its HMAC endpoint was still starting; unknown and cross-identity listeners remain rejected |
 | `MAC-OFFICE-001` | `CU-MAC-OFFICE` | `63a591d81ddc38ab2793236943f559a02f25eee9` | Word create authoring inputs failed twice after the initial create probe | Pending triage | Assigned separately | — | Pending | Exact 2.0.4 arm64 DMG SHA-256 `c9dc0022a831f053081f3c0776f1480c2939811ec1ffde2d7f9a7996e4fa2582`; ConversationStore retained the complete tool chain |
+| `CU-205-PDF-PREVIEW-001` | Windows exact 2.0.4 Office baseline | `63a591d81ddc38ab2793236943f559a02f25eee9` | `office_pdf` create/edit/inspect passed; the model-visible `render_preview` action deterministically returned `OfficePdfRuntimeError` | P1 | `codex/fix-pdf-preview-capability` | `97df920a` | Exact schema regression plus verified Pack create/edit/inspect regression passed | The exact Office Pack exports only `office.formats`; neither its Windows archive nor Core carries PyMuPDF, Poppler, or LibreOffice. Desktop preview already uses `ArtifactPreviewDialog` and the Runtime artifact preview Blob. |
 
 Use `CU-205-<AREA>-NNN` for product findings. Do not allocate an ID for an
 environment failure until the product failure reproduces from known state.
@@ -123,3 +124,27 @@ environment failure until the product failure reproduces from known state.
   local-toolchain run passed `24` and failed only the constructor inventory
   because that local Python closure lacks the declared `web.py` package; this
   is environment evidence, not a reason to change the valid v1 lock.
+
+### 2026-08-13 CU-205-PDF-PREVIEW-001
+
+- On the exact 2.0.4 Windows installer, `office_pdf` create, replacement edit,
+  and inspect succeeded, but the same public schema advertised
+  `render_preview`; calling it failed through the legacy
+  `common.office_pdf_runtime` path with `OfficePdfRuntimeError`.
+- Artifact shape settled the boundary: the signed Office Pack manifest exports
+  only `office.formats`, and its Windows archive plus Core contain no PyMuPDF,
+  Poppler, or LibreOffice renderer. The desktop already previews the verified
+  artifact Blob inside `ArtifactPreviewDialog`, so no second model-side PDF
+  renderer or host fallback was added.
+- Root cause: the four public Cow Office tools shared a stale model schema and
+  execution branch for legacy analyze/render/quality/compare operations that
+  were never transported by the verified Pack. Fix `97df920a` deletes those
+  branches and exposes only `probe/status/create/edit/inspect`, matching the
+  Pack and the four built-in Office skill instructions.
+- Red check: the new schema regression failed because five unsupported actions
+  remained visible. Green check:
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q
+  tests/test_v024_skill_tool_exposure.py::test_v025_public_office_schema_matches_verified_formats_pack
+  tests/test_v024_skill_tool_exposure.py::test_v024_public_cow_office_tools_create_edit_and_emit_artifacts`
+  passed `2` tests; `git diff --check` passed. No App, package, signer, or
+  deployment path was started.
