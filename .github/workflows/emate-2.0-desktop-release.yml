@@ -98,6 +98,7 @@ jobs:
             tests/v1/test_memory_storage_shared_db_recovery.py \
             tests/v1/test_cow_data_plane_admission.py \
             tests/v1/test_cow_spine_takeover_contract.py \
+            tests/v1/test_desktop_update_tool.py \
             tests/v1/test_usage_projection.py \
             tests/v1/test_device_identity_management.py \
             tests/v1/test_image_orchestrator_production_runtime.py \

@@ -674,7 +674,10 @@ test("public download index parsing only offers newer stable releases", () => {
       download("macos-x64", "macos", "x64", `e-Mate-${version}-x64.dmg`),
     ],
   };
-  assert.equal(updateContract.parseDownloadIndex(JSON.stringify(index))?.version, version);
+  const parsed = updateContract.parseDownloadIndex(JSON.stringify(index));
+  assert.equal(parsed?.version, version);
+  assert.equal(parsed?.downloads[1]?.target, "macos-arm64");
+  assert.equal(parsed?.downloads[1]?.sha256, "a".repeat(64));
   const forged = structuredClone(index);
   forged.downloads[1].url = "https://example.invalid/forged.dmg";
   assert.equal(updateContract.parseDownloadIndex(JSON.stringify(forged)), null);
@@ -685,16 +688,20 @@ test("public download index parsing only offers newer stable releases", () => {
   assert.equal(updateContract.isNewerStableVersion("2.1.0-beta.1", "2.0.0"), false);
 });
 
-test("unsigned mac updates remain manual while Windows retains electron-updater", async () => {
+test("Agent self-update uses the one desktop updater on Windows and macOS", async () => {
   const updater = await load("electron/updater.cjs");
-  assert.match(updater, /process\.platform !== "win32"/);
-  assert.match(updater, /shell\.openExternal\(DOWNLOAD_URL\)/);
   assert.match(updater, /parseDownloadIndex/);
   assert.match(updater, /download-index\.json/);
-  assert.doesNotMatch(updater, /latest-mac\.yml/);
   assert.match(updater, /autoUpdater\.autoDownload = false/);
   assert.match(updater, /autoUpdater\.quitAndInstall/);
-  assert.match(updater, /manualInstall: true/);
+  assert.match(updater, /requestAutomatic/);
+  assert.match(updater, /downloadMacUpdate/);
+  assert.match(updater, /installMacUpdate/);
+  assert.match(updater, /hdiutil/);
+  assert.match(updater, /ditto/);
+  assert.match(updater, /PlistBuddy/);
+  assert.match(updater, /app\.relaunch/);
+  assert.doesNotMatch(updater, /shell\.openExternal|github\.com|ghproxy/u);
 });
 
 test("native completion notifications are Runtime-driven and deep-link through preload", async () => {

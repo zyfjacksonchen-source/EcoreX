@@ -75,6 +75,7 @@ OfficeDocumentsTool = _safe_import("agent.tools.office_artifacts.office_artifact
 OfficePdfTool = _safe_import("agent.tools.office_artifacts.office_artifacts", "OfficePdfTool")
 OfficePresentationsTool = _safe_import("agent.tools.office_artifacts.office_artifacts", "OfficePresentationsTool")
 OfficeSpreadsheetsTool = _safe_import("agent.tools.office_artifacts.office_artifacts", "OfficeSpreadsheetsTool")
+DesktopUpdateTool = _safe_import("agent.tools.desktop_update.desktop_update", "DesktopUpdateTool")
 McpTool = _safe_import("agent.tools.mcp.mcp_tool", "McpTool")
 McpClientRegistry = _safe_import("agent.tools.mcp.mcp_client", "McpClientRegistry")
 
@@ -105,5 +106,6 @@ __all__ = [
     "OfficePdfTool",
     "OfficePresentationsTool",
     "OfficeSpreadsheetsTool",
+    "DesktopUpdateTool",
     "McpTool",
 ]

@@ -127,7 +127,7 @@ const DESKTOP_THREAD_ID = /^thr_[A-Za-z0-9._:-]{1,252}$/u;
 
 type DesktopUpdateStatus =
   | { state: "checking" | "not-available"; userInitiated: boolean }
-  | { state: "available"; version: string; platform: "windows" | "macos"; manualInstall: boolean; userInitiated: boolean }
+  | { state: "available"; version: string; platform: "windows" | "macos"; userInitiated: boolean }
   | { state: "downloading"; version: string | null; percent: number }
   | { state: "downloaded"; version: string }
   | { state: "error"; version: string | null; message: string; userInitiated: boolean };
@@ -136,7 +136,6 @@ declare global {
   interface Window {
     eMateDesktop?: {
       checkForUpdates?: () => Promise<void>;
-      openUpdatePage?: () => Promise<void>;
       downloadDesktopUpdate?: () => Promise<void>;
       installDesktopUpdate?: () => Promise<void>;
       desktopUpdateStatus?: () => Promise<DesktopUpdateStatus | null>;
@@ -474,9 +473,7 @@ export function AppV1() {
   const desktopUpdateMessage = (() => {
     switch (desktopUpdate?.state) {
       case "available":
-        return desktopUpdate.manualInstall
-          ? `e-Mate ${desktopUpdate.version} 已发布。当前 macOS 版本未签名，请打开官方下载页，并按安装图解或信任命令手动更新。`
-          : `e-Mate ${desktopUpdate.version} 已发布，已签名 Windows 安装包可供下载。`;
+        return `e-Mate ${desktopUpdate.version} 已发布，可从国内 CDN 下载并在应用内完成更新。`;
       case "downloading":
         return `正在下载并验证 e-Mate ${desktopUpdate.version ?? "新版"}（${desktopUpdate.percent}%）`;
       case "downloaded":
@@ -907,13 +904,9 @@ export function AppV1() {
                     className="ex-button is-primary"
                     type="button"
                     disabled={desktopUpdateBusy}
-                    onClick={() => void (desktopUpdate.manualInstall
-                      ? window.eMateDesktop?.openUpdatePage?.()
-                      : downloadDesktopUpdate())}
+                    onClick={() => void downloadDesktopUpdate()}
                   >
-                    {desktopUpdate.manualInstall
-                      ? "打开官方下载页"
-                      : desktopUpdateBusy ? "正在准备下载" : "下载更新"}
+                    {desktopUpdateBusy ? "正在准备下载" : "下载更新"}
                   </button>
                 ) : null}
                 {desktopUpdate?.state === "downloaded" ? (

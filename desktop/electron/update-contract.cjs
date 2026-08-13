@@ -47,6 +47,7 @@ function parseDownloadIndex(payload) {
     if (!Array.isArray(index.downloads) || index.downloads.length !== 3) return null;
 
     const seen = new Set();
+    const downloads = [];
     for (const candidate of index.downloads) {
       const download = record(candidate);
       if (!download) return null;
@@ -82,9 +83,22 @@ function parseDownloadIndex(payload) {
           || !CERTIFICATE_THUMBPRINT.test(evidence.signer_certificate_thumbprint)
         ) return null;
       }
+      downloads.push(Object.freeze({
+        target: download.target,
+        platform: download.platform,
+        architecture: download.architecture,
+        file_name: download.file_name,
+        url: download.url,
+        size_bytes: download.size_bytes,
+        sha256: download.sha256,
+      }));
     }
     return seen.size === Object.keys(TARGETS).length
-      ? { version: index.version, distributionMode: manual ? "unsigned-manual" : "signed-automatic" }
+      ? Object.freeze({
+          version: index.version,
+          distributionMode: manual ? "unsigned-manual" : "signed-automatic",
+          downloads: Object.freeze(downloads),
+        })
       : null;
   } catch {
     return null;

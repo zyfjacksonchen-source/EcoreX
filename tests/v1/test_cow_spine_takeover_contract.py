@@ -180,6 +180,7 @@ def test_actual_initializer_keeps_the_complete_cow_catalog_for_every_profile(
         "memory_get", "office_documents", "office_pdf", "office_presentations",
         "office_spreadsheets",
     }
+    emate_local = {"desktop_update"}
     workspace_tools = {
         "read", "write", "edit", "bash", "search_files", "ls", "web_fetch",
         "send", "browser", "ocr", "office_documents", "office_pdf",
@@ -203,8 +204,8 @@ def test_actual_initializer_keeps_the_complete_cow_catalog_for_every_profile(
         )
         by_name = {tool.name: tool for tool in tools}
 
-        assert len(tools) == len(required)
-        assert set(by_name) == required
+        assert len(tools) == len(required | emate_local)
+        assert set(by_name) == required | emate_local
         for name in workspace_tools:
             assert Path(by_name[name].config["cwd"]) == workspace
         agent = Agent("contract", tools=tools, workspace_dir=str(workspace), enable_skills=False)

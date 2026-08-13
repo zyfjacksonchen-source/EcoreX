@@ -4,6 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { fileURLToPath } = require("node:url");
 const { BackendManager, runtimeDiagnosticCode, runtimeResponds } = require("./backend.cjs");
+const { initAgentUpdateRequests } = require("./agent-update-request.cjs");
 const { externalHttpUrl } = require("./navigation-policy.cjs");
 const { readRuntimeBearerToken, TaskNotificationMonitor } = require("./task-notifications.cjs");
 const { initDesktopUpdater } = require("./updater.cjs");
@@ -17,6 +18,7 @@ let backend = null;
 let mainWindow = null;
 let tray = null;
 let updater = null;
+let agentUpdateRequests = null;
 let taskNotifications = null;
 let quitting = false;
 let runtimeRestart = null;
@@ -365,7 +367,6 @@ function setupIpc() {
   ipcMain.handle("emate:version", () => app.getVersion());
   ipcMain.handle("emate:restart-runtime", restartRuntime);
   ipcMain.handle("emate:check-for-updates", () => updater?.check(true));
-  ipcMain.handle("emate:open-update-page", () => updater?.openPage());
   ipcMain.handle("emate:download-update", () => updater?.download());
   ipcMain.handle("emate:install-update", () => updater?.install());
   ipcMain.handle("emate:desktop-update-status", () => updater?.status() ?? null);
@@ -386,6 +387,7 @@ async function launch() {
   const runtimeStartup = startBackendWithRetry(window);
   await window.loadURL(startupPage());
   updater = initDesktopUpdater(() => mainWindow);
+  agentUpdateRequests = initAgentUpdateRequests(DATA_DIR, updater);
   setupIpc();
   buildMenu();
   createTray();
@@ -428,6 +430,8 @@ app.on("before-quit", (event) => {
   tray = null;
   taskNotifications?.stop();
   taskNotifications = null;
+  agentUpdateRequests?.stop();
+  agentUpdateRequests = null;
   shutdown = (async () => {
     try {
       await backend?.stop();

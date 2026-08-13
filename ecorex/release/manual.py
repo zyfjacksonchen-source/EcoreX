@@ -22,7 +22,8 @@ COW_HARD_TOOL_IDS = (
 COW_OFFICE_TOOL_IDS = (
     "office_documents", "office_pdf", "office_presentations", "office_spreadsheets",
 )
-BUILTIN_TOOL_IDS = COW_HARD_TOOL_IDS + COW_OFFICE_TOOL_IDS
+EMATE_LOCAL_TOOL_IDS = ("desktop_update",)
+BUILTIN_TOOL_IDS = COW_HARD_TOOL_IDS + COW_OFFICE_TOOL_IDS + EMATE_LOCAL_TOOL_IDS
 PREPARE_STEPS = (
     "preflight",
     "local-gates",
@@ -526,7 +527,7 @@ def browser_request(store: ReleaseRunStore) -> dict[str, Any]:
             {
                 "id": "builtin-matrix",
                 "action": "exercise every built-in tool through the authenticated production UI",
-                "assert": "all Cow hard tools and all four Office tools complete with a visible terminal state",
+                "assert": "all Cow hard tools, all four Office tools and desktop_update complete with a visible terminal state",
             },
             {
                 "id": "image-calls",
@@ -608,6 +609,7 @@ __all__ = [
     "BUILTIN_TOOL_IDS",
     "COW_HARD_TOOL_IDS",
     "COW_OFFICE_TOOL_IDS",
+    "EMATE_LOCAL_TOOL_IDS",
     "FINALIZE_STEPS",
     "ManualReleaseError",
     "PREPARE_STEPS",

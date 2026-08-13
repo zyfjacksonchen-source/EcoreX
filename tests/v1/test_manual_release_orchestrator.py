@@ -11,6 +11,7 @@ from ecorex.release.manual import (
     BUILTIN_TOOL_IDS,
     COW_HARD_TOOL_IDS,
     COW_OFFICE_TOOL_IDS,
+    EMATE_LOCAL_TOOL_IDS,
     PREPARE_STEPS,
     ManualReleaseError,
     ReleaseRunStore,
@@ -207,6 +208,7 @@ def test_browser_request_requires_real_production_model_images_and_long_session(
         "office_presentations",
         "office_spreadsheets",
     }
+    assert EMATE_LOCAL_TOOL_IDS == ("desktop_update",)
     assert request["required_builtin_tool_ids"] == list(BUILTIN_TOOL_IDS)
     assert set(request["receipt_observations"]) == set(_observations())
 

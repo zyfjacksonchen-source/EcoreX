@@ -19,18 +19,21 @@ test("packaged desktop exposes Electron updater as the only update UI and action
   assert.match(app, /data-desktop-update-state/u);
 });
 
-test("desktop updates keep one feed and require a platform-correct user action", () => {
+test("desktop updates keep one CDN feed and support Agent-triggered installation", () => {
   assert.match(desktopUpdater, /autoUpdater\.autoDownload = false/u);
   assert.doesNotMatch(desktopUpdater, /autoUpdater\.autoDownload = true/u);
   assert.match(desktopUpdater, /setFeedURL\(\{ provider: "generic", url: UPDATE_URL \}\)/u);
   assert.match(desktopUpdater, /const UPDATE_POLL_MS = 4 \* 60 \* 60 \* 1000/u);
-  assert.match(desktopUpdater, /manualInstall: true/u);
   assert.match(desktopUpdater, /UPDATE_URL = "https:\/\/dl\.ecoremedia\.net\/e-mate\/update\/"/u);
+  assert.doesNotMatch(desktopUpdater, /shell\.openExternal|github\.com|ghproxy/u);
+  assert.match(desktopUpdater, /requestAutomatic/u);
+  assert.match(desktopUpdater, /downloadMacUpdate/u);
+  assert.match(desktopUpdater, /installMacUpdate/u);
   assert.match(desktopMain, /"emate:download-update"/u);
   assert.match(desktopMain, /"emate:install-update"/u);
+  assert.match(desktopMain, /initAgentUpdateRequests/u);
   assert.match(desktopPreload, /onDesktopUpdateStatus/u);
-  assert.match(app, /当前 macOS 版本未签名/u);
-  assert.match(app, /打开官方下载页/u);
+  assert.doesNotMatch(app, /当前 macOS 版本未签名|打开官方下载页|信任命令/u);
   assert.match(app, /下载更新/u);
   assert.match(app, /重启并更新/u);
 });
