@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+from datetime import UTC, datetime, timedelta
+from io import BytesIO
 import json
 import os
 from pathlib import Path
 import threading
+import time
 from typing import Any, Mapping
 
 from bridge.context import Context
@@ -20,6 +24,14 @@ from config import conf
 
 from .channel_catalog import CHANNEL_CATALOG, normalize_channel_name
 from .channel_runtime import ChannelInboundMessage, ChannelRuntimeDispatcher
+from .channel_self_service import (
+    ChannelDeviceAuthorization,
+    ChannelDeviceAuthorizationError,
+)
+
+
+_WEIXIN_FLOW_TTL = timedelta(seconds=480)
+_WEIXIN_QR_READY_SECONDS = 15.0
 
 
 bind_cow_channel_runtime_bridge = bind_runtime_bridge
@@ -104,6 +116,10 @@ class CowChannelService:
         self.bridge = bridge
         self.started = False
         self._lock = threading.RLock()
+        self._weixin_flow_id: str | None = None
+        self._weixin_flow_expires_at: datetime | None = None
+        self._weixin_flow_terminal: str | None = None
+        self._weixin_qr_cache: tuple[str, str] | None = None
 
     @staticmethod
     def _sync_live_config(settings: Mapping[str, Any]) -> None:
@@ -193,7 +209,13 @@ class CowChannelService:
         exists = bool(configured or enabled)
         if not exists:
             return None
-        running = self.manager.get_channel(name) is not None
+        channel = self.manager.get_channel(name)
+        running = channel is not None
+        authenticating = bool(
+            name == "weixin"
+            and running
+            and getattr(channel, "login_status", "") != "logged_in"
+        )
         return {
             "instance_id": f"cow-channel-{name}",
             "channel_id": name,
@@ -206,10 +228,22 @@ class CowChannelService:
             "missing_fields": missing,
             "enabled": enabled,
             "state": (
-                "unconfigured" if missing else "connected" if running else "stopped"
+                "unconfigured"
+                if missing
+                else "starting"
+                if authenticating
+                else "connected"
+                if running
+                else "stopped"
             ),
             "health": (
-                "unconfigured" if missing else "connected" if running else "disabled"
+                "unconfigured"
+                if missing
+                else "authenticating"
+                if authenticating
+                else "connected"
+                if running
+                else "disabled"
             ),
             "last_error_code": None,
             "updated_at": None,
@@ -223,6 +257,7 @@ class CowChannelService:
                 instance = self._projection(name, settings)
                 configured = not self._configured_fields(definition, settings)[1]
                 enabled = bool(instance and instance["enabled"])
+                device = name == "weixin"
                 items.append(
                     {
                         "channel_id": name,
@@ -264,17 +299,144 @@ class CowChannelService:
                         ],
                         "instance": instance,
                         "actions": {
-                            "save": True,
+                            "save": not device,
                             "test": configured,
-                            "enable": configured and not enabled,
+                            "enable": configured and not enabled and not device,
                             "disable": enabled,
                             "retry": configured and enabled,
                             "disconnect": instance is not None,
-                            "auth_begin": False,
+                            "auth_begin": device,
                         },
                     }
                 )
             return {"contract_version": "channel-self-service-v1", "items": items}
+
+    def begin_authorization(self, channel_id: str) -> ChannelDeviceAuthorization:
+        with self._lock:
+            self._require_weixin(channel_id)
+            if self._weixin_flow_id is not None:
+                current = self._weixin_authorization()
+                if current.status in {"pending", "scanned"}:
+                    return current if current.verification_url else self._await_weixin_qr()
+            self._new_weixin_flow()
+            if self.manager.get_channel("weixin") is None:
+                if not self.started:
+                    raise ChannelDeviceAuthorizationError(
+                        "weixin_runtime_not_started", 503
+                    )
+                self.enable("weixin")
+            return self._await_weixin_qr()
+
+    def poll_authorization(
+        self, channel_id: str, flow_id: str
+    ) -> ChannelDeviceAuthorization:
+        with self._lock:
+            self._require_weixin_flow(channel_id, flow_id)
+            return self._weixin_authorization()
+
+    def cancel_authorization(
+        self, channel_id: str, flow_id: str
+    ) -> ChannelDeviceAuthorization:
+        with self._lock:
+            self._require_weixin_flow(channel_id, flow_id)
+            current = self._weixin_authorization()
+            if current.status == "confirmed":
+                raise ChannelDeviceAuthorizationError(
+                    "weixin_device_flow_confirmed", 409
+                )
+            self.disable("weixin")
+            self._weixin_flow_terminal = "cancelled"
+            return self._weixin_authorization()
+
+    def refresh_authorization(
+        self, channel_id: str, flow_id: str
+    ) -> ChannelDeviceAuthorization:
+        with self._lock:
+            self._require_weixin_flow(channel_id, flow_id)
+            if self._weixin_authorization().status == "confirmed":
+                raise ChannelDeviceAuthorizationError(
+                    "weixin_device_flow_confirmed", 409
+                )
+            self._new_weixin_flow(flow_id)
+            if not self.started:
+                raise ChannelDeviceAuthorizationError(
+                    "weixin_runtime_not_started", 503
+                )
+            if self.manager.get_channel("weixin") is None:
+                self.enable("weixin")
+            else:
+                self.manager.restart("weixin")
+            return self._await_weixin_qr()
+
+    @staticmethod
+    def _require_weixin(channel_id: str) -> None:
+        if normalize_channel_name(channel_id) != "weixin":
+            raise ChannelDeviceAuthorizationError(
+                "channel_device_authorization_unsupported", 409
+            )
+
+    def _require_weixin_flow(self, channel_id: str, flow_id: str) -> None:
+        self._require_weixin(channel_id)
+        if flow_id != self._weixin_flow_id:
+            raise ChannelDeviceAuthorizationError(
+                "channel_device_flow_invalid", 422
+            )
+
+    def _new_weixin_flow(self, flow_id: str | None = None) -> None:
+        self._weixin_flow_id = flow_id or f"wxauth_{os.urandom(16).hex()}"
+        self._weixin_flow_expires_at = datetime.now(UTC) + _WEIXIN_FLOW_TTL
+        self._weixin_flow_terminal = None
+        self._weixin_qr_cache = None
+
+    def _await_weixin_qr(self) -> ChannelDeviceAuthorization:
+        deadline = time.monotonic() + _WEIXIN_QR_READY_SECONDS
+        while True:
+            result = self._weixin_authorization()
+            if result.status == "confirmed" or result.verification_url:
+                return result
+            if time.monotonic() >= deadline:
+                raise ChannelDeviceAuthorizationError(
+                    "weixin_qrcode_unavailable", 502
+                )
+            time.sleep(0.05)
+
+    def _weixin_authorization(self) -> ChannelDeviceAuthorization:
+        if self._weixin_flow_id is None or self._weixin_flow_expires_at is None:
+            raise ChannelDeviceAuthorizationError(
+                "channel_device_flow_invalid", 422
+            )
+        channel = self.manager.get_channel("weixin")
+        login_status = str(getattr(channel, "login_status", ""))
+        if self._weixin_flow_terminal is not None:
+            status = self._weixin_flow_terminal
+        elif login_status == "logged_in":
+            status = "confirmed"
+        elif login_status == "scanned":
+            status = "scanned"
+        elif datetime.now(UTC) >= self._weixin_flow_expires_at:
+            status = "expired"
+        else:
+            status = "pending"
+        verification_url = (
+            str(getattr(channel, "_current_qr_url", "") or "")
+            if status in {"pending", "scanned"}
+            else ""
+        )
+        qr_image_data_url = None
+        if verification_url:
+            if self._weixin_qr_cache is None or self._weixin_qr_cache[0] != verification_url:
+                self._weixin_qr_cache = (
+                    verification_url,
+                    _qr_png_data_url(verification_url),
+                )
+            qr_image_data_url = self._weixin_qr_cache[1]
+        return ChannelDeviceAuthorization(
+            flow_id=self._weixin_flow_id,
+            status=status,
+            verification_url=verification_url or None,
+            qr_image_data_url=qr_image_data_url,
+            expires_at=self._weixin_flow_expires_at,
+        )
 
     def save(
         self,
@@ -468,6 +630,26 @@ class CowChannelService:
 
     async def stop(self) -> None:
         await asyncio.to_thread(self.stop_sync)
+
+
+def _qr_png_data_url(value: str) -> str:
+    try:
+        import qrcode
+    except ImportError:
+        raise ChannelDeviceAuthorizationError(
+            "weixin_qrcode_dependency_missing"
+        ) from None
+    qr = qrcode.QRCode(
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=6,
+        border=4,
+    )
+    qr.add_data(value)
+    qr.make(fit=True)
+    image = qr.make_image(fill_color="black", back_color="white")
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
 
 
 __all__ = [

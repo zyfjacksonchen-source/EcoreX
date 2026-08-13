@@ -6,6 +6,8 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from bridge.context import Context
 from bridge.reply import ReplyType
 from ecorex.connectors.channel_runtime import (
@@ -14,6 +16,11 @@ from ecorex.connectors.channel_runtime import (
     ChannelTurnReceipt,
 )
 from ecorex.connectors.cow_channel import CowChannelRuntimeBridge, CowChannelService
+from ecorex.connectors.channel_self_service import (
+    ChannelCredentialOwner,
+    ChannelSelfService,
+)
+from ecorex.connectors.vault import InMemoryCredentialVault
 from ecorex.protocol import ItemKind, ItemStatus, TurnStatus
 
 
@@ -69,6 +76,90 @@ def test_native_weixin_exposes_qr_authorization_instead_of_hidden_terminal_login
     assert weixin["auth_kind"] == "device_code"
     assert weixin["actions"]["auth_begin"] is True
     assert weixin["actions"]["save"] is False
+
+
+def test_native_weixin_device_actions_project_the_same_cow_login_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = SimpleNamespace(
+        login_status="waiting_scan",
+        _current_qr_url="https://weixin.qq.com/q/cow-login",
+    )
+    manager = _Manager()
+    manager.channels["weixin"] = channel
+    native = CowChannelService(
+        manager=manager,
+        config={"channel_type": "weixin"},
+    )
+    native.started = True
+    service = ChannelSelfService(
+        owner=ChannelCredentialOwner("account", "organization"),
+        vault=InMemoryCredentialVault(),
+        native_service=native,
+    )
+    monkeypatch.setattr(
+        "ecorex.connectors.cow_channel._qr_png_data_url",
+        lambda _value: "data:image/png;base64,cWl4",
+    )
+
+    pending = service.begin_authorization("weixin", request_id="begin")
+    channel.login_status = "scanned"
+    scanned = service.poll_authorization(
+        "weixin", pending["flow_id"], request_id="poll-scanned"
+    )
+    channel.login_status = "logged_in"
+    channel._current_qr_url = ""
+    confirmed = service.poll_authorization(
+        "weixin", pending["flow_id"], request_id="poll-confirmed"
+    )
+
+    assert pending["status"] == "pending"
+    assert pending["verification_url"] == "https://weixin.qq.com/q/cow-login"
+    assert pending["qr_image_data_url"] == "data:image/png;base64,cWl4"
+    assert scanned["status"] == "scanned"
+    assert confirmed["status"] == "confirmed"
+    assert confirmed["instance"]["state"] == "connected"
+    assert confirmed["instance"]["health"] == "connected"
+
+
+def test_native_weixin_cancel_and_refresh_control_the_same_cow_channel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = SimpleNamespace(
+        login_status="waiting_scan",
+        _current_qr_url="https://weixin.qq.com/q/first",
+    )
+    manager = _Manager()
+    manager.channels["weixin"] = channel
+    native = CowChannelService(
+        manager=manager,
+        config={"channel_type": "weixin"},
+    )
+    native.started = True
+    service = ChannelSelfService(
+        owner=ChannelCredentialOwner("account", "organization"),
+        vault=InMemoryCredentialVault(),
+        native_service=native,
+    )
+    monkeypatch.setattr(
+        "ecorex.connectors.cow_channel._qr_png_data_url",
+        lambda value: "data:image/png;base64," + value.rsplit("/", 1)[-1],
+    )
+
+    first = service.begin_authorization("weixin", request_id="begin")
+    channel._current_qr_url = "https://weixin.qq.com/q/refreshed"
+    refreshed = service.refresh_authorization(
+        "weixin", first["flow_id"], request_id="refresh"
+    )
+    cancelled = service.cancel_authorization(
+        "weixin", first["flow_id"], request_id="cancel"
+    )
+
+    assert refreshed["flow_id"] == first["flow_id"]
+    assert refreshed["verification_url"].endswith("/refreshed")
+    assert manager.restarted == ["weixin"]
+    assert cancelled["status"] == "cancelled"
+    assert manager.removed == ["weixin"]
 
 
 def test_cow_channel_ui_edits_the_live_config_and_manager(tmp_path: Path) -> None:
@@ -169,7 +260,7 @@ for name in CHANNEL_CATALOG:
 assert created == list(CHANNEL_CATALOG)
 '''
     result = subprocess.run(
-        [sys.executable, "-I", "-c", script],
+        [sys.executable, "-c", script],
         cwd=Path(__file__).resolve().parents[2],
         env={**dict(__import__("os").environ), "HOME": str(tmp_path)},
         capture_output=True,

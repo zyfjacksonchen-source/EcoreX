@@ -591,6 +591,13 @@ class ChannelSelfService:
     def begin_authorization(
         self, channel_id: str, *, request_id: str | None
     ) -> dict[str, Any]:
+        if self.native_service is not None:
+            return self._native_device_authorization(
+                channel_id,
+                "auth_begin",
+                request_id,
+                lambda: self.native_service.begin_authorization(channel_id),
+            )
         channel_id, adapter = self._device_adapter(channel_id)
         request_id = _request_id(request_id)
         result = self._call_device(
@@ -602,6 +609,15 @@ class ChannelSelfService:
     def poll_authorization(
         self, channel_id: str, flow_id: str, *, request_id: str | None
     ) -> dict[str, Any]:
+        if self.native_service is not None:
+            return self._native_device_authorization(
+                channel_id,
+                "auth_poll",
+                request_id,
+                lambda: self.native_service.poll_authorization(
+                    channel_id, _device_flow_id(flow_id)
+                ),
+            )
         channel_id, adapter = self._device_adapter(channel_id)
         request_id = _request_id(request_id)
         flow_id = _device_flow_id(flow_id)
@@ -721,6 +737,15 @@ class ChannelSelfService:
     def cancel_authorization(
         self, channel_id: str, flow_id: str, *, request_id: str | None
     ) -> dict[str, Any]:
+        if self.native_service is not None:
+            return self._native_device_authorization(
+                channel_id,
+                "auth_cancel",
+                request_id,
+                lambda: self.native_service.cancel_authorization(
+                    channel_id, _device_flow_id(flow_id)
+                ),
+            )
         channel_id, adapter = self._device_adapter(channel_id)
         request_id = _request_id(request_id)
         result = self._call_device(
@@ -735,6 +760,15 @@ class ChannelSelfService:
     def refresh_authorization(
         self, channel_id: str, flow_id: str, *, request_id: str | None
     ) -> dict[str, Any]:
+        if self.native_service is not None:
+            return self._native_device_authorization(
+                channel_id,
+                "auth_refresh",
+                request_id,
+                lambda: self.native_service.refresh_authorization(
+                    channel_id, _device_flow_id(flow_id)
+                ),
+            )
         channel_id, adapter = self._device_adapter(channel_id)
         request_id = _request_id(request_id)
         result = self._call_device(
@@ -745,6 +779,30 @@ class ChannelSelfService:
         )
         self._audit(channel_id, "auth_refresh", "succeeded", request_id, (), None)
         return self._device_projection(channel_id, result)
+
+    def _native_device_authorization(
+        self,
+        channel_id: str,
+        operation: str,
+        request_id: str | None,
+        call: Callable[[], ChannelDeviceAuthorization],
+    ) -> dict[str, Any]:
+        channel_id = normalize_channel_name(channel_id)
+        if channel_id not in CHANNEL_CATALOG:
+            raise ChannelSelfServiceError("channel_not_found", 404)
+        if self._auth_kind(channel_id) is not ConnectorAuthKind.DEVICE_CODE:
+            raise ChannelSelfServiceError(
+                "channel_device_authorization_unsupported", 409
+            )
+        request_id = _request_id(request_id)
+        result = self._call_device(channel_id, operation, request_id, call)
+        projection = self._device_projection(channel_id, result)
+        if result.status == "confirmed":
+            instance = self.native_service.health(channel_id)
+            if instance:
+                projection["instance"] = instance
+        self._audit(channel_id, operation, "succeeded", request_id, (), None)
+        return projection
 
     def _device_adapter(
         self, channel_id: str
