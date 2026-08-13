@@ -61,7 +61,8 @@ Allowed status values: `pending`, `passed`, `failed`, `blocked`.
 | `CU-205-PDF-PREVIEW-001` | Windows exact 2.0.4 Office baseline | `63a591d81ddc38ab2793236943f559a02f25eee9` | `office_pdf` create/edit/inspect passed; the model-visible `render_preview` action deterministically returned `OfficePdfRuntimeError` | P1 | `codex/fix-pdf-preview-capability` | `97df920a` | Exact schema regression plus verified Pack create/edit/inspect regression passed | The exact Office Pack exports only `office.formats`; neither its Windows archive nor Core carries PyMuPDF, Poppler, or LibreOffice. Desktop preview already uses `ArtifactPreviewDialog` and the Runtime artifact preview Blob. |
 | `CU-205-MODEL-SWITCH-001` | macOS exact 2.0.4 model-switch continuity | `63a591d81ddc38ab2793236943f559a02f25eee9` | The same three-image conversation succeeded on Luna, then DeepSeek and Doubao both failed before any tool call with `provider_rejected` | P1 | `codex/fix-model-switch-image-context-205` | `f693156a` (integrated as `a07bc35b`) | Exact history-envelope regression plus affected Chat Completions, multimodal, and image fallback checks passed `19` | Both providers accepted `system` and rejected `developer` in bounded direct protocol probes; all three Artifact URLs and complete Cow history remain present. |
 | `CU-205-TIMELINE-BOTTOM-001` | macOS exact 2.0.4 model-switch UI | `63a591d81ddc38ab2793236943f559a02f25eee9` | After model-switch reprojection the composer and real bottom were visible, but the floating `回到底部` button remained | P1 | `codex/fix-model-switch-image-context-205` | `56f61374` (integrated as `c721ecdb`) | Timeline plus interaction renderer contracts passed `23` | Virtuoso height changes now remeasure the same real scroll parent; an active upward scroll remains paused and is not forced to the bottom. |
-| `CU-205-IMAGE-BATCH-SESSION-001` | macOS exact 2.0.4 three-image edit | `63a591d81ddc38ab2793236943f559a02f25eee9` | One `imagegen(tasks=[3])` returned two Artifacts and failed item 3 with `managed_image_session_changed` after 328.32 seconds | P1 | `codex/fix-model-switch-image-context-205` | `67496696` | Managed-image client and batch facade passed `24` affected tests | A normal credential refresh changed generation `4→5` and lease revision `1000441→1000442` at 12:28:05 while preserving account and signed policy; the old exact-revision fence rejected the remaining child. |
+| `CU-205-IMAGE-BATCH-SESSION-001` | macOS exact 2.0.4 three-image edit | `63a591d81ddc38ab2793236943f559a02f25eee9` | One `imagegen(tasks=[3])` returned two Artifacts and failed item 3 with `managed_image_session_changed` after 328.32 seconds | P1 | `codex/fix-model-switch-image-context-205` | `67496696` | Historical evidence only; superseded by `CU-205-IMAGEGEN-CODEX-SINGLE-001` | The 2.0.5 public contract removed `tasks`; this batch implementation is not a current capability. |
+| `CU-205-IMAGEGEN-CODEX-SINGLE-001` | macOS 2.0.4 screenshot plus source-level replay | `00a765a6` | A completed batch tool card projected seven synthetic failed gallery slots and invited a second paid request despite no successful Artifact facts | P1 | `codex/fix-image-batch-false-success-205` | `0cf95cd1` | Exact and affected Python checks passed `11`; Artifact-only renderer checks passed `4`; TypeScript and Python compile passed | Public imagegen now accepts one prompt/reference set and returns at most one real Artifact. Multiple assets are independent Cow tool calls; failed calls cannot create empty gallery slots. |
 | `CU-205-SETTINGS-INSET-001` | macOS exact 2.0.4 Settings | `63a591d81ddc38ab2793236943f559a02f25eee9` | Opening Settings consistently placed its title under the native red/yellow/green controls | P1 | `codex/fix-settings-inset-password-205` | `d3ad5f3a` | Exact renderer red/green plus `17` affected layout/product contracts passed | The full-screen Settings workspace omitted the macOS native-chrome inset; the shared header now reuses the existing Darwin-only `76px` safe area and Windows receives no offset. |
 
 Use `CU-205-<AREA>-NNN` for product findings. Do not allocate an ID for an
@@ -283,6 +284,9 @@ environment failure until the product failure reproduces from known state.
 
 ### 2026-08-13 CU-205-IMAGE-BATCH-SESSION-001
 
+> Historical evidence only. The current 2.0.5 imagegen contract removes the
+> `tasks` batch route; `CU-205-IMAGEGEN-CODEX-SINGLE-001` supersedes this path.
+
 - Exact evidence: the Luna recovery call started once at 12:22:38 with three
   edit tasks. Two new Artifacts completed; item 3 failed with
   `managed_image_session_changed`, and the batch settled `2/3` after 328.32
@@ -309,6 +313,34 @@ environment failure until the product failure reproduces from known state.
   result may remain `gpt-image-2` / e-Mate Image 2. The original batch made one
   tool call at 12:11:33, completed all three independent Artifacts at 12:15:55
   in 261.04 seconds, and made no second tool call or retry.
+
+### 2026-08-13 CU-205-IMAGEGEN-CODEX-SINGLE-001
+
+- The screenshot showed a completed imagegen tool row followed by seven
+  synthetic “图片未完成” gallery slots. The supplied isolated Runtime database
+  and log did not contain the named conversation, so no provider state was
+  inferred and no replacement image request was sent.
+- Upstream CowAgent exact `e3ac1b952500f60934862c6bf0bd0de91b415ed8`
+  has one prompt-based image script and no native `tasks`, batch executor,
+  partial-failure, or concurrency contract. The selected Codex-style boundary
+  is one prompt plus optional references per call and one generated result;
+  multiple assets require separate imagegen calls.
+- Fix `0cf95cd1` removes `tasks` from both model-visible schemas and deletes the
+  Runtime batch executor/events. A stale `tasks` payload fails before provider
+  execution or Artifact publication. The existing Cow loop executes multiple
+  imagegen calls independently, preserving each call ID and its existing
+  idempotent publication boundary; `gpt-image-2-pro` routing is unchanged.
+- Renderer galleries now derive only from ready image Artifact facts in the
+  same Turn. Three successes form a three-image gallery; two successes and one
+  failed call form a two-image gallery; a failed call without an Artifact forms
+  no gallery. Retouch results and single-image cards keep their existing paths.
+  Old `image_batch` metadata is used only to order already-written successful
+  Artifacts in Cow history and cannot enter a new call.
+- The public/local provider boundary also keeps only the first image if a
+  provider unexpectedly returns several results. Exact and affected Python
+  checks passed `11`, the renderer gallery checks passed `4`, TypeScript and
+  Python compile passed, and no live provider request, package build, or
+  publication was performed.
 
 ### 2026-08-13 CU-205-SETTINGS-INSET-001
 
