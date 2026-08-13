@@ -2,7 +2,7 @@ const { app, dialog, net, shell } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const { isNewerStableVersion, parseDownloadIndex } = require("./update-contract.cjs");
 
-const UPDATE_URL = "https://mvdcm.ecoremedia.net/e-mate/update/";
+const UPDATE_URL = "https://dl.ecoremedia.net/e-mate/update/";
 const DOWNLOAD_URL = "https://mvdcm.ecoremedia.net/e-mate/";
 const UPDATE_POLL_MS = 4 * 60 * 60 * 1000;
 let manualWindowsCheck = false;

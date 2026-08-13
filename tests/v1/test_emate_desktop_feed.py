@@ -353,7 +353,7 @@ def test_feed_gate_merges_mac_metadata_and_rejects_tampering(tmp_path: Path) -> 
         "macos-x64",
     ]
     assert all(
-        item["url"].startswith("https://mvdcm.ecoremedia.net/e-mate/update/")
+        item["url"].startswith("https://dl.ecoremedia.net/e-mate/update/")
         for item in download_index["downloads"]
     )
     assert "download-index.json" in receipt["activation"]["pointer_files"]
@@ -390,17 +390,39 @@ def test_feed_gate_prepares_explicit_unsigned_manual_activation(tmp_path: Path) 
     assert receipt["schema_version"] == 2
     assert receipt["status"] == "activation-ready-unsigned-manual"
     assert receipt["distribution_mode"] == "unsigned-manual"
-    assert receipt["activation"]["pointer_files"] == ["download-index.json"]
+    assert receipt["activation"]["pointer_files"] == [
+        "latest.yml",
+        "download-index.json",
+    ]
     assert json.loads((tmp_path / "manual/download-index.json").read_text())[
         "distribution_mode"
     ] == "unsigned-manual"
     assert not (tmp_path / "manual/public-bootstrap-index.json").exists()
-    assert not (tmp_path / "manual/latest.yml").exists()
+    assert (tmp_path / "manual/latest.yml").exists()
+    assert (tmp_path / f"manual/e-Mate-Setup-{VERSION}-x64.exe.blockmap").exists()
     assert not (tmp_path / "manual/latest-mac.yml").exists()
+    installer_name = f"e-Mate-Setup-{VERSION}-x64.exe"
+    installer = tmp_path / "manual" / installer_name
+    records = {item["path"]: item for item in receipt["files"]}
+    assert {
+        "latest.yml",
+        installer_name,
+        f"{installer_name}.blockmap",
+    } <= records.keys()
+    latest = (tmp_path / "manual/latest.yml").read_text(encoding="utf-8")
+    assert f"path: {installer_name}" in latest
+    assert f"sha512: {_sha512(installer)}" in latest
+    assert f"size: {installer.stat().st_size}" in latest
+    windows = json.loads((tmp_path / "manual/download-index.json").read_text())[
+        "downloads"
+    ][0]
+    assert windows["url"] == f"https://dl.ecoremedia.net/e-mate/update/{installer_name}"
+    assert windows["sha256"] == records[installer_name]["sha256"]
     nginx = MANUAL_NGINX.read_text(encoding="utf-8")
     for path in ("latest.yml", "latest-mac.yml", "public-bootstrap-index.json"):
         assert f"location = /e-mate/update/{path}" in nginx
-    assert nginx.count("return 404;") >= 3
+    assert "alias /srv/e-mate-update/current/latest.yml;" in nginx
+    assert nginx.count("return 404;") >= 2
     assert "location = /e-mate/update/" in nginx and "return 302 /e-mate/;" in nginx
 
     rejected = subprocess.run(
@@ -640,7 +662,6 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
         in upload
     )
     assert "path: .handoff/feed" in upload
-    assert ".handoff/feed/latest.yml" not in upload
     assert ".handoff/feed/latest-mac.yml" not in upload
     assert ".handoff/feed/public-bootstrap-index.json" not in upload
     for required_gate in (

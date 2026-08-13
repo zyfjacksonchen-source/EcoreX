@@ -114,7 +114,7 @@ test("desktop identity and unsigned release targets are explicit", async () => {
   assert.equal(pkg.build.directories.buildResources, "build");
   assert.equal(pkg.build.mac.icon, "icon.icns");
   assert.equal(pkg.build.win.icon, "icon.ico");
-  assert.equal(pkg.build.publish.url, "https://mvdcm.ecoremedia.net/e-mate/update/");
+  assert.equal(pkg.build.publish.url, "https://dl.ecoremedia.net/e-mate/update/");
   assert.equal(pkg.build.mac.identity, null);
   assert.equal(pkg.build.mac.hardenedRuntime, false);
   assert.equal(pkg.build.mac.notarize, false);
@@ -522,7 +522,7 @@ test("public download index parsing only offers newer stable releases", () => {
     platform,
     architecture,
     file_name: fileName,
-    url: `https://mvdcm.ecoremedia.net/e-mate/update/${fileName}`,
+    url: `https://dl.ecoremedia.net/e-mate/update/${fileName}`,
     size_bytes: 123456,
     sha256: "a".repeat(64),
   });

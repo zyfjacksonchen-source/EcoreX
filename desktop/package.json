@@ -117,7 +117,7 @@
     },
     "publish": {
       "provider": "generic",
-      "url": "https://mvdcm.ecoremedia.net/e-mate/update/"
+      "url": "https://dl.ecoremedia.net/e-mate/update/"
     }
   }
 }

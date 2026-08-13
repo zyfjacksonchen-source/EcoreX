@@ -35,7 +35,7 @@ _SIGNED_POINTER_FILES = [
     "download-index.json",
     "public-bootstrap-index.json",
 ]
-_MANUAL_POINTER_FILES = ["download-index.json"]
+_MANUAL_POINTER_FILES = ["latest.yml", "download-index.json"]
 _RECEIPT_FIELDS = [
     "operation",
     "feed_build_id",
@@ -303,7 +303,6 @@ def _validate_inventory(candidate: Path, receipt: dict[str, Any], device: int) -
             manual
             and any(
                 item["path"] in {
-                    "latest.yml",
                     "latest-mac.yml",
                     "public-bootstrap-index.json",
                 }

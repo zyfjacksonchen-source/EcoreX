@@ -476,7 +476,7 @@ def _download_index(
                 "platform": platform,
                 "architecture": architecture,
                 "file_name": name,
-                "url": f"https://mvdcm.ecoremedia.net/e-mate/update/{name}",
+                "url": f"https://dl.ecoremedia.net/e-mate/update/{name}",
                 "size_bytes": path.stat().st_size,
                 "sha256": _sha256(path),
             }
@@ -519,7 +519,7 @@ def _validate_nginx(path: Path, *, unsigned_manual: bool) -> str:
     ):
         raise FeedError("Nginx update-feed configuration can fall through to the SPA")
     manual_required = (
-        "location = /e-mate/update/latest.yml {\n    return 404;",
+        "alias /srv/e-mate-update/current/latest.yml;",
         "location = /e-mate/update/latest-mac.yml {\n    return 404;",
         "location = /e-mate/update/public-bootstrap-index.json {\n    return 404;",
         "location = /e-mate/update/ {\n    return 302 /e-mate/;",
@@ -762,17 +762,17 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             _bind_public_index(value, manifest, str(runtime_receipt["manifest_sha256"]))
 
         records: list[dict[str, Any]] = []
-        if not args.unsigned_manual:
-            windows_metadata = _one(inventories["windows-x64"], "latest.yml")
-            _publish_snapshot(windows_metadata, staging / "latest.yml")
-            records.append(
-                _record(
-                    staging / "latest.yml",
-                    role="pointer",
-                    source_artifact="windows-x64",
-                    root=staging,
-                )
+        windows_metadata = _one(inventories["windows-x64"], "latest.yml")
+        _publish_snapshot(windows_metadata, staging / "latest.yml")
+        records.append(
+            _record(
+                staging / "latest.yml",
+                role="pointer",
+                source_artifact="windows-x64",
+                root=staging,
             )
+        )
+        if not args.unsigned_manual:
             merged = staging / "latest-mac.yml"
             merged.write_bytes(
                 _merge_mac(metadata["macos-arm64"], metadata["macos-x64"])
@@ -861,7 +861,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
                 "allowed_operations": ["activate", "rollback"],
                 "link": "/srv/e-mate-update/current",
                 "pointer_files": (
-                    ["download-index.json"]
+                    ["latest.yml", "download-index.json"]
                     if args.unsigned_manual
                     else [
                         "latest.yml",

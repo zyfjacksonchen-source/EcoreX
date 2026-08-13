@@ -65,7 +65,7 @@ function parseDownloadIndex(payload) {
         || typeof download.file_name !== "string"
         || !SAFE_NAME.test(download.file_name)
         || download.file_name !== expectedName(download.target, index.version)
-        || download.url !== `https://mvdcm.ecoremedia.net/e-mate/update/${download.file_name}`
+        || download.url !== `https://dl.ecoremedia.net/e-mate/update/${download.file_name}`
         || !Number.isSafeInteger(download.size_bytes)
         || download.size_bytes < 1
         || download.size_bytes > MAX_DOWNLOAD_BYTES

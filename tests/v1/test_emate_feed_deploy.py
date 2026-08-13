@@ -44,11 +44,11 @@ def _previous_feed(root: Path, releases: Path, *, unsigned_manual: bool) -> str:
             "version": version,
             "distribution_mode": "unsigned-manual" if unsigned_manual else "signed-automatic",
         }).encode() + b"\n",
+        "latest.yml": b"version: 1.9.9\n",
         f"runtime/{release_id}/release-manifest.json": b'{"release":"previous"}\n',
     }
     if not unsigned_manual:
         files.update({
-            "latest.yml": b"version: 1.9.9\n",
             "latest-mac.yml": b"version: 1.9.9\n",
             "public-bootstrap-index.json": b'{"schema":"previous-public-bootstrap"}\n',
         })
@@ -88,7 +88,7 @@ def _previous_feed(root: Path, releases: Path, *, unsigned_manual: bool) -> str:
             "strategy": "same-filesystem-current-symlink-rename",
             "allowed_operations": ["activate", "rollback"],
             "link": "/srv/e-mate-update/current",
-            "pointer_files": ["download-index.json"] if unsigned_manual else [
+            "pointer_files": ["latest.yml", "download-index.json"] if unsigned_manual else [
                 "latest.yml", "latest-mac.yml", "download-index.json",
                 "public-bootstrap-index.json",
             ],
@@ -131,12 +131,12 @@ def _feed(
             "version": VERSION,
             "distribution_mode": "unsigned-manual" if unsigned_manual else "signed-automatic",
         }).encode() + b"\n",
+        "latest.yml": f"version: {VERSION}\n".encode(),
         f"runtime/{RELEASE_ID}/release-manifest.json": MANIFEST,
         f"e-Mate-Setup-{VERSION}-x64.exe": b"installer",
     }
     if not unsigned_manual:
         files.update({
-            "latest.yml": f"version: {VERSION}\n".encode(),
             "latest-mac.yml": f"version: {VERSION}\n".encode(),
             "public-bootstrap-index.json": b'{"schema":"public-bootstrap"}\n',
         })
@@ -159,8 +159,8 @@ def _feed(
                 "immutable-desktop",
                 "windows-x64",
             ),
+            _record(staging, "latest.yml", "pointer", "windows-x64"),
             *([] if unsigned_manual else [
-                _record(staging, "latest.yml", "pointer", "windows-x64"),
                 _record(staging, "latest-mac.yml", "pointer", "macos-arm64"),
             ]),
             *([] if unsigned_manual else [_record(
@@ -193,7 +193,7 @@ def _feed(
             "strategy": "same-filesystem-current-symlink-rename",
             "allowed_operations": ["activate", "rollback"],
             "link": "/srv/e-mate-update/current",
-            "pointer_files": ["download-index.json"] if unsigned_manual else [
+            "pointer_files": ["latest.yml", "download-index.json"] if unsigned_manual else [
                 "latest.yml", "latest-mac.yml", "download-index.json",
                 "public-bootstrap-index.json",
             ],

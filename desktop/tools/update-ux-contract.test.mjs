@@ -25,7 +25,7 @@ test("desktop updates keep one feed and require a platform-correct user action",
   assert.match(desktopUpdater, /setFeedURL\(\{ provider: "generic", url: UPDATE_URL \}\)/u);
   assert.match(desktopUpdater, /const UPDATE_POLL_MS = 4 \* 60 \* 60 \* 1000/u);
   assert.match(desktopUpdater, /manualInstall: true/u);
-  assert.match(desktopUpdater, /DOWNLOAD_URL = "https:\/\/mvdcm\.ecoremedia\.net\/e-mate\/"/u);
+  assert.match(desktopUpdater, /UPDATE_URL = "https:\/\/dl\.ecoremedia\.net\/e-mate\/update\/"/u);
   assert.match(desktopMain, /"emate:download-update"/u);
   assert.match(desktopMain, /"emate:install-update"/u);
   assert.match(desktopPreload, /onDesktopUpdateStatus/u);

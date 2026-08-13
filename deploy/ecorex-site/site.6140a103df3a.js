@@ -3,9 +3,6 @@ const VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const CERTIFICATE_THUMBPRINT = /^[0-9A-F]{40}$/;
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,179}$/;
-const GITHUB_RELEASE_REPOSITORY = "zyfjacksonchen-source/EcoreX";
-const GITHUB_RELEASE_MIRRORS = Object.freeze(["https://ghproxy.net/", "https://ghfast.top/"]);
-const DOWNLOAD_SOURCE_LABELS = Object.freeze(["国内镜像 1", "国内镜像 2", "GitHub", "官方源"]);
 const TARGETS = Object.freeze({
   "windows-x64": Object.freeze({ platform: "windows", architecture: "x64", label: "Windows x64" }),
   "macos-arm64": Object.freeze({ platform: "macos", architecture: "arm64", label: "macOS Apple Silicon" }),
@@ -63,7 +60,7 @@ export function normalizeDownloadIndex(raw) {
       if (evidence.status !== "verified") throw new Error("Windows 签名状态无效");
       safeText(evidence.signer_certificate_thumbprint, "Windows 签名证书", CERTIFICATE_THUMBPRINT);
     }
-    const expectedUrl = `https://mvdcm.ecoremedia.net/e-mate/update/${download.file_name}`;
+    const expectedUrl = `https://dl.ecoremedia.net/e-mate/update/${download.file_name}`;
     if (download.url !== expectedUrl) throw new Error("下载地址无效");
     return Object.freeze({ ...download, label: target.label });
   });
@@ -79,15 +76,9 @@ export function installationTrustCopy(index) {
     : Object.freeze({ release: "手动安装（未签名）", help: "当前候选暂未签名，请按系统提示允许打开。" });
 }
 
-export function downloadSources(index, target, repository = GITHUB_RELEASE_REPOSITORY) {
+export function downloadSources(index, target) {
   const download = index.downloads.find((item) => item.target === target);
-  if (!download) return [];
-  const origin = `https://github.com/${repository}/releases/download/v${index.version}/${download.file_name}`;
-  return Object.freeze([
-    ...GITHUB_RELEASE_MIRRORS.map((mirror) => `${mirror}${origin}`),
-    origin,
-    download.url,
-  ]);
+  return Object.freeze(download ? [download.url] : []);
 }
 
 export function targetFromPlatformSignals({ source = "", architecture = "", renderer = "" }) {
@@ -151,7 +142,7 @@ export function indexSources({ hostname = location.hostname, pathname = location
   if (hostname === "mvdcm.ecoremedia.net" || hostname === "dl.ecoremedia.net" || pathname.startsWith("/e-mate/")) {
     return ["/e-mate/update/download-index.json"];
   }
-  return ["https://mvdcm.ecoremedia.net/e-mate/update/download-index.json"];
+  return ["https://dl.ecoremedia.net/e-mate/update/download-index.json"];
 }
 
 async function loadIndex() {
@@ -247,19 +238,6 @@ function renderIndex(index, target) {
       card.append(digest);
     }
     card.append(link);
-    const fallback = document.createElement("details");
-    const fallbackSummary = document.createElement("summary");
-    fallbackSummary.textContent = "镜像下载失败？使用备用线路";
-    fallback.append(fallbackSummary);
-    sources.slice(1).forEach((url, index) => {
-      const alternate = document.createElement("a");
-      alternate.href = url;
-      alternate.download = download.file_name;
-      alternate.textContent = DOWNLOAD_SOURCE_LABELS[index + 1];
-      alternate.setAttribute("aria-label", `通过${DOWNLOAD_SOURCE_LABELS[index + 1]}下载 ${download.label}`);
-      fallback.append(index ? " · " : "", alternate);
-    });
-    card.append(fallback);
     grid.append(card);
   }
   const platform = preferredPlatform(target);
