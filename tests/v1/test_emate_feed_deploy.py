@@ -33,7 +33,13 @@ def _record(root: Path, relative: str, role: str, source: str) -> dict[str, obje
     }
 
 
-def _previous_feed(root: Path, releases: Path, *, unsigned_manual: bool) -> str:
+def _previous_feed(
+    root: Path,
+    releases: Path,
+    *,
+    unsigned_manual: bool,
+    legacy_manual: bool = False,
+) -> str:
     staging = releases / "previous-staging"
     staging.mkdir()
     version = "1.9.9"
@@ -44,9 +50,10 @@ def _previous_feed(root: Path, releases: Path, *, unsigned_manual: bool) -> str:
             "version": version,
             "distribution_mode": "unsigned-manual" if unsigned_manual else "signed-automatic",
         }).encode() + b"\n",
-        "latest.yml": b"version: 1.9.9\n",
         f"runtime/{release_id}/release-manifest.json": b'{"release":"previous"}\n',
     }
+    if not (unsigned_manual and legacy_manual):
+        files["latest.yml"] = b"version: 1.9.9\n"
     if not unsigned_manual:
         files.update({
             "latest-mac.yml": b"version: 1.9.9\n",
@@ -88,7 +95,11 @@ def _previous_feed(root: Path, releases: Path, *, unsigned_manual: bool) -> str:
             "strategy": "same-filesystem-current-symlink-rename",
             "allowed_operations": ["activate", "rollback"],
             "link": "/srv/e-mate-update/current",
-            "pointer_files": ["latest.yml", "download-index.json"] if unsigned_manual else [
+            "pointer_files": (
+                ["download-index.json"]
+                if unsigned_manual and legacy_manual
+                else ["latest.yml", "download-index.json"]
+            ) if unsigned_manual else [
                 "latest.yml", "latest-mac.yml", "download-index.json",
                 "public-bootstrap-index.json",
             ],
@@ -113,6 +124,7 @@ def _feed(
     previous: bool = True,
     unsigned_manual: bool = False,
     previous_unsigned_manual: bool = False,
+    previous_legacy_manual: bool = False,
 ) -> tuple[Path, Path, dict[str, object]]:
     root = tmp_path / "e-mate-update"
     releases = root / "releases"
@@ -121,7 +133,10 @@ def _feed(
     previous_target = None
     if previous:
         previous_target = _previous_feed(
-            root, releases, unsigned_manual=previous_unsigned_manual
+            root,
+            releases,
+            unsigned_manual=previous_unsigned_manual,
+            legacy_manual=previous_legacy_manual,
         )
         os.symlink(previous_target, root / "current")
 
@@ -300,6 +315,119 @@ def test_unsigned_manual_activation_reads_back_only_download_index(tmp_path: Pat
     assert receipt["public_readback_sha256"] == hashlib.sha256(
         (candidate / "download-index.json").read_bytes()
     ).hexdigest()
+
+
+def test_unsigned_manual_activation_accepts_legacy_manual_previous(
+    tmp_path: Path,
+) -> None:
+    root, candidate, stage = _feed(
+        tmp_path,
+        unsigned_manual=True,
+        previous_unsigned_manual=True,
+        previous_legacy_manual=True,
+    )
+    previous = root / str(stage["_test_previous_target"])
+    previous_receipt = json.loads(
+        (previous / "feed-stage-receipt.json").read_text(encoding="utf-8")
+    )
+    assert previous_receipt["activation"]["pointer_files"] == [
+        "download-index.json"
+    ]
+    assert not (previous / "latest.yml").exists()
+    output = root / "activation-receipts" / "legacy-previous.json"
+
+    result = subprocess.run(
+        [
+            *_command(root, candidate, output),
+            "--readback-command", "/bin/cat",
+            "--readback-argument", str(root / "current/{pointer}"),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert os.readlink(root / "current") == stage["candidate_target"]
+
+
+def test_unsigned_manual_candidate_cannot_use_legacy_missing_latest_contract(
+    tmp_path: Path,
+) -> None:
+    root, candidate, stage = _feed(
+        tmp_path,
+        unsigned_manual=True,
+        previous_unsigned_manual=True,
+    )
+    previous_target = str(stage.pop("_test_previous_target"))
+    (candidate / "latest.yml").unlink()
+    stage["files"] = [
+        item for item in stage["files"] if item["path"] != "latest.yml"
+    ]
+    build_id = hashlib.sha256(
+        json.dumps(stage["files"], sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    stage["feed_build_id"] = build_id
+    stage["candidate_target"] = f"releases/v{VERSION}-{build_id[:16]}"
+    stage["activation"]["pointer_files"] = ["download-index.json"]
+    (candidate / "feed-stage-receipt.json").write_text(
+        json.dumps(stage, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    legacy_candidate = root / stage["candidate_target"]
+    candidate.rename(legacy_candidate)
+    output = root / "activation-receipts" / "legacy-candidate.json"
+
+    result = subprocess.run(
+        [
+            *_command(root, legacy_candidate, output),
+            "--readback-command", "/bin/cat",
+            "--readback-argument", str(root / "current/{pointer}"),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "activation_contract_invalid" in result.stderr
+    assert os.readlink(root / "current") == previous_target
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("mutation", ["tamper", "missing"])
+def test_legacy_manual_previous_still_requires_exact_inventory(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    root, candidate, stage = _feed(
+        tmp_path,
+        unsigned_manual=True,
+        previous_unsigned_manual=True,
+        previous_legacy_manual=True,
+    )
+    previous_target = str(stage["_test_previous_target"])
+    previous_pointer = root / previous_target / "download-index.json"
+    if mutation == "tamper":
+        previous_pointer.write_bytes(b"tampered\n")
+    else:
+        previous_pointer.unlink()
+    output = root / "activation-receipts" / f"legacy-{mutation}.json"
+
+    result = subprocess.run(
+        [
+            *_command(root, candidate, output),
+            "--readback-command", "/bin/cat",
+            "--readback-argument", str(root / "current/{pointer}"),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert os.readlink(root / "current") == previous_target
+    assert not output.exists()
 
 
 def test_manual_to_signed_post_switch_failure_restores_previous_pointer_and_readback(

@@ -363,6 +363,8 @@ def _validate_target(
     receipt: dict[str, Any],
     device: int,
     expected: dict[str, tuple[str, re.Pattern[str]]] | None = None,
+    *,
+    allow_legacy_manual_pointer_files: bool = False,
 ) -> tuple[str, bytes]:
     base_keys = {
         "schema_version", "document_type", "status", "version", "source_commit",
@@ -412,14 +414,26 @@ def _validate_target(
     readback_name = (
         "download-index.json" if schema == 2 else "public-bootstrap-index.json"
     )
-    if not isinstance(activation, dict) or activation != {
+    expected_activation = {
         "strategy": "same-filesystem-current-symlink-rename",
         "allowed_operations": ["activate", "rollback"],
         "link": "/srv/e-mate-update/current",
         "pointer_files": pointer_files,
         "missing_files_must_return": 404,
         "receipt_required_fields": _RECEIPT_FIELDS,
-    }:
+    }
+    legacy_manual_activation = {
+        **expected_activation,
+        "pointer_files": ["download-index.json"],
+    }
+    if not isinstance(activation, dict) or (
+        activation != expected_activation
+        and not (
+            allow_legacy_manual_pointer_files
+            and schema == 2
+            and activation == legacy_manual_activation
+        )
+    ):
         raise FeedDeployError("activation_contract_invalid")
     public_bytes = _validate_inventory(target_path, receipt, device)
     return readback_name, public_bytes
@@ -479,7 +493,10 @@ def _validate_previous(
     target_path = root / PurePosixPath(target)
     receipt = _strict_json(target_path / "feed-stage-receipt.json")
     readback_name, readback_bytes = _validate_target(
-        target_path, receipt, device
+        target_path,
+        receipt,
+        device,
+        allow_legacy_manual_pointer_files=True,
     )
     if _current_target(root, device) != target:
         raise FeedDeployError("current_target_changed")
