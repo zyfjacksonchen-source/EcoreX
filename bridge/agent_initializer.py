@@ -559,14 +559,6 @@ class AgentInitializer:
         
         for tool_name in tool_manager.tool_classes.keys():
             try:
-                # Skip evolution_undo when self-evolution is disabled: with no
-                # evolution there is nothing to roll back, so the tool is dead weight.
-                if tool_name == "evolution_undo":
-                    from agent.evolution.config import get_evolution_config
-                    if not get_evolution_config().enabled:
-                        logger.debug("[AgentInitializer] evolution_undo skipped - self-evolution disabled")
-                        continue
-
                 # Special handling for EnvConfig tool
                 if tool_name == "env_config":
                     from agent.tools import EnvConfig

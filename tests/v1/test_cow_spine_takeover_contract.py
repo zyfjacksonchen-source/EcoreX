@@ -162,6 +162,55 @@ def test_actual_initializer_and_tool_manager_are_the_default_tool_contract(
             assert Path(tool.config["cwd"]) == tmp_path
 
 
+def test_actual_initializer_keeps_the_complete_cow_catalog_for_every_profile(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A local e-Mate feature flag must not hide a Cow model-visible tool."""
+
+    import config as config_module
+    from agent.protocol import Agent
+    from agent.tools.memory.memory_get import MemoryGetTool
+    from agent.tools.memory.memory_search import MemorySearchTool
+    from bridge.agent_initializer import AgentInitializer
+
+    required = {
+        "read", "write", "edit", "bash", "subagent", "search_files", "ls",
+        "send", "evolution_undo", "env_config", "scheduler", "web_search",
+        "web_fetch", "vision", "ocr", "browser", "imagegen", "memory_search",
+        "memory_get", "office_documents", "office_pdf", "office_presentations",
+        "office_spreadsheets",
+    }
+    workspace_tools = {
+        "read", "write", "edit", "bash", "search_files", "ls", "web_fetch",
+        "send", "browser", "ocr", "office_documents", "office_pdf",
+        "office_presentations", "office_spreadsheets",
+    }
+
+    for profile_name, profile in (
+        ("fresh", {}),
+        ("legacy-disabled-evolution", {"self_evolution_enabled": False}),
+    ):
+        monkeypatch.setattr(config_module, "config", config_module.Config(profile))
+        workspace = tmp_path / profile_name
+        memory_manager = SimpleNamespace()
+        memory_tools = [
+            MemorySearchTool(memory_manager),
+            MemoryGetTool(memory_manager),
+        ]
+        initializer = AgentInitializer(SimpleNamespace(), SimpleNamespace())
+        tools = initializer._load_tools(
+            str(workspace), memory_manager, memory_tools, "contract-session"
+        )
+        by_name = {tool.name: tool for tool in tools}
+
+        assert len(tools) == len(required)
+        assert set(by_name) == required
+        for name in workspace_tools:
+            assert Path(by_name[name].config["cwd"]) == workspace
+        agent = Agent("contract", tools=tools, workspace_dir=str(workspace), enable_skills=False)
+        assert Path(agent._find_tool("evolution_undo").context.workspace_dir) == workspace
+
+
 def test_public_cow_worker_does_not_replace_the_cow_browser_executor(
     tmp_path: Path,
 ) -> None:
