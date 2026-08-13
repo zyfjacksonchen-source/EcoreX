@@ -167,7 +167,7 @@ def _transfer_config():
     )
 
 
-def _remote_matches(client: object, record: Mapping[str, Any]) -> bool:
+def _remote_matches(client: object, record: Mapping[str, Any]) -> bool | None:
     for attempt in range(5):
         try:
             value = client.head_object(Bucket=BUCKET, Key=record["key"])
@@ -183,7 +183,7 @@ def _remote_matches(client: object, record: Mapping[str, Any]) -> bool:
                 "NoSuchKey",
                 "NotFound",
             }:
-                return False
+                return None
             if attempt < 4:
                 time.sleep(2**attempt)
     raise RuntimeError(
@@ -200,7 +200,13 @@ def _upload(client: object, record: Mapping[str, Any], path: Path) -> None:
         current.st_mtime_ns,
     ) != tuple(record["source_identity"]):
         raise RuntimeError(f"r2_artifact_changed:{record['file_name']}")
-    if not _remote_matches(client, record):
+    remote = _remote_matches(client, record)
+    if remote is True:
+        return
+    if remote is False:
+        raise RuntimeError(f"r2_object_collision:{record['file_name']}")
+    upload_error: Exception | None = None
+    if remote is None:
         with path.open("rb") as source:
             opened = os.fstat(source.fileno())
             if (
@@ -210,17 +216,20 @@ def _upload(client: object, record: Mapping[str, Any], path: Path) -> None:
                 opened.st_mtime_ns,
             ) != tuple(record["source_identity"]):
                 raise RuntimeError(f"r2_artifact_changed:{record['file_name']}")
-            client.upload_fileobj(
-                source,
-                BUCKET,
-                str(record["key"]),
-                ExtraArgs={
-                    "Metadata": {"sha256": str(record["sha256"])},
-                    "ContentType": str(record["content_type"]),
-                    "CacheControl": "public,max-age=31536000,immutable",
-                },
-                Config=_transfer_config(),
-            )
+            try:
+                client.upload_fileobj(
+                    source,
+                    BUCKET,
+                    str(record["key"]),
+                    ExtraArgs={
+                        "Metadata": {"sha256": str(record["sha256"])},
+                        "ContentType": str(record["content_type"]),
+                        "CacheControl": "public,max-age=31536000,immutable",
+                    },
+                    Config=_transfer_config(),
+                )
+            except Exception as error:
+                upload_error = error
             after = os.fstat(source.fileno())
             if (
                 after.st_dev,
@@ -229,7 +238,17 @@ def _upload(client: object, record: Mapping[str, Any], path: Path) -> None:
                 after.st_mtime_ns,
             ) != tuple(record["source_identity"]):
                 raise RuntimeError(f"r2_artifact_changed:{record['file_name']}")
-    if not _remote_matches(client, record):
+    try:
+        admitted = _remote_matches(client, record) is True
+    except Exception:
+        if upload_error is not None:
+            raise RuntimeError(f"r2_upload_failed:{record['file_name']}") from None
+        raise
+    if upload_error is not None:
+        if admitted:
+            return
+        raise RuntimeError(f"r2_upload_failed:{record['file_name']}") from None
+    if not admitted:
         raise RuntimeError(f"r2_authenticated_head_failed:{record['file_name']}")
 
 

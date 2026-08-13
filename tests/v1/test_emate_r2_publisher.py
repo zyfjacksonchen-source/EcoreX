@@ -116,7 +116,7 @@ def test_r2_publisher_runs_three_independent_multipart_uploads_and_resumes(
         assert metadata == {"sha256": record["sha256"]}
         probes.append(path.name)
 
-    with pytest.raises(RuntimeError, match=f"failed:{failed}"):
+    with pytest.raises(RuntimeError, match=f"r2_upload_failed:{failed}"):
         module["publish"](args, client=client, public_probe=probe)
 
     assert client.maximum_active == 3
@@ -360,3 +360,80 @@ def test_authenticated_head_after_upload_retries_without_reuploading(
 
     assert exhausted.uploaded.count(blockmap) == 1
     assert sleeps == [1, 2, 4, 8]
+
+
+def test_upload_exception_after_committed_object_is_admitted_without_reuploading(
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    module["_upload"].__globals__["_transfer_config"] = lambda: SimpleNamespace(
+        max_concurrency=1, use_threads=False
+    )
+    record, path = module["_records"](_inputs(tmp_path))[3]
+
+    class CommittedThenFailedS3(FakeS3):
+        def upload_fileobj(
+            self,
+            source: io.BufferedReader,
+            bucket: str,
+            key: str,
+            *,
+            ExtraArgs: dict[str, object],
+            Config: object,
+        ) -> None:
+            self.uploaded.append(key.rsplit("/", 1)[-1])
+            self.objects[key] = (source.read(), dict(ExtraArgs["Metadata"]))
+            raise OSError("multipart completion response was lost")
+
+    client = CommittedThenFailedS3()
+
+    module["_upload"](client, record, path)
+
+    assert client.uploaded == [record["file_name"]]
+
+
+def test_upload_exception_without_matching_object_fails_safely(
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    module["_upload"].__globals__["_transfer_config"] = lambda: SimpleNamespace(
+        max_concurrency=1, use_threads=False
+    )
+    record, path = module["_records"](_inputs(tmp_path))[3]
+
+    class FailedS3(FakeS3):
+        def upload_fileobj(self, source, bucket, key, **kwargs) -> None:
+            self.uploaded.append(key.rsplit("/", 1)[-1])
+            self.objects[key] = (b"partial object", {"sha256": "0" * 64})
+            raise OSError("multipart completion failed with a mismatched object")
+
+    client = FailedS3()
+
+    with pytest.raises(
+        RuntimeError,
+        match=f"^r2_upload_failed:{record['file_name']}$",
+    ):
+        module["_upload"](client, record, path)
+
+    assert client.uploaded == [record["file_name"]]
+
+
+def test_existing_immutable_key_mismatch_is_not_overwritten(tmp_path: Path) -> None:
+    module = _module()
+    module["_upload"].__globals__["_transfer_config"] = lambda: SimpleNamespace(
+        max_concurrency=1, use_threads=False
+    )
+    record, path = module["_records"](_inputs(tmp_path))[3]
+    client = FakeS3()
+    client.objects[str(record["key"])] = (
+        b"different immutable object",
+        {"sha256": "0" * 64},
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=f"^r2_object_collision:{record['file_name']}$",
+    ):
+        module["_upload"](client, record, path)
+
+    assert client.uploaded == []
