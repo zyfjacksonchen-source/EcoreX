@@ -924,3 +924,24 @@ environment failure until the product failure reproduces from known state.
 - Commit `5d84916a` passed the exact transient-HEAD regression and the complete
   publisher set `7/7`. The failed run's three GitHub secrets and Cloudflare
   user token were revoked before the next frozen dispatch.
+
+### 2026-08-14 CU-205-R2-COMMIT-003
+
+- Formal run `31720481862` again built every platform, then stopped after R2
+  had accepted all four new objects but before an admission receipt existed.
+  Each public `Last-Modified` timestamp fell inside the publish step and the
+  blockmap was visible in the same second as the generic failure. The prior
+  authenticated-HEAD retry therefore never ran: the multipart SDK raised while
+  returning from an already-committed upload.
+- Upstream CowAgent `e3ac1b9` confirms the release boundary: complete all
+  platform builds, stage installers under versioned R2 keys, register them as
+  unpublished, and promote latest separately. Cow uses Wrangler for transport,
+  but e-Mate's 330--399 MB packages exceed Wrangler's current single-object
+  limit, so the required platform deviation remains the standard S3 multipart
+  client rather than a second custom uploader.
+- Multipart completion exceptions are now reconciled once through the existing
+  bounded authenticated HEAD. Exact size and SHA metadata admit the committed
+  object without retransmission; missing or mismatched bytes fail with a safe
+  object-level error. An existing immutable key with different size or SHA is
+  a collision and is never overwritten. Commit `5fccae49` passed the three
+  exact commit/collision regressions and the complete publisher set `10/10`.
