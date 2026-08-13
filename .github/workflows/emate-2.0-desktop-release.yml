@@ -81,6 +81,7 @@ jobs:
             tests/v1/test_callback_channel_boundary.py \
             tests/v1/test_workspace_content.py \
             tests/v1/test_cowagent_data_migration.py \
+            tests/v1/test_ecorex_history_restore.py \
             tests/v1/test_channel_self_service.py \
             tests/v1/test_channel_runtime_dispatcher.py \
             tests/v1/test_channel_terminal_convergence.py \
