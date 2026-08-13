@@ -1620,6 +1620,26 @@ def test_windows_helper_source_contains_real_appcontainer_and_job_boundaries() -
     assert 'command += ("-GitHubHostedCompatibility",)' in stager_source
 
 
+def test_windows_native_source_authority_is_checkout_platform_independent() -> None:
+    source_names = (
+        "ecorex_launcher.cpp",
+        "ecorex_sandbox_host.cpp",
+        "ecorex_sandbox_security.cpp",
+        "ecorex_sandbox_process.cpp",
+        "ecorex_sandbox_host_internal.h",
+    )
+    output = subprocess.check_output(
+        ("git", "check-attr", "text", "eol", "--", *source_names),
+        cwd=ROOT / "platform-staging/native/windows",
+        text=True,
+    )
+    assert output.splitlines() == [
+        line
+        for name in source_names
+        for line in (f"{name}: text: set", f"{name}: eol: lf")
+    ]
+
+
 def test_staged_windows_helper_probe_is_behavioral_but_cannot_authorize_runtime(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

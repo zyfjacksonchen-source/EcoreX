@@ -4,6 +4,8 @@
 *.css text eol=lf
 *.html text eol=lf
 *.go text eol=lf
+platform-staging/native/windows/*.cpp text eol=lf
+platform-staging/native/windows/*.h text eol=lf
 *.in text eol=lf
 *.js text eol=lf
 *.json text eol=lf
