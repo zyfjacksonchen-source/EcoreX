@@ -82,7 +82,11 @@ def _previous_feed(
         "schema_version": 2 if unsigned_manual else 1,
         "document_type": "emate.desktop-feed-stage",
         **({"distribution_mode": "unsigned-manual"} if unsigned_manual else {}),
-        **({"r2_admission_sha256": R2_ADMISSION_SHA256} if unsigned_manual else {}),
+        **(
+            {"r2_admission_sha256": R2_ADMISSION_SHA256}
+            if unsigned_manual and not legacy_manual
+            else {}
+        ),
         "status": "activation-ready-unsigned-manual" if unsigned_manual else "activation-ready",
         "version": version,
         "source_commit": "b" * 40,
@@ -355,6 +359,29 @@ def test_r2_admission_digest_is_valid_only_for_schema2(
     assert expected_error in result.stderr
 
 
+def test_incoming_schema2_requires_r2_admission_digest(tmp_path: Path) -> None:
+    root, candidate, stage = _feed(tmp_path, unsigned_manual=True)
+    stage.pop("r2_admission_sha256")
+    stage.pop("_test_previous_target")
+    (candidate / "feed-stage-receipt.json").write_text(
+        json.dumps(stage, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            *_command(root, candidate, root / "activation-receipts/rejected.json"),
+            "--readback-command", "/bin/cat",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "stage_receipt_fields_invalid" in result.stderr
+
+
 def test_unsigned_manual_activation_accepts_legacy_manual_previous(
     tmp_path: Path,
 ) -> None:
@@ -368,6 +395,12 @@ def test_unsigned_manual_activation_accepts_legacy_manual_previous(
     previous_receipt = json.loads(
         (previous / "feed-stage-receipt.json").read_text(encoding="utf-8")
     )
+    assert set(previous_receipt) == {
+        "activation", "build_digest", "candidate_target", "distribution_mode",
+        "document_type", "feed_build_id", "files", "nginx_config_sha256",
+        "release_id", "runtime_manifest_sha256", "schema_version",
+        "source_commit", "status", "version",
+    }
     assert previous_receipt["activation"]["pointer_files"] == [
         "download-index.json"
     ]
@@ -387,6 +420,69 @@ def test_unsigned_manual_activation_accepts_legacy_manual_previous(
 
     assert result.returncode == 0, result.stderr
     assert os.readlink(root / "current") == stage["candidate_target"]
+
+
+def test_legacy_previous_validates_r2_digest_when_present(tmp_path: Path) -> None:
+    root, candidate, stage = _feed(
+        tmp_path,
+        unsigned_manual=True,
+        previous_unsigned_manual=True,
+        previous_legacy_manual=True,
+    )
+    previous = root / str(stage["_test_previous_target"])
+    previous_receipt = json.loads(
+        (previous / "feed-stage-receipt.json").read_text(encoding="utf-8")
+    )
+    previous_receipt["r2_admission_sha256"] = "not-a-sha256"
+    (previous / "feed-stage-receipt.json").write_text(
+        json.dumps(previous_receipt, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            *_command(root, candidate, root / "activation-receipts/rejected.json"),
+            "--readback-command", "/bin/cat",
+            "--readback-argument", str(root / "current/{pointer}"),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "r2_admission_sha256_invalid" in result.stderr
+
+
+def test_nonlegacy_previous_cannot_omit_r2_digest(tmp_path: Path) -> None:
+    root, candidate, stage = _feed(
+        tmp_path,
+        unsigned_manual=True,
+        previous_unsigned_manual=True,
+    )
+    previous = root / str(stage["_test_previous_target"])
+    previous_receipt = json.loads(
+        (previous / "feed-stage-receipt.json").read_text(encoding="utf-8")
+    )
+    previous_receipt.pop("r2_admission_sha256")
+    (previous / "feed-stage-receipt.json").write_text(
+        json.dumps(previous_receipt, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            *_command(root, candidate, root / "activation-receipts/rejected.json"),
+            "--readback-command", "/bin/cat",
+            "--readback-argument", str(root / "current/{pointer}"),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "stage_receipt_fields_invalid" in result.stderr
 
 
 def test_unsigned_manual_candidate_cannot_use_legacy_missing_latest_contract(

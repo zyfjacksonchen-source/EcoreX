@@ -372,9 +372,17 @@ def _validate_target(
         "candidate_target", "nginx_config_sha256", "files", "activation",
     }
     schema = receipt.get("schema_version")
-    expected_keys = base_keys | (
-        {"distribution_mode", "r2_admission_sha256"} if schema == 2 else set()
+    expected_keys = base_keys | ({"distribution_mode"} if schema == 2 else set())
+    activation = receipt.get("activation")
+    legacy_manual_receipt = (
+        schema == 2
+        and allow_legacy_manual_pointer_files
+        and "r2_admission_sha256" not in receipt
+        and isinstance(activation, dict)
+        and activation.get("pointer_files") == ["download-index.json"]
     )
+    if schema == 2 and not legacy_manual_receipt:
+        expected_keys.add("r2_admission_sha256")
     if schema not in {1, 2} or set(receipt) != expected_keys:
         raise FeedDeployError("stage_receipt_fields_invalid")
     if receipt.get("document_type") != "emate.desktop-feed-stage":
@@ -402,7 +410,7 @@ def _validate_target(
     for field in ("feed_build_id", "nginx_config_sha256"):
         if not isinstance(receipt.get(field), str) or not _SHA256.fullmatch(receipt[field]):
             raise FeedDeployError(f"{field}_invalid")
-    if schema == 2 and (
+    if schema == 2 and "r2_admission_sha256" in receipt and (
         not isinstance(receipt.get("r2_admission_sha256"), str)
         or not _SHA256.fullmatch(receipt["r2_admission_sha256"])
     ):
@@ -412,7 +420,6 @@ def _validate_target(
         raise FeedDeployError("candidate_target_invalid")
     if target_path.name != PurePosixPath(target).name:
         raise FeedDeployError("candidate_identity_mismatch")
-    activation = receipt.get("activation")
     pointer_files = (
         _MANUAL_POINTER_FILES
         if schema == 2
