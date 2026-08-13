@@ -13,14 +13,16 @@ import stat
 import tempfile
 from typing import Any, Mapping
 
-from ecorex.capabilities import builtin_tool_specs
-
-
 SCHEMA_VERSION = 1
-BUILTIN_TOOL_IDS = tuple(spec.tool_id for spec in builtin_tool_specs())
-_OPTIONALLY_UNCONFIGURED_TOOLS = frozenset(
-    {"connector_describe", "connector_read", "connector_write"}
+COW_HARD_TOOL_IDS = (
+    "read", "write", "edit", "bash", "subagent", "search_files", "ls", "send",
+    "evolution_undo", "env_config", "scheduler", "web_search", "web_fetch",
+    "vision", "ocr", "browser", "imagegen", "memory_search", "memory_get",
 )
+COW_OFFICE_TOOL_IDS = (
+    "office_documents", "office_pdf", "office_presentations", "office_spreadsheets",
+)
+BUILTIN_TOOL_IDS = COW_HARD_TOOL_IDS + COW_OFFICE_TOOL_IDS
 PREPARE_STEPS = (
     "preflight",
     "local-gates",
@@ -420,14 +422,8 @@ def _valid_browser_observations(
             isinstance(item, Mapping)
             and set(item) == {"status", "terminal_visible"}
             and item.get("terminal_visible") is True
-            and (
-                item.get("status") == "completed"
-                or (
-                    tool_id in _OPTIONALLY_UNCONFIGURED_TOOLS
-                    and item.get("status") == "expected_unconfigured"
-                )
-            )
-            for tool_id, item in builtins.items()
+            and item.get("status") == "completed"
+            for item in builtins.values()
         )
         and isinstance(image, Mapping)
         and set(image)
@@ -514,7 +510,7 @@ def browser_request(store: ReleaseRunStore) -> dict[str, Any]:
             {
                 "id": "builtin-matrix",
                 "action": "exercise every built-in tool through the authenticated production UI",
-                "assert": "all 19 tools complete or show an explicit expected connector-unconfigured terminal state",
+                "assert": "all Cow hard tools and all four Office tools complete with a visible terminal state",
             },
             {
                 "id": "image-concurrency",
@@ -594,6 +590,8 @@ def _now() -> str:
 __all__ = [
     "ALL_STEPS",
     "BUILTIN_TOOL_IDS",
+    "COW_HARD_TOOL_IDS",
+    "COW_OFFICE_TOOL_IDS",
     "FINALIZE_STEPS",
     "ManualReleaseError",
     "PREPARE_STEPS",

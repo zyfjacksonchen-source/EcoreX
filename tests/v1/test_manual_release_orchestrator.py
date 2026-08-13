@@ -9,6 +9,8 @@ import pytest
 from ecorex.release.manual import (
     ALL_STEPS,
     BUILTIN_TOOL_IDS,
+    COW_HARD_TOOL_IDS,
+    COW_OFFICE_TOOL_IDS,
     PREPARE_STEPS,
     ManualReleaseError,
     ReleaseRunStore,
@@ -150,17 +152,7 @@ def test_comprehensive_codex_browser_receipt_is_digest_bound(tmp_path):
         nonce=str(request["nonce"]),
         evidence_root=evidence_root,
     )["status"] == "passed"
-    receipt["observations"]["builtin_capabilities"]["connector_write"][
-        "status"
-    ] = "expected_unconfigured"
-    assert validate_codex_browser_receipt(
-        receipt,
-        spec=SPEC,
-        run_id=SPEC.run_id,
-        nonce=str(request["nonce"]),
-        evidence_root=evidence_root,
-    )["status"] == "passed"
-    shell = receipt["observations"]["builtin_capabilities"].pop("shell")
+    shell = receipt["observations"]["builtin_capabilities"].pop("bash")
     with pytest.raises(ManualReleaseError, match="codex_browser_observations_invalid"):
         validate_codex_browser_receipt(
             receipt,
@@ -169,7 +161,7 @@ def test_comprehensive_codex_browser_receipt_is_digest_bound(tmp_path):
             nonce=str(request["nonce"]),
             evidence_root=evidence_root,
         )
-    receipt["observations"]["builtin_capabilities"]["shell"] = shell
+    receipt["observations"]["builtin_capabilities"]["bash"] = shell
     receipt["observations"]["image_concurrency"]["overlap_observed"] = False
     with pytest.raises(ManualReleaseError, match="codex_browser_observations_invalid"):
         validate_codex_browser_receipt(
@@ -193,6 +185,13 @@ def test_browser_request_requires_real_production_model_images_and_long_session(
         "runtime-management",
     }
     assert "token consumption is authorized" in request["token_policy"]
+    assert len(COW_HARD_TOOL_IDS) == 19
+    assert set(COW_OFFICE_TOOL_IDS) == {
+        "office_documents",
+        "office_pdf",
+        "office_presentations",
+        "office_spreadsheets",
+    }
     assert request["required_builtin_tool_ids"] == list(BUILTIN_TOOL_IDS)
     assert set(request["receipt_observations"]) == set(_observations())
 
