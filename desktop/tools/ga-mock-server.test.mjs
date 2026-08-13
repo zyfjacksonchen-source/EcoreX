@@ -431,9 +431,9 @@ test("GA task-switch scenario serves independent projections and preserves missi
   const current = await fetch(`${harness.url}/api/v1/threads/thr_current_ga/projection`).then((response) => response.json());
   const target = await fetch(`${harness.url}/api/v1/threads/thr_target_ga/projection`).then((response) => response.json());
   assert.equal(current.thread.title, "当前季度任务");
-  assert.equal(current.items[0].content.text, "当前任务原始内容");
+  assert.equal(current.items.at(-2).content.text, "当前任务原始内容");
   assert.equal(target.thread.title, "已恢复的年度任务");
-  assert.equal(target.items[0].content.text, "年度任务已从恢复点载入");
+  assert.equal(target.items.at(-2).content.text, "年度任务已从恢复点载入");
   assert.equal(target.turns[0].thread_id, "thr_target_ga");
   assert.equal(target.items[0].thread_id, "thr_target_ga");
 
