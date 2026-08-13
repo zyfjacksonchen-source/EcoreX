@@ -26,7 +26,7 @@ def test_public_download_site_static_gate_passes() -> None:
         errors="strict",
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    evidence = json.loads(result.stdout)
+    evidence = json.loads(result.stdout.splitlines()[-1])
     assert evidence["status"] == "passed"
     assert evidence["public_pointer"] == "unpublished"
     assert evidence["hashed_asset_count"] == 10
@@ -58,7 +58,12 @@ def test_public_download_site_uses_real_product_assets_and_dynamic_release_data(
     assert "targetFromPlatformSignals" in javascript
     assert "downloadSources(index, download.target)" in javascript
     assert "link.href = sources[0]" in javascript
-    assert "镜像下载失败？使用备用线路" in javascript
+    assert "https://dl.ecoremedia.net/e-mate/update/" in javascript
+    assert "mvdcm.ecoremedia.net" not in javascript
+    assert "github.com" not in javascript.casefold()
+    assert "ghproxy" not in javascript.casefold()
+    assert "ghfast" not in javascript.casefold()
+    assert "镜像下载失败？使用备用线路" not in javascript
     assert 'summary.textContent = "核对 SHA-256"' in javascript
     assert 'label.textContent = "立即下载"' in javascript
     assert "WEBUI_RELEASE" not in javascript
@@ -175,7 +180,7 @@ const download = (target, platform, architecture, fileName) => ({
   platform,
   architecture,
   file_name: fileName,
-  url: `https://mvdcm.ecoremedia.net/e-mate/update/${fileName}`,
+  url: `https://dl.ecoremedia.net/e-mate/update/${fileName}`,
   size_bytes: 42,
   sha256: "a".repeat(64),
 });
@@ -199,10 +204,7 @@ assert.equal(contract.normalizeDownloadIndex(raw).version, version);
 assert.equal(contract.normalizeDownloadIndex(raw).distribution_mode, "unsigned-manual");
 assert.equal(contract.normalizeDownloadIndex(raw).downloads[0].authenticode.status, "verified");
 assert.deepEqual(contract.downloadSources(contract.normalizeDownloadIndex(raw), "windows-x64"), [
-  `https://ghproxy.net/https://github.com/zyfjacksonchen-source/EcoreX/releases/download/v${version}/e-Mate-Setup-${version}-x64.exe`,
-  `https://ghfast.top/https://github.com/zyfjacksonchen-source/EcoreX/releases/download/v${version}/e-Mate-Setup-${version}-x64.exe`,
-  `https://github.com/zyfjacksonchen-source/EcoreX/releases/download/v${version}/e-Mate-Setup-${version}-x64.exe`,
-  `https://mvdcm.ecoremedia.net/e-mate/update/e-Mate-Setup-${version}-x64.exe`,
+  `https://dl.ecoremedia.net/e-mate/update/e-Mate-Setup-${version}-x64.exe`,
 ]);
 assert.deepEqual(contract.downloadSources(contract.normalizeDownloadIndex(raw), "unknown"), []);
 assert.deepEqual(contract.installationTrustCopy(contract.normalizeDownloadIndex(raw)), {
@@ -233,8 +235,8 @@ assert.equal(contract.isMacDesktop({ source: "MacIntel Mozilla/5.0 (Macintosh)" 
 assert.equal(contract.isMacDesktop({ source: "Win32 Mozilla/5.0 (Windows NT 10.0)" }), false);
 assert.equal(contract.isMacDesktop({ source: "iPhone Mac OS X" }), false);
 assert.deepEqual(contract.indexSources({ hostname: "127.0.0.1", pathname: "/" }), ["./download-index.json"]);
-assert.deepEqual(contract.indexSources({ hostname: "mvdcm.ecoremedia.net", pathname: "/e-mate/" }), ["/e-mate/update/download-index.json"]);
-assert.deepEqual(contract.indexSources({ hostname: "dl.ecoremedia.net", pathname: "/ecorex-agent/" }), ["/e-mate/update/download-index.json"]);
+assert.deepEqual(contract.indexSources({ hostname: "mvdcm.ecoremedia.net", pathname: "/e-mate/" }), ["https://dl.ecoremedia.net/e-mate/update/download-index.json?feed=2d7481d20f1fedd0"]);
+assert.deepEqual(contract.indexSources({ hostname: "dl.ecoremedia.net", pathname: "/ecorex-agent/" }), ["https://dl.ecoremedia.net/e-mate/update/download-index.json?feed=2d7481d20f1fedd0"]);
 """
     source = next(SITE.glob("site.*.js"))
     result = subprocess.run(

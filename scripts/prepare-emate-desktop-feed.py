@@ -476,7 +476,7 @@ def _download_index(
                 "platform": platform,
                 "architecture": architecture,
                 "file_name": name,
-                "url": f"https://mvdcm.ecoremedia.net/e-mate/update/{name}",
+                "url": f"https://dl.ecoremedia.net/e-mate/update/{name}",
                 "size_bytes": path.stat().st_size,
                 "sha256": _sha256(path),
             }

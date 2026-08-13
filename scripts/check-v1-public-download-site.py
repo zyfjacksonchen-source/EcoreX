@@ -184,6 +184,15 @@ def main() -> int:
             errors,
         )
         _require(
+            "https://dl.ecoremedia.net/e-mate/update/" in javascript
+            and not any(
+                value in javascript.casefold()
+                for value in ("mvdcm.ecoremedia.net", "github.com", "ghproxy", "ghfast")
+            ),
+            "public desktop downloads must use only the domestic dl CDN",
+            errors,
+        )
+        _require(
             'data-feature-nav' in html
             and "featureNav.textContent = `${major}.${minor} 新功能`" in javascript
             and "releaseLabel.textContent = `当前版本 ${index.version}" in javascript
