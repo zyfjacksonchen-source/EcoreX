@@ -184,6 +184,34 @@ def test_v024_office_skill_tools_are_registered_and_probeable():
     assert result.result["officialSkill"] == "pdf"
 
 
+def test_v025_public_office_schema_matches_verified_formats_pack():
+    manager = _reset_tool_manager()
+    expected_actions = ["probe", "status", "create", "edit", "inspect"]
+
+    for name in (
+        "office_documents",
+        "office_pdf",
+        "office_presentations",
+        "office_spreadsheets",
+    ):
+        schema = manager.list_tools()[name]["parameters"]
+        if "parameters" in schema:
+            schema = schema["parameters"]
+        assert schema["properties"]["action"]["enum"] == expected_actions
+
+    result = manager.create_tool("office_pdf").execute({
+        "action": "render_preview",
+        "path": "must-not-be-read.pdf",
+    })
+    assert result.status == "error"
+    assert result.result == {
+        "error": "unsupported office artifact action",
+        "action": "render_preview",
+        "allowedActions": expected_actions,
+        "redacted": True,
+    }
+
+
 def test_v024_public_cow_office_tools_create_edit_and_emit_artifacts(
     tmp_path, monkeypatch
 ):
