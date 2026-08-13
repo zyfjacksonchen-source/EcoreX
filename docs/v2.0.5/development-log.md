@@ -353,6 +353,12 @@ environment failure until the product failure reproduces from known state.
   checks passed `11`, the renderer gallery checks passed `4`, TypeScript and
   Python compile passed, and no live provider request, package build, or
   publication was performed.
+- The frozen-release Computer Use receipt now rejects the retired concurrency
+  observation. It requires two independent `imagegen` tool-call IDs, two real
+  Artifact IDs, one Artifact per call, preserved context, and production usage
+  facts with `actual_model_id=gpt-image-2-pro`. The same receipt requires every
+  Hard19 and Office4 row to bind a real executor, tool result, visible terminal
+  state, and successful next-turn reference.
 
 ### 2026-08-13 CU-205-SETTINGS-INSET-001
 
