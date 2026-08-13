@@ -369,7 +369,14 @@ def _office_create(payload: Mapping[str, Any], runtime: Path) -> Mapping[str, An
                 raise ValueError("document section is invalid")
             heading = str(section.get("heading") or "").strip()
             if heading:
-                document.add_heading(_text(heading, maximum=512), level=1)
+                level = section.get("level", 1)
+                if (
+                    isinstance(level, bool)
+                    or not isinstance(level, int)
+                    or not 0 <= level <= 9
+                ):
+                    raise ValueError("document heading level is invalid")
+                document.add_heading(_text(heading, maximum=512), level=level)
             paragraphs = section.get("paragraphs") or []
             if not isinstance(paragraphs, list):
                 raise ValueError("document paragraphs are invalid")

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 
 from agent.tools.base_tool import BaseTool, ToolResult
+from common.office_authoring_contract import OFFICE_SECTION_SCHEMA
 from common.office_pdf_runtime import (
     OfficePdfRuntimeError,
     analyze_document_quality,
@@ -94,7 +95,7 @@ _COMMON_PARAMS: dict[str, Any] = {
         },
         "sections": {
             "type": "array",
-            "items": {"type": "object"},
+            "items": OFFICE_SECTION_SCHEMA,
             "description": "Complete structured sections for DOCX/PDF create or replacement edit.",
         },
         "slides": {

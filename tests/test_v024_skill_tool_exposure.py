@@ -203,6 +203,12 @@ def test_v024_public_cow_office_tools_create_edit_and_emit_artifacts(
             return {"provider": "python-office-formats-v1"}
 
         def create(self, family, payload, *, timeout_seconds):
+            if family == "document":
+                assert payload["sections"][0] == {
+                    "heading": "e-Mate 2.0.5 Office Acceptance",
+                    "level": 0,
+                    "paragraphs": [],
+                }
             return self._result(family, payload["title"])
 
         def edit(self, family, content, payload, *, timeout_seconds):
@@ -261,12 +267,42 @@ def test_v024_public_cow_office_tools_create_edit_and_emit_artifacts(
                 "sheets": [{"name": "Data", "rows": [["version", 1]]}],
                 "slides": [{"title": "Summary", "bullets": ["v1"]}],
             }[field]
+            if tool_name == "office_documents":
+                section_schema = manager.list_tools()[tool_name]["parameters"][
+                    "parameters"
+                ]["properties"]["sections"]["items"]
+                assert section_schema["additionalProperties"] is False
+                assert set(section_schema["properties"]) == {
+                    "heading",
+                    "level",
+                    "paragraphs",
+                }
+                content = [
+                    {"heading": "e-Mate 2.0.5 Office Acceptance", "level": 0},
+                    {"heading": "Release Acceptance", "level": 1},
+                    {
+                        "heading": "Conclusion",
+                        "level": 1,
+                        "paragraphs": ["DOCX create path passed"],
+                    },
+                ]
             created = tool.execute(
                 {"action": "create", "path": file_name, "title": "v1", field: content}
             )
             assert created.status == "success"
             assert created.result["operation"] == "create"
             assert Path(created.result["path"]).is_file()
+            if tool_name == "office_documents":
+                rejected = tool.execute(
+                    {
+                        "action": "create",
+                        "path": "unknown-section-field.docx",
+                        "title": "invalid",
+                        "sections": [{"heading": "Invalid", "unknown": True}],
+                    }
+                )
+                assert rejected.status == "error"
+                assert rejected.result["errorType"] == "OfficeAuthoringContractError"
             executor._maybe_emit_artifact(
                 {"name": tool_name, "arguments": {"path": file_name}},
                 {"status": "success", "result": created.result},

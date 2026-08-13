@@ -15,6 +15,31 @@ MIME_TYPES = {
     "pdf": "application/pdf",
 }
 
+OFFICE_SECTION_FIELDS = frozenset({"heading", "level", "paragraphs"})
+OFFICE_SECTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "heading": {
+            "type": "string",
+            "description": "Section heading text.",
+        },
+        "level": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9,
+            "description": "DOCX heading level. Defaults to 1.",
+        },
+        "paragraphs": {
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": 128,
+            "description": "Optional body paragraphs; heading-only sections are valid.",
+        },
+    },
+    "required": ["heading"],
+    "additionalProperties": False,
+}
+
 
 class OfficeAuthoringContractError(ValueError):
     pass
@@ -49,19 +74,33 @@ def validated_authoring_request(
     payload: dict[str, Any] = {"title": title}
     if family in {"document", "pdf"}:
         sections = _list(parameters.get("sections"), 64)
-        payload["sections"] = [
-            {
-                "heading": _text(section.get("heading") or "", 512, empty=True),
-                "paragraphs": [
-                    _text(value, 4096)
-                    for value in _list(section.get("paragraphs"), 128)
-                ],
-            }
-            for section in sections
-            if isinstance(section, Mapping)
-        ]
-        if len(payload["sections"]) != len(sections):
-            raise OfficeAuthoringContractError("office_sections_invalid")
+        normalized_sections = []
+        for section in sections:
+            if (
+                not isinstance(section, Mapping)
+                or set(section) - OFFICE_SECTION_FIELDS
+            ):
+                raise OfficeAuthoringContractError("office_sections_invalid")
+            level = section.get("level", 1)
+            if (
+                isinstance(level, bool)
+                or not isinstance(level, int)
+                or not 0 <= level <= 9
+            ):
+                raise OfficeAuthoringContractError("office_sections_invalid")
+            normalized_sections.append(
+                {
+                    "heading": _text(section.get("heading"), 512),
+                    "level": level,
+                    "paragraphs": [
+                        _text(value, 4096)
+                        for value in _list(
+                            section.get("paragraphs") or [], 128, empty=True
+                        )
+                    ],
+                }
+            )
+        payload["sections"] = normalized_sections
     elif family == "presentation":
         slides = _list(parameters.get("slides"), 120)
         payload["slides"] = [
