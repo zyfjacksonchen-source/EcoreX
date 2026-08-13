@@ -765,3 +765,40 @@ environment failure until the product failure reproduces from known state.
   flag. No replacement policy or compatibility path was added.
 - The exact CI regression changed from red to green. Focused and affected
   Scheduler/Skill/Hub checks passed `34` cases on the isolated fix branch.
+
+### 2026-08-13 CU-205-AGENT-SELF-UPDATE-001
+
+- The comparison source is official CowAgent 2.1.5 exact
+  `e3ac1b952500f60934862c6bf0bd0de91b415ed8`. Cow has one Electron desktop
+  updater for Windows and signed macOS builds, but it has no model-visible
+  update tool. e-Mate now adds only the missing local intent boundary:
+  an explicit user request such as “更新版本” lets the Agent call
+  `desktop_update(action="install_latest")`; the tool cannot download or
+  install bytes itself.
+- The tool writes one owner-nonce-bound request into the private desktop data
+  directory. Electron consumes it once and remains the sole update owner. The
+  tool result is deliberately `accepted` with `completed=false`, so the Agent
+  cannot claim success before the installed application relaunches on the new
+  version. Development Runtime, stale-owner, malformed, oversized, symlink,
+  and replayed requests fail closed.
+- Windows directly reuses Cow's existing `electron-updater` path. Metadata,
+  installer, and blockmap remain on the single domestic CDN feed. The Agent
+  path requests the existing download and `quitAndInstall` sequence rather
+  than creating another installer or updater.
+- Electron/Squirrel.Mac requires a signed application for its standard macOS
+  automatic-update path, while this release train is explicitly unsigned.
+  The smallest platform deviation therefore reads the existing CDN
+  `download-index.json`, selects the current architecture, verifies the exact
+  declared byte count and SHA-256, mounts the DMG read-only, verifies bundle
+  version/identifier/executable, stages a backup-aware replacement, and
+  relaunches the installed app. A standard macOS administrator prompt is used
+  when `/Applications` is not writable; the user never runs a Terminal
+  command. This unsigned path provides CDN TLS plus release-receipt byte
+  integrity, not Apple Developer ID authenticity or notarization.
+- The exact Agent/request/updater/UI tests passed `5/5`; tool and release
+  regressions passed `3/3`; the affected Electron set passed `24/24`, and the
+  affected Feed checks passed `2/2`. TypeScript, Python/Node syntax, and diff
+  checks passed. The final same-byte Computer Use matrix keeps Cow Hard19 and
+  Office4 separate, then adds `desktop_update` as a changed-item hard gate on
+  both Windows and macOS: visible tool call, CDN-only download, byte
+  verification, installation, automatic relaunch, and visible 2.0.5 identity.
