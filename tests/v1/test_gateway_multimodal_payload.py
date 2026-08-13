@@ -286,7 +286,7 @@ def test_verified_workflow_instructions_map_to_each_provider_contract() -> None:
 
     assert responses["instructions"] == "Use the verified image workflow."
     assert chat["messages"][0] == {
-        "role": "developer",
+        "role": "system",
         "content": "Use the verified image workflow.",
     }
     assert chat["messages"][1]["role"] == "user"

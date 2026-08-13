@@ -295,7 +295,7 @@ class ManagedHTTPSChatCompletionsProvider:
         provider_names = {tool_id: name for name, tool_id in names.items()}
         messages: list[dict[str, Any]] = []
         if request.instructions is not None:
-            messages.append({"role": "developer", "content": request.instructions})
+            messages.append({"role": "system", "content": request.instructions})
         if request.previous_response_id is not None:
             if prior is None and any(
                 isinstance(item, GatewayFunctionCallOutputInput)

@@ -13,8 +13,10 @@ from ecorex.gateway.chat_completions_provider import (
 )
 from ecorex.gateway.handoff import ChatModelRevision, DurableChatHandoff
 from ecorex.gateway.models import (
+    GatewayAssistantMessageInput,
     GatewayEventType,
     GatewayFunctionCallOutputInput,
+    GatewayUserMessageInput,
     ModelGatewayRequest,
     ecorex_chat_gateway_policy,
 )
@@ -23,6 +25,63 @@ from ecorex.gateway.responses_provider import (
     ResponsesProviderUnavailable,
 )
 from ecorex.gateway.server import GatewayPrincipal
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    ["ecorex-deepseek-v4-pro", "ecorex-doubao-seed-2.0-pro"],
+)
+def test_chat_payload_switches_model_without_rewriting_cow_history(model_id: str) -> None:
+    policy = ecorex_chat_gateway_policy(model_id)
+    request = ModelGatewayRequest(
+        request_id="model-switch-request",
+        thread_id="image-history-thread",
+        turn_id="model-switch-turn",
+        trace_id="model-switch-trace",
+        model_id=model_id,
+        model_policy=policy,
+        instructions="Keep CowAgent history and tool semantics intact.",
+        input_items=[
+            GatewayUserMessageInput(
+                message_id="original-image-request",
+                content="Generate TEST 1, TEST 2, and TEST 3.",
+            ),
+            GatewayAssistantMessageInput(
+                message_id="original-image-answer",
+                content=(
+                    "TEST 1: /api/v1/artifacts/art_one/preview; "
+                    "TEST 2: /api/v1/artifacts/art_two/preview; "
+                    "TEST 3: /api/v1/artifacts/art_three/preview"
+                ),
+            ),
+            GatewayUserMessageInput(
+                message_id="model-switch-request",
+                content="List the same three images in order.",
+            ),
+        ],
+        config_snapshot_id="config-model-switch",
+        capability_snapshot_id="capability-model-switch",
+        permission_snapshot_id="permission-model-switch",
+    )
+    fake = type(
+        "Provider",
+        (),
+        {"model_mapping": {model_id: policy.upstream_model_id}},
+    )()
+
+    payload, _names = ManagedHTTPSChatCompletionsProvider._payload(
+        fake, request, prior=None
+    )
+
+    assert [message["role"] for message in payload["messages"]] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert "art_one" in payload["messages"][2]["content"]
+    assert "art_two" in payload["messages"][2]["content"]
+    assert "art_three" in payload["messages"][2]["content"]
 
 
 def test_stream_chat_completion_maps_text_reasoning_usage() -> None:
