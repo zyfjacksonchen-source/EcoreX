@@ -317,3 +317,46 @@ def test_public_probe_failure_rerun_skips_three_uploaded_packages_and_adds_block
         f"e-Mate-Setup-{VERSION}-x64.exe.blockmap"
     ]
     assert receipt["status"] == "verified"
+
+
+def test_authenticated_head_after_upload_retries_without_reuploading(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _module()
+    module["_upload"].__globals__["_transfer_config"] = lambda: SimpleNamespace(
+        max_concurrency=1, use_threads=False
+    )
+    args = _inputs(tmp_path)
+    blockmap = f"e-Mate-Setup-{VERSION}-x64.exe.blockmap"
+
+    class TransientHeadS3(FakeS3):
+        def __init__(self, failures: int) -> None:
+            super().__init__()
+            self.failures = failures
+
+        def head_object(self, *, Bucket: str, Key: str) -> dict[str, object]:
+            if Key in self.objects and Key.endswith(blockmap) and self.failures:
+                self.failures -= 1
+                raise OSError("private endpoint temporarily unavailable")
+            return super().head_object(Bucket=Bucket, Key=Key)
+
+    sleeps: list[int] = []
+    monkeypatch.setattr(module["time"], "sleep", sleeps.append)
+    client = TransientHeadS3(failures=4)
+
+    receipt = module["publish"](args, client=client, public_probe=lambda *_: None)
+
+    assert receipt["status"] == "verified"
+    assert client.uploaded.count(blockmap) == 1
+    assert sleeps == [1, 2, 4, 8]
+
+    exhausted = TransientHeadS3(failures=5)
+    sleeps.clear()
+    with pytest.raises(
+        RuntimeError,
+        match=f"^r2_authenticated_head_failed:{blockmap}$",
+    ):
+        module["publish"](args, client=exhausted, public_probe=lambda *_: None)
+
+    assert exhausted.uploaded.count(blockmap) == 1
+    assert sleeps == [1, 2, 4, 8]

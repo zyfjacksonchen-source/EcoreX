@@ -168,22 +168,27 @@ def _transfer_config():
 
 
 def _remote_matches(client: object, record: Mapping[str, Any]) -> bool:
-    try:
-        value = client.head_object(Bucket=BUCKET, Key=record["key"])
-    except Exception as error:
-        response = getattr(error, "response", None)
-        if isinstance(response, dict) and str(
-            response.get("Error", {}).get("Code")
-        ) in {
-            "404",
-            "NoSuchKey",
-            "NotFound",
-        }:
-            return False
-        raise
-    return value.get("ContentLength") == record["size_bytes"] and value.get(
-        "Metadata"
-    ) == {"sha256": record["sha256"]}
+    for attempt in range(5):
+        try:
+            value = client.head_object(Bucket=BUCKET, Key=record["key"])
+            return value.get("ContentLength") == record["size_bytes"] and value.get(
+                "Metadata"
+            ) == {"sha256": record["sha256"]}
+        except Exception as error:
+            response = getattr(error, "response", None)
+            if isinstance(response, dict) and str(
+                response.get("Error", {}).get("Code")
+            ) in {
+                "404",
+                "NoSuchKey",
+                "NotFound",
+            }:
+                return False
+            if attempt < 4:
+                time.sleep(2**attempt)
+    raise RuntimeError(
+        f"r2_authenticated_head_failed:{record['file_name']}"
+    ) from None
 
 
 def _upload(client: object, record: Mapping[str, Any], path: Path) -> None:
