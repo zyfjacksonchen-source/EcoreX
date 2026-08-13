@@ -37,6 +37,7 @@ NGINX = ROOT / "deploy" / "e-mate" / "nginx" / "update-feed.conf"
 MANUAL_NGINX = ROOT / "deploy" / "e-mate" / "nginx" / "update-feed-unsigned-manual.conf"
 COMMIT = "a" * 40
 VERSION = __version__
+R2_ORIGIN = "https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev"
 
 
 def _sha512(path: Path) -> str:
@@ -209,6 +210,44 @@ def _inputs(tmp_path: Path, *, publication_drift_target: str | None = None):
         "macos-x64",
         (f"e-Mate-{VERSION}-x64.dmg", f"e-Mate-{VERSION}-x64.zip"),
     )
+    objects = []
+    for target, root, name in (
+        ("windows-x64", tmp_path / "windows-x64", f"e-Mate-Setup-{VERSION}-x64.exe"),
+        ("macos-arm64", tmp_path / "macos-arm64", f"e-Mate-{VERSION}-arm64.dmg"),
+        ("macos-x64", tmp_path / "macos-x64", f"e-Mate-{VERSION}-x64.dmg"),
+        (
+            "windows-x64-blockmap",
+            tmp_path / "windows-x64",
+            f"e-Mate-Setup-{VERSION}-x64.exe.blockmap",
+        ),
+    ):
+        path = root / name
+        key = f"desktop/v{VERSION}/{name}"
+        objects.append(
+            {
+                "target": target,
+                "file_name": name,
+                "key": key,
+                "url": f"{R2_ORIGIN}/{key}",
+                "size_bytes": path.stat().st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        )
+    (tmp_path / "r2-receipt.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "document_type": "emate.r2-download-admission",
+                "status": "verified",
+                "version": VERSION,
+                "bucket": "emate-desktop-downloads",
+                "public_origin": R2_ORIGIN,
+                "max_parallel_multipart": 3,
+                "objects": objects,
+            }
+        ),
+        encoding="utf-8",
+    )
     return runtime
 
 
@@ -316,6 +355,8 @@ def _command(
         str(tmp_path / "macos-x64"),
         "--nginx-config",
         str(nginx),
+        "--r2-receipt",
+        str(tmp_path / "r2-receipt.json"),
         "--output",
         str(tmp_path / output),
         "--expected-version",
@@ -353,7 +394,7 @@ def test_feed_gate_merges_mac_metadata_and_rejects_tampering(tmp_path: Path) -> 
         "macos-x64",
     ]
     assert all(
-        item["url"].startswith("https://dl.ecoremedia.net/e-mate/update/")
+        item["url"].startswith(f"{R2_ORIGIN}/desktop/v{VERSION}/")
         for item in download_index["downloads"]
     )
     assert "download-index.json" in receipt["activation"]["pointer_files"]
@@ -410,13 +451,14 @@ def test_feed_gate_prepares_explicit_unsigned_manual_activation(tmp_path: Path) 
         f"{installer_name}.blockmap",
     } <= records.keys()
     latest = (tmp_path / "manual/latest.yml").read_text(encoding="utf-8")
-    assert f"path: {installer_name}" in latest
+    assert f"path: {R2_ORIGIN}/desktop/v{VERSION}/{installer_name}" in latest
+    assert f"  - url: {R2_ORIGIN}/desktop/v{VERSION}/{installer_name}" in latest
     assert f"sha512: {_sha512(installer)}" in latest
     assert f"size: {installer.stat().st_size}" in latest
     windows = json.loads((tmp_path / "manual/download-index.json").read_text())[
         "downloads"
     ][0]
-    assert windows["url"] == f"https://dl.ecoremedia.net/e-mate/update/{installer_name}"
+    assert windows["url"] == f"{R2_ORIGIN}/desktop/v{VERSION}/{installer_name}"
     assert windows["sha256"] == records[installer_name]["sha256"]
     nginx = MANUAL_NGINX.read_text(encoding="utf-8")
     for path in ("latest.yml", "latest-mac.yml", "public-bootstrap-index.json"):
@@ -432,6 +474,30 @@ def test_feed_gate_prepares_explicit_unsigned_manual_activation(tmp_path: Path) 
     )
     assert rejected.returncode == 1
     assert "unsigned-manual routes are incomplete" in rejected.stderr
+
+
+def test_feed_gate_refuses_to_generate_without_exact_r2_admission(
+    tmp_path: Path,
+) -> None:
+    _inputs(tmp_path)
+    admission = tmp_path / "r2-receipt.json"
+    value = json.loads(admission.read_text())
+    admission.unlink()
+    rejected = subprocess.run(
+        _command(tmp_path, "no-r2"), capture_output=True, text=True
+    )
+    assert rejected.returncode == 1
+    assert "R2 admission" in rejected.stderr
+    assert not (tmp_path / "no-r2").exists()
+
+    value["objects"][0]["sha256"] = "0" * 64
+    admission.write_text(json.dumps(value), encoding="utf-8")
+    rejected = subprocess.run(
+        _command(tmp_path, "forged-r2"), capture_output=True, text=True
+    )
+    assert rejected.returncode == 1
+    assert "does not match desktop bytes" in rejected.stderr
+    assert not (tmp_path / "forged-r2").exists()
 
 
 def test_feed_gate_accepts_pointer_signed_by_both_runtime_trust_roles(
@@ -633,7 +699,9 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
         ("git", "rev-parse", "HEAD:desktop/src/v1"), cwd=ROOT, text=True
     ).strip()
     assert f'test "$(git rev-parse HEAD:desktop/src/v1)" = "{ui_tree}"' in workflow
-    assert "- codex/e-mate-*" in workflow
+    assert "push:" not in workflow.split("permissions:", 1)[0]
+    assert "github.event_name == 'workflow_dispatch'" in workflow
+    assert "github.ref == 'refs/heads/codex/e-mate-2.0.5'" in workflow
     assert "needs.runtime.outputs.version" in workflow
     assert 'package["version"] == branch_version == __version__' in workflow
     assert '--expected-version "${{ needs.runtime.outputs.version }}"' in workflow
@@ -642,6 +710,15 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
     assert '"desktop/release/latest-mac-$arch.yml"' in workflow
     assert "name: verify and merge desktop feed" in workflow
     assert "scripts/prepare-emate-desktop-feed.py" in workflow
+    assert "python scripts/install-v1-python-profile.py --profile cloud" in workflow
+    assert "scripts/publish-emate-r2-downloads.py" in workflow
+    assert "--r2-receipt .handoff/r2-download-admission.json" in workflow
+    assert "ECOREX_R2_ACCOUNT_ID: ${{ secrets.ECOREX_R2_ACCOUNT_ID }}" in workflow
+    assert "ECOREX_R2_ACCESS_KEY_ID: ${{ secrets.ECOREX_R2_ACCESS_KEY_ID }}" in workflow
+    assert (
+        "ECOREX_R2_SECRET_ACCESS_KEY: ${{ secrets.ECOREX_R2_SECRET_ACCESS_KEY }}"
+        in workflow
+    )
     assert "--unsigned-manual" in workflow
     assert "tests/v1/test_runtime_composition.py" not in workflow
     assert 'const roots = ["electron", "src", "dist", "package.json"]' in (
@@ -683,3 +760,27 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
         "e2e/ga-webui.spec.ts",
     ):
         assert required_gate in workflow
+
+
+def test_locked_electron_updater_preserves_absolute_r2_download_urls() -> None:
+    provider = ROOT / "desktop/node_modules/electron-updater/out/providers/Provider.js"
+    if not provider.exists():
+        import pytest
+
+        pytest.skip("npm ci is required for the locked electron-updater contract")
+    node = ROOT / ".candidate/toolchains/node-v22.23.1-darwin-arm64/bin/node"
+    executable = str(node) if node.exists() else "node"
+    r2_url = f"{R2_ORIGIN}/desktop/v{VERSION}/e-Mate-Setup-{VERSION}-x64.exe"
+    script = """
+const assert = require('node:assert/strict');
+const { resolveFiles } = require(process.argv[1]);
+const url = process.argv[2];
+const files = resolveFiles({ files: [{ url, sha512: 'x', size: 1 }] }, 'https://dl.ecoremedia.net/e-mate/update/');
+assert.equal(files[0].url.href, url);
+"""
+    result = subprocess.run(
+        [executable, "-e", script, str(provider), r2_url],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

@@ -176,7 +176,7 @@ const download = (target, platform, architecture, fileName) => ({
   platform,
   architecture,
   file_name: fileName,
-  url: `https://dl.ecoremedia.net/e-mate/update/${fileName}`,
+  url: `https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev/desktop/v${version}/${fileName}`,
   size_bytes: 42,
   sha256: "a".repeat(64),
 });
@@ -200,7 +200,7 @@ assert.equal(contract.normalizeDownloadIndex(raw).version, version);
 assert.equal(contract.normalizeDownloadIndex(raw).distribution_mode, "unsigned-manual");
 assert.equal(contract.normalizeDownloadIndex(raw).downloads[0].authenticode.status, "verified");
 assert.deepEqual(contract.downloadSources(contract.normalizeDownloadIndex(raw), "windows-x64"), [
-  `https://dl.ecoremedia.net/e-mate/update/e-Mate-Setup-${version}-x64.exe`,
+  `https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev/desktop/v${version}/e-Mate-Setup-${version}-x64.exe`,
 ]);
 assert.deepEqual(contract.downloadSources(contract.normalizeDownloadIndex(raw), "unknown"), []);
 assert.deepEqual(contract.installationTrustCopy(contract.normalizeDownloadIndex(raw)), {
@@ -233,6 +233,7 @@ assert.equal(contract.isMacDesktop({ source: "iPhone Mac OS X" }), false);
 assert.deepEqual(contract.indexSources({ hostname: "127.0.0.1", pathname: "/" }), ["./download-index.json"]);
 assert.deepEqual(contract.indexSources({ hostname: "mvdcm.ecoremedia.net", pathname: "/e-mate/" }), ["/e-mate/update/download-index.json"]);
 assert.deepEqual(contract.indexSources({ hostname: "dl.ecoremedia.net", pathname: "/ecorex-agent/" }), ["/e-mate/update/download-index.json"]);
+assert.deepEqual(contract.indexSources({ hostname: "example.invalid", pathname: "/" }), ["/e-mate/update/download-index.json"]);
 """
     source = next(SITE.glob("site.*.js"))
     result = subprocess.run(

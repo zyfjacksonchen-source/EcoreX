@@ -3,6 +3,7 @@ const MAX_DOWNLOAD_BYTES = 16 * 1024 * 1024 * 1024;
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,179}$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
 const CERTIFICATE_THUMBPRINT = /^[0-9A-F]{40}$/u;
+const R2_ORIGIN = "https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev";
 const TARGETS = Object.freeze({
   "windows-x64": Object.freeze({ platform: "windows", architecture: "x64" }),
   "macos-arm64": Object.freeze({ platform: "macos", architecture: "arm64" }),
@@ -66,7 +67,7 @@ function parseDownloadIndex(payload) {
         || typeof download.file_name !== "string"
         || !SAFE_NAME.test(download.file_name)
         || download.file_name !== expectedName(download.target, index.version)
-        || download.url !== `https://dl.ecoremedia.net/e-mate/update/${download.file_name}`
+        || download.url !== `${R2_ORIGIN}/desktop/v${index.version}/${download.file_name}`
         || !Number.isSafeInteger(download.size_bytes)
         || download.size_bytes < 1
         || download.size_bytes > MAX_DOWNLOAD_BYTES

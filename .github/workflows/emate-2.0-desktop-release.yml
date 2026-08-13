@@ -1,9 +1,6 @@
 name: e-Mate 2.0 desktop release
 
 on:
-  push:
-    branches:
-      - codex/e-mate-*
   workflow_dispatch:
 
 permissions:
@@ -16,7 +13,7 @@ concurrency:
 jobs:
   runtime:
     name: signed Runtime seed
-    if: ${{ github.repository == 'zyfjacksonchen-source/EcoreX' && startsWith(github.ref, 'refs/heads/codex/e-mate-') }}
+    if: ${{ github.repository == 'zyfjacksonchen-source/EcoreX' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/e-mate-2.0.5' }}
     runs-on: macos-15
     outputs:
       version: ${{ steps.release_identity.outputs.version }}
@@ -75,6 +72,7 @@ jobs:
           python -m pytest -q -p no:cacheprovider \
             tests/v1/test_public_download_site.py \
             tests/v1/test_emate_desktop_feed.py \
+            tests/v1/test_emate_r2_publisher.py \
             tests/v1/test_emate_feed_deploy.py \
             tests/v1/test_control_plane_release_replica_service.py \
             tests/v1/test_manual_webui_builder.py \
@@ -354,8 +352,8 @@ jobs:
           python-version: "3.11.9"
           cache: pip
 
-      - name: Install the signed Runtime verifier
-        run: python scripts/install-v1-python-profile.py --profile runtime
+      - name: Install the signed Runtime verifier and locked R2 client
+        run: python scripts/install-v1-python-profile.py --profile cloud
 
       - name: Download the Runtime handoff
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -381,6 +379,19 @@ jobs:
           name: e-mate-${{ needs.runtime.outputs.version }}-macos-x64
           path: .handoff/macos-x64
 
+      - name: Publish and publicly admit the immutable R2 downloads
+        env:
+          ECOREX_R2_ACCOUNT_ID: ${{ secrets.ECOREX_R2_ACCOUNT_ID }}
+          ECOREX_R2_ACCESS_KEY_ID: ${{ secrets.ECOREX_R2_ACCESS_KEY_ID }}
+          ECOREX_R2_SECRET_ACCESS_KEY: ${{ secrets.ECOREX_R2_SECRET_ACCESS_KEY }}
+        run: |
+          python scripts/publish-emate-r2-downloads.py \
+            --version "${{ needs.runtime.outputs.version }}" \
+            --windows-root .handoff/windows-x64 \
+            --macos-arm64-root .handoff/macos-arm64 \
+            --macos-x64-root .handoff/macos-x64 \
+            --receipt .handoff/r2-download-admission.json
+
       - name: Verify exact bytes and create one collision-free feed receipt
         run: |
           python scripts/prepare-emate-desktop-feed.py \
@@ -390,6 +401,7 @@ jobs:
             --macos-arm64-root .handoff/macos-arm64 \
             --macos-x64-root .handoff/macos-x64 \
             --nginx-config deploy/e-mate/nginx/update-feed-unsigned-manual.conf \
+            --r2-receipt .handoff/r2-download-admission.json \
             --output .handoff/feed \
             --expected-version "${{ needs.runtime.outputs.version }}" \
             --expected-source-sha "$GITHUB_SHA"

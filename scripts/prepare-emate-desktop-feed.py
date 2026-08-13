@@ -38,6 +38,8 @@ _RELEASE_DATE = re.compile(
 )
 _MAX_FILES = 500
 _MAX_FILE_BYTES = 16 * 1024 * 1024 * 1024
+_R2_BUCKET = "emate-desktop-downloads"
+_R2_ORIGIN = "https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev"
 
 
 class FeedError(RuntimeError):
@@ -51,6 +53,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--macos-arm64-root", required=True, type=Path)
     parser.add_argument("--macos-x64-root", required=True, type=Path)
     parser.add_argument("--nginx-config", required=True, type=Path)
+    parser.add_argument("--r2-receipt", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--expected-version", required=True)
     parser.add_argument("--expected-source-sha", required=True)
@@ -447,6 +450,99 @@ def _merge_mac(arm64: Mapping[str, Any], x64: Mapping[str, Any]) -> bytes:
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
+def _windows_r2_metadata(metadata: Mapping[str, Any], version: str) -> bytes:
+    if len(metadata["files"]) != 1:
+        raise FeedError("Windows update metadata inventory is invalid")
+    item = metadata["files"][0]
+    url = f"{_R2_ORIGIN}/desktop/v{version}/{item['url']}"
+    return (
+        "\n".join(
+            (
+                f"version: {version}",
+                "files:",
+                f"  - url: {url}",
+                f"    sha512: {item['sha512']}",
+                f"    size: {item['size']}",
+                f"path: {url}",
+                f"sha512: {item['sha512']}",
+                f"releaseDate: '{metadata['releaseDate']}'",
+                "",
+            )
+        )
+    ).encode("utf-8")
+
+
+def _validate_r2_admission(
+    path: Path,
+    version: str,
+    desktop: Mapping[str, Mapping[str, Path]],
+) -> dict[str, Any]:
+    try:
+        value = _json(path, 64 * 1024)
+    except FeedError:
+        raise FeedError("R2 admission receipt is invalid") from None
+    names = {
+        "windows-x64": f"e-Mate-Setup-{version}-x64.exe",
+        "macos-arm64": f"e-Mate-{version}-arm64.dmg",
+        "macos-x64": f"e-Mate-{version}-x64.dmg",
+        "windows-x64-blockmap": f"e-Mate-Setup-{version}-x64.exe.blockmap",
+    }
+    if (
+        set(value)
+        != {
+            "schema_version",
+            "document_type",
+            "status",
+            "version",
+            "bucket",
+            "public_origin",
+            "max_parallel_multipart",
+            "objects",
+        }
+        or value.get("schema_version") != 1
+        or value.get("document_type") != "emate.r2-download-admission"
+        or value.get("status") != "verified"
+        or value.get("version") != version
+        or value.get("bucket") != _R2_BUCKET
+        or value.get("public_origin") != _R2_ORIGIN
+        or value.get("max_parallel_multipart") != 3
+        or not isinstance(value.get("objects"), list)
+        or len(value["objects"]) != 4
+    ):
+        raise FeedError("R2 admission receipt is invalid")
+    observed: set[str] = set()
+    for item in value["objects"]:
+        if not isinstance(item, dict) or set(item) != {
+            "target",
+            "file_name",
+            "key",
+            "url",
+            "size_bytes",
+            "sha256",
+        }:
+            raise FeedError("R2 admission object is invalid")
+        target = str(item["target"])
+        name = names.get(target)
+        root = "windows-x64" if target == "windows-x64-blockmap" else target
+        source = desktop.get(root, {}).get(str(name))
+        key = f"desktop/v{version}/{name}"
+        if (
+            name is None
+            or target in observed
+            or source is None
+            or item["file_name"] != name
+            or item["key"] != key
+            or item["url"] != f"{_R2_ORIGIN}/{key}"
+            or item["size_bytes"] != source.stat().st_size
+            or item["sha256"] != _sha256(source)
+        ):
+            raise FeedError("R2 admission object does not match desktop bytes")
+        observed.add(target)
+    if observed != set(names):
+        raise FeedError("R2 admission inventory is incomplete")
+    return value
+
+
 def _download_index(
     version: str,
     metadata: Mapping[str, Mapping[str, Any]],
@@ -476,7 +572,7 @@ def _download_index(
                 "platform": platform,
                 "architecture": architecture,
                 "file_name": name,
-                "url": f"https://dl.ecoremedia.net/e-mate/update/{name}",
+                "url": f"{_R2_ORIGIN}/desktop/v{version}/{name}",
                 "size_bytes": path.stat().st_size,
                 "sha256": _sha256(path),
             }
@@ -749,6 +845,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
                 expected_version=version,
                 expected_names=names,
             )
+        r2_admission = _validate_r2_admission(args.r2_receipt, version, desktop)
         nginx_sha256 = _validate_nginx(
             nginx_config, unsigned_manual=args.unsigned_manual
         )
@@ -762,8 +859,9 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             _bind_public_index(value, manifest, str(runtime_receipt["manifest_sha256"]))
 
         records: list[dict[str, Any]] = []
-        windows_metadata = _one(inventories["windows-x64"], "latest.yml")
-        _publish_snapshot(windows_metadata, staging / "latest.yml")
+        (staging / "latest.yml").write_bytes(
+            _windows_r2_metadata(metadata["windows-x64"], version)
+        )
         records.append(
             _record(
                 staging / "latest.yml",
@@ -855,6 +953,11 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             "feed_build_id": build_id,
             "candidate_target": f"releases/v{version}-{build_id[:16]}",
             "nginx_config_sha256": nginx_sha256,
+            "r2_admission_sha256": hashlib.sha256(
+                json.dumps(r2_admission, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            ).hexdigest(),
             "files": records,
             "activation": {
                 "strategy": "same-filesystem-current-symlink-rename",

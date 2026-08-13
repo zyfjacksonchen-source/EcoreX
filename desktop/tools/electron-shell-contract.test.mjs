@@ -658,7 +658,7 @@ test("public download index parsing only offers newer stable releases", () => {
     platform,
     architecture,
     file_name: fileName,
-    url: `https://dl.ecoremedia.net/e-mate/update/${fileName}`,
+    url: `https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev/desktop/v${version}/${fileName}`,
     size_bytes: 123456,
     sha256: "a".repeat(64),
   });
