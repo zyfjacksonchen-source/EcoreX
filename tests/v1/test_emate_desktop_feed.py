@@ -353,7 +353,7 @@ def test_feed_gate_merges_mac_metadata_and_rejects_tampering(tmp_path: Path) -> 
         "macos-x64",
     ]
     assert all(
-        item["url"].startswith("https://dl.ecoremedia.net/e-mate/update/")
+        item["url"].startswith("https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev/desktop/v2.0.4/")
         for item in download_index["downloads"]
     )
     assert "mvdcm.ecoremedia.net" not in json.dumps(download_index)

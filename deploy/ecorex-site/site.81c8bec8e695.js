@@ -60,7 +60,7 @@ export function normalizeDownloadIndex(raw) {
       if (evidence.status !== "verified") throw new Error("Windows 签名状态无效");
       safeText(evidence.signer_certificate_thumbprint, "Windows 签名证书", CERTIFICATE_THUMBPRINT);
     }
-    const expectedUrl = `https://dl.ecoremedia.net/e-mate/update/${download.file_name}`;
+    const expectedUrl = `https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev/desktop/v${index.version}/${download.file_name}`;
     if (download.url !== expectedUrl) throw new Error("下载地址无效");
     return Object.freeze({ ...download, label: target.label });
   });

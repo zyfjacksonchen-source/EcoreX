@@ -184,7 +184,7 @@ def main() -> int:
             errors,
         )
         _require(
-            "https://dl.ecoremedia.net/e-mate/update/" in javascript
+            "https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev/desktop/v" in javascript
             and not any(
                 value in javascript.casefold()
                 for value in ("mvdcm.ecoremedia.net", "github.com", "ghproxy", "ghfast")

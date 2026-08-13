@@ -58,7 +58,7 @@ def test_public_download_site_uses_real_product_assets_and_dynamic_release_data(
     assert "targetFromPlatformSignals" in javascript
     assert "downloadSources(index, download.target)" in javascript
     assert "link.href = sources[0]" in javascript
-    assert "https://dl.ecoremedia.net/e-mate/update/" in javascript
+    assert "https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev/desktop/v" in javascript
     assert "mvdcm.ecoremedia.net" not in javascript
     assert "github.com" not in javascript.casefold()
     assert "ghproxy" not in javascript.casefold()
@@ -184,7 +184,7 @@ const download = (target, platform, architecture, fileName) => ({
   platform,
   architecture,
   file_name: fileName,
-  url: `https://dl.ecoremedia.net/e-mate/update/${fileName}`,
+  url: `https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev/desktop/v${version}/${fileName}`,
   size_bytes: 42,
   sha256: "a".repeat(64),
 });
@@ -208,7 +208,7 @@ assert.equal(contract.normalizeDownloadIndex(raw).version, version);
 assert.equal(contract.normalizeDownloadIndex(raw).distribution_mode, "unsigned-manual");
 assert.equal(contract.normalizeDownloadIndex(raw).downloads[0].authenticode.status, "verified");
 assert.deepEqual(contract.downloadSources(contract.normalizeDownloadIndex(raw), "windows-x64"), [
-  `https://dl.ecoremedia.net/e-mate/update/e-Mate-Setup-${version}-x64.exe`,
+  `https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev/desktop/v${version}/e-Mate-Setup-${version}-x64.exe`,
 ]);
 assert.deepEqual(contract.downloadSources(contract.normalizeDownloadIndex(raw), "unknown"), []);
 assert.deepEqual(contract.installationTrustCopy(contract.normalizeDownloadIndex(raw)), {
