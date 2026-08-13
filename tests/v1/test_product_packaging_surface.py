@@ -77,12 +77,14 @@ def test_v1_runtime_imports_the_packaged_cow_data_plane() -> None:
         "bridge",
         "channel",
         "common",
+        "models",
     }
     assert {
         "agent.tools",
         "bridge.agent_initializer",
         "channel.channel_manager",
         "common.ecorex_tool_permissions",
+        "models.model_capabilities",
     } <= imports
 
 
