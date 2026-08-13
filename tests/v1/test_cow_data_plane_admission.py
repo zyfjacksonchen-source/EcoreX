@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import sys
 
+from pydantic import SecretStr
+
 from agent.skills.manager import SkillManager
 from agent.tools.tool_manager import ToolManager
 from ecorex.extensions.cow_mcp import CowMCPSettingsService
@@ -172,6 +174,35 @@ def test_mcp_settings_write_the_same_project_file_tool_manager_reads(
             "_emate_revision": 1,
         }
     ]
+
+
+def test_tencent_docs_bearer_is_written_only_to_the_cow_workspace_mcp_config(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    project = tmp_path / "project"
+    monkeypatch.setattr(ToolManager, "_instance", None)
+    manager = ToolManager(workspace_root=project)
+    monkeypatch.setattr(manager, "refresh_mcp_if_changed", lambda: None)
+    service = CowMCPSettingsService(project, manager)
+    token = "tencent-docs-test-token"
+
+    projected = service.create(
+        UserMCPServerRequest(
+            display_name="tencent-docs",
+            endpoint="https://docs.qq.com/openapi/mcp",
+            auth_kind="bearer",
+            credential=SecretStr(token),
+        )
+    )
+
+    stored = json.loads((project / "mcp.json").read_text(encoding="utf-8"))
+    config = stored["mcpServers"]["tencent-docs"]
+    assert config["type"] == "streamable-http"
+    assert config["url"] == "https://docs.qq.com/openapi/mcp"
+    assert config["headers"] == {"Authorization": f"Bearer {token}"}
+    assert projected["credential_configured"] is True
+    assert token not in json.dumps(projected)
+    assert manager._load_mcp_configs() == [{"name": "tencent-docs", **config}]
 
 
 def test_product_runtime_never_mounts_legacy_mcp_execution_supervisor(

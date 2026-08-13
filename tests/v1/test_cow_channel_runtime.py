@@ -59,6 +59,18 @@ def test_cow_channel_service_starts_official_config_without_managed_session() ->
     assert manager.stopped == [None]
 
 
+def test_native_weixin_exposes_qr_authorization_instead_of_hidden_terminal_login() -> None:
+    service = CowChannelService(manager=_Manager(), config={})
+
+    weixin = next(
+        item for item in service.catalog()["items"] if item["channel_id"] == "weixin"
+    )
+
+    assert weixin["auth_kind"] == "device_code"
+    assert weixin["actions"]["auth_begin"] is True
+    assert weixin["actions"]["save"] is False
+
+
 def test_cow_channel_ui_edits_the_live_config_and_manager(tmp_path: Path) -> None:
     manager = _Manager()
     config_path = tmp_path / "config.json"
