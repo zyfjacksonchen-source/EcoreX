@@ -479,3 +479,28 @@ environment failure until the product failure reproduces from known state.
   generation/migration/producer set passed `17`; JavaScript syntax and
   `git diff --check` passed. No production credential, database, service,
   package, feed, deployment, or external request was used.
+
+### 2026-08-13 CU-205-STARTUP-PARALLEL-001
+
+- Exact 2.0.4 evidence separated Electron process start, startup-page load,
+  Runtime spawn, and Runtime readiness. The Runtime itself reached its first
+  scheduler log about 11 seconds after spawn; the longer visible delay came
+  before spawn because `launch()` awaited the startup-page Renderer first.
+- Fix `c71161c3` starts the existing owner-proofed BackendManager promise before
+  awaiting the local startup page, then awaits that same promise. Runtime
+  ownership, failure dialog, retry, and shutdown semantics are unchanged.
+- The ordering regression failed before the fix and passed after it; the
+  affected Electron suite passed `19/19`. The 2.0.4 App was not restarted; the
+  final wall-clock result remains a frozen 2.0.5 candidate acceptance gate.
+
+### 2026-08-13 CU-205-MAC-ICON-001
+
+- The existing macOS ICNS used an opaque 1024x1024 square, so Launchpad rendered
+  it larger and squarer than native macOS icons. The e-Mate robot artwork and
+  orange/black brand pixels were not regenerated.
+- The ICNS now uses the macOS 824x824 live area centered on a transparent
+  1024x1024 canvas with a rounded-square silhouette. Windows ICO bytes remain
+  unchanged.
+- The focused asset check proves transparent corners, the exact live-area
+  bounds, an opaque center, and sub-one-channel mean drift against the existing
+  Windows brand artwork after normalization.
