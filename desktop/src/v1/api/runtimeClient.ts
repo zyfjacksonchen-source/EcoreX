@@ -94,6 +94,8 @@ export interface RuntimeBridgeConfig {
   mode?: "standard" | "acceptance-preview";
 }
 
+export const SESSION_LOGIN_TERMINAL_TIMEOUT_MS = 30_000;
+
 export interface TurnModelSelection {
   agentModelId: string;
   imageModelId: string | null;
@@ -512,7 +514,9 @@ export class RuntimeClient {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       try {
-        const bootstrap = await this.bootstrap();
+        const bootstrap = await this.bootstrap(
+          AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+        );
         if (bootstrap.login.authenticated) return true;
       } catch (error) {
         if (error instanceof RuntimeApiError) {
@@ -526,8 +530,10 @@ export class RuntimeClient {
           }
         }
       }
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) break;
       await new Promise<void>((resolve) => {
-        globalThis.setTimeout(resolve, pollIntervalMs);
+        globalThis.setTimeout(resolve, Math.min(pollIntervalMs, remainingMs));
       });
     }
     return false;
@@ -869,6 +875,7 @@ export class RuntimeClient {
       "/api/v1/session/login",
       {
         method: "POST",
+        signal: AbortSignal.timeout(SESSION_LOGIN_TERMINAL_TIMEOUT_MS),
         body: JSON.stringify({
           identifier,
           password,

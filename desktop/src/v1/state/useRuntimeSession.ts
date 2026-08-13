@@ -43,6 +43,7 @@ import {
   projectionClientMessageIds,
   RuntimeApiError,
   RuntimeClient,
+  SESSION_LOGIN_TERMINAL_TIMEOUT_MS,
 } from "../api/runtimeClient.ts";
 import type {
   ClientOperation,
@@ -1626,6 +1627,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     setSessionBusy(true);
     setSessionError(null);
     try {
+      const terminalDeadline = Date.now() + SESSION_LOGIN_TERMINAL_TIMEOUT_MS;
       const receipt = await client.loginSession(identifier, password);
       if (!receipt.restart_scheduled) {
         setSessionError(
@@ -1634,7 +1636,11 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
         window.setTimeout(() => window.location.reload(), 1_500);
         return null;
       }
-      if (await client.waitForCredentialRotation({ timeoutMs: 90_000 })) {
+      const handoffTimeoutMs = Math.max(0, terminalDeadline - Date.now());
+      if (
+        handoffTimeoutMs > 0
+        && await client.waitForCredentialRotation({ timeoutMs: handoffTimeoutMs })
+      ) {
         window.location.reload();
         return receipt;
       }

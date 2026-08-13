@@ -603,6 +603,33 @@ test("account login sends one CSRF-protected credential mutation and validates t
   }
 });
 
+test("account login request carries a terminal deadline", async () => {
+  let loginSignal: AbortSignal | null = null;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_input, init) => {
+    loginSignal = init?.signal ?? null;
+    return Response.json({
+      authenticated: true,
+      display_name: "小芯",
+      generation: 2,
+      restart_required: true,
+      restart_scheduled: true,
+    });
+  };
+  try {
+    const client = new RuntimeClient({
+      apiBase: "http://127.0.0.1:8765",
+      bearerToken: "b".repeat(43),
+    });
+    client.acceptBootstrap(bootstrap);
+    await client.loginSession("user@example.com", "password");
+
+    assert.ok(loginSignal);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("account login rejects a malformed success receipt", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => Response.json({
@@ -695,6 +722,32 @@ test("login restart waits through the old process 409 and reloads on rotated bea
         === `Bearer old-runtime-bearer-${"b".repeat(32)}`),
       true,
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("login restart deadline aborts a stalled bootstrap request", async () => {
+  let sawBoundSignal = false;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_input, init) => new Promise<Response>((_resolve, reject) => {
+    const signal = init?.signal;
+    if (!signal) return;
+    sawBoundSignal = true;
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+  try {
+    const client = new RuntimeClient({
+      apiBase: "http://127.0.0.1:8765",
+      bearerToken: "old-runtime-bearer-" + "b".repeat(32),
+    });
+    const outcome = await Promise.race([
+      client.waitForCredentialRotation({ timeoutMs: 20, pollIntervalMs: 0 }),
+      new Promise<"unbounded">((resolve) => setTimeout(() => resolve("unbounded"), 200)),
+    ]);
+
+    assert.equal(outcome, false);
+    assert.equal(sawBoundSignal, true);
   } finally {
     globalThis.fetch = originalFetch;
   }
