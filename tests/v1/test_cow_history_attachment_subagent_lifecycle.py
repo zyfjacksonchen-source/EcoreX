@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
 from pathlib import Path
 import sqlite3
 import threading
+from types import SimpleNamespace
 
 from PIL import Image
 import pytest
@@ -136,6 +138,213 @@ def test_gateway_does_not_apply_a_second_96_message_cutoff() -> None:
         assert request.ordered_input_items()[0].content == "message-0"
     finally:
         loop.close()
+
+
+def test_cow_gateway_cancel_closes_inflight_provider_stream() -> None:
+    from agent.protocol.cancel import AgentCancelledError
+    from ecorex.runtime.worker import _CowGatewayModel
+
+    async def scenario() -> None:
+        started = asyncio.Event()
+        closed = asyncio.Event()
+
+        class Gateway:
+            async def stream(self, request):
+                started.set()
+                try:
+                    yield GatewayEvent(
+                        seq=1,
+                        event_type="output_text.delta",
+                        response_id=request.request_id,
+                        delta="partial",
+                    )
+                    await asyncio.Event().wait()
+                finally:
+                    closed.set()
+
+        cancel_event = threading.Event()
+        model = _CowGatewayModel(
+            Gateway(),
+            asyncio.get_running_loop(),
+            thread_id="thread-cancel",
+            turn_id="turn-cancel",
+            model_id="ecorex-chat",
+            cancel_event=cancel_event,
+        )
+        stream = model.call_stream(
+            SimpleNamespace(
+                system="system",
+                tools=[],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "cancel me"}],
+                    }
+                ],
+            )
+        )
+
+        first = await asyncio.to_thread(next, stream)
+        assert first["choices"][0]["delta"]["content"] == "partial"
+        await started.wait()
+        cancel_event.set()
+        with pytest.raises(AgentCancelledError):
+            await asyncio.wait_for(asyncio.to_thread(next, stream), timeout=0.5)
+        await asyncio.wait_for(closed.wait(), timeout=0.5)
+
+    asyncio.run(scenario())
+
+
+def test_cow_gateway_cancel_closes_inflight_vision_stream() -> None:
+    from agent.protocol.cancel import AgentCancelledError
+    from ecorex.runtime.worker import _CowGatewayModel
+
+    async def scenario() -> None:
+        started = asyncio.Event()
+        closed = asyncio.Event()
+
+        class Gateway:
+            async def stream(self, request):
+                started.set()
+                try:
+                    yield GatewayEvent(
+                        seq=1,
+                        event_type="output_text.delta",
+                        response_id=request.request_id,
+                        delta="partial",
+                    )
+                    await asyncio.Event().wait()
+                finally:
+                    closed.set()
+
+        cancel_event = threading.Event()
+        model = _CowGatewayModel(
+            Gateway(),
+            asyncio.get_running_loop(),
+            thread_id="thread-vision-cancel",
+            turn_id="turn-vision-cancel",
+            model_id="ecorex-chat",
+            cancel_event=cancel_event,
+        )
+        image_url = (
+            "data:image/png;base64,"
+            + base64.b64encode(_png((20, 40, 60))).decode("ascii")
+        )
+        running = asyncio.create_task(
+            asyncio.to_thread(
+                model.call_vision,
+                image_url=image_url,
+                question="describe",
+            )
+        )
+        await started.wait()
+        cancel_event.set()
+        with pytest.raises(AgentCancelledError):
+            await asyncio.wait_for(running, timeout=0.5)
+        await asyncio.wait_for(closed.wait(), timeout=0.5)
+
+    asyncio.run(scenario())
+
+
+def test_model_switch_keeps_failed_prompt_and_artifact_history(tmp_path: Path) -> None:
+    from ecorex.runtime.worker import _CowGatewayModel
+
+    store = ConversationStore(tmp_path / "switch-history.db")
+    store.append_messages(
+        "switch-session",
+        [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "create two deliverables"}],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "created"}],
+                "extras": {
+                    "artifacts": [
+                        {
+                            "title": "poster.png",
+                            "type": "image/png",
+                            "url": "/api/v1/artifacts/art_poster/preview",
+                        },
+                        {
+                            "title": "report.docx",
+                            "type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            "path": "/workspace/report.docx",
+                        },
+                    ]
+                },
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "retry after provider_rejected"}
+                ],
+            },
+        ],
+        channel_type="web",
+    )
+
+    loop = asyncio.new_event_loop()
+    try:
+        request = _CowGatewayModel(
+            SimpleNamespace(),
+            loop,
+            thread_id="switch-session",
+            turn_id="switch-turn",
+            model_id="ecorex-doubao-seed-2.0-pro",
+        )._request(
+            SimpleNamespace(
+                system="system",
+                tools=[],
+                messages=store.load_messages("switch-session", max_turns=30),
+            )
+        )
+    finally:
+        loop.close()
+
+    contents = [item.content for item in request.ordered_input_items()]
+    assert request.model_id == "ecorex-doubao-seed-2.0-pro"
+    assert contents[0] == "create two deliverables"
+    assert "[历史图片产物: poster.png | /api/v1/artifacts/art_poster/preview]" in contents[1]
+    assert "[历史文件产物: report.docx | /workspace/report.docx]" in contents[1]
+    assert contents[2] == "retry after provider_rejected"
+
+
+def test_duplicate_tool_call_id_reuses_result_without_repeating_side_effect() -> None:
+    from agent.protocol.agent_stream import AgentStreamExecutor
+    from agent.tools.base_tool import ToolResult
+
+    calls: list[dict] = []
+
+    class Tool:
+        name = "side_effect"
+        params = {"type": "object"}
+
+        def execute_tool(self, arguments):
+            calls.append(dict(arguments))
+            return ToolResult.success({"written": len(calls)})
+
+    executor = AgentStreamExecutor(
+        agent=SimpleNamespace(skill_manager=None),
+        model=SimpleNamespace(),
+        system_prompt="system",
+        tools=[Tool()],
+    )
+    first = executor._execute_tool(
+        {"id": "call-once", "name": "side_effect", "arguments": {"value": 1}}
+    )
+    replay = executor._execute_tool(
+        {"id": "call-once", "name": "side_effect", "arguments": {"value": 1}}
+    )
+    conflict = executor._execute_tool(
+        {"id": "call-once", "name": "side_effect", "arguments": {"value": 2}}
+    )
+
+    assert first == replay
+    assert calls == [{"value": 1}]
+    assert conflict["status"] == "error"
+    assert "nothing was executed" in conflict["result"]
 
 
 def _create_turn(app, thread_id: str, text: str, message_id: str):

@@ -56,6 +56,7 @@ Allowed status values: `pending`, `passed`, `failed`, `blocked`.
 | `CU-205-WIN-UPDATER-001` | Windows exact 2.0.4 installed update path | `63a591d81ddc38ab2793236943f559a02f25eee9` | Both production hosts returned 404 for `latest.yml` while the unsigned-manual gate deliberately omitted it | P1 | `codex/fix-windows-updater-205` | `c744813e` | Exact Feed red test, 16 Electron contracts, 13 deploy/rollback tests, and public download contracts passed | The single electron-updater feed now uses the domestic CDN; Windows metadata remains atomic while unsigned macOS stays manual |
 | `CU-205-FILE-001` | `CU-MAC-OFFICE` | `63a591d81ddc38ab2793236943f559a02f25eee9` | `205-表格验收.xlsx` was created, but the final row was plain text with no open/preview action | P1 | `codex/205-artifact-file-open` | `5aed338a` | Exact Cow projection regression, secure open/materialize checks, 18 Web Artifact contracts, and TypeScript passed | Cow path metadata is now admitted once into the existing account/thread-scoped Artifact store; office cards open natively while PDF/image cards retain in-app preview |
 | `CU-205-OCR-001` | macOS exact 2.0.4 OCR cold profile | `63a591d81ddc38ab2793236943f559a02f25eee9` | First call failed after 31.90s with `DependencyPackProcessError`; the same attachment succeeded on the second call in 15.45s | P1 | `codex/fix-ocr-cold-timeout-205` | `2436e951` | Exact cold-deadline regression plus all 10 dependency Pack process tests passed | One verified OCR Pack process now receives a 38s hard wall-clock bound: 30s operation plus 8s Pack-Python startup; there is no retry or fallback execution path |
+| `CU-205-CANCEL-001` | Cow Runtime robustness matrix | `58fd72e4fb845619238d21cb905df90ce5e25b36` | A silent/long Gateway stream remained open after the user cancelled because Cow's synchronous bridge blocked indefinitely on its result queue | P1 | `codex/fix-runtime-robustness-205` | Pending | Exact text/vision cancellation regressions plus the ten-test Cow history/attachment/subagent lifecycle suite passed | The turn's existing cancel Event now reaches every root/forked Cow Gateway model; cancellation closes the one in-flight future without retrying or repeating tools |
 | `MAC-OFFICE-001` | `CU-MAC-OFFICE` | `63a591d81ddc38ab2793236943f559a02f25eee9` | Word create authoring inputs failed twice after the initial create probe | Pending triage | Assigned separately | — | Pending | Exact 2.0.4 arm64 DMG SHA-256 `c9dc0022a831f053081f3c0776f1480c2939811ec1ffde2d7f9a7996e4fa2582`; ConversationStore retained the complete tool chain |
 | `CU-205-PDF-PREVIEW-001` | Windows exact 2.0.4 Office baseline | `63a591d81ddc38ab2793236943f559a02f25eee9` | `office_pdf` create/edit/inspect passed; the model-visible `render_preview` action deterministically returned `OfficePdfRuntimeError` | P1 | `codex/fix-pdf-preview-capability` | `97df920a` | Exact schema regression plus verified Pack create/edit/inspect regression passed | The exact Office Pack exports only `office.formats`; neither its Windows archive nor Core carries PyMuPDF, Poppler, or LibreOffice. Desktop preview already uses `ArtifactPreviewDialog` and the Runtime artifact preview Blob. |
 
@@ -217,3 +218,29 @@ environment failure until the product failure reproduces from known state.
   rollback, and compensation suite passed `13`; the affected public download
   checks passed. `git diff --check` passed. No package, signer, deployment, or
   production mutation was started.
+
+### 2026-08-13 CU-205-CANCEL-001
+
+- The Cow robustness matrix isolated a cancellation gap without any provider,
+  network, or account request: after one streamed delta, a silent Gateway
+  generator stayed open when the consumer set the turn cancel Event.
+- Root cause: `AgentTurnWorker` passed that Event to Cow's agent loop, but not
+  to `_CowGatewayModel`; its synchronous bridge could therefore block forever
+  on `Queue.get()` and leave the async Gateway request consuming a connection
+  and Tokens. The same Event now reaches the root model and all forks, the
+  bridge checks it every 100ms, cancels its one in-flight future, and raises
+  Cow's existing `AgentCancelledError`. No retry or duplicate tool call was
+  added.
+- The matrix also proves a provider-failed prompt remains in durable Cow
+  history, and switching the next turn's model preserves both image and office
+  Artifact references. Existing Runtime `client_message_id` coverage remains
+  the duplicate-submit authority. A repeated provider `tool_call_id` now reuses
+  its first result only when tool name and arguments match; conflicting reuse
+  fails without execution. Existing completed-tool-chain coverage proves a
+  provider failure after a tool does not erase its fact.
+- Green checks: the exact text/vision cancellation, duplicate-tool, and
+  model-switch tests passed; the affected Cow
+  history/attachment/subagent lifecycle suite passed all `10`
+  tests; four adjacent Cow tool-round/fallback, Runtime idempotency, and Chat
+  handoff tests passed. `git diff --check` passed. No App, package, feed,
+  deployment, or external request was run.

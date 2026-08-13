@@ -5375,6 +5375,7 @@ class _CowGatewayModel:
         model_id: str,
         request_scope: str | None = None,
         usage_events: list[tuple[str, dict[str, int]]] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> None:
         self.gateway = gateway
         self.loop = loop
@@ -5385,6 +5386,7 @@ class _CowGatewayModel:
         self.previous_response_id: str | None = None
         self.last_usage: dict[str, int] | None = None
         self.usage_events = usage_events if usage_events is not None else []
+        self.cancel_event = cancel_event
         self._user_images: deque[tuple[str, list[GatewayImageInput]]] = deque()
         self._assigned_user_images: dict[
             tuple[str, int], list[GatewayImageInput]
@@ -5404,7 +5406,9 @@ class _CowGatewayModel:
     def managed_gateway(self) -> bool:
         return True
 
-    def fork(self, scope: str) -> "_CowGatewayModel":
+    def fork(
+        self, scope: str, cancel_event: threading.Event | None = None
+    ) -> "_CowGatewayModel":
         return _CowGatewayModel(
             self.gateway,
             self.loop,
@@ -5413,6 +5417,7 @@ class _CowGatewayModel:
             model_id=self.model,
             request_scope=f"{self.request_scope}:{scope}",
             usage_events=self.usage_events,
+            cancel_event=cancel_event or self.cancel_event,
         )
 
     def bind_user_images(
@@ -5624,7 +5629,8 @@ class _CowGatewayModel:
             output.put(end)
 
     def call_stream(self, request: Any):
-        from queue import Queue
+        from queue import Empty, Queue
+        from agent.protocol.cancel import AgentCancelledError
 
         output: Queue[Any] = Queue()
         end = object()
@@ -5635,7 +5641,13 @@ class _CowGatewayModel:
         tool_index = 0
         saw_tool = False
         while True:
-            event = output.get()
+            if self.cancel_event is not None and self.cancel_event.is_set():
+                future.cancel()
+                raise AgentCancelledError("cancelled during Gateway streaming")
+            try:
+                event = output.get(timeout=0.1)
+            except Empty:
+                continue
             if event is end:
                 break
             if isinstance(event, BaseException):
@@ -5760,7 +5772,8 @@ class _CowGatewayModel:
             direct_tools=[],
             previous_response_id=None,
         )
-        from queue import Queue
+        from queue import Empty, Queue
+        from agent.protocol.cancel import AgentCancelledError
 
         output: Queue[Any] = Queue()
         end = object()
@@ -5770,7 +5783,13 @@ class _CowGatewayModel:
         text = ""
         usage: dict[str, int] = {}
         while True:
-            event = output.get()
+            if self.cancel_event is not None and self.cancel_event.is_set():
+                future.cancel()
+                raise AgentCancelledError("cancelled during Gateway vision")
+            try:
+                event = output.get(timeout=0.1)
+            except Empty:
+                continue
             if event is end:
                 break
             if isinstance(event, BaseException):
@@ -6738,7 +6757,10 @@ class AgentTurnWorker:
         )
         subagent_token = bind_managed_subagent_reply(
             lambda prompt, context, child_cancel: self._run_agent(
-                model=model.fork(str(context.get("session_id") or "subagent")),
+                model=model.fork(
+                    str(context.get("session_id") or "subagent"),
+                    cancel_event=child_cancel,
+                ),
                 workspace=workspace,
                 job_id=job_id,
                 thread_id=str(context.get("session_id") or "subagent"),
@@ -6886,6 +6908,7 @@ class AgentTurnWorker:
                 thread_id=job.thread_id,
                 turn_id=job.turn_id,
                 model_id=turn.agent_model_id,
+                cancel_event=cancel_event,
             )
             workspace = await _run_blocking(
                 self._workspace,

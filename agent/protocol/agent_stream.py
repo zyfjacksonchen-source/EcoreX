@@ -265,6 +265,7 @@ class AgentStreamExecutor:
 
         # Tool failure tracking for retry protection
         self.tool_failure_history = []  # List of (tool_name, args_hash, success) tuples
+        self._tool_results_by_call_id = {}
 
         # Track files to send (populated by read tool)
         self.files_to_send = []  # List of file metadata dicts
@@ -1487,6 +1488,23 @@ class AgentStreamExecutor:
         return list(required) if isinstance(required, list) else []
 
     def _execute_tool(self, tool_call: Dict) -> Dict[str, Any]:
+        tool_id = tool_call["id"]
+        identity = (tool_call["name"], self._hash_args(tool_call["arguments"]))
+        cached = self._tool_results_by_call_id.get(tool_id)
+        if cached is not None:
+            if cached[0] != identity:
+                return {
+                    "status": "error",
+                    "result": "Tool call ID was reused with different arguments; nothing was executed.",
+                    "execution_time": 0,
+                }
+            logger.info(f"Reused result for duplicate tool call ID '{tool_id}'")
+            return dict(cached[1])
+        result = self._execute_tool_once(tool_call)
+        self._tool_results_by_call_id[tool_id] = (identity, dict(result))
+        return result
+
+    def _execute_tool_once(self, tool_call: Dict) -> Dict[str, Any]:
         """
         Execute tool
         
