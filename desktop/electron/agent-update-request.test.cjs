@@ -56,6 +56,16 @@ test("Agent update request invokes the one desktop updater", async () => {
     try {
       await new Promise((resolve) => setTimeout(resolve, 50));
       assert.equal(calls, 1);
+      assert.deepEqual(
+        JSON.parse(fs.readFileSync(path.join(root, "desktop-update", "receipt.json"), "utf8")),
+        {
+          schema_version: 1,
+          owner_nonce: request.owner_nonce,
+          tool_call_id: request.tool_call_id,
+          status: "accepted",
+          completed: false,
+        },
+      );
     } finally {
       watcher.stop();
     }

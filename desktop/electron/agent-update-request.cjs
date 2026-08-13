@@ -27,6 +27,28 @@ function consumeAgentUpdateRequest(dataDir) {
   }
 }
 
+function writeAgentUpdateReceipt(dataDir, request, status) {
+  const directory = path.join(dataDir, "desktop-update");
+  const target = path.join(directory, "receipt.json");
+  const temporary = `${target}.${process.pid}.tmp`;
+  try {
+    const metadata = fs.lstatSync(directory);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) return false;
+    fs.writeFileSync(temporary, `${JSON.stringify({
+      schema_version: 1,
+      owner_nonce: request.owner_nonce,
+      tool_call_id: request.tool_call_id,
+      status,
+      completed: false,
+    })}\n`, { flag: "wx", mode: 0o600 });
+    fs.renameSync(temporary, target);
+    return true;
+  } catch {
+    try { fs.unlinkSync(temporary); } catch { /* No partial receipt. */ }
+    return false;
+  }
+}
+
 function initAgentUpdateRequests(dataDir, updater) {
   let active = false;
   const check = async () => {
@@ -35,8 +57,11 @@ function initAgentUpdateRequests(dataDir, updater) {
     if (!request) return;
     active = true;
     try {
-      await updater.requestAutomatic();
+      const operation = updater.requestAutomatic();
+      writeAgentUpdateReceipt(dataDir, request, "accepted");
+      await operation;
     } catch {
+      writeAgentUpdateReceipt(dataDir, request, "error");
       // The updater already projects a redacted failure to the renderer.
     } finally {
       active = false;
@@ -48,4 +73,4 @@ function initAgentUpdateRequests(dataDir, updater) {
   return { stop: () => clearInterval(interval) };
 }
 
-module.exports = { consumeAgentUpdateRequest, initAgentUpdateRequests };
+module.exports = { consumeAgentUpdateRequest, initAgentUpdateRequests, writeAgentUpdateReceipt };

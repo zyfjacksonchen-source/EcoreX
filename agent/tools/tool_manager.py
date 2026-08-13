@@ -194,6 +194,8 @@ class ToolManager:
                                     
                                     # Create a temporary instance to get the name
                                     temp_instance = cls()
+                                    if class_name == "DesktopUpdateTool" and not temp_instance.available():
+                                        continue
                                     tool_name = temp_instance.name
                                     # Store the class, not the instance
                                     self.tool_classes[tool_name] = cls
