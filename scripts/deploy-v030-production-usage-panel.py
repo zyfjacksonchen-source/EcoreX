@@ -663,7 +663,7 @@ def _upload_candidate(sftp, incoming: str, files: dict[str, bytes]) -> None:
     try:
         for name in CANDIDATE_NAMES:
             target = f"{incoming}/{name}"
-            with sftp.open(target, "xb") as handle:
+            with sftp.open(target, "x+") as handle:
                 handle.write(files[name])
                 handle.flush()
             sftp.chmod(target, 0o644)

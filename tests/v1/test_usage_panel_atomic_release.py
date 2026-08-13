@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import builtins
+import io
 import json
 import os
 from pathlib import Path
@@ -50,6 +51,57 @@ def test_remote_release_library_uses_only_the_server_stdlib(tmp_path: Path) -> N
                 pass
     with namespace["DeploymentLock"](lock_path, timeout=0):
         assert lock_path.is_file()
+
+
+def test_candidate_upload_uses_paramiko_exclusive_writable_mode() -> None:
+    deployer = _deployer()
+
+    class RemoteFile(io.BytesIO):
+        def __init__(self, owner, path, mode):
+            super().__init__()
+            self.owner = owner
+            self.path = path
+            self.mode = mode
+
+        def __exit__(self, exc_type, exc, traceback):
+            if exc_type is None:
+                if "+" not in self.mode:
+                    raise OSError("paramiko handle is not writable")
+                self.owner.files[self.path] = self.getvalue()
+            self.close()
+
+    class Sftp:
+        def __init__(self):
+            self.files = {}
+            self.modes = []
+            self.directories = set()
+
+        def mkdir(self, path, _mode):
+            if path in self.directories:
+                raise OSError("remote candidate collision")
+            self.directories.add(path)
+
+        def open(self, path, mode):
+            if "x" not in mode or path in self.files:
+                raise OSError("remote candidate collision")
+            self.modes.append(mode)
+            return RemoteFile(self, path, mode)
+
+        def chmod(self, _path, _mode):
+            pass
+
+    sftp = Sftp()
+    files = {name: name.encode() for name in deployer["CANDIDATE_NAMES"]}
+    deployer["_upload_candidate"](sftp, "/releases/.incoming-test", files)
+
+    assert set(sftp.files) == {
+        f"/releases/.incoming-test/{name}" for name in deployer["CANDIDATE_NAMES"]
+    }
+    assert sftp.modes == ["x+"] * len(files)
+    preserved = dict(sftp.files)
+    with pytest.raises(OSError, match="remote candidate collision"):
+        deployer["_upload_candidate"](sftp, "/releases/.incoming-test", files)
+    assert sftp.files == preserved
 
 
 def test_candidate_binds_exact_source_and_every_runtime_file() -> None:
