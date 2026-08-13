@@ -362,3 +362,28 @@ environment failure until the product failure reproduces from known state.
   evolution scenario harness passed all `13` cases plus undo; the Settings
   contract and TypeScript check passed; the affected direct Cow spine suite
   passed `19` with two package-only cases excluded. `git diff --check` passed.
+
+### 2026-08-13 CU-205-TENCENT-DOCS-001
+
+- Exact 2.0.4 Computer Use showed the stable Tencent Docs card as
+  `adapter_not_installed` while the same Capability Center already exposed the
+  native Cow Remote MCP self-service. The managed Connector projection was a
+  stale second entrance, not a missing Runtime component.
+- Fix `3e44c4ad` keeps one execution path. The stable card now opens the generic
+  `UserMCPPanel` with the official `https://docs.qq.com/openapi/mcp` Bearer
+  preset. An existing server at that endpoint is edited in place; otherwise
+  the same Cow MCP create form opens. Save, secret redaction, real test,
+  enable/disable, delete, dynamic ToolManager discovery, and execution remain
+  owned by `CowMCPSettingsService` and the current workspace `mcp.json`.
+- The exact GA regression first reproduced the misleading missing-component
+  state, then passed the card-to-preset, secret non-echo, real-test, enable,
+  disable, and credential-delete flow. The adjacent generic Remote MCP E2E
+  passed unchanged. The native ToolManager regression now makes two sequential
+  calls through one loaded MCP Runtime; both focused Python checks passed.
+  The lazy-feature contract passed all `12` tests, Vite compiled successfully,
+  and `git diff --check` passed. Repository-wide TypeScript remains blocked by
+  the pre-existing `Timeline.tsx` scroll-listener signature errors at lines
+  684 and 696; none of the changed Tencent Docs/MCP files emitted a type error.
+- No managed Tencent adapter, second executor, connector-vault write,
+  enterprise policy, real token, external request, package, or deployment was
+  added or run.
