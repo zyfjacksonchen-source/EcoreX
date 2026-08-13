@@ -907,3 +907,20 @@ environment failure until the product failure reproduces from known state.
   leaves every receipt/signature/hash check intact. Exact checks passed `5/5`,
   CI reproducibility passed `8/8`, and the merged checkout regression passed in
   0.6 seconds. The failed run's R2 credentials were fully revoked.
+
+### 2026-08-14 CU-205-R2-ADMISSION-002
+
+- Formal run `31707033628` built the Runtime and all three desktop platforms,
+  then stopped before the admission receipt and Feed. Public evidence showed
+  all four immutable R2 objects present with the expected content lengths and
+  working byte ranges. The blockmap's `Last-Modified` timestamp and the generic
+  failure occurred in the same second; a public-probe failure would have spent
+  at least 15 seconds in its existing bounded backoff. This isolates the
+  failure to the authenticated HEAD immediately after the blockmap upload.
+- Authenticated R2 HEAD now uses the same bounded `1/2/4/8` second retry shape
+  as the existing cloud client boundary. A successful retry does not upload the
+  object again; exhaustion reports only the safe object name. Missing-object
+  codes still return immediately so a genuinely absent object can be uploaded.
+- Commit `5d84916a` passed the exact transient-HEAD regression and the complete
+  publisher set `7/7`. The failed run's three GitHub secrets and Cloudflare
+  user token were revoked before the next frozen dispatch.
