@@ -719,3 +719,30 @@ environment failure until the product failure reproduces from known state.
   native set passed `5` with `11` Windows-only source tests skipped on macOS.
   PowerShell source parsing passed on Windows. The frozen candidate still owns
   the actual Windows native build and installed-machine replay.
+
+### 2026-08-13 CU-205-COW-DESKTOP-PLATFORM-PARITY-001
+
+- The platform comparison source is official CowAgent 2.1.5 exact
+  `e3ac1b952500f60934862c6bf0bd0de91b415ed8`. Its desktop launches one
+  PyInstaller onedir backend from a user-writable data directory, pipes child
+  output into the shell, and waits on an unauthenticated health endpoint.
+- Cow desktop clears its fixed port by terminating every discovered listener.
+  e-Mate does not copy that unsafe behavior: it proves an owned Runtime with
+  the existing HMAC receipt, replaces only that exact owner, and moves an
+  unknown listener to a free loopback port. Its fixed startup-stage diagnostic
+  retains less information than Cow's raw output but remains useful without
+  persisting paths, tokens, nonces, or arbitrary stderr.
+- Cow's PyInstaller `Analysis` and `COLLECT` own the Windows native dependency
+  closure. e-Mate retains its immutable Core/Pack staging and now binds the
+  previously missing `MSVCP140.dll` explicitly, so a developer machine's
+  System32 can no longer make an incomplete package appear healthy.
+- On macOS, Cow restores the login-shell PATH because Finder/Dock starts GUI
+  applications with a minimal environment. e-Mate now does the same once per
+  Electron process and retains `~/.local/bin`, Homebrew, and standard system
+  locations; Windows PATH behavior is unchanged. The exact desktop contract
+  passed, followed by the remaining affected Electron cases `8/8`.
+- e-Mate already verifies the target architecture and every staged Mach-O,
+  ships the matched Playwright Chromium runtime, and keeps writable state under
+  `EMATE_DATA_DIR`; these stronger existing paths were not replaced. Developer
+  ID signing, hardened Runtime, and notarization also remain outside this
+  unsigned release train as previously selected, rather than being simulated.
