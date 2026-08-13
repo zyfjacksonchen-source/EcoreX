@@ -32,13 +32,46 @@ def test_production_deployer_accepts_the_current_usage_contract(monkeypatch) -> 
     )
     assert b"from ecorex import __version__" not in payload
     compile(payload, "usage_panel_api.py", "exec")
-    assert repr(usage_panel_service.USAGE_PROJECTION_VERSION) in deployer[
-        "_verify_program"
-    ](
+    namespace = {"__name__": "usage_panel_release_test"}
+    exec(deployer["_REMOTE_LIBRARY"], namespace)
+    responses = {
+        "health": {"ok": True, "version": PRODUCT_VERSION},
+        "data": {
+            "projection_version": usage_panel_service.USAGE_PROJECTION_VERSION,
+            "kpis": {"totalTokens": 7},
+            "reconciliation": {"canonical_record_count": 1},
+        },
+        "audit": {
+            "projection_version": usage_panel_service.USAGE_PROJECTION_VERSION,
+            "kpis": {"totalTokens": 7},
+            "reconciliation": {"canonical_record_count": 1},
+        },
+    }
+    namespace["_load"] = lambda _url, label: responses[label]
+    assert namespace["_verify_live"](
         "2026-08-01T00:00:00+08:00",
         "2026-08-10T00:00:00+08:00",
+        PRODUCT_VERSION,
         usage_panel_service.USAGE_PROJECTION_VERSION,
-    )
+    ) == {
+        "status": "passed",
+        "version": PRODUCT_VERSION,
+        "projection_version": usage_panel_service.USAGE_PROJECTION_VERSION,
+        "kpis_sha256": "844917ecff5322e426544456e964ef6cd250444d5bd0d42b44ee56c28aff6da8",
+        "reconciliation_sha256": "7f79a7d4207c67e128b429cf1480b5bfaae260e495b922d0abda1fc3f8424b88",
+        "canonical_record_count": 1,
+        "replaced_duplicate_count": None,
+        "unassociated_record_count": None,
+        "missing_provider_usage_count": None,
+    }
+    responses["audit"]["kpis"] = {"totalTokens": 8}
+    with pytest.raises(RuntimeError, match="kpi_mismatch"):
+        namespace["_verify_live"](
+            "2026-08-01T00:00:00+08:00",
+            "2026-08-10T00:00:00+08:00",
+            PRODUCT_VERSION,
+            usage_panel_service.USAGE_PROJECTION_VERSION,
+        )
 
 
 def _database(path: str) -> None:
