@@ -202,7 +202,7 @@ def test_enabled_local_skill_is_discovered_by_cow_and_disable_removes_it(
     assert live_extension_skill_roots() == ()
     manager.refresh_skills()
     assert manager.filter_skills() == []
-    assert manager.is_skill_enabled("shared-helper") is False
+    assert manager.get_skill("shared-helper") is None
 
 
 def test_skill_switch_does_not_hide_cow_first_party_tools(tmp_path: Path) -> None:

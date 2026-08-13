@@ -275,14 +275,6 @@ class SkillManager:
         :param name: skill name
         :return: True if enabled (default True if not in config)
         """
-        try:
-            from ecorex.extensions.live_authority import live_skill_enabled
-
-            live = live_skill_enabled(name)
-            if live is not None:
-                return live
-        except Exception:
-            pass
         entry = self.skills_config.get(name)
         return True if entry is None else bool(entry.get("enabled", True))
 
