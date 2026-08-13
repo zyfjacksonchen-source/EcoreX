@@ -16,6 +16,7 @@ import hashlib
 from html import escape
 import json
 import math
+import mimetypes
 import os
 from pathlib import Path
 import threading
@@ -6459,17 +6460,14 @@ class AgentTurnWorker:
                         lease_token=lease_token,
                     )
         elif event_type in {"artifact", "file_to_send"} and data:
-            self.kernel.create_item(
-                turn_id=turn_id,
-                kind=ItemKind.ARTIFACT,
-                status=ItemStatus.COMPLETED,
-                content={
-                    "source": "cow-2.1.5",
-                    **data,
-                    "type": data.get("type") or event_type,
-                },
+            self._project_cow_artifact(
+                event_type,
+                data,
+                state=state,
+                seq=seq,
                 job_id=job_id,
                 lease_token=lease_token,
+                turn_id=turn_id,
             )
         elif event_type in {"reasoning_update", "tool_execution_progress", "error"}:
             turn = self.kernel.get_turn(turn_id)
@@ -6481,6 +6479,127 @@ class AgentTurnWorker:
                 event_type=f"cow.{event_type}",
                 payload=data,
                 idempotency_key=f"{turn_id}:cow:{event_type}:{seq}",
+            )
+
+    def _project_cow_artifact(
+        self,
+        event_type: str,
+        data: Mapping[str, Any],
+        *,
+        state: Mapping[str, Any],
+        seq: int,
+        job_id: str,
+        lease_token: str,
+        turn_id: str,
+    ) -> None:
+        if self.input_attachments is None:
+            raise ConflictError("Cow Artifact service is unavailable")
+        service = self.input_attachments.artifacts
+        thread_id = str(state.get("thread_id") or self.kernel.get_turn(turn_id).thread_id)
+        raw_path = str(data.get("path") or "").strip()
+        if not raw_path:
+            raise ConflictError("Cow Artifact path is missing")
+        try:
+            path = Path(raw_path).expanduser().resolve(strict=True)
+        except OSError as error:
+            raise ConflictError("Cow Artifact is unavailable") from error
+        if not path.is_file():
+            raise ConflictError("Cow Artifact is not a file")
+        if event_type == "artifact":
+            workspace = state.get("workspace")
+            if workspace is None:
+                raise ConflictError("Cow Artifact workspace is unavailable")
+            try:
+                path.relative_to(Path(workspace).resolve(strict=True))
+            except (OSError, ValueError) as error:
+                raise CapabilityDeniedError(
+                    "Cow generated Artifact escaped its workspace"
+                ) from error
+        try:
+            file_content = path.read_bytes()
+        except OSError as error:
+            raise ConflictError("Cow Artifact could not be read") from error
+        from ecorex.artifacts import ArtifactScope
+
+        prepared = service.prepare_artifact(
+            file_content,
+            requested_name=path.name,
+            mime_type=(
+                str(data.get("mime_type") or "").strip()
+                or mimetypes.guess_type(path.name)[0]
+                or "application/octet-stream"
+            ),
+            declaration=service.issue_trusted_deliverable_declaration("cow-2.1.5"),
+            scope=ArtifactScope(
+                account_id=self.input_attachments.account_id,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                created_by_tool_id="cow-2.1.5",
+            ),
+        )
+        with self.kernel._mutation_transaction(
+            scope="cow_artifact_project",
+            subject=turn_id,
+            job_id=job_id,
+            lease_token=lease_token,
+        ) as connection:
+            artifact = service.create_artifact_in_transaction(connection, prepared)
+            item_id = "itm_" + hashlib.sha256(
+                f"{turn_id}\0cow-artifact\0{seq}\0{artifact.revision_id}".encode("utf-8")
+            ).hexdigest()[:32]
+            item_content: dict[str, Any] = {
+                "artifact": artifact.to_dict(),
+                "source": {"kind": "cow-2.1.5", "event_type": event_type},
+                "change_summary": "CowAgent 已生成文件产物。",
+            }
+            if "preview" in {action.value for action in artifact.actions}:
+                item_content["preview"] = {
+                    "artifact_id": artifact.artifact_id,
+                    "revision_id": artifact.revision_id,
+                    "mime_type": artifact.mime_type,
+                    "url": f"/api/v1/artifacts/{artifact.artifact_id}/preview",
+                }
+            if event_type == "file_to_send":
+                item_content.update(
+                    {
+                        key: data[key]
+                        for key in (
+                            "type",
+                            "file_type",
+                            "path",
+                            "file_name",
+                            "mime_type",
+                            "size",
+                            "size_formatted",
+                            "message",
+                        )
+                        if key in data
+                    }
+                )
+                item_content["type"] = "file_to_send"
+            self.kernel._create_item_in_transaction(
+                connection,
+                item_id=item_id,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                kind=ItemKind.ARTIFACT,
+                content=item_content,
+                status=ItemStatus.COMPLETED,
+                idempotency_key=f"{turn_id}:cow:artifact:{seq}:item",
+            )
+            self.kernel.events.append_in_transaction(
+                connection,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                item_id=item_id,
+                job_id=job_id,
+                event_type="artifact.cow.created",
+                payload={
+                    "artifact_id": artifact.artifact_id,
+                    "revision_id": artifact.revision_id,
+                    "sha256": artifact.sha256,
+                },
+                idempotency_key=f"{turn_id}:cow:artifact:{seq}:created",
             )
 
     async def _heartbeat_loop(
@@ -6775,6 +6894,8 @@ class AgentTurnWorker:
                 job.turn_id,
                 turn.metadata,
             )
+            state["workspace"] = workspace
+            state["thread_id"] = job.thread_id
             conversation_store = self._conversation_store(workspace)
             project_context = self._project_context(turn.metadata, workspace)
             channel_type, receiver = self._delivery_context(

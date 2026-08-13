@@ -1,4 +1,8 @@
-import type { ArtifactAction, ArtifactProjection } from "../api/contracts.ts";
+import type {
+  ArtifactAction,
+  ArtifactFamily,
+  ArtifactProjection,
+} from "../api/contracts.ts";
 
 export type ArtifactUiAction =
   | "thumbs_up"
@@ -15,6 +19,22 @@ const OVERFLOW_ACTIONS = [
   "reveal",
   "download",
 ] as const satisfies readonly ArtifactAction[];
+
+const NATIVE_OPEN_FAMILIES = new Set<ArtifactFamily>([
+  "document",
+  "spreadsheet",
+  "presentation",
+]);
+
+export function artifactPrimaryAction(
+  family: ArtifactFamily,
+  actions: readonly ArtifactAction[],
+): "preview" | "open" | null {
+  const projected = new Set(actions);
+  if (NATIVE_OPEN_FAMILIES.has(family) && projected.has("open")) return "open";
+  if (projected.has("preview")) return "preview";
+  return projected.has("open") ? "open" : null;
+}
 
 /**
  * Maps the backend action projection to the actions this WebUI can execute.

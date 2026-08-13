@@ -682,6 +682,92 @@ def test_cow_terminal_fallback_is_projected_once_without_repeating_streamed_text
     assert worker.kernel.deltas[-1][1] == "streamed"
 
 
+def test_cow_office_file_events_become_account_scoped_public_artifacts(
+    tmp_path: Path,
+) -> None:
+    from ecorex.protocol import CreateThreadRequest, CreateTurnRequest, ItemKind
+    from ecorex.runtime import RuntimeSettings, create_app
+    from ecorex.runtime.worker import AgentTurnWorker
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    app = create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "runtime.db",
+            workspace_root=workspace,
+        )
+    )
+    kernel = app.state.runtime
+    composition = app.state.runtime_composition
+    thread = kernel.create_thread(CreateThreadRequest(title="Cow office files"))
+    prepared = composition.prepare_turn(
+        CreateTurnRequest(
+            input="生成办公文件",
+            client_message_id="cow-office-artifact-message",
+        )
+    )
+    created = kernel.create_turn(
+        thread.thread_id,
+        prepared.request,
+        snapshot_context=prepared.snapshot_context,
+    )
+    leased = kernel.jobs.lease_next("cow-office-artifact-worker")
+    assert leased is not None and leased.lease_token
+    kernel.jobs.start(leased.job_id, "cow-office-artifact-worker", leased.lease_token)
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=SimpleNamespace(),
+        input_attachments=app.state.input_attachment_service,
+    )
+    state = {
+        "seq": 0,
+        "message_item": None,
+        "tools": {},
+        "errors": [],
+        "workspace": workspace,
+        "thread_id": thread.thread_id,
+    }
+
+    for filename in ("report.docx", "budget.xlsx", "slides.pptx"):
+        path = workspace / filename
+        path.write_bytes(b"PK\x03\x04cow-office")
+        worker._project_event(
+            {
+                "type": "artifact",
+                "data": {
+                    "type": "artifact",
+                    "path": str(path),
+                    "file_name": filename,
+                    "kind": "office",
+                },
+            },
+            state=state,
+            job_id=leased.job_id,
+            lease_token=leased.lease_token,
+            turn_id=created.turn.turn_id,
+        )
+
+    projection = kernel.projection(thread.thread_id)
+    items = [item for item in projection.items if item.kind is ItemKind.ARTIFACT]
+    assert [item.content["artifact"]["family"] for item in items] == [
+        "document",
+        "spreadsheet",
+        "presentation",
+    ]
+    assert [Path(item.content["artifact"]["display_name"]).suffix for item in items] == [
+        ".docx",
+        ".xlsx",
+        ".pptx",
+    ]
+    for item in items:
+        artifact = item.content["artifact"]
+        assert {"open", "download", "reveal"} <= set(artifact["actions"])
+        scope = app.state.artifact_service.get_artifact_scope(artifact["artifact_id"])
+        assert scope.account_id == app.state.input_attachment_service.account_id
+        assert scope.thread_id == thread.thread_id
+        assert scope.turn_id == created.turn.turn_id
+
+
 def test_cow_tool_catalog_is_not_rejected_at_the_legacy_sixty_four_tool_limit() -> None:
     from agent.protocol.models import LLMRequest
     from ecorex.gateway import MAX_TOOL_SCHEMA_BATCH_BYTES, canonical_tool_schema_batch_bytes

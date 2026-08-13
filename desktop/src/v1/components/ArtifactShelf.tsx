@@ -20,6 +20,7 @@ import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 
 import type { ArtifactProjection } from "../api/contracts.ts";
 import {
+  artifactPrimaryAction,
   artifactUiActions,
   type ArtifactUiAction,
 } from "../state/artifactActions.ts";
@@ -416,7 +417,7 @@ export function ArtifactShelf({
         {artifacts.map((artifact) => {
           const media = artifact.family === "image" || artifact.family === "video";
           const previewUrl = previewUrls[artifact.artifact_id];
-          const canPreview = artifact.actions.includes("preview");
+          const primaryAction = artifactPrimaryAction(artifact.family, artifact.actions);
           const primaryContent = (
             <>
               {media && previewUrl ? (
@@ -438,15 +439,16 @@ export function ArtifactShelf({
               data-emate-artifact-id={artifact.artifact_id}
               data-emate-artifact-revision={artifact.revision_id}
               data-emate-artifact-name={artifact.display_name}
-              data-preview-artifact-id={media && canPreview ? artifact.artifact_id : undefined}
+              data-preview-artifact-id={media && primaryAction === "preview" ? artifact.artifact_id : undefined}
               key={artifact.artifact_id}
             >
-              {canPreview ? (
+              {primaryAction ? (
                 <button
                   className="ex-artifact-primary"
                   type="button"
-                  data-artifact-preview-trigger={artifact.artifact_id}
-                  onClick={() => onAction?.(artifact, "preview")}
+                  data-artifact-preview-trigger={primaryAction === "preview" ? artifact.artifact_id : undefined}
+                  aria-label={`${primaryAction === "open" ? "打开文件" : "预览"}：${artifact.display_name}`}
+                  onClick={() => onAction(artifact, primaryAction)}
                 >
                   {primaryContent}
                 </button>

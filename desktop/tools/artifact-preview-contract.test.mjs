@@ -47,8 +47,9 @@ const markdown = await readFile(
   "utf-8",
 );
 
-test("clicking the Artifact card opens preview without a separate magnifier affordance", () => {
-  assert.match(shelf, /className="ex-artifact-primary"[\s\S]*onClick=\{\(\) => onAction\?\.\(artifact, "preview"\)\}/u);
+test("the Artifact card executes its backend-authorized primary action", () => {
+  assert.match(shelf, /const primaryAction = artifactPrimaryAction\(artifact\.family, artifact\.actions\)/u);
+  assert.match(shelf, /className="ex-artifact-primary"[\s\S]*onClick=\{\(\) => onAction\(artifact, primaryAction\)\}/u);
   assert.doesNotMatch(shelf, /label="(?:放大|缩小|打开)预览"/u);
 });
 
