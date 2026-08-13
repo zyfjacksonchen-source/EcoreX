@@ -1,10 +1,12 @@
 const assert = require("node:assert/strict");
 const Module = require("node:module");
+const path = require("node:path");
 const test = require("node:test");
 
 const originalLoad = Module._load;
 let executable = "/Applications/e-Mate.app/Contents/MacOS/e-Mate";
 Module._load = function mockedLoad(request, parent, isMain) {
+  if (request === "node:path") return path.posix;
   if (request === "electron") return {
     app: {
       getPath: (name) => name === "exe" ? executable : "/tmp/emate-test",

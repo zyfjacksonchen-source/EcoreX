@@ -165,7 +165,7 @@ test("desktop identity and unsigned release targets are explicit", async () => {
 
 test("desktop starts the Runtime before waiting for the startup page", async () => {
   const main = await load("electron/main.cjs");
-  const launchBody = main.match(/async function launch\(\) \{(?<body>[\s\S]*?)\n\}\n\nconst singleInstance/)?.groups?.body ?? "";
+  const launchBody = main.match(/async function launch\(\) \{(?<body>[\s\S]*?)\r?\n\}\r?\n\r?\nconst singleInstance/)?.groups?.body ?? "";
   assert.match(launchBody, /const runtimeStartup = startBackendWithRetry\(window\);/);
   assert.ok(launchBody.indexOf("const runtimeStartup") < launchBody.indexOf("await window.loadURL(startupPage())"));
   assert.match(launchBody, /const runtimeOrigin = await runtimeStartup;/);
@@ -596,7 +596,7 @@ test("packaged desktop directly launches the immutable Runtime on macOS and Wind
     assert.equal(mac.environment.COW_DATA_DIR, dataDir);
     assert.equal(mac.environment.COW_DESKTOP, "1");
     assert.ok(mac.environment.PATH.split(":").includes("/opt/homebrew/bin"));
-    assert.ok(mac.environment.PATH.split(":").includes(path.join(os.homedir(), ".local/bin")));
+    assert.ok(mac.environment.PATH.includes(path.join(os.homedir(), ".local/bin")));
     assert.equal(mac.environment.PLAYWRIGHT_BROWSERS_PATH, path.join(runtime, "payload", "ms-playwright"));
     assert.equal(mac.environment.EMATE_PACKAGED_RUNTIME, "1");
     assert.equal(mac.windowsHide, true);
