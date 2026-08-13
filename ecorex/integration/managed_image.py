@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -14,7 +13,7 @@ import re
 import sqlite3
 import threading
 import time
-from typing import Any, Iterator, Mapping
+from typing import Any, Mapping
 from urllib.parse import urlsplit
 
 import httpx
@@ -349,17 +348,6 @@ class ManagedImageOrchestrationClient:
         actual = _session_continuity(snapshot)
         if actual != expected:
             raise ManagedImageClientError("managed_image_session_changed", retryable=False)
-
-    @contextmanager
-    def operation_scope(self) -> Iterator[None]:
-        """Freeze one logical session across all child requests in an operation."""
-
-        _snapshot, binding, _token = self._session()
-        operation = self._operation_binding.set(binding)
-        try:
-            yield
-        finally:
-            self._operation_binding.reset(operation)
 
     async def upload_input(self, asset: ManagedImageInputAsset) -> None:
         response, _account = await self._request(
