@@ -588,3 +588,17 @@ environment failure until the product failure reproduces from known state.
   5 threads, 12 turns, 31 items, and 1,437 events while preserving all 9 current
   threads; the resulting Runtime invariant report was clean. No real profile
   was changed.
+
+### 2026-08-13 CU-205-THREAD-SWITCH-JITTER-001
+
+- The message Timeline retained one Virtuoso measurement owner while switching
+  between conversations of very different heights. Stale row measurements and
+  the new conversation's scroll correction then competed, visibly moving only
+  the message region while the composer stayed fixed.
+- The Virtuoso list is now keyed by `timelineThreadId`, so each conversation
+  receives fresh measurement and scroll state without remounting the composer.
+  No animation was disabled and no timeout-based correction was added.
+- The exact renderer contract passed `15/15`. A focused source E2E switched a
+  48-turn conversation to a 2-turn conversation and back, observed the expected
+  measurement owner each time, and verified unchanged composer geometry; it
+  passed `1/1` in 1.9 seconds. TypeScript and the Vite source build also passed.
