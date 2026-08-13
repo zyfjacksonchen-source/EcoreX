@@ -59,6 +59,9 @@ Allowed status values: `pending`, `passed`, `failed`, `blocked`.
 | `CU-205-CANCEL-001` | Cow Runtime robustness matrix | `58fd72e4fb845619238d21cb905df90ce5e25b36` | A silent/long Gateway stream remained open after the user cancelled because Cow's synchronous bridge blocked indefinitely on its result queue | P1 | `codex/fix-runtime-robustness-205` | Pending | Exact text/vision cancellation regressions plus the ten-test Cow history/attachment/subagent lifecycle suite passed | The turn's existing cancel Event now reaches every root/forked Cow Gateway model; cancellation closes the one in-flight future without retrying or repeating tools |
 | `MAC-OFFICE-001` | `CU-MAC-OFFICE` | `63a591d81ddc38ab2793236943f559a02f25eee9` | Word create authoring inputs failed twice after the initial create probe | Pending triage | Assigned separately | — | Pending | Exact 2.0.4 arm64 DMG SHA-256 `c9dc0022a831f053081f3c0776f1480c2939811ec1ffde2d7f9a7996e4fa2582`; ConversationStore retained the complete tool chain |
 | `CU-205-PDF-PREVIEW-001` | Windows exact 2.0.4 Office baseline | `63a591d81ddc38ab2793236943f559a02f25eee9` | `office_pdf` create/edit/inspect passed; the model-visible `render_preview` action deterministically returned `OfficePdfRuntimeError` | P1 | `codex/fix-pdf-preview-capability` | `97df920a` | Exact schema regression plus verified Pack create/edit/inspect regression passed | The exact Office Pack exports only `office.formats`; neither its Windows archive nor Core carries PyMuPDF, Poppler, or LibreOffice. Desktop preview already uses `ArtifactPreviewDialog` and the Runtime artifact preview Blob. |
+| `CU-205-MODEL-SWITCH-001` | macOS exact 2.0.4 model-switch continuity | `63a591d81ddc38ab2793236943f559a02f25eee9` | The same three-image conversation succeeded on Luna, then DeepSeek and Doubao both failed before any tool call with `provider_rejected` | P1 | `codex/fix-model-switch-image-context-205` | `f693156a` (integrated as `a07bc35b`) | Exact history-envelope regression plus affected Chat Completions, multimodal, and image fallback checks passed `19` | Both providers accepted `system` and rejected `developer` in bounded direct protocol probes; all three Artifact URLs and complete Cow history remain present. |
+| `CU-205-TIMELINE-BOTTOM-001` | macOS exact 2.0.4 model-switch UI | `63a591d81ddc38ab2793236943f559a02f25eee9` | After model-switch reprojection the composer and real bottom were visible, but the floating `回到底部` button remained | P1 | `codex/fix-model-switch-image-context-205` | `56f61374` (integrated as `c721ecdb`) | Timeline plus interaction renderer contracts passed `23` | Virtuoso height changes now remeasure the same real scroll parent; an active upward scroll remains paused and is not forced to the bottom. |
+| `CU-205-IMAGE-BATCH-SESSION-001` | macOS exact 2.0.4 three-image edit | `63a591d81ddc38ab2793236943f559a02f25eee9` | One `imagegen(tasks=[3])` returned two Artifacts and failed item 3 with `managed_image_session_changed` after 328.32 seconds | P1 | `codex/fix-model-switch-image-context-205` | `67496696` | Managed-image client and batch facade passed `24` affected tests | A normal credential refresh changed generation `4→5` and lease revision `1000441→1000442` at 12:28:05 while preserving account and signed policy; the old exact-revision fence rejected the remaining child. |
 
 Use `CU-205-<AREA>-NNN` for product findings. Do not allocate an ID for an
 environment failure until the product failure reproduces from known state.
@@ -244,3 +247,64 @@ environment failure until the product failure reproduces from known state.
   tests; four adjacent Cow tool-round/fallback, Runtime idempotency, and Chat
   handoff tests passed. `git diff --check` passed. No App, package, feed,
   deployment, or external request was run.
+### 2026-08-13 CU-205-MODEL-SWITCH-001
+
+- Exact 2.0.4 thread `thr_01KZWN2HKGPMWF2JCE8Y0W5P26` retained the complete
+  three-image Luna turn. Switching to `ecorex-deepseek-v4-pro` and then
+  `ecorex-doubao-seed-2.0-pro` failed in zero to one second, before a tool call,
+  retry, or side effect. Switching back to Luna recovered the three original
+  Artifact IDs and made one batch edit call, proving history storage itself was
+  intact.
+- Root cause: the shared Chat Completions adapter projected Cow instructions as
+  role `developer`. Bounded calls through the active production provider
+  configurations returned HTTP 200 for `system`, while DeepSeek returned HTTP
+  400 with its accepted-role list and Doubao returned HTTP 400
+  `InvalidParameter` for `developer`. Fix `f693156a` uses the providers'
+  supported `system` role without dropping, truncating, or rewriting Cow
+  history, image URLs, or tool schemas.
+- Red check reproduced the four-message envelope with all three Artifact URLs;
+  both providers rejected the old role. Green checks covered the exact
+  envelope, both affected provider adapters, multimodal history, and the
+  existing controlled image-model fallback rules: `19 passed` in 6.05 seconds.
+
+### 2026-08-13 CU-205-TIMELINE-BOTTOM-001
+
+- Root cause: `Timeline.tsx` synchronized follow state only on native `scroll`.
+  A model-switch separator or message reprojection can change Virtuoso's total
+  height without emitting that event, leaving `showJumpToLatest` stale even
+  when the real scroll parent is already at the bottom.
+- Fix `56f61374` reuses the existing bottom threshold and state machine from
+  `totalListHeightChanged`. A layout change clears the stale pause only when
+  the measured parent is at the bottom; a user who remains above the threshold
+  stays paused, with no timer or forced scroll added.
+- The new exact renderer regression and the affected interaction contract both
+  passed: `23` Node tests in 0.14 seconds; `git diff --check` passed.
+
+### 2026-08-13 CU-205-IMAGE-BATCH-SESSION-001
+
+- Exact evidence: the Luna recovery call started once at 12:22:38 with three
+  edit tasks. Two new Artifacts completed; item 3 failed with
+  `managed_image_session_changed`, and the batch settled `2/3` after 328.32
+  seconds. The managed-session audit shows a normal signed credential refresh
+  at 12:28:05 from generation `4`, revision `1000441` to generation `5`,
+  revision `1000442`; account, organization, roles, model allowlist, quota,
+  admin denies, and lease expiry were unchanged.
+- Root cause: each child fenced the credential generation, lease digest, and
+  revision instead of the stable signed session authority. Fix `67496696`
+  admits one batch under one logical session scope, keeps Turn image-model and
+  child idempotency identities frozen, and permits only a policy-equivalent
+  credential rotation. Logout, account/policy change, or authentication loss
+  aborts outstanding siblings; completed children are never submitted again.
+- The smallest red check changed the credential revision during one admitted
+  execution and reproduced `managed_image_session_changed`. Green checks cover
+  equivalent refresh, cross-account fencing, one-scope three-child admission,
+  cancellation on true session change, ordered partial results, and recovery:
+  both affected test files passed `24` tests in 6.95 seconds.
+- Image routing is independently green, not inferred from the public label.
+  Production usage facts bind single generate `imgjob_d70f…`, single edit
+  `imgjob_b502…`, and the successful three-item batch jobs `imgjob_238b…`,
+  `imgjob_7729…`, `imgjob_89bd…` to
+  `actual_model_id=gpt-image-2-pro` and `fallback_used=false`. The public/local
+  result may remain `gpt-image-2` / e-Mate Image 2. The original batch made one
+  tool call at 12:11:33, completed all three independent Artifacts at 12:15:55
+  in 261.04 seconds, and made no second tool call or retry.
