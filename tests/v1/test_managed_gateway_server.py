@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
+from ecorex import __version__ as PRODUCT_VERSION
 from ecorex.gateway import (
     GatewayEvent,
     GatewayEventType,
@@ -558,6 +559,10 @@ def test_cloud_gateway_auth_allowlist_persists_before_stream_and_replays(
             ).fetchone()[0]
             == "completed"
         )
+        assert connection.execute(
+            "SELECT product_generation,product_version FROM gateway_requests "
+            "WHERE request_id='request-1'"
+        ).fetchone() == ("emate", PRODUCT_VERSION)
 
 
 def test_dynamic_catalog_exposes_active_image_models_without_streaming_them(

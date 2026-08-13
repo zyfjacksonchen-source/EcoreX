@@ -218,8 +218,8 @@ def test_dry_run_idempotency_and_conflict_are_fail_closed(tmp_path: Path) -> Non
     target_database(conflict_target)
     with sqlite3.connect(conflict_target) as connection:
         connection.execute(
-            "INSERT INTO admin_ops_users VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            ("existing", "Existing", "existing@example.com", None, "active", 0, 0, 0, 0, 1, NOW.isoformat(), NOW.isoformat()),
+            "INSERT INTO admin_ops_users VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("existing", "Existing", "existing@example.com", None, "active", 0, 0, 0, 0, 1, NOW.isoformat(), NOW.isoformat(), 1),
         )
     with pytest.raises(LegacyAdminManagementImportError, match="business data"):
         import_v0292_admin_management(

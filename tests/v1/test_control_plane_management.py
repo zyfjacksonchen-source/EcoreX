@@ -11,7 +11,8 @@ from fastapi.testclient import TestClient
 import httpx
 import pytest
 
-from ecorex.control_plane import management_schema
+from ecorex import __version__ as PRODUCT_VERSION
+from ecorex.control_plane import management as management_module, management_schema
 from ecorex.control_plane.admin_management_router import (
     create_admin_management_router,
 )
@@ -173,6 +174,7 @@ def test_account_ids_and_emails_share_one_unambiguous_login_namespace(
 
 def test_provider_usage_settlement_is_exactly_once_and_conflict_safe(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     repository = _repository(tmp_path)
     created = repository.create_user(_user_request(), actor=ACTOR)
@@ -187,6 +189,7 @@ def test_provider_usage_settlement_is_exactly_once_and_conflict_safe(
         "provider_created_at": "2026-07-19T02:30:00+00:00",
     }
     settled = repository.record_provider_usage(**values)
+    monkeypatch.setattr(management_module, "__version__", "2.0.6")
     replayed = repository.record_provider_usage(**values)
     assert replayed == settled
     assert settled.tokens_used == 150
@@ -197,14 +200,17 @@ def test_provider_usage_settlement_is_exactly_once_and_conflict_safe(
 
     with sqlite3.connect(tmp_path / "control-plane.db") as connection:
         facts = connection.execute(
-            "SELECT source_service,source_id,total_tokens FROM "
+            "SELECT source_service,source_id,total_tokens,product_generation,"
+            "product_version FROM "
             "admin_ops_provider_usage_facts"
         ).fetchall()
         audit_count = connection.execute(
             "SELECT COUNT(*) FROM admin_ops_audit "
             "WHERE action='usage.provider.settled'"
         ).fetchone()[0]
-    assert facts == [("managed_gateway", "gateway-request-1", 150)]
+    assert facts == [
+        ("managed_gateway", "gateway-request-1", 150, "emate", PRODUCT_VERSION)
+    ]
     assert audit_count == 1
     assert repository.usage_summary().tokens_used == 150
     repository.verify_integrity()
@@ -575,7 +581,7 @@ def test_management_schema_migrates_v1_model_origin_presets(tmp_path: Path) -> N
         connection.close()
 
     receipt = AdminManagementSchemaManager(path).migrate()
-    assert receipt.migration_version == 7
+    assert receipt.migration_version == 8
     connection = sqlite3.connect(path)
     try:
         columns = {
@@ -624,6 +630,8 @@ def test_management_schema_migrates_v1_model_origin_presets(tmp_path: Path) -> N
         "fallback_used",
         "job_status",
         "result_status",
+        "product_generation",
+        "product_version",
     } <= usage_columns
     assert tenant_policies == [
         ("existing-org", "ecorex-chat", "max", "gpt-image-2-pro", "gpt-image-2", 1),
@@ -642,8 +650,8 @@ def test_management_schema_migrates_v1_model_origin_presets(tmp_path: Path) -> N
     ]
 
 
-def test_management_schema_v7_preserves_v6_provider_facts(tmp_path: Path) -> None:
-    path = tmp_path / "control-plane-v6.db"
+def test_management_schema_v8_preserves_v7_provider_facts_as_legacy(tmp_path: Path) -> None:
+    path = tmp_path / "control-plane-v7.db"
     connection = sqlite3.connect(path)
     try:
         connection.executescript(management_schema.ADMIN_MANAGEMENT_SCHEMA_SQL)
@@ -682,23 +690,33 @@ def test_management_schema_v7_preserves_v6_provider_facts(tmp_path: Path) -> Non
                 "2026-07-16T00:00:00+00:00", "2026-07-16T00:00:00+00:00",
             ),
         )
+        connection.executescript(management_schema.ADMIN_MANAGEMENT_SCHEMA_V7_SQL)
+        connection.execute(
+            "INSERT INTO admin_ops_schema_migrations VALUES(7,?,?,?)",
+            (
+                management_schema._MIGRATION_V7_NAME,
+                management_schema._MIGRATION_V7_CHECKSUM,
+                "2026-07-16T00:00:00+00:00",
+            ),
+        )
         connection.commit()
     finally:
         connection.close()
 
     receipt = AdminManagementSchemaManager(path).migrate()
 
-    assert receipt.migration_version == 7
+    assert receipt.migration_version == 8
     connection = sqlite3.connect(path)
     try:
         row = connection.execute(
             "SELECT source_id,image_count,organization_id,actual_model_id,"
-            "fallback_used,result_status FROM admin_ops_provider_usage_facts"
+            "fallback_used,result_status,product_generation,product_version "
+            "FROM admin_ops_provider_usage_facts"
         ).fetchone()
         auth_revision = connection.execute(
             "SELECT auth_revision FROM admin_ops_users WHERE account_id='account-v5'"
         ).fetchone()
     finally:
         connection.close()
-    assert row == ("job-v5", 1, None, None, None, None)
+    assert row == ("job-v5", 1, None, None, None, None, "ecorex", "legacy")
     assert auth_revision == (7,)

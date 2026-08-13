@@ -373,6 +373,120 @@ def _v1_payload(tmp_path, monkeypatch):
     )
 
 
+def test_usage_generation_filter_uses_explicit_gateway_fact_and_locks_task_types(
+    tmp_path, monkeypatch
+) -> None:
+    database = tmp_path / "generation.sqlite3"
+    _database(str(database))
+    _add_v1_facts(str(database))
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "ALTER TABLE gateway_requests ADD COLUMN product_generation TEXT"
+        )
+        connection.execute(
+            "ALTER TABLE gateway_requests ADD COLUMN product_version TEXT"
+        )
+        connection.execute(
+            "UPDATE gateway_requests SET product_generation='emate', "
+            "product_version='2.0.5'"
+        )
+    _use_database(monkeypatch, str(database))
+
+    legacy = usage_panel_service.build_data_request_payload(
+        {
+            "start": ["2026-07-18"],
+            "end": ["2026-07-19"],
+            "productGeneration": ["ecorex"],
+        }
+    )
+    emate = usage_panel_service.build_data_request_payload(
+        {
+            "start": ["2026-07-18"],
+            "end": ["2026-07-19"],
+            "productGeneration": ["emate"],
+        }
+    )
+    combined = usage_panel_service.build_data_request_payload(
+        {
+            "start": ["2026-07-18"],
+            "end": ["2026-07-19"],
+            "productGeneration": ["all"],
+        }
+    )
+
+    assert legacy["meta"]["productGeneration"] == "ecorex"
+    assert legacy["kpis"]["tasks"] == 1
+    assert legacy["kpis"]["totalTokens"] == 14
+    assert {task["productGeneration"] for task in legacy["tasks"]} == {"ecorex"}
+    assert emate["meta"]["productGeneration"] == "emate"
+    assert emate["kpis"]["tasks"] == 1
+    assert emate["kpis"]["totalTokens"] == 25
+    assert {task["productVersion"] for task in emate["tasks"]} == {"2.0.5"}
+    assert combined["generationBreakdown"] == {
+        "ecorex": {"tasks": 1, "totalTokens": 14},
+        "emate": {"tasks": 1, "totalTokens": 25},
+    }
+    assert combined["kpis"]["tasks"] == 2
+    assert combined["kpis"]["totalTokens"] == 39
+
+    task = emate["tasks"][0]
+    assert {key: type(task[key]).__name__ for key in (
+        "user", "email", "date", "time", "requestId", "sessionId",
+        "statusCategory", "scenario", "mainTools", "productGeneration",
+        "productVersion",
+    )} == {key: "str" for key in (
+        "user", "email", "date", "time", "requestId", "sessionId",
+        "statusCategory", "scenario", "mainTools", "productGeneration",
+        "productVersion",
+    )}
+    assert {key: type(task[key]).__name__ for key in (
+        "success", "needsIntervention", "hasUsage", "noUsageFlag",
+    )} == {key: "bool" for key in (
+        "success", "needsIntervention", "hasUsage", "noUsageFlag",
+    )}
+    assert {key: type(task[key]).__name__ for key in (
+        "problemEvents", "artifactEvents", "inputTokens", "outputTokens",
+        "totalTokens",
+    )} == {key: "int" for key in (
+        "problemEvents", "artifactEvents", "inputTokens", "outputTokens",
+        "totalTokens",
+    )}
+    assert task["durationMinutes"] is None or isinstance(
+        task["durationMinutes"], (int, float)
+    )
+
+
+def test_usage_generation_filter_rejects_unknown_values_without_querying(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        usage_panel_service,
+        "build_payload",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid generation must not query storage")
+        ),
+    )
+    with pytest.raises(usage_panel_service.UsagePanelRequestError) as error:
+        usage_panel_service.build_data_request_payload(
+            {"productGeneration": ["date-guessed"]}
+        )
+    assert error.value.status == 400
+    assert error.value.code == "invalid_product_generation"
+
+
+def test_usage_panel_generation_selector_requests_only_the_data_projection() -> None:
+    root = Path(__file__).resolve().parents[2]
+    html = (root / "ecorex/control_plane/usage_panel_web/index.html").read_text()
+    app = (root / "ecorex/control_plane/usage_panel_web/app.js").read_text()
+
+    assert 'id="productGeneration"' in html
+    assert all(f'value="{value}"' in html for value in ("all", "emate", "ecorex"))
+    assert "旧版 EcoreX / 历史未标识" in html
+    assert "endpoint.searchParams.set('productGeneration', state.productGeneration)" in app
+    audit_slice = app[app.index("async function loadRuntimeAudit"):app.index("async function refreshLiveData")]
+    assert "productGeneration" not in audit_slice
+
+
 def test_data_request_accepts_the_exact_maximum_date_span(tmp_path, monkeypatch):
     database = tmp_path / "bounded-range.sqlite3"
     _database_with_active_users(str(database), 1)

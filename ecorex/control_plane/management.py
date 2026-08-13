@@ -16,6 +16,7 @@ import uuid
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from ecorex import __version__
 from ecorex.managed_model_policy import MANAGED_CHAT_MODEL_POLICIES
 
 from .management_models import (
@@ -59,6 +60,7 @@ _PASSWORD_RATE_TTL = timedelta(hours=1)
 _PASSWORD_ACCOUNT_LIMIT = 5
 _PASSWORD_IP_LIMIT = 20
 _PASSWORD_RATE_CAPACITY = 100_000
+_PRODUCT_GENERATION = "emate"
 
 
 class AdminManagementError(RuntimeError):
@@ -1225,6 +1227,11 @@ class AdminManagementRepository:
                         "job_status": job_status,
                         "result_status": result_status,
                     }
+                if existing["product_generation"] == _PRODUCT_GENERATION:
+                    material = material | {
+                        "product_generation": existing["product_generation"],
+                        "product_version": existing["product_version"],
+                    }
                 if (
                     str(existing["account_id"]) != account_id
                     or str(existing["payload_sha256"]) != _sha(material)
@@ -1257,6 +1264,8 @@ class AdminManagementRepository:
                 "fallback_used": fallback_used,
                 "job_status": job_status,
                 "result_status": result_status,
+                "product_generation": _PRODUCT_GENERATION,
+                "product_version": __version__,
             }
             payload_sha256 = _sha(material)
             revision = int(row["revision"]) + 1
@@ -1269,8 +1278,9 @@ class AdminManagementRepository:
                 "input_tokens,output_tokens,total_tokens,image_count,payload_sha256,"
                 "provider_created_at,recorded_at,organization_id,requested_model_id,"
                 "provider_reported_model_id,actual_model_id,actual_provider_id,"
-                "fallback_from_model_id,fallback_used,job_status,result_status) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "fallback_from_model_id,fallback_used,job_status,result_status,"
+                "product_generation,product_version) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     fact_id,
                     source_service,
@@ -1293,6 +1303,8 @@ class AdminManagementRepository:
                     None if fallback_used is None else int(fallback_used),
                     job_status,
                     result_status,
+                    _PRODUCT_GENERATION,
+                    __version__,
                 ),
             )
             updated = connection.execute(

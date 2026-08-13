@@ -16,7 +16,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from ecorex import __version__
 
 VERSION = __version__
-USAGE_PROJECTION_VERSION = "e-mate-2.0-usage-2"
+USAGE_PROJECTION_VERSION = "e-mate-2.0-usage-3"
+PRODUCT_GENERATIONS = frozenset({"all", "emate", "ecorex"})
 DB_PATH = "/srv/ecorex-agent-admin/data/ecorex-admin.sqlite3"
 CONTROL_PLANE_DB_PATH = os.environ.get(
     "ECOREX_CONTROL_PLANE_DATABASE_PATH",
@@ -368,6 +369,20 @@ def canonical_email(value: object) -> str:
     return str(value or "").strip().casefold()
 
 
+def parse_product_generation(query: dict[str, list[str]]) -> str:
+    generation = str(
+        query.get("productGeneration", query.get("product_generation", ["all"]))[0]
+        or "all"
+    ).strip().casefold()
+    if generation not in PRODUCT_GENERATIONS:
+        raise UsagePanelRequestError(
+            status=400,
+            code="invalid_product_generation",
+            message="产品版本筛选无效",
+        )
+    return generation
+
+
 def _read_optional_rows(
     paths: list[str],
     table: str,
@@ -665,8 +680,9 @@ def build_data_request_payload(query: dict[str, list[str]]) -> dict:
     default_end = datetime(2026, 6, 29, tzinfo=TZ)
     start = parse_date(query.get("start", [""])[0][:10], default_start)
     end = parse_date(query.get("end", [""])[0][:10], default_end)
+    product_generation = parse_product_generation(query)
     validate_data_request(start, end)
-    return build_payload(start, end)
+    return build_payload(start, end, product_generation=product_generation)
 
 
 def usage_request_id(row: dict, gateway_request_ids: set[str] | None = None) -> str:
@@ -822,7 +838,14 @@ def task_status_category(rec: dict) -> str:
     return "进行中"
 
 
-def build_payload(start: datetime, end: datetime) -> dict:
+def build_payload(
+    start: datetime,
+    end: datetime,
+    *,
+    product_generation: str = "all",
+) -> dict:
+    if product_generation not in PRODUCT_GENERATIONS:
+        raise ValueError("usage product generation is invalid")
     conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
@@ -916,6 +939,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
                COALESCE(attempts.upstream_model_id, requests.model_id) AS actual_model_id,
                attempts.reasoning_effort, attempts.thread_id, attempts.turn_id,
                requests.trace_id, requests.status, requests.terminal_event_type,
+               requests.product_generation, requests.product_version,
                requests.created_at, requests.updated_at
         FROM gateway_requests AS requests
         LEFT JOIN gateway_model_attempts AS attempts
@@ -934,6 +958,50 @@ def build_payload(start: datetime, end: datetime) -> dict:
             [GATEWAY_DB_PATH, DB_PATH],
             "gateway_requests",
             """
+            SELECT requests.request_id, requests.account_id,
+                   requests.organization_id, requests.model_id,
+                   COALESCE(attempts.upstream_model_id, requests.model_id) AS actual_model_id,
+                   attempts.reasoning_effort, attempts.thread_id, attempts.turn_id,
+                   requests.trace_id, requests.status, requests.terminal_event_type,
+                   requests.created_at, requests.updated_at
+            FROM gateway_requests AS requests
+            LEFT JOIN gateway_model_attempts AS attempts
+              ON attempts.request_id = requests.request_id
+            WHERE (
+                datetime(requests.created_at) >= datetime(?) AND datetime(requests.created_at) < datetime(?)
+            ) OR (
+                datetime(requests.updated_at) >= datetime(?) AND datetime(requests.updated_at) < datetime(?)
+            )
+            ORDER BY datetime(requests.created_at), requests.request_id
+            """,
+            (start.isoformat(), end.isoformat(), start.isoformat(), end.isoformat()),
+        )
+        for row in gateway_request_rows:
+            row["product_generation"] = "ecorex"
+            row["product_version"] = "legacy"
+    if not gateway_request_rows:
+        gateway_request_rows = _read_optional_rows(
+            [GATEWAY_DB_PATH, DB_PATH],
+            "gateway_requests",
+            """
+            SELECT request_id, account_id, model_id, model_id AS actual_model_id,
+                   trace_id, status, terminal_event_type,
+                   product_generation, product_version, created_at, updated_at
+            FROM gateway_requests
+            WHERE (
+                datetime(created_at) >= datetime(?) AND datetime(created_at) < datetime(?)
+            ) OR (
+                datetime(updated_at) >= datetime(?) AND datetime(updated_at) < datetime(?)
+            )
+            ORDER BY datetime(created_at), request_id
+            """,
+            (start.isoformat(), end.isoformat(), start.isoformat(), end.isoformat()),
+        )
+    if not gateway_request_rows:
+        gateway_request_rows = _read_optional_rows(
+            [GATEWAY_DB_PATH, DB_PATH],
+            "gateway_requests",
+            """
             SELECT request_id, account_id, model_id, model_id AS actual_model_id,
                    trace_id, status, terminal_event_type, created_at, updated_at
             FROM gateway_requests
@@ -946,6 +1014,9 @@ def build_payload(start: datetime, end: datetime) -> dict:
             """,
             (start.isoformat(), end.isoformat(), start.isoformat(), end.isoformat()),
         )
+        for row in gateway_request_rows:
+            row["product_generation"] = "ecorex"
+            row["product_version"] = "legacy"
     gateway_event_rows = _read_optional_rows(
         [GATEWAY_DB_PATH, DB_PATH],
         "gateway_events",
@@ -957,6 +1028,52 @@ def build_payload(start: datetime, end: datetime) -> dict:
         """,
         (start.isoformat(), end.isoformat()),
     )
+
+    all_gateway_requests = gateway_request_rows
+    gateway_product_identity = {
+        str(row.get("request_id") or "").strip(): (
+            str(row.get("product_generation") or "ecorex"),
+            str(row.get("product_version") or "legacy"),
+        )
+        for row in all_gateway_requests
+        if str(row.get("request_id") or "").strip()
+    }
+
+    def product_identity(request_id: object) -> tuple[str, str]:
+        return gateway_product_identity.get(
+            str(request_id or "").strip(), ("ecorex", "legacy")
+        )
+
+    def generation_selected(generation: str) -> bool:
+        return product_generation == "all" or product_generation == generation
+
+    rows = [
+        row for row in rows
+        if generation_selected(product_identity(row.get("request_id"))[0])
+    ]
+    legacy_usage_rows = [
+        row for row in legacy_usage_rows
+        if generation_selected(
+            product_identity(usage_request_id(row, set(gateway_product_identity)))[0]
+        )
+    ]
+    artifact_rows = artifact_rows if generation_selected("ecorex") else []
+    gateway_request_rows = [
+        row for row in all_gateway_requests
+        if generation_selected(str(row.get("product_generation") or "ecorex"))
+    ]
+    selected_gateway_request_ids = {
+        str(row.get("request_id") or "").strip() for row in gateway_request_rows
+    }
+    gateway_event_rows = [
+        row for row in gateway_event_rows
+        if str(row.get("request_id") or "").strip() in selected_gateway_request_ids
+    ]
+    all_provider_fact_rows = provider_fact_rows
+    provider_fact_rows = [
+        row for row in all_provider_fact_rows
+        if generation_selected(str(row.get("product_generation") or "ecorex"))
+    ]
 
     observed_emails = {
         canonical_email(event.get("user_email") or event.get("user_key"))
@@ -1008,6 +1125,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
     for row in legacy_usage_rows:
         identity = canonical_email(row.get("user_email"))
         request_id = usage_request_id(row, gateway_request_ids)
+        generation, version = product_identity(request_id)
         anonymous_usage_sequence += 1
         key = (
             "request",
@@ -1019,6 +1137,8 @@ def build_payload(start: datetime, end: datetime) -> dict:
         normalized = dict(row)
         normalized["_identity"] = identity
         normalized["_request_id"] = request_id
+        normalized["_product_generation"] = generation
+        normalized["_product_version"] = version
         merged_usage[key] = normalized
         if request_id:
             legacy_request_ids.add(request_id)
@@ -1082,6 +1202,10 @@ def build_payload(start: datetime, end: datetime) -> dict:
             "total_tokens": max(total_tokens, input_tokens + output_tokens),
             "_identity": identity,
             "_request_id": request_id,
+            "_product_generation": str(
+                request.get("product_generation") or "ecorex"
+            ),
+            "_product_version": str(request.get("product_version") or "legacy"),
         }
     for request_id, row in gateway_completion_by_request.items():
         merged_usage[("request", request_id)] = row
@@ -1124,6 +1248,10 @@ def build_payload(start: datetime, end: datetime) -> dict:
             "total_tokens": max(0, token_number(fact.get("total_tokens"))),
             "_identity": identity,
             "_request_id": request_id,
+            "_product_generation": str(
+                fact.get("product_generation") or "ecorex"
+            ),
+            "_product_version": str(fact.get("product_version") or "legacy"),
         }
     usage_rows = sorted(
         merged_usage.values(),
@@ -1133,7 +1261,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
         ),
     )
     settled_by_account: dict[str, dict[str, int]] = {}
-    for fact in provider_fact_rows:
+    for fact in all_provider_fact_rows:
         account = str(fact.get("account_id") or "")
         totals = settled_by_account.setdefault(account, {"tokens": 0, "images": 0})
         totals["tokens"] += max(0, token_number(fact.get("total_tokens")))
@@ -1302,6 +1430,8 @@ def build_payload(start: datetime, end: datetime) -> dict:
                 "totalTokens": 0,
                 "rawEventType": raw_event,
                 "rawStatus": raw_status,
+                "productGeneration": product_identity(event.get("request_id"))[0],
+                "productVersion": product_identity(event.get("request_id"))[1],
             }
         )
 
@@ -1325,6 +1455,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
         if not request_id:
             continue
         task_key = task_key_for_request(request_id)
+        generation, version = product_identity(request_id)
         email = canonical_email(event.get("user_email") or event.get("user_key"))
         created = parse_time(event.get("created_at"))
         rec = requests.setdefault(
@@ -1350,6 +1481,8 @@ def build_payload(start: datetime, end: datetime) -> dict:
                 "inputTokens": 0,
                 "outputTokens": 0,
                 "totalTokens": 0,
+                "productGeneration": generation,
+                "productVersion": version,
             },
         )
         rec["firstAt"] = min(rec["firstAt"], created)
@@ -1413,6 +1546,10 @@ def build_payload(start: datetime, end: datetime) -> dict:
                 "inputTokens": 0,
                 "outputTokens": 0,
                 "totalTokens": 0,
+                "productGeneration": str(
+                    request.get("product_generation") or "ecorex"
+                ),
+                "productVersion": str(request.get("product_version") or "legacy"),
             },
         )
         # The v1 account directory is authoritative for Gateway facts. This
@@ -1507,6 +1644,8 @@ def build_payload(start: datetime, end: datetime) -> dict:
                 "scenario": scenario,
                 "mainTools": "、".join(f"{name} {count}" for name, count in rec["tools"].most_common(3))
                 or "无工具调用记录",
+                "productGeneration": rec["productGeneration"],
+                "productVersion": rec["productVersion"],
             }
         )
 
@@ -1650,6 +1789,22 @@ def build_payload(start: datetime, end: datetime) -> dict:
     output_tokens = sum(usage_row_projection(row)["outputTokens"] for row in usage_rows)
     total_tokens = sum(usage_row_projection(row)["totalTokens"] for row in usage_rows)
     token_usage_tasks = sum(1 for task in tasks if task.get("hasUsage"))
+    generation_breakdown = {}
+    for generation in ("ecorex", "emate"):
+        generation_tasks = [
+            task for task in tasks if task["productGeneration"] == generation
+        ]
+        generation_usage = [
+            row
+            for row in usage_rows
+            if str(row.get("_product_generation") or "ecorex") == generation
+        ]
+        generation_breakdown[generation] = {
+            "tasks": len(generation_tasks),
+            "totalTokens": sum(
+                usage_row_projection(row)["totalTokens"] for row in generation_usage
+            ),
+        }
     scenario_counts = Counter(task["scenario"] for task in tasks)
     daily_counts = []
     for date in dates:
@@ -1696,6 +1851,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
             "rawSheetUrl": "https://my.feishu.cn/sheets/KGias0a8OhQvrNtX9lict6Jznkg",
             "source": "服务器 sync_events RAW 实时查询",
             "version": VERSION,
+            "productGeneration": product_generation,
             "live": True,
         },
         "kpis": {
@@ -1727,6 +1883,7 @@ def build_payload(start: datetime, end: datetime) -> dict:
         "summaryRows": summary_rows,
         "tasks": tasks,
         "rawEvents": raw_events,
+        "generationBreakdown": generation_breakdown,
         "charts": {
             "daily": daily_counts,
             "users": user_counts,
