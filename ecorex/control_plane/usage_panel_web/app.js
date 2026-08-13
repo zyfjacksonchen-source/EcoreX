@@ -11,6 +11,7 @@ function emptyUsageData() {
       rawSheetUrl: '#',
       source: '等待实时数据',
       version: '1.0.5',
+      productGeneration: 'all',
       live: false
     },
     kpis: {},
@@ -131,6 +132,7 @@ function defaultDateRange() {
 
 const state = {
   metricView: 'tasks',
+  productGeneration: DATA.meta.productGeneration || 'all',
   dateRange: initialDateRange,
   auditFilters: {
     userEmail: '',
@@ -639,6 +641,8 @@ function syncRangeInputs() {
   const endInput = $('#rangeEnd');
   if (startInput) startInput.value = state.dateRange.start;
   if (endInput) endInput.value = state.dateRange.end;
+  const generation = $('#productGeneration');
+  if (generation) generation.value = state.productGeneration;
 }
 
 function rangeFromInputs() {
@@ -1864,6 +1868,7 @@ async function refreshLiveData() {
     endpoint.password = '';
     endpoint.searchParams.set('start', nextRange.start);
     endpoint.searchParams.set('end', addDays(nextRange.end, 1));
+    endpoint.searchParams.set('productGeneration', state.productGeneration);
     endpoint.searchParams.set('_', String(Date.now()));
     const response = await fetch(endpoint.toString(), { cache: 'no-store', credentials: 'same-origin' });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
@@ -1877,6 +1882,7 @@ async function refreshLiveData() {
     const hadAllDates = allSelected(DATA.dates, state.dates);
     const hadAllScenarios = allSelected(DATA.scenarios, state.scenarios);
     DATA = nextData;
+    state.productGeneration = DATA.meta.productGeneration || state.productGeneration;
     syncSelectionsWithData(true);
     if (hadAllUsers) state.users = new Set(DATA.users);
     if (hadAllDates) state.dates = new Set(DATA.dates);
@@ -2021,6 +2027,10 @@ function init() {
   $('#rawSheetLink').href = DATA.meta.rawSheetUrl;
   $('#refreshData').addEventListener('click', refreshLiveData);
   $('#applyRange').addEventListener('click', refreshLiveData);
+  $('#productGeneration').addEventListener('change', (event) => {
+    state.productGeneration = event.target.value || 'all';
+    refreshLiveData();
+  });
   $('#applyAuditFilters').addEventListener('click', () => {
     const nextRange = auditRangeFromInputs();
     if (!nextRange) return;

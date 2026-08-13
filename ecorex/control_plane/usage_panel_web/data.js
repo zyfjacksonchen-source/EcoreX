@@ -8,6 +8,7 @@ window.ECOREX_USAGE_DATA = window.ECOREX_USAGE_DATA || {
     rawSheetUrl: '#',
     source: '等待服务器实时数据',
     version: '1.0.5',
+    productGeneration: 'all',
     live: false
   },
   kpis: {},

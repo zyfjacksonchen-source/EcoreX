@@ -50,6 +50,7 @@ _MAX_EVENTS = 10_000
 _MAX_ACTIVE_CHAT_HANDOFFS_PER_ACCOUNT = 256
 _STREAM_KEEPALIVE_SECONDS = 15.0
 _ZERO_DIGEST = "0" * 64
+_PRODUCT_GENERATION = "emate"
 
 
 def _utcnow() -> datetime:
@@ -482,8 +483,9 @@ class SQLiteGatewayStore:
             connection.execute(
                 "INSERT INTO gateway_requests("
                 "request_id, account_id, organization_id, quota_period, request_fingerprint, model_id, "
-                "trace_id, status, lease_token, lease_expires_at, created_at, updated_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)",
+                "trace_id, product_generation, product_version, status, lease_token, "
+                "lease_expires_at, created_at, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)",
                 (
                     request.request_id,
                     principal.account_id,
@@ -492,6 +494,8 @@ class SQLiteGatewayStore:
                     fingerprint,
                     request.model_id,
                     request.trace_id,
+                    _PRODUCT_GENERATION,
+                    __version__,
                     lease_token,
                     _iso(now + timedelta(seconds=lease_seconds)),
                     _iso(now),
@@ -618,9 +622,10 @@ class SQLiteGatewayStore:
             connection.execute(
                 "INSERT INTO gateway_requests("
                 "request_id,account_id,organization_id,quota_period,"
-                "request_fingerprint,model_id,trace_id,status,lease_token,"
+                "request_fingerprint,model_id,trace_id,product_generation,"
+                "product_version,status,lease_token,"
                 "lease_expires_at,created_at,updated_at"
-                ") VALUES(?,?,?,?,?,?,?,'active',?,?,?,?)",
+                ") VALUES(?,?,?,?,?,?,?,?,?,'active',?,?,?,?)",
                 (
                     fact.request_id,
                     principal.account_id,
@@ -629,6 +634,8 @@ class SQLiteGatewayStore:
                     fingerprint,
                     model_id,
                     trace_id,
+                    _PRODUCT_GENERATION,
+                    __version__,
                     lease_token,
                     _iso(now + timedelta(seconds=60)),
                     _iso(now),

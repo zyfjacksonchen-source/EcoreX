@@ -351,7 +351,8 @@ body[data-view="tokens"] .status-help {
   font-weight: 700;
 }
 
-.range-control input {
+.range-control input,
+.range-control select {
   width: 160px;
   min-height: 38px;
   padding: 0 10px;
@@ -365,7 +366,8 @@ body[data-view="tokens"] .status-help {
   min-height: 38px;
 }
 
-.range-control input:focus {
+.range-control input:focus,
+.range-control select:focus {
   outline: 2px solid #bfdbfe;
   border-color: #60a5fa;
 }
@@ -1254,6 +1256,7 @@ tbody tr:hover td {
 
   .range-control label,
   .range-control input,
+  .range-control select,
   .range-control .button {
     width: 100%;
   }

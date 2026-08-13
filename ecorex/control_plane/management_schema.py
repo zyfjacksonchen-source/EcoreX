@@ -10,8 +10,8 @@ from pathlib import Path
 import sqlite3
 
 
-CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION = 7
-ADMIN_MANAGEMENT_MIGRATION_NAME = "stable-auth-revision"
+CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION = 8
+ADMIN_MANAGEMENT_MIGRATION_NAME = "provider-usage-product-generation"
 
 _INITIAL_MIGRATION_NAME = "initial-admin-management"
 _INITIAL_MIGRATION_CHECKSUM = (
@@ -356,12 +356,30 @@ _MIGRATION_V6_NAME = "provider-usage-audit-metadata"
 _MIGRATION_V6_CHECKSUM = hashlib.sha256(
     b"ecorex-admin-management-schema-v6\0provider-usage-audit-metadata"
 ).hexdigest()
+_MIGRATION_V7_NAME = "stable-auth-revision"
+_MIGRATION_V7_CHECKSUM = hashlib.sha256(
+    b"ecorex-admin-management-schema-v7\0stable-auth-revision"
+).hexdigest()
 
 ADMIN_MANAGEMENT_SCHEMA_V7_SQL = """
 ALTER TABLE admin_ops_users ADD COLUMN auth_revision INTEGER NOT NULL DEFAULT 1
 CHECK(auth_revision > 0);
 UPDATE admin_ops_users SET auth_revision=revision;
 """
+
+ADMIN_MANAGEMENT_SCHEMA_V8_SQL = """
+ALTER TABLE admin_ops_provider_usage_facts
+ADD COLUMN product_generation TEXT NOT NULL DEFAULT 'ecorex'
+CHECK(product_generation IN ('ecorex','emate'));
+ALTER TABLE admin_ops_provider_usage_facts
+ADD COLUMN product_version TEXT NOT NULL DEFAULT 'legacy'
+CHECK(length(product_version) BETWEEN 1 AND 64);
+"""
+
+_MIGRATION_V8_CHECKSUM = hashlib.sha256(
+    b"ecorex-admin-management-schema-v8\0provider-usage-product-generation"
+).hexdigest()
+ADMIN_MANAGEMENT_MIGRATION_CHECKSUM = _MIGRATION_V8_CHECKSUM
 
 
 class AdminManagementSchemaError(RuntimeError):
@@ -407,6 +425,7 @@ def _expected_shape() -> str:
         connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V5_SQL)
         connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V6_SQL)
         connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V7_SQL)
+        connection.executescript(ADMIN_MANAGEMENT_SCHEMA_V8_SQL)
         return _managed_shape(connection)
     finally:
         connection.close()
@@ -470,6 +489,7 @@ class AdminManagementSchemaManager:
                     (4, _MIGRATION_V4_NAME, _MIGRATION_V4_CHECKSUM),
                     (5, _MIGRATION_V5_NAME, _MIGRATION_V5_CHECKSUM),
                     (6, _MIGRATION_V6_NAME, _MIGRATION_V6_CHECKSUM),
+                    (7, _MIGRATION_V7_NAME, _MIGRATION_V7_CHECKSUM),
                 )
                 if any(
                     tuple(row) != expected_prefix[index]
@@ -656,9 +676,26 @@ class AdminManagementSchemaManager:
                 _execute_sql(connection, ADMIN_MANAGEMENT_SCHEMA_V7_SQL)
                 installed_at = datetime.now(UTC).isoformat()
                 connection.execute(
-                    "INSERT INTO admin_ops_schema_migrations("
+                        "INSERT INTO admin_ops_schema_migrations("
                     "version,migration_name,migration_checksum,installed_at"
                     ") VALUES(7,?,?,?)",
+                    (
+                        _MIGRATION_V7_NAME,
+                        _MIGRATION_V7_CHECKSUM,
+                        installed_at,
+                    ),
+                )
+            rows = connection.execute(
+                "SELECT version,migration_name,migration_checksum "
+                "FROM admin_ops_schema_migrations ORDER BY version"
+            ).fetchall()
+            if len(rows) == 7:
+                _execute_sql(connection, ADMIN_MANAGEMENT_SCHEMA_V8_SQL)
+                installed_at = datetime.now(UTC).isoformat()
+                connection.execute(
+                    "INSERT INTO admin_ops_schema_migrations("
+                    "version,migration_name,migration_checksum,installed_at"
+                    ") VALUES(8,?,?,?)",
                     (
                         ADMIN_MANAGEMENT_MIGRATION_NAME,
                         ADMIN_MANAGEMENT_MIGRATION_CHECKSUM,
@@ -715,6 +752,7 @@ class AdminManagementSchemaManager:
             migration_v4,
             migration_v5,
             migration_v6,
+            migration_v7,
             value,
         ) = row
         if (
@@ -736,8 +774,10 @@ class AdminManagementSchemaManager:
             or int(migration_v6[0]) != 6
             or str(migration_v6[1]) != _MIGRATION_V6_NAME
             or str(migration_v6[2]) != _MIGRATION_V6_CHECKSUM
-            or
-            int(value[0]) != CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION
+            or int(migration_v7[0]) != 7
+            or str(migration_v7[1]) != _MIGRATION_V7_NAME
+            or str(migration_v7[2]) != _MIGRATION_V7_CHECKSUM
+            or int(value[0]) != CURRENT_ADMIN_MANAGEMENT_SCHEMA_VERSION
             or str(value[1]) != ADMIN_MANAGEMENT_MIGRATION_NAME
             or str(value[2]) != ADMIN_MANAGEMENT_MIGRATION_CHECKSUM
         ):
@@ -762,6 +802,7 @@ __all__ = [
     "ADMIN_MANAGEMENT_SCHEMA_V5_SQL",
     "ADMIN_MANAGEMENT_SCHEMA_V6_SQL",
     "ADMIN_MANAGEMENT_SCHEMA_V7_SQL",
+    "ADMIN_MANAGEMENT_SCHEMA_V8_SQL",
     "AdminManagementSchemaError",
     "AdminManagementSchemaManager",
     "AdminManagementSchemaReceipt",

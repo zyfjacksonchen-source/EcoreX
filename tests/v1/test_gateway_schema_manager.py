@@ -24,6 +24,8 @@ from ecorex.gateway.schema import (
     GATEWAY_SCHEMA_V2_SQL,
     GATEWAY_SCHEMA_V3_SHA256,
     GATEWAY_SCHEMA_V3_SQL,
+    GATEWAY_SCHEMA_V4_SHA256,
+    GATEWAY_AUDIT_FACTS_SCHEMA_SQL,
     GATEWAY_SCHEMA_RECEIPT_VERSION,
     LEGACY_GATEWAY_SCHEMA_SQL,
     MIGRATION_001_CHECKSUM,
@@ -32,6 +34,8 @@ from ecorex.gateway.schema import (
     MIGRATION_002_NAME,
     MIGRATION_003_CHECKSUM,
     MIGRATION_003_NAME,
+    MIGRATION_004_CHECKSUM,
+    MIGRATION_004_NAME,
     GatewaySchemaReceipt,
     main as gateway_schema_main,
 )
@@ -69,7 +73,7 @@ def test_gateway_schema_migration_is_explicit_versioned_and_idempotent(
     store = SQLiteGatewayStore(database)
 
     assert second == first == store.schema_receipt
-    assert first.migration_version == 4
+    assert first.migration_version == 5
     assert first.target_schema_sha256 == GATEWAY_SCHEMA_SHA256
     assert first.transformed_rows == 0
     with sqlite3.connect(database) as connection:
@@ -90,7 +94,7 @@ def test_gateway_schema_deployment_cli_migrates_then_validates(
 
     assert gateway_schema_main(["migrate", str(database)]) == 0
     migrated = json.loads(capsys.readouterr().out)
-    assert migrated["migration_version"] == 4
+    assert migrated["migration_version"] == 5
     assert gateway_schema_main(["validate", str(database)]) == 0
     validated = json.loads(capsys.readouterr().out)
 
@@ -130,7 +134,7 @@ def test_existing_v1_gateway_is_upgraded_without_losing_ledger(tmp_path) -> None
         )
 
     upgraded = GatewaySchemaManager(database).migrate()
-    assert upgraded.migration_version == 4
+    assert upgraded.migration_version == 5
     with sqlite3.connect(database) as connection:
         versions = connection.execute(
             "SELECT version FROM gateway_schema_migrations ORDER BY version"
@@ -138,7 +142,7 @@ def test_existing_v1_gateway_is_upgraded_without_losing_ledger(tmp_path) -> None
         handoff_table = connection.execute(
             "SELECT 1 FROM sqlite_schema WHERE name='gateway_chat_handoffs'"
         ).fetchone()
-    assert versions == [(1,), (2,), (3,), (4,)]
+    assert versions == [(1,), (2,), (3,), (4,), (5,)]
     assert handoff_table == (1,)
 
 
@@ -262,7 +266,7 @@ def test_existing_v2_gateway_backfills_only_billable_terminal_usage(
 
     upgraded = GatewaySchemaManager(database).migrate()
 
-    assert upgraded.migration_version == 4
+    assert upgraded.migration_version == 5
     with sqlite3.connect(database) as connection:
         settlements = connection.execute(
             "SELECT request_id,state FROM gateway_usage_settlements "
@@ -280,10 +284,11 @@ def test_existing_v2_gateway_backfills_only_billable_terminal_usage(
         ("request-tool", "pending"),
     ]
     assert "organization_id" in request_columns
+    assert {"product_generation", "product_version"} <= request_columns
     assert {"organization_id", "reasoning_effort"} <= attempt_columns
 
 
-def test_existing_v3_gateway_adds_audit_columns_without_rewriting_facts(
+def test_existing_v4_gateway_adds_product_identity_without_rewriting_facts(
     tmp_path,
 ) -> None:
     database = tmp_path / "gateway-v3.sqlite3"
@@ -376,13 +381,41 @@ def test_existing_v3_gateway_adds_audit_columns_without_rewriting_facts(
                 installed_at,
             ),
         )
+        connection.executescript(GATEWAY_AUDIT_FACTS_SCHEMA_SQL)
+        receipt_v4 = GatewaySchemaReceipt(
+            GATEWAY_SCHEMA_RECEIPT_VERSION,
+            4,
+            MIGRATION_004_NAME,
+            MIGRATION_004_CHECKSUM,
+            GATEWAY_SCHEMA_V3_SHA256,
+            GATEWAY_SCHEMA_V4_SHA256,
+            0,
+            empty_chain,
+            installed_at,
+        )
+        encoded = _canonical(receipt_v4.to_dict())
+        connection.execute(
+            "INSERT INTO gateway_schema_migrations VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                4,
+                receipt_v4.migration_name,
+                receipt_v4.migration_checksum,
+                receipt_v4.source_schema_sha256,
+                receipt_v4.target_schema_sha256,
+                0,
+                encoded,
+                hashlib.sha256(encoded.encode()).hexdigest(),
+                installed_at,
+            ),
+        )
 
     receipt = GatewaySchemaManager(database).migrate()
 
-    assert receipt.migration_version == 4
+    assert receipt.migration_version == 5
     with sqlite3.connect(database) as connection:
         request_fact = connection.execute(
-            "SELECT account_id,organization_id,model_id,trace_id FROM gateway_requests"
+            "SELECT account_id,organization_id,model_id,trace_id,"
+            "product_generation,product_version FROM gateway_requests"
         ).fetchone()
         attempt_fact = connection.execute(
             "SELECT thread_id,turn_id,upstream_model_id,organization_id,"
@@ -393,6 +426,8 @@ def test_existing_v3_gateway_adds_audit_columns_without_rewriting_facts(
         None,
         "ecorex-chat",
         "trace-existing",
+        "ecorex",
+        "legacy",
     )
     assert attempt_fact == (
         "thread-existing",
@@ -445,7 +480,7 @@ def test_gateway_store_rejects_future_schema_history_without_writing(tmp_path) -
             "INSERT INTO gateway_schema_migrations("
             "version,migration_name,migration_checksum,source_schema_sha256,"
             "target_schema_sha256,transformed_rows,receipt_json,receipt_sha256,"
-            "installed_at) VALUES(5,?,?,?,?,?,?,?,?)",
+            "installed_at) VALUES(6,?,?,?,?,?,?,?,?)",
             (
                 "future-gateway-schema",
                 "f" * 64,
@@ -465,7 +500,7 @@ def test_gateway_store_rejects_future_schema_history_without_writing(tmp_path) -
         versions = connection.execute(
             "SELECT version FROM gateway_schema_migrations ORDER BY version"
         ).fetchall()
-    assert versions == [(1,), (2,), (3,), (4,), (5,)]
+    assert versions == [(1,), (2,), (3,), (4,), (5,), (6,)]
 
 
 def test_explicit_gateway_migration_backfills_known_legacy_event_chain(
