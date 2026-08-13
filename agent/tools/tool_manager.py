@@ -631,6 +631,12 @@ class ToolManager:
                         tool_name = schema.get("name", "")
                         if not tool_name:
                             continue
+                        if tool_name in self.tool_classes:
+                            logger.warning(
+                                f"[MCP] Refusing to replace first-party tool '{tool_name}' "
+                                f"with MCP tool from {server_name}"
+                            )
+                            continue
                         mcp_tool = McpTool(client, schema, server_name)
                         # Atomic dict assignment is GIL-safe; readers iterate
                         # over a list() snapshot to avoid concurrent mutation.
@@ -708,6 +714,7 @@ class ToolManager:
         registry_names = set(current.keys())
 
         agent_tools = agent.tools
+        applied_added = set()
 
         if isinstance(agent_tools, dict):
             agent_mcp_names = {
@@ -727,6 +734,7 @@ class ToolManager:
                     )
                     continue
                 agent_tools[name] = current[name]
+                applied_added.add(name)
             for name in removed:
                 agent_tools.pop(name, None)
 
@@ -744,12 +752,22 @@ class ToolManager:
                     if not (isinstance(t, McpTool) and t.name in removed)
                 ]
             for name in added:
+                existing = next(
+                    (tool for tool in agent.tools if tool.name == name), None
+                )
+                if existing is not None and not isinstance(existing, McpTool):
+                    logger.warning(
+                        f"[MCP] Refusing to replace first-party tool '{name}' "
+                        f"with MCP tool from {getattr(current[name], 'server_name', 'unknown')}"
+                    )
+                    continue
                 agent.tools.append(current[name])
+                applied_added.add(name)
 
         else:
             return ([], [])
 
-        return (sorted(added), sorted(removed))
+        return (sorted(applied_added), sorted(removed))
 
     def create_tool(self, name: str) -> BaseTool:
         """
