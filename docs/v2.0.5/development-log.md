@@ -53,6 +53,7 @@ Allowed status values: `pending`, `passed`, `failed`, `blocked`.
 | Bug ID | Found by case | Source commit | Reproduction | Severity | Fix branch | Fix commit | Verification | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `CU-205-STARTUP-001` | macOS fresh-profile startup | `63a591d81ddc38ab2793236943f559a02f25eee9` | Deterministic delayed-owner contract | P1 | `codex/e-mate-2.0.5` | `cf14a545` | Exact regression plus all 14 Electron shell contracts passed | Same-data-dir, same-identity receipt could be rejected while its HMAC endpoint was still starting; unknown and cross-identity listeners remain rejected |
+| `CU-205-FILE-001` | `CU-MAC-OFFICE` | `63a591d81ddc38ab2793236943f559a02f25eee9` | `205-表格验收.xlsx` was created, but the final row was plain text with no open/preview action | P1 | `codex/205-artifact-file-open` | `5aed338a` | Exact Cow projection regression, secure open/materialize checks, 18 Web Artifact contracts, and TypeScript passed | Cow path metadata is now admitted once into the existing account/thread-scoped Artifact store; office cards open natively while PDF/image cards retain in-app preview |
 | `MAC-OFFICE-001` | `CU-MAC-OFFICE` | `63a591d81ddc38ab2793236943f559a02f25eee9` | Word create authoring inputs failed twice after the initial create probe | Pending triage | Assigned separately | — | Pending | Exact 2.0.4 arm64 DMG SHA-256 `c9dc0022a831f053081f3c0776f1480c2939811ec1ffde2d7f9a7996e4fa2582`; ConversationStore retained the complete tool chain |
 | `CU-205-PDF-PREVIEW-001` | Windows exact 2.0.4 Office baseline | `63a591d81ddc38ab2793236943f559a02f25eee9` | `office_pdf` create/edit/inspect passed; the model-visible `render_preview` action deterministically returned `OfficePdfRuntimeError` | P1 | `codex/fix-pdf-preview-capability` | `97df920a` | Exact schema regression plus verified Pack create/edit/inspect regression passed | The exact Office Pack exports only `office.formats`; neither its Windows archive nor Core carries PyMuPDF, Poppler, or LibreOffice. Desktop preview already uses `ArtifactPreviewDialog` and the Runtime artifact preview Blob. |
 
@@ -148,3 +149,27 @@ environment failure until the product failure reproduces from known state.
   tests/test_v024_skill_tool_exposure.py::test_v024_public_cow_office_tools_create_edit_and_emit_artifacts`
   passed `2` tests; `git diff --check` passed. No App, package, signer, or
   deployment path was started.
+
+### 2026-08-13 CU-205-FILE-001
+
+- Exact 2.0.4 Computer Use reproduced an XLSX that existed under the Cow
+  workspace while the assistant rendered only `下载 205-表格验收.xlsx`; the AX
+  tree exposed text only, and clicking did not open WPS or an in-app preview.
+- Root cause: the Cow executor emitted valid local file metadata, but the
+  Runtime stored that legacy dictionary directly as an Artifact Item. The
+  desktop correctly rejected it because it was not an `ArtifactProjection`.
+- Fix `5aed338a` translates that one Cow event at the existing Runtime adapter:
+  workspace outputs are read into the immutable Artifact CAS once, scoped to
+  the authenticated account/thread/turn, and projected through the existing
+  item/list/action contracts. No second file store or path-supplied open route
+  was added. DOCX/XLSX/PPTX cards use the existing secure native `open` action;
+  PDF and image cards keep authenticated in-app preview.
+- Red check: the Cow office regression failed with `KeyError: 'artifact'`, and
+  the UI regression failed because `artifactPrimaryAction` did not exist.
+  Green checks: the exact Cow regression passed; the three focused Artifact
+  ownership/open/API checks passed; `artifactActions` plus the preview contract
+  passed `18`; TypeScript and `git diff --check` passed.
+- A broader Cow contract file passed `20` product tests and failed only its
+  unrelated package-closure fixture because this local validation environment
+  could not resolve the declared `regex` distribution file. No package,
+  installer, feed, or deployment was changed for this development fix.
