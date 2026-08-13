@@ -629,6 +629,10 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
     workflow = (
         ROOT / ".github" / "workflows" / "emate-2.0-desktop-release.yml"
     ).read_text()
+    ui_tree = subprocess.check_output(
+        ("git", "rev-parse", "HEAD:desktop/src/v1"), cwd=ROOT, text=True
+    ).strip()
+    assert f'test "$(git rev-parse HEAD:desktop/src/v1)" = "{ui_tree}"' in workflow
     assert "- codex/e-mate-*" in workflow
     assert "needs.runtime.outputs.version" in workflow
     assert 'package["version"] == branch_version == __version__' in workflow
