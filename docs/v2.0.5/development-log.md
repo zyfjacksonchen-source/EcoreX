@@ -892,3 +892,18 @@ environment failure until the product failure reproduces from known state.
   `33/33`; Ruff and diff checks passed. The merged focused Windows closure and
   workflow checks passed `5/5`. No global VC Redist installation, alternate
   launcher, dependency, package build, or production mutation was introduced.
+
+### 2026-08-13 CU-205-WIN-MSVC-HANDOFF-002
+
+- Formal run `31705297351` stopped before platform packages and R2 publication:
+  the Windows native job passed, while the macOS Runtime builder rejected its
+  handoff with `manual_webui_windows_native_runtime_invalid`.
+- The 474 KB diagnostic handoff passed every manifest, Microsoft signature,
+  launcher/helper/MSVCP hash, and version check. Its sole mismatch was
+  `source_set_sha256`: Windows checkout had converted the five trusted native
+  `.cpp/.h` files to CRLF while the macOS validator read their canonical LF
+  bytes.
+- Commit `0440e575` fixes only those native source patterns to `eol=lf` and
+  leaves every receipt/signature/hash check intact. Exact checks passed `5/5`,
+  CI reproducibility passed `8/8`, and the merged checkout regression passed in
+  0.6 seconds. The failed run's R2 credentials were fully revoked.
