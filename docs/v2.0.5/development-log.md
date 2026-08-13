@@ -334,3 +334,31 @@ environment failure until the product failure reproduces from known state.
   Production account credentials were not touched. The frozen 2.0.5 candidate
   must perform one user-handoff password change and immediate restoration of
   the original password, because Computer Use must not type credentials.
+
+### 2026-08-13 CU-205-COW-MEMORY-DREAM-001
+
+- CowAgent 2.1.5 exact `e3ac1b952500f60934862c6bf0bd0de91b415ed8`
+  uses the local `self_evolution_enabled` switch, enabled by default. Its idle
+  learner scans every 60 seconds after 10 idle minutes and six user turns (or
+  80% context pressure); its nightly timer runs at a random local time from
+  23:50 through 23:55. The same switch now controls both paths in e-Mate.
+- Root cause: e-Mate exposed neither Cow's switch nor its config API, the direct
+  Runtime rebuilt agents without carrying evolution counters and never started
+  or notified Cow's idle trigger, and nightly dream ignored the switch. A
+  legacy noninteractive permission broker additionally rejected Cow's local
+  memory writes. Fix `386ef7dc` persists the switch atomically in the local Cow
+  `config.json`, binds it on Runtime restart, restores direct-worker trigger
+  state, and keeps memory reads/writes confined to the active Cow workspace.
+  The enterprise plane has no hide, deny, or remote-control path for it.
+- Controlled local tests used fake models and a shortened idle threshold. With
+  the switch on, the real evolution executor produced
+  `memory/evolution/YYYY-MM-DD.md`; nightly consolidation produced `MEMORY.md`
+  and `memory/dreams/YYYY-MM-DD.md`. Turning it off stopped both paths without
+  a write, turning it back on worked without restart, turning it off again
+  stopped subsequent writes, and a new Runtime composition restored the saved
+  off state. No model provider, network, production account, package, feed, or
+  deployment was used.
+- Green checks: the focused memory/API/runtime suite passed `10`; Cow's original
+  evolution scenario harness passed all `13` cases plus undo; the Settings
+  contract and TypeScript check passed; the affected direct Cow spine suite
+  passed `19` with two package-only cases excluded. `git diff --check` passed.
