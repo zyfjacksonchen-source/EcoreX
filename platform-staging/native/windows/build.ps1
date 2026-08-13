@@ -26,7 +26,8 @@ if (-not $outputItem.PSIsContainer -or
 $script:publishedTargets = @(
   (Join-Path $output 'native-build-receipt.json'),
   (Join-Path $output 'ecorex.exe'),
-  (Join-Path $output 'ecorex-sandbox-host.exe')
+  (Join-Path $output 'ecorex-sandbox-host.exe'),
+  (Join-Path $output 'msvcp140.dll')
 )
 foreach ($target in $script:publishedTargets) {
   if ([System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($target)) -cne $output) {
@@ -193,7 +194,7 @@ function Resolve-TrustedTool($Descriptor, [string]$Path, [string]$Label) {
     'file_name', 'file_version', 'product_version', 'sha256',
     'authenticode_subject', 'authenticode_thumbprint'
   ) ($Label + '_manifest')
-  if ($Descriptor.file_name -notmatch '^(cl|link)\.exe$|^(c1xx|c2)\.dll$' -or
+  if ($Descriptor.file_name -notmatch '^(cl|link)\.exe$|^(c1xx|c2|msvcp140)\.dll$' -or
       $Descriptor.sha256 -notmatch '^[0-9a-f]{64}$' -or
       $Descriptor.file_version -notmatch '^[0-9]+(?:\.[0-9]+){3}$' -or
       $Descriptor.product_version -notmatch '^[0-9]+(?:\.[0-9]+){3}$' -or
@@ -226,7 +227,7 @@ function Resolve-GitHubHostedCompatibilityTool($Descriptor, [string]$Path, [stri
     'file_name', 'file_version', 'product_version', 'sha256',
     'authenticode_subject', 'authenticode_thumbprint'
   ) ($Label + '_manifest')
-  if ($Descriptor.file_name -notmatch '^(cl|link)\.exe$|^(c1xx|c2)\.dll$' -or
+  if ($Descriptor.file_name -notmatch '^(cl|link)\.exe$|^(c1xx|c2|msvcp140)\.dll$' -or
       $Descriptor.sha256 -notmatch '^[0-9a-f]{64}$' -or
       $Descriptor.file_version -notmatch '^[0-9]+(?:\.[0-9]+){3}$' -or
       $Descriptor.product_version -notmatch '^[0-9]+(?:\.[0-9]+){3}$' -or
@@ -278,7 +279,7 @@ try {
 catch { throw 'toolchain_manifest_unreadable' }
 Assert-ExactProperties $toolchain @(
   'schema_version', 'target', 'msvc_tools_version', 'windows_sdk_version',
-  'tools', 'libraries'
+  'tools', 'libraries', 'runtime_libraries'
 ) 'toolchain_manifest'
 if ($toolchain.schema_version -ne 2 -or
     $toolchain.target -cne 'windows-x64-msvc' -or
@@ -287,6 +288,7 @@ if ($toolchain.schema_version -ne 2 -or
   throw 'toolchain_manifest_contract_invalid'
 }
 Assert-ExactProperties $toolchain.tools @('compiler', 'linker', 'c1xx', 'c2') 'toolchain_tools'
+Assert-ExactProperties $toolchain.runtime_libraries @('msvcp140.dll') 'toolchain_runtime_libraries'
 
 $sourceNames = @(
   'ecorex_launcher.cpp', 'ecorex_sandbox_host.cpp',
@@ -348,6 +350,14 @@ $compilerAuthority = & $toolResolver $toolchain.tools.compiler (Join-Path $toolB
 $linkerAuthority = & $toolResolver $toolchain.tools.linker (Join-Path $toolBin 'link.exe') 'linker'
 $c1xxAuthority = & $toolResolver $toolchain.tools.c1xx (Join-Path $toolBin 'c1xx.dll') 'c1xx'
 $c2Authority = & $toolResolver $toolchain.tools.c2 (Join-Path $toolBin 'c2.dll') 'c2'
+$vcRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $msvcRoot))
+$redistVersionPath = Assert-RealRegularFile (Join-Path $vcRoot 'Auxiliary\Build\Microsoft.VCRedistVersion.default.txt') 'msvc_redist_version'
+$redistVersion = ([System.IO.File]::ReadAllText($redistVersionPath)).Trim()
+if ($redistVersion -notmatch '^14\.[0-9]+\.[0-9]+$') { throw 'trusted_msvc_redist_version_invalid' }
+$redistRoot = Assert-RealDirectory (Join-Path $vcRoot ('Redist\MSVC\' + $redistVersion)) 'msvc_redist_root'
+$msvcpPath = Join-Path $redistRoot 'x64\Microsoft.VC143.CRT\msvcp140.dll'
+$msvcpAuthority = & $toolResolver $toolchain.runtime_libraries.'msvcp140.dll' $msvcpPath 'msvcp140'
+[System.IO.File]::WriteAllBytes((Join-Path $output 'msvcp140.dll'), $msvcpAuthority.Bytes)
 $clPath = $compilerAuthority.Path
 $linkPath = $linkerAuthority.Path
 
@@ -487,6 +497,20 @@ foreach ($entry in $toolChecks) {
     throw ($label + '_changed_during_build')
   }
 }
+Assert-AuthorityUnchanged $msvcpAuthority 'msvcp140'
+$msvcpSignature = Get-AuthenticodeSignature -LiteralPath $msvcpAuthority.Path
+$msvcpVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($msvcpAuthority.Path)
+$expectedMsvcpThumbprint = if ($compatibilityMode) {
+  [string]$msvcpAuthority.AuthenticodeThumbprint
+} else {
+  [string]$toolchain.runtime_libraries.'msvcp140.dll'.authenticode_thumbprint
+}
+if ($msvcpSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+    $null -eq $msvcpSignature.SignerCertificate -or
+    $msvcpSignature.SignerCertificate.Thumbprint.ToLowerInvariant() -cne $expectedMsvcpThumbprint -or
+    (Get-Sha256Hex (Join-Path $output 'msvcp140.dll')) -cne $msvcpAuthority.Sha256) {
+  throw 'msvcp140_changed_during_build'
+}
 $receipt = [ordered]@{
   schema_version = 2
   status = 'passed'
@@ -513,6 +537,9 @@ $receipt = [ordered]@{
   c2_authenticode_thumbprint = $c2Authority.AuthenticodeThumbprint
   runtime_launcher_sha256 = Get-Sha256Hex (Join-Path $output 'ecorex.exe')
   sandbox_helper_sha256 = Get-Sha256Hex (Join-Path $output 'ecorex-sandbox-host.exe')
+  msvcp140_sha256 = Get-Sha256Hex (Join-Path $output 'msvcp140.dll')
+  msvcp140_file_version = $msvcpVersion.FileVersion
+  msvcp140_authenticode_thumbprint = $expectedMsvcpThumbprint
 }
 $json = $receipt | ConvertTo-Json -Compress
 [System.IO.File]::WriteAllText($receiptPath, $json + "`n", [System.Text.UTF8Encoding]::new($false))

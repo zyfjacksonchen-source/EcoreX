@@ -1593,6 +1593,8 @@ def test_windows_helper_source_contains_real_appcontainer_and_job_boundaries() -
     assert "/Brepro" in build
     assert "/GUARD:CF" in build
     assert "sandbox_helper_sha256" in build
+    assert "msvcp140_sha256" in build
+    assert "Microsoft.VC143.CRT" in build
     assert "toolchain-manifest.json" in build
     assert "compiler_identity_untrusted" not in build  # composed from trusted label
     assert "Resolve-TrustedTool" in build
@@ -1679,14 +1681,24 @@ def test_windows_native_receipt_is_bound_to_pinned_toolchain_and_binaries(
     tmp_path: Path,
 ) -> None:
     stager = runpy.run_path(str(ROOT / "platform-staging/stager.py"))
-    manifest = ROOT / "platform-staging/native/windows/toolchain-manifest.json"
-    manifest_value = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_source = ROOT / "platform-staging/native/windows/toolchain-manifest.json"
+    manifest_value = json.loads(manifest_source.read_text(encoding="utf-8"))
     output = tmp_path / "native"
     output.mkdir()
     launcher = output / "ecorex.exe"
     helper = output / "ecorex-sandbox-host.exe"
+    msvcp = output / "msvcp140.dll"
     launcher.write_bytes(b"trusted-launcher-test")
     helper.write_bytes(b"trusted-helper-test")
+    msvcp.write_bytes(b"trusted-app-local-runtime-test")
+    manifest_value["runtime_libraries"]["msvcp140.dll"]["sha256"] = hashlib.sha256(
+        msvcp.read_bytes()
+    ).hexdigest()
+    manifest = tmp_path / "toolchain-manifest.json"
+    manifest.write_text(
+        json.dumps(manifest_value, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
     source_names = (
         "ecorex_launcher.cpp",
         "ecorex_sandbox_host.cpp",
@@ -1732,6 +1744,13 @@ def test_windows_native_receipt_is_bound_to_pinned_toolchain_and_binaries(
         "c2_authenticode_thumbprint": tools["c2"]["authenticode_thumbprint"],
         "runtime_launcher_sha256": hashlib.sha256(launcher.read_bytes()).hexdigest(),
         "sandbox_helper_sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
+        "msvcp140_sha256": hashlib.sha256(msvcp.read_bytes()).hexdigest(),
+        "msvcp140_file_version": manifest_value["runtime_libraries"][
+            "msvcp140.dll"
+        ]["file_version"],
+        "msvcp140_authenticode_thumbprint": manifest_value["runtime_libraries"][
+            "msvcp140.dll"
+        ]["authenticode_thumbprint"],
     }
     receipt_path = output / "native-build-receipt.json"
     receipt_path.write_text(
@@ -1759,7 +1778,6 @@ def test_windows_native_receipt_is_bound_to_pinned_toolchain_and_binaries(
             output,
             toolchain_manifest=manifest,
         )
-
     stager["_validate_windows_native_receipt"](
         output,
         toolchain_manifest=manifest,
@@ -1778,6 +1796,26 @@ def test_windows_native_receipt_is_bound_to_pinned_toolchain_and_binaries(
             output,
             toolchain_manifest=manifest,
         )
+
+
+def test_windows_installs_locked_msvcp_beside_pack_python(tmp_path: Path) -> None:
+    stager = runpy.run_path(str(ROOT / "platform-staging/stager.py"))
+    native = tmp_path / "native"
+    native.mkdir()
+    for name in ("ecorex.exe", "ecorex-sandbox-host.exe", "msvcp140.dll"):
+        (native / name).write_bytes(name.encode("ascii"))
+    core = tmp_path / "core"
+    (core / "bin/pack-python").mkdir(parents=True)
+
+    stager["_install_native"](native, core, "windows")
+
+    assert (core / "bin/pack-python/msvcp140.dll").read_bytes() == b"msvcp140.dll"
+    probe = stager["_pack_python_probe_command"](
+        Path("pack-python")
+    )[-1]
+    assert "from greenlet import greenlet" in probe
+    assert "GetModuleFileNameW" in probe
+    assert "parent == Path(sys.executable).resolve(strict=True).parent" in probe
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows native build contract")
@@ -1809,6 +1847,7 @@ def test_windows_native_build_rejects_injected_toolchain_environment_and_stale_o
         output / "native-build-receipt.json",
         output / "ecorex.exe",
         output / "ecorex-sandbox-host.exe",
+        output / "msvcp140.dll",
     )
     for path in published:
         path.write_bytes(b"stale-passed-output")
@@ -1867,6 +1906,7 @@ def test_windows_native_build_clears_published_outputs_on_late_validation_failur
         output / "native-build-receipt.json",
         output / "ecorex.exe",
         output / "ecorex-sandbox-host.exe",
+        output / "msvcp140.dll",
     )
     for path in published:
         path.write_bytes(b"stale-passed-output")
@@ -1967,6 +2007,7 @@ def test_windows_native_caller_pin_rejects_authority_mutation_before_build_lock(
         output / "native-build-receipt.json",
         output / "ecorex.exe",
         output / "ecorex-sandbox-host.exe",
+        output / "msvcp140.dll",
     )
     blocked = {
         "CL",

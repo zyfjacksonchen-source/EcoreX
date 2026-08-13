@@ -478,7 +478,12 @@ def _build_native(platform: str, architecture: str, evidence: Path) -> Path:
             code="native_build_failed",
         )
         required = (
-            ("ecorex.exe", "ecorex-sandbox-host.exe", "native-build-receipt.json")
+            (
+                "ecorex.exe",
+                "ecorex-sandbox-host.exe",
+                "msvcp140.dll",
+                "native-build-receipt.json",
+            )
             if platform == "windows"
             else ("ecorex",)
         )
@@ -526,6 +531,7 @@ def _validate_windows_native_receipt(
             "windows_sdk_version",
             "tools",
             "libraries",
+            "runtime_libraries",
         }:
             raise ValueError("manifest")
         if (
@@ -576,6 +582,38 @@ def _validate_windows_native_receipt(
                 is None
             ):
                 raise ValueError(name)
+        runtime_libraries = manifest.get("runtime_libraries")
+        if not isinstance(runtime_libraries, dict) or set(runtime_libraries) != {
+            "msvcp140.dll"
+        }:
+            raise ValueError("runtime_libraries")
+        msvcp = runtime_libraries["msvcp140.dll"]
+        if not isinstance(msvcp, dict) or set(msvcp) != {
+            "file_name",
+            "file_version",
+            "product_version",
+            "sha256",
+            "authenticode_subject",
+            "authenticode_thumbprint",
+        }:
+            raise ValueError("msvcp140")
+        if (
+            msvcp.get("file_name") != "msvcp140.dll"
+            or not isinstance(msvcp.get("file_version"), str)
+            or re.fullmatch(r"[0-9]+(?:\.[0-9]+){3}", msvcp["file_version"])
+            is None
+            or not isinstance(msvcp.get("product_version"), str)
+            or re.fullmatch(r"[0-9]+(?:\.[0-9]+){3}", msvcp["product_version"])
+            is None
+            or not isinstance(msvcp.get("sha256"), str)
+            or _SHA256.fullmatch(msvcp["sha256"]) is None
+            or not isinstance(msvcp.get("authenticode_subject"), str)
+            or not msvcp["authenticode_subject"].strip()
+            or not isinstance(msvcp.get("authenticode_thumbprint"), str)
+            or re.fullmatch(r"[0-9a-f]{40}", msvcp["authenticode_thumbprint"])
+            is None
+        ):
+            raise ValueError("msvcp140")
         expected_libraries = {
             "advapi32.lib",
             "bcrypt.lib",
@@ -623,6 +661,9 @@ def _validate_windows_native_receipt(
             "c2_authenticode_thumbprint",
             "runtime_launcher_sha256",
             "sandbox_helper_sha256",
+            "msvcp140_sha256",
+            "msvcp140_file_version",
+            "msvcp140_authenticode_thumbprint",
         }
         if not isinstance(receipt, dict) or set(receipt) != expected_receipt:
             raise ValueError("receipt")
@@ -667,6 +708,7 @@ def _validate_windows_native_receipt(
             or receipt.get("runtime_launcher_sha256") != _sha256(output / "ecorex.exe")
             or receipt.get("sandbox_helper_sha256")
             != _sha256(output / "ecorex-sandbox-host.exe")
+            or receipt.get("msvcp140_sha256") != _sha256(output / "msvcp140.dll")
         ):
             raise ValueError("binding")
         tool_names = ("compiler", "linker", "c1xx", "c2")
@@ -688,6 +730,20 @@ def _validate_windows_native_receipt(
                     != expected_version.split(".")[:2]
                 ):
                     raise ValueError("compatibility_version")
+            if (
+                not isinstance(receipt.get("msvcp140_file_version"), str)
+                or receipt["msvcp140_file_version"].split(".")[:2]
+                != msvcp["file_version"].split(".")[:2]
+                or not isinstance(
+                    receipt.get("msvcp140_authenticode_thumbprint"), str
+                )
+                or re.fullmatch(
+                    r"[0-9a-f]{40}",
+                    receipt["msvcp140_authenticode_thumbprint"],
+                )
+                is None
+            ):
+                raise ValueError("compatibility_msvcp140")
         elif (
             receipt.get("library_set_sha256")
             != hashlib.sha256(library_binding).hexdigest()
@@ -700,6 +756,10 @@ def _validate_windows_native_receipt(
             or receipt.get("compiler_file_version")
             != tools["compiler"]["file_version"]
             or receipt.get("linker_file_version") != tools["linker"]["file_version"]
+            or receipt.get("msvcp140_sha256") != msvcp["sha256"]
+            or receipt.get("msvcp140_file_version") != msvcp["file_version"]
+            or receipt.get("msvcp140_authenticode_thumbprint")
+            != msvcp["authenticode_thumbprint"]
         ):
             raise ValueError("pinned_toolchain")
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
@@ -2606,12 +2666,20 @@ except BaseException:
  print('__ECOREX_PACK_PROBE_BOOTSTRAP_FAILED__')
  raise SystemExit(81)
 try:
+ import ctypes,sys
+ from pathlib import Path
  from bridge.agent_initializer import AgentInitializer
  from agent.tools.search_files.search_files import SearchFiles
  from agent.tools.tool_manager import ToolManager
+ from greenlet import greenlet
  from playwright.sync_api import sync_playwright
  import regex
- assert AgentInitializer and SearchFiles and ToolManager and sync_playwright and regex
+ if sys.platform == 'win32':
+  dll=ctypes.WinDLL('msvcp140.dll')
+  path=ctypes.create_unicode_buffer(32768)
+  assert ctypes.windll.kernel32.GetModuleFileNameW(dll._handle,path,len(path))
+  assert Path(path.value).resolve(strict=True).parent == Path(sys.executable).resolve(strict=True).parent
+ assert AgentInitializer and SearchFiles and ToolManager and greenlet and sync_playwright and regex
 except BaseException:
  print('__ECOREX_PACK_PROBE_COW_SPINE_FAILED__')
  raise SystemExit(87)
@@ -2682,6 +2750,7 @@ def _install_native(native: Path, core: Path, platform: str) -> None:
             bin_dir / "ecorex-sandbox-host.exe",
             executable=True,
         )
+        _copy_regular(native / "msvcp140.dll", bin_dir / "pack-python/msvcp140.dll")
 
 
 def _build_bootstrap(

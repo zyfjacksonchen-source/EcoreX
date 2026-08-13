@@ -604,6 +604,9 @@ def test_native_helper_identity_requires_matching_helpers_and_v2_authority(
     bootstrap.parent.mkdir(parents=True)
     core.write_bytes(b"same-current-native-helper")
     bootstrap.write_bytes(core.read_bytes())
+    msvcp = tmp_path / "stages/windows-x64/core/bin/pack-python/msvcp140.dll"
+    msvcp.parent.mkdir(parents=True)
+    msvcp.write_bytes(b"app-local-msvcp140")
     digest = drill._sha256_file(core)
     receipt = {
         "schema_version": 2,
@@ -628,6 +631,7 @@ def test_native_helper_identity_requires_matching_helpers_and_v2_authority(
                 "sandbox_helper_sha256",
             )
         },
+        "msvcp140_sha256": drill._sha256_file(msvcp),
     }
 
     assert drill._validated_native_helper_sha256(tmp_path, receipt) == digest

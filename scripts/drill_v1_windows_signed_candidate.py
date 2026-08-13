@@ -641,6 +641,9 @@ def _validated_native_helper_sha256(
         output / "stages/windows-x64/bootstrap/bin/ecorex-sandbox-host.exe"
     )
     helper_sha256 = _sha256_file(core_helper)
+    msvcp_sha256 = _sha256_file(
+        output / "stages/windows-x64/core/bin/pack-python/msvcp140.dll"
+    )
     if _sha256_file(bootstrap_helper) != helper_sha256:
         raise DrillError("Bootstrap and Runtime sandbox helpers differ")
     digest_fields = (
@@ -657,6 +660,7 @@ def _validated_native_helper_sha256(
         "c2_sha256",
         "runtime_launcher_sha256",
         "sandbox_helper_sha256",
+        "msvcp140_sha256",
     )
     if (
         native_receipt.get("schema_version") != 2
@@ -669,6 +673,7 @@ def _validated_native_helper_sha256(
             for field in digest_fields
         )
         or native_receipt.get("sandbox_helper_sha256") != helper_sha256
+        or native_receipt.get("msvcp140_sha256") != msvcp_sha256
     ):
         raise DrillError("the caller-pinned native build receipt is invalid")
     return helper_sha256
