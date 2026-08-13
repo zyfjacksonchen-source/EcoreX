@@ -680,3 +680,42 @@ environment failure until the product failure reproduces from known state.
   `shell` hard deny while the Cow boundary intentionally projects none. The
   same assertion fails unchanged on baseline `9e4f8cdd`. No build, package,
   publication, or CI run was started.
+
+### 2026-08-13 CU-205-WINDOWS-RUNTIME-STARTUP-001
+
+- The reported dialog proves Electron started but not why its Runtime child
+  failed. The user's exact failure remains unclassified until a new candidate
+  emits its fixed diagnostic code; x64 alone is not a root-cause signal.
+- A shared P1 reproduced the same dialog when an unrelated process owned the
+  fixed port 8765. Desktop now preserves 8765 by default, moves an unknown
+  listener to a free loopback port, and retries a bounded two additional ports
+  only when the child reports `http_server_bind`. The selected origin reaches
+  Electron navigation, notifications, Connector OAuth, and Cow MCP OAuth.
+- Direct desktop packaging had also bypassed the existing nonce-bound startup
+  stage evidence because that helper accepted only Bootstrap `slots` layouts.
+  It now accepts the immutable `resources/runtime/payload` layout and writes
+  only fixed stage, spawn errno, or exit classifications. No path, token,
+  nonce, or raw stderr is retained. Consecutive failures replace
+  `~/.emate/diagnostics/runtime-startup.json`; a successful start removes it.
+- The exact Electron contract passed `17/17`. Focused dynamic-port, bind-race,
+  same-origin, consecutive-diagnostic, direct-package-stage, Connector OAuth,
+  and Cow MCP OAuth checks passed `5/5`. No installer was built.
+
+### 2026-08-13 CU-205-WINDOWS-MSVCP-CLOSURE-001
+
+- Static inspection of the exact 2.0.4 Windows Core found that
+  `greenlet/_greenlet.cp311-win_amd64.pyd` imports `MSVCP140.dll`, but Core
+  ships only the VCRuntime DLLs. Machines with a system VC runtime hide this
+  package defect. This is a Browser package-closure P1, not proof of the
+  reported whole-Runtime exit.
+- The Windows native stage now takes `msvcp140.dll` only from the locked MSVC
+  14.44 x64 app-local Redist path, validates its Microsoft signature, version,
+  SHA-256, and caller-pinned manifest identity, records it in the native build
+  receipt, and installs it beside Pack Python. No host DLL was copied into the
+  repository.
+- The final Pack-Python probe imports `greenlet` and, on Windows, proves the
+  loaded `msvcp140.dll` came from Pack Python rather than System32. Receipt,
+  package-shape, and signed-candidate drill checks passed `3/3`; the affected
+  native set passed `5` with `11` Windows-only source tests skipped on macOS.
+  PowerShell source parsing passed on Windows. The frozen candidate still owns
+  the actual Windows native build and installed-machine replay.
