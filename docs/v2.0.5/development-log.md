@@ -387,3 +387,39 @@ environment failure until the product failure reproduces from known state.
 - No managed Tencent adapter, second executor, connector-vault write,
   enterprise policy, real token, external request, package, or deployment was
   added or run.
+
+### 2026-08-13 CU-205-SCHEDULER-SKILLS-001
+
+- Root cause: the capability-center Extension authority could stage and enable
+  a local or Hub Skill, but Cow's `SkillManager` scanned only its built-in and
+  workspace directories. The UI could therefore show a Skill as enabled while
+  the model could not discover it. The local upload API also stopped at
+  `staged`. Fix `6d58f82a` contributes only enabled, ready, digest-reverified CAS
+  roots to Cow's original refresh; local upload now activates the same
+  Extension revision. Disabling removes it on the next Cow refresh. Pack
+  switches remain separate and cannot hide or rewrite Cow first-party tools.
+- A two-principal loopback test uploaded from account A, discovered and
+  downloaded from account B, checked the immutable digest, installed into B's
+  independent `runtime.db` and CAS, and proved Cow could discover and read the
+  complete `SKILL.md`. Duplicate slug/version with changed bytes was rejected;
+  account-bound signed intents, expiry, path traversal, executable/symlink
+  input, CAS tampering, signature evidence, timeout, idempotency conflict, and
+  offline-upgrade preservation all stayed fail-closed. No production identity
+  or external message was used.
+- Scheduler now exposes Cow-local `edit` and `run_now` through the existing
+  single workspace service. Edits preserve the captured delivery target;
+  run-now records the attempt without changing the next scheduled time. The
+  task store serializes read-modify-write, uses atomic replacement, and repairs
+  an interrupted primary from its last-good backup instead of silently erasing
+  tasks. Due failures retain their scheduled time for the next bounded tick;
+  success advances once; restart and delete remain durable. The desktop change
+  adds only two instruction-prefill cards and no scheduler state machine.
+- Green checks after rebasing onto `bb744aa3`: the exact Scheduler/Skill suite
+  and affected security/Hub/Cow boundary set passed `29`; existing Skill
+  governance and Scheduler singleton/isolation checks passed `11`; TypeScript
+  contracts and `tsc --noEmit` passed; `git diff --check` passed. The complete
+  23-tool initializer check could not run in this local Python toolchain because
+  its pre-existing `regex` distribution is absent (`search_files` is the sole
+  missing load); the focused switch test proves the loaded tool set is byte-for-
+  byte unchanged and retains all four Office tools. No package, feed, deploy, or
+  external network path was started.
