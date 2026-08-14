@@ -278,7 +278,9 @@ def test_go_bootstrap_local_release_path_is_fail_closed_and_network_independent(
         / "platform-staging/bootstrap/main.go"
     ).read_text(encoding="utf-8")
     local_branch = source.index('if *localRelease != "" {')
-    network_branch = source.index("if err := run(*indexURL, *installRootFlag)")
+    network_branch = source.index(
+        "if err := run(*indexURL, *installRootFlag, !*noOpen)"
+    )
     loader_start = source.index("func loadLocalRelease(")
     loader_end = source.index("func localManifestDiscovery(", loader_start)
     loader = source[loader_start:loader_end]
