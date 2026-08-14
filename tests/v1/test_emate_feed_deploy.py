@@ -23,6 +23,7 @@ BUILD_DIGEST = hashlib.sha256(b"build").hexdigest()
 MANIFEST = b'{"release":"test"}\n'
 MANIFEST_SHA256 = hashlib.sha256(MANIFEST).hexdigest()
 R2_ADMISSION_SHA256 = hashlib.sha256(b"r2-admission").hexdigest()
+R2_ORIGIN = "https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev"
 def _record(root: Path, relative: str, role: str, source: str) -> dict[str, object]:
     payload = (root / relative).read_bytes()
     return {
@@ -146,15 +147,35 @@ def _feed(
         )
         os.symlink(previous_target, root / "current")
 
+    installers = {
+        "windows-x64": (f"e-Mate-Setup-{VERSION}-x64.exe", b"installer"),
+        "macos-arm64": (f"e-Mate-{VERSION}-arm64.dmg", b"mac-installer"),
+        "macos-x64": (f"e-Mate-{VERSION}-x64.dmg", b"mac-x64-installer"),
+    }
+    downloads = [
+        {
+            "target": target,
+            "platform": target.split("-", 1)[0],
+            "architecture": target.split("-", 1)[1],
+            "file_name": name,
+            "url": f"{R2_ORIGIN}/desktop/v{VERSION}/{name}",
+            "size_bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+        for target, (name, payload) in installers.items()
+    ]
     files = {
         "download-index.json": json.dumps({
             "schema_version": 2 if unsigned_manual else 1,
+            "product": "e-Mate",
             "version": VERSION,
-            "distribution_mode": "unsigned-manual" if unsigned_manual else "signed-automatic",
+            **({"distribution_mode": "unsigned-manual"} if unsigned_manual else {}),
+            "released_at": "2026-08-14T00:00:00Z",
+            "downloads": downloads,
         }).encode() + b"\n",
         "latest.yml": f"version: {VERSION}\n".encode(),
         f"runtime/{RELEASE_ID}/release-manifest.json": MANIFEST,
-        f"e-Mate-Setup-{VERSION}-x64.exe": b"installer",
+        **{name: payload for name, payload in installers.values()},
     }
     if not unsigned_manual:
         files.update({
@@ -174,11 +195,9 @@ def _feed(
                 "immutable-runtime",
                 "runtime",
             ),
-            _record(
-                staging,
-                f"e-Mate-Setup-{VERSION}-x64.exe",
-                "immutable-desktop",
-                "windows-x64",
+            *(
+                _record(staging, name, "immutable-desktop", target)
+                for target, (name, _payload) in installers.items()
             ),
             _record(staging, "latest.yml", "pointer", "windows-x64"),
             *([] if unsigned_manual else [
@@ -239,7 +258,50 @@ def _feed(
     return root, candidate, receipt
 
 
+def _cu_receipt_paths(root: Path) -> tuple[Path, Path]:
+    return root / "acceptance/macos-arm64/receipt.json", root / "acceptance/windows-x64/receipt.json"
+
+
+def _write_cu_receipts(root: Path, candidate: Path) -> tuple[Path, Path]:
+    stage = json.loads((candidate / "feed-stage-receipt.json").read_text())
+    index = json.loads((candidate / "download-index.json").read_text())
+    by_target = {item["target"]: item for item in index["downloads"]}
+    paths = _cu_receipt_paths(root)
+    for target, platform, architecture, receipt_path in (
+        ("macos-arm64", "macos", "arm64", paths[0]),
+        ("windows-x64", "windows", "x64", paths[1]),
+    ):
+        if receipt_path.exists():
+            continue
+        evidence = receipt_path.parent / "evidence/session.json"
+        evidence.parent.mkdir(parents=True)
+        evidence.write_text(json.dumps({"target": target}), encoding="utf-8")
+        receipt_path.write_text(json.dumps({
+            "schema_version": 1,
+            "document_type": "emate.desktop-same-byte-cu-receipt",
+            "status": "passed",
+            "platform": platform,
+            "architecture": architecture,
+            **{field: stage[field] for field in (
+                "source_commit", "version", "release_id", "build_digest",
+                "runtime_manifest_sha256", "feed_build_id",
+            )},
+            "installer": by_target[target],
+            "scenarios": [{
+                "name": "cow-hard19-office4",
+                "status": "passed",
+                "evidence": ["evidence/session.json"],
+            }],
+            "evidence": [{
+                "path": "evidence/session.json",
+                "sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+            }],
+        }, sort_keys=True) + "\n", encoding="utf-8")
+    return paths
+
+
 def _command(root: Path, candidate: Path, receipt_path: Path) -> list[str]:
+    macos_receipt, windows_receipt = _write_cu_receipts(root, candidate)
     return [
         sys.executable,
         str(SCRIPT),
@@ -259,6 +321,10 @@ def _command(root: Path, candidate: Path, receipt_path: Path) -> list[str]:
         BUILD_DIGEST,
         "--expected-manifest-sha256",
         MANIFEST_SHA256,
+        "--macos-arm64-cu-receipt",
+        str(macos_receipt),
+        "--windows-x64-cu-receipt",
+        str(windows_receipt),
     ]
 
 
@@ -300,6 +366,61 @@ def test_activation_switches_relative_current_and_writes_seven_field_receipt(
         (candidate / "public-bootstrap-index.json").read_bytes()
     ).hexdigest()
     assert output.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_error"),
+    [
+        ("missing", "computer_use_receipt_unavailable"),
+        ("cross-candidate", "computer_use_identity_mismatch"),
+        ("installer", "computer_use_installer_mismatch"),
+        ("scenario", "computer_use_scenario_failed"),
+        ("evidence", "computer_use_evidence_digest_mismatch"),
+        ("escape", "computer_use_evidence_invalid"),
+        ("symlink", "computer_use_receipt_invalid"),
+    ],
+)
+def test_activation_requires_two_exact_same_byte_computer_use_receipts(
+    tmp_path: Path, mutation: str, expected_error: str
+) -> None:
+    root, candidate, stage = _feed(tmp_path, previous_unsigned_manual=True)
+    previous = str(stage["_test_previous_target"])
+    output = root / "activation-receipts/rejected.json"
+    command = _command(root, candidate, output)
+    macos, windows = _cu_receipt_paths(root)
+    if mutation == "missing":
+        macos.unlink()
+    elif mutation == "evidence":
+        (macos.parent / "evidence/session.json").write_bytes(b"tampered")
+    elif mutation == "symlink":
+        original = macos.with_name("original.json")
+        macos.rename(original)
+        macos.symlink_to(original)
+    else:
+        path = windows if mutation == "scenario" else macos
+        receipt = json.loads(path.read_text())
+        if mutation == "cross-candidate":
+            receipt["feed_build_id"] = "f" * 64
+        elif mutation == "installer":
+            receipt["installer"]["sha256"] = "f" * 64
+        elif mutation == "escape":
+            receipt["evidence"][0]["path"] = "../outside.json"
+            receipt["scenarios"][0]["evidence"] = ["../outside.json"]
+        else:
+            receipt["scenarios"][0]["status"] = "failed"
+        path.write_text(json.dumps(receipt, sort_keys=True) + "\n")
+
+    result = subprocess.run(
+        [*command, "--readback-command", "/bin/cat"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert expected_error in result.stderr
+    assert os.readlink(root / "current") == previous
+    assert not output.exists()
 
 
 def test_unsigned_manual_activation_reads_back_only_download_index(tmp_path: Path) -> None:

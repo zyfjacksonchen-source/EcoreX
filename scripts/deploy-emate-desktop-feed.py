@@ -89,6 +89,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-release-id", required=True)
     parser.add_argument("--expected-build-digest", required=True)
     parser.add_argument("--expected-manifest-sha256", required=True)
+    parser.add_argument("--macos-arm64-cu-receipt", required=True, type=Path)
+    parser.add_argument("--windows-x64-cu-receipt", required=True, type=Path)
     verifier = parser.add_mutually_exclusive_group(required=True)
     verifier.add_argument("--readback-command", type=Path)
     verifier.add_argument("--readback-url")
@@ -132,7 +134,7 @@ def _safe_directory(path: Path, label: str, device: int) -> os.stat_result:
     return metadata
 
 
-def _strict_json(path: Path) -> dict[str, Any]:
+def _strict_json(path: Path, label: str = "stage_receipt") -> dict[str, Any]:
     try:
         metadata = path.lstat()
         if (
@@ -140,7 +142,7 @@ def _strict_json(path: Path) -> dict[str, Any]:
             or not stat.S_ISREG(metadata.st_mode)
             or not 1 <= metadata.st_size <= _MAX_JSON_BYTES
         ):
-            raise FeedDeployError("stage_receipt_invalid")
+            raise FeedDeployError(f"{label}_invalid")
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(path, flags)
         try:
@@ -160,15 +162,15 @@ def _strict_json(path: Path) -> dict[str, Any]:
             or before.st_dev != metadata.st_dev
             or (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns)
         ):
-            raise FeedDeployError("stage_receipt_changed")
+            raise FeedDeployError(f"{label}_changed")
 
         value = json.loads(payload.decode("utf-8"), object_pairs_hook=_unique_json)
     except FeedDeployError:
         raise
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
-        raise FeedDeployError("stage_receipt_invalid") from None
+        raise FeedDeployError(f"{label}_invalid") from None
     if not isinstance(value, dict):
-        raise FeedDeployError("stage_receipt_invalid")
+        raise FeedDeployError(f"{label}_invalid")
     return value
 
 
@@ -500,6 +502,182 @@ def _validate_stage(args: argparse.Namespace) -> tuple[Path, Path, dict[str, Any
         candidate, receipt, root_metadata.st_dev, expected
     )
     return root, candidate, receipt, public_bytes
+
+
+def _computer_use_installers(
+    candidate: Path, stage: dict[str, Any]
+) -> dict[str, dict[str, Any]]:
+    index = _strict_json(candidate / "download-index.json", "download_index")
+    expected_keys = {
+        "schema_version", "product", "version", "released_at", "downloads"
+    } | ({"distribution_mode"} if stage["schema_version"] == 2 else set())
+    downloads = index.get("downloads")
+    if (
+        set(index) != expected_keys
+        or index.get("schema_version") != stage["schema_version"]
+        or index.get("product") != "e-Mate"
+        or index.get("version") != stage["version"]
+        or not isinstance(downloads, list)
+        or len(downloads) != 3
+        or (
+            stage["schema_version"] == 2
+            and index.get("distribution_mode") != "unsigned-manual"
+        )
+    ):
+        raise FeedDeployError("computer_use_installer_mismatch")
+    by_target: dict[str, dict[str, Any]] = {}
+    inventory = {
+        item["path"]: item
+        for item in stage["files"]
+        if item["role"] == "immutable-desktop"
+    }
+    for item in downloads:
+        if not isinstance(item, dict) or set(item) != {
+            "target", "platform", "architecture", "file_name", "url",
+            "size_bytes", "sha256",
+        }:
+            raise FeedDeployError("computer_use_installer_mismatch")
+        target = item.get("target")
+        record = inventory.get(item.get("file_name"))
+        if (
+            target in by_target
+            or target not in {"windows-x64", "macos-arm64", "macos-x64"}
+            or item.get("platform") != str(target).split("-", 1)[0]
+            or item.get("architecture") != str(target).split("-", 1)[1]
+            or not isinstance(item.get("url"), str)
+            or not isinstance(item.get("size_bytes"), int)
+            or isinstance(item.get("size_bytes"), bool)
+            or not isinstance(item.get("sha256"), str)
+            or _SHA256.fullmatch(item["sha256"]) is None
+            or record is None
+            or record["source_artifact"] != target
+            or (record["size_bytes"], record["sha256"])
+            != (item["size_bytes"], item["sha256"])
+        ):
+            raise FeedDeployError("computer_use_installer_mismatch")
+        by_target[str(target)] = item
+    if set(by_target) != {"windows-x64", "macos-arm64", "macos-x64"}:
+        raise FeedDeployError("computer_use_installer_mismatch")
+    return by_target
+
+
+def _validate_computer_use_receipt(
+    path: Path,
+    *,
+    platform: str,
+    architecture: str,
+    stage: dict[str, Any],
+    installer: dict[str, Any],
+) -> None:
+    try:
+        path.lstat()
+    except OSError:
+        raise FeedDeployError("computer_use_receipt_unavailable") from None
+    value = _strict_json(path, "computer_use_receipt")
+    if (
+        set(value) != {
+            "schema_version", "document_type", "status", "platform",
+            "architecture", "source_commit", "version", "release_id",
+            "build_digest", "runtime_manifest_sha256", "feed_build_id",
+            "installer", "scenarios", "evidence",
+        }
+        or value.get("schema_version") != 1
+        or value.get("document_type") != "emate.desktop-same-byte-cu-receipt"
+        or value.get("status") != "passed"
+        or (value.get("platform"), value.get("architecture"))
+        != (platform, architecture)
+    ):
+        raise FeedDeployError("computer_use_receipt_invalid")
+    if any(
+        value.get(field) != stage[field]
+        for field in (
+            "source_commit", "version", "release_id", "build_digest",
+            "runtime_manifest_sha256", "feed_build_id",
+        )
+    ):
+        raise FeedDeployError("computer_use_identity_mismatch")
+    if value.get("installer") != installer:
+        raise FeedDeployError("computer_use_installer_mismatch")
+
+    scenarios = value.get("scenarios")
+    if not isinstance(scenarios, list) or not 1 <= len(scenarios) <= 128:
+        raise FeedDeployError("computer_use_scenario_failed")
+    scenario_names: set[str] = set()
+    referenced: set[str] = set()
+    for row in scenarios:
+        if not isinstance(row, dict) or set(row) != {"name", "status", "evidence"}:
+            raise FeedDeployError("computer_use_scenario_failed")
+        name = row.get("name")
+        refs = row.get("evidence")
+        if (
+            not isinstance(name, str)
+            or _SAFE_ID.fullmatch(name) is None
+            or name.casefold() in scenario_names
+            or row.get("status") != "passed"
+            or not isinstance(refs, list)
+            or not refs
+            or any(not isinstance(item, str) for item in refs)
+            or len(refs) != len({item.casefold() for item in refs})
+        ):
+            raise FeedDeployError("computer_use_scenario_failed")
+        scenario_names.add(name.casefold())
+        referenced.update(refs)
+
+    evidence = value.get("evidence")
+    if not isinstance(evidence, list) or not 1 <= len(evidence) <= 128:
+        raise FeedDeployError("computer_use_evidence_invalid")
+    try:
+        root = Path(os.path.abspath(path)).parent.resolve(strict=True)
+    except OSError:
+        raise FeedDeployError("computer_use_evidence_invalid") from None
+    observed: set[str] = set()
+    for item in evidence:
+        if not isinstance(item, dict) or set(item) != {"path", "sha256"}:
+            raise FeedDeployError("computer_use_evidence_invalid")
+        try:
+            relative = _safe_record_path(item.get("path"))
+        except FeedDeployError:
+            raise FeedDeployError("computer_use_evidence_invalid") from None
+        name = str(relative)
+        if (
+            name.casefold() in observed
+            or not isinstance(item.get("sha256"), str)
+            or _SHA256.fullmatch(item["sha256"]) is None
+        ):
+            raise FeedDeployError("computer_use_evidence_invalid")
+        unresolved = root.joinpath(*relative.parts)
+        try:
+            resolved = unresolved.resolve(strict=True)
+        except OSError:
+            raise FeedDeployError("computer_use_evidence_invalid") from None
+        if resolved != unresolved or not resolved.is_relative_to(root):
+            raise FeedDeployError("computer_use_evidence_invalid")
+        try:
+            _hash_file(resolved, resolved.lstat().st_size, item["sha256"])
+        except FeedDeployError as error:
+            if str(error) == "inventory_hash_mismatch":
+                raise FeedDeployError("computer_use_evidence_digest_mismatch") from None
+            raise FeedDeployError("computer_use_evidence_invalid") from None
+        observed.add(name.casefold())
+    if {name.casefold() for name in referenced} != observed:
+        raise FeedDeployError("computer_use_evidence_invalid")
+
+
+def _validate_computer_use_receipts(
+    args: argparse.Namespace, candidate: Path, stage: dict[str, Any]
+) -> None:
+    installers = _computer_use_installers(candidate, stage)
+    for path, platform, architecture, target in (
+        (args.macos_arm64_cu_receipt, "macos", "arm64", "macos-arm64"),
+        (args.windows_x64_cu_receipt, "windows", "x64", "windows-x64"),
+    ):
+        _validate_computer_use_receipt(
+            path,
+            platform=platform,
+            architecture=architecture,
+            stage=stage,
+            installer=installers[target],
+        )
 
 
 def _current_target(root: Path, device: int) -> str | None:
@@ -839,6 +1017,7 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
     try:
         with lock:
             root, candidate, stage, _public_bytes = _validate_stage(args)
+            _validate_computer_use_receipts(args, candidate, stage)
             output = _receipt_path(root, args.activation_receipt)
             device = root.lstat().st_dev
             previous = _current_target(root, device)
