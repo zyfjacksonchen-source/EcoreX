@@ -249,6 +249,7 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
     for tool in tools:
         name = tool.name if hasattr(tool, 'name') else str(tool)
         available[name] = core_summaries.get(name, "")
+    available_names = frozenset(available)
 
     # Generate tool lines: ordered tools first, then extras
     tool_lines = []
@@ -293,23 +294,34 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
             "",
         ]
 
-    lines.extend(_build_host_boundary_tooling_rules())
+    lines.extend(
+        _build_host_boundary_tooling_rules(
+            feishu_cli_available="feishu_cli" in available_names,
+        )
+    )
     return lines
 
 
-def _build_host_boundary_tooling_rules() -> List[str]:
+def _build_host_boundary_tooling_rules(
+    *, feishu_cli_available: bool,
+) -> List[str]:
     """Rules that make the local host boundary explicit to the model.
 
     Kept ASCII-only so the prompt remains readable across Windows package
     encoding paths.
     """
+    feishu_rule = (
+        "- For Feishu/Lark documents, Base, Drive, Wiki, or auth flows, call `feishu_cli` first. Let `feishu_cli agent_auth` choose between official config/login flows; do not probe `lark-cli` through raw `bash` unless `feishu_cli` reports an unrecoverable setup issue."
+        if feishu_cli_available
+        else "- Feishu/Lark documents, Base, Drive, Wiki, messaging, and auth require a real e-Mate Connector login challenge owned by this session. If that interaction is unavailable, report connector authorization unavailable. Never use browser automation, raw shell, `send`, screenshots, QR codes, or text as an authentication fallback."
+    )
     return [
         "Host capability boundary:",
         "",
         "- Use `host_diagnostics` when a task appears stuck, a tool is missing, MCP/CDP state is unclear, permissions look wrong, or a packaged helper may not be installed.",
         "- Use `optional_abilities` to list, enable, disable, or install optional heavy abilities. Do not start MCP, CDP, browser packs, or Feishu setup through raw shell when this tool applies.",
         "- For external connection setup/auth/install work, call the declared structured tool's status/diagnose/agent_auth action first and follow its official diagnostics. Do not hardcode vendor auth parameters in WebUI, prompts, or raw shell.",
-        "- For Feishu/Lark documents, Base, Drive, Wiki, or auth flows, call `feishu_cli` first. Let `feishu_cli agent_auth` choose between official config/login flows; do not probe `lark-cli` through raw `bash` unless `feishu_cli` reports an unrecoverable setup issue.",
+        feishu_rule,
         "- For browser automation, prefer the configured CDP/chrome-devtools path first; use fallback browser or shell only after CDP state is known.",
         "- For semantic image generation, image editing, reference-image generation, and batch or multi-image generation, call the native `imagegen` tool one or more times according to the visible tool schema and the user's requested ordering. Local Python/PIL/HTML/SVG/canvas is only for deterministic post-processing such as contact sheets, resizing, masks, or format conversion; do not use it as a substitute for final image generation.",
         "- If the same external capability chain fails, times out, or returns no new information repeatedly, stop repeating it. Summarize what is known, name the precise blocker, then switch approach or ask the user for the required login/authorization/input.",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 from pydantic import SecretStr
 
@@ -137,6 +138,25 @@ def test_tool_manager_does_not_publish_channel_transport_cli_tools(monkeypatch) 
     manager.load_tools(start_mcp=False)
 
     assert {"feishu_cli", "tongxin_cli"}.isdisjoint(manager.list_tools())
+
+
+def test_managed_feishu_auth_never_falls_back_to_browser_or_fake_qr() -> None:
+    from agent.prompt.builder import _build_tooling_section
+
+    managed_prompt = "\n".join(
+        _build_tooling_section(
+            [SimpleNamespace(name="browser"), SimpleNamespace(name="send")],
+            "en",
+        )
+    )
+    assert "real e-Mate Connector login challenge owned by this session" in managed_prompt
+    assert "Never use browser automation, raw shell, `send`, screenshots, QR codes" in managed_prompt
+    assert "call `feishu_cli` first" not in managed_prompt
+
+    cow_prompt = "\n".join(
+        _build_tooling_section([SimpleNamespace(name="feishu_cli")], "en")
+    )
+    assert "call `feishu_cli` first" in cow_prompt
 
 
 def test_mcp_settings_write_the_same_project_file_tool_manager_reads(
