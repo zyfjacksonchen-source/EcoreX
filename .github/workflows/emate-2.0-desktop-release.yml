@@ -158,6 +158,7 @@ jobs:
             tests/v1/test_dependency_pack_process.py \
             tests/v1/test_light_real_release_validation.py \
             tests/v1/test_office_skill_runtime.py \
+            tests/test_v024_skill_tool_exposure.py::test_v025_public_office_schema_matches_verified_formats_pack \
             tests/v1/test_release_process_boundary.py \
             tests/v1/test_user_mcp_self_service.py \
             tests/v1/test_mcp_oauth.py \
@@ -176,6 +177,7 @@ jobs:
             tests/v1/test_process_capability_pack.py \
             tests/v1/test_runtime_permission_settings.py \
             tests/v1/test_usage_panel_calibration.py \
+            tests/v1/test_usage_panel_atomic_release.py \
             tests/v1/test_desktop_update_tool.py \
             tests/v1/test_usage_projection.py \
             tests/v1/test_device_identity_management.py \
