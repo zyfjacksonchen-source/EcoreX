@@ -410,7 +410,6 @@ def _session_binding(snapshot: ManagedSessionSnapshot) -> tuple[object, ...]:
         snapshot.account_id,
         snapshot.organization_id,
         frozenset(snapshot.allowed_model_ids),
-        frozenset(snapshot.admin_denies),
     )
 
 

@@ -622,7 +622,6 @@ def _lease_runtime_binding(lease: SignedManagedSessionLease) -> tuple[object, ..
         claims.account_id,
         claims.organization_id,
         frozenset(claims.model_allowlist),
-        frozenset(claims.admin_denies),
     )
 
 
@@ -631,7 +630,6 @@ def _runtime_binding(snapshot: ManagedSessionSnapshot) -> tuple[object, ...]:
         snapshot.account_id,
         snapshot.organization_id,
         frozenset(snapshot.model_allowlist),
-        frozenset(snapshot.admin_denies),
     )
 
 

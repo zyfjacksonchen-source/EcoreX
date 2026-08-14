@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+import inspect
 import sqlite3
 
 from fastapi.testclient import TestClient
@@ -9,7 +10,7 @@ from pydantic import ValidationError
 import pytest
 
 from ecorex.protocol import PermissionSnapshot
-from ecorex.runtime import RuntimeSettings, create_app
+from ecorex.runtime import RuntimeComposition, RuntimeSettings, create_app
 from ecorex.runtime.errors import ConflictError, SchemaVersionError
 from ecorex.runtime.database import SQLiteDatabase
 from ecorex.runtime.permissions import PermissionAuthority, PermissionIntegrityError
@@ -89,6 +90,9 @@ def test_product_has_one_cowagent_runtime_boundary_and_no_permission_setting(
     assert "full_access" not in ProductServerSettings.__dataclass_fields__
     assert "admin_hard_denies" not in ProductServerSettings.__dataclass_fields__
     assert "enforce_admin_tool_denies" not in ProductServerSettings.__dataclass_fields__
+    assert "enforce_admin_tool_denies" not in inspect.signature(
+        RuntimeComposition
+    ).parameters
     assert (
         "capability_sandbox_profile_availability"
         not in RuntimeSettings.__dataclass_fields__

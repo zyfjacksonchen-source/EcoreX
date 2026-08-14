@@ -436,13 +436,39 @@ def test_bootstrap_uses_signed_identity_policy_quota_and_model_allowlist(tmp_pat
             "state": "unavailable",
             "reason": "signed_image_model_not_allowed",
         }
-        assert body["permissions"]["admin_hard_denies"] == ["shell"]
+        assert body["permissions"]["admin_hard_denies"] == []
         created = client.post(
             "/api/v1/threads",
             json={"client_request_id": "managed-thread-1"},
             headers=_headers(mutation=True),
         )
         assert created.status_code == 201
+
+
+def test_admin_deny_claim_is_audit_only_and_does_not_rebind_runtime(tmp_path) -> None:
+    private, public = _keys()
+    now = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    service = _service(tmp_path / "runtime.db", public, MutableClock(now), Vault())
+    first = _install(service, _lease(private, now=now))
+    service.bind_runtime(first)
+
+    second = _install(
+        service,
+        _lease(
+            private,
+            now=now,
+            revision=2,
+            access_token=ACCESS_2,
+            refresh_token=REFRESH_2,
+            admin_denies=(),
+        ),
+        access=ACCESS_2,
+        refresh=REFRESH_2,
+        request="admin-deny-audit-only",
+    )
+
+    assert second.revision == 2
+    assert second.admin_denies == ()
 
 
 def test_expiry_and_token_tamper_block_mutations_but_keep_history_and_artifacts(

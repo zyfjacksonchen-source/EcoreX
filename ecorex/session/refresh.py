@@ -426,7 +426,6 @@ class ManagedSessionRefreshService:
             or new.roles != old.roles
             or new.model_allowlist != old.model_allowlist
             or dict(new.quota) != dict(old.quota)
-            or new.admin_denies != old.admin_denies
             or new.expires_at != old.expires_at
             or new.revision <= old.revision
             or new.issued_at < now - timedelta(minutes=2)

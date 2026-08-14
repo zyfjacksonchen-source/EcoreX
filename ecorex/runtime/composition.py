@@ -321,7 +321,6 @@ class RuntimeComposition:
         mcp_oauth_service: "MCPOAuthService | None" = None,
         tenant_id: str = "local-user",
         mcp_tenant_id: str | None = None,
-        enforce_admin_tool_denies: bool = False,
         persist_startup_snapshots: bool = True,
         turn_workspace_resolver: Callable[[str | None], str | Path] | None = None,
     ) -> None:
@@ -472,11 +471,7 @@ class RuntimeComposition:
                 tool_executions=self.tool_execution_repository,
                 snapshot_resolver=self._connector_snapshot_for_scope,
                 turn_intent_resolver=self._turn_input_for_scope,
-                admin_hard_denies_provider=lambda: (
-                    frozenset(self._permission_provider().admin_hard_denies)
-                    if self._enforce_admin_tool_denies
-                    else frozenset()
-                ),
+                admin_hard_denies_provider=lambda: frozenset(),
                 frozen_admin_hard_denies_resolver=(self._frozen_admin_hard_denies),
             )
             if connector_service is not None
@@ -573,13 +568,9 @@ class RuntimeComposition:
             raise ValueError(
                 "administrator permission policy does not match its payload"
             )
-        # Control-plane denial facts remain in the immutable permission
-        # projection for audit and reconciliation.  They are not an execution
-        # gate for the local product by default: local permissions, local
-        # capability discovery and the selected sandbox profile own that
-        # decision.  A regulated deployment can explicitly opt in.
+        # Historical denial facts remain auditable but are never executable
+        # policy in the Cow-compatible local Runtime.
         self._admin_hard_denies = admin_hard_denies
-        self._enforce_admin_tool_denies = bool(enforce_admin_tool_denies)
         self._permission_provider = permission_provider or (lambda: static_permission)
         self._permission_state_digest_provider = permission_state_digest_provider or (
             lambda: self._read_permission_state_digest(tenant_id)
@@ -1127,17 +1118,8 @@ class RuntimeComposition:
         return availability
 
     def _frozen_admin_hard_denies(self, snapshot_id: str) -> frozenset[str]:
-        if not self._enforce_admin_tool_denies:
-            return frozenset()
-        snapshot = self.snapshot_repository.get(snapshot_id)
-        if snapshot.kind != "permission":
-            raise ValueError("Connector permission snapshot kind is invalid")
-        permission = PermissionSnapshot.model_validate(snapshot.payload)
-        if permission.snapshot_id != snapshot_id:
-            raise ValueError("Connector permission snapshot identity is invalid")
-        return frozenset(
-            str(value).casefold() for value in permission.admin_hard_denies
-        )
+        del snapshot_id
+        return frozenset()
 
     def _read_permission_state_digest(self, account_id: str) -> str:
         """Read a ledger-backed chain head for non-API composition tests."""
@@ -1166,11 +1148,10 @@ class RuntimeComposition:
                 if permission.full_access
                 else PermissionProfile.DEFAULT
             ),
-            # Keep the signed facts on the policy so durable admission can
-            # reconstruct the exact PermissionAuthority snapshot.  Governance
-            # separately receives the product enforcement switch below.
+            # Keep legacy facts auditable without allowing a management-plane
+            # deny list to alter local Cow tool discovery or execution.
             admin_hard_denies=frozenset(permission.admin_hard_denies),
-            enforce_admin_hard_denies=self._enforce_admin_tool_denies,
+            enforce_admin_hard_denies=False,
         )
 
     def _record_connector_catalog(self):
