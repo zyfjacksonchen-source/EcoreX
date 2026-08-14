@@ -1492,3 +1492,26 @@ environment failure until the product failure reproduces from known state.
   image facts still contain pre-fix inflated counts; they remain visible and
   attributable instead of being rewritten. New producer facts use one image
   per completed result and terminal `completed` status.
+
+### 2026-08-14 RELEASE-205-R2-RECLAIM-027
+
+- The rejected `77786087` candidate was never referenced by either live Feed.
+  A dedicated `reclaim-rejected` workflow now binds the successful historical
+  run, canonical admission SHA-256, source, release, and Runtime manifest;
+  re-reads all eight dl/mvdcm pointer endpoints; requires exact authenticated
+  size/SHA metadata for every admitted key; aborts multipart uploads only for
+  those exact keys; and verifies authenticated plus public 404 after deletion.
+  Partial deletion is idempotent, while a same-key byte mismatch fails closed.
+- Run `31785044320` reclaimed exactly 38 admission objects and completed with
+  `{"objects_reclaimed":38,"status":"reclaimed"}`. Independent no-cache HEAD
+  readback returned 404 for all 38 objects. The live dl and mvdcm
+  `download-index.json` files remained byte-identical at version 2.0.4 and
+  SHA-256
+  `57868d8b3f9f5cc924a5fb35398a42742fd61490c3d87ed962e4a8c5dc9dc6ca`.
+  No Feed pointer, Bootstrap pointer, CU receipt, or activation state changed.
+- Two earlier attempts stopped before any R2 mutation: the first lacked the
+  locked Python 3.11.9 setup step; the second exposed that `urlopen` socket
+  timeout was not a total request budget on the hosted runner. The final gate
+  reuses pinned `actions/setup-python` and the runner-native curl with explicit
+  connect and total deadlines. Publisher tests passed `19/19`; the affected
+  Feed set passed `12/12` with one environment skip.
