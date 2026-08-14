@@ -47,6 +47,26 @@ func canonicalTestTempDir(t *testing.T) string {
 	return filepath.Clean(absolute)
 }
 
+func TestInstallRootIsTheDesktopDataRootOnWindowsAndMacOS(t *testing.T) {
+	home := canonicalTestTempDir(t)
+	want := filepath.Join(home, ".emate")
+	for _, platform := range []string{"windows", "darwin"} {
+		first, err := installRootFor(platform, "", home, nil)
+		if err != nil || first != want {
+			t.Fatalf("%s default root = %q, %v; want %q", platform, first, err, want)
+		}
+		second, err := installRootFor(platform, "", home, nil)
+		if err != nil || second != first {
+			t.Fatalf("%s root resolution is not idempotent: %q, %v", platform, second, err)
+		}
+	}
+	override := filepath.Join(home, "explicit")
+	got, err := installRootFor("windows", override, home, nil)
+	if err != nil || got != override {
+		t.Fatalf("explicit install root = %q, %v; want %q", got, err, override)
+	}
+}
+
 func TestSandboxHelperRetentionKeepsDigestVersionsImmutable(t *testing.T) {
 	root := canonicalTestTempDir(t)
 	if err := os.MkdirAll(filepath.Join(root, "bootstrap"), 0o700); err != nil {

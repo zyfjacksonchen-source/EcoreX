@@ -36,6 +36,12 @@ _SIGNED_POINTER_FILES = [
     "public-bootstrap-index.json",
 ]
 _MANUAL_POINTER_FILES = ["latest.yml", "download-index.json"]
+_MANUAL_STANDALONE_POINTER_FILES = [
+    *_MANUAL_POINTER_FILES,
+    "public-bootstrap-index.json",
+    "install-webui.sh",
+    "install-webui.ps1",
+]
 _RECEIPT_FIELDS = [
     "operation",
     "feed_build_id",
@@ -300,15 +306,17 @@ def _validate_inventory(candidate: Path, receipt: dict[str, Any], device: int) -
         len(readback_records) != 1
         or readback_records[0]["role"] != "pointer"
         or (
-            manual
-            and any(
-                item["path"] in {
-                    "latest-mac.yml",
-                    "public-bootstrap-index.json",
-                }
-                for item in records
-            )
+            manual and any(item["path"] == "latest-mac.yml" for item in records)
         )
+    ):
+        raise FeedDeployError("public_pointer_inventory_invalid")
+    install_records = {
+        item["path"]
+        for item in records
+        if item["path"] in {"install-webui.sh", "install-webui.ps1"}
+    }
+    if manual and (len(public_records) == 1) != (
+        install_records == {"install-webui.sh", "install-webui.ps1"}
     ):
         raise FeedDeployError("public_pointer_inventory_invalid")
 
@@ -420,8 +428,15 @@ def _validate_target(
         raise FeedDeployError("candidate_target_invalid")
     if target_path.name != PurePosixPath(target).name:
         raise FeedDeployError("candidate_identity_mismatch")
+    raw_files = receipt.get("files")
+    has_public_index = isinstance(raw_files, list) and any(
+        isinstance(item, dict) and item.get("path") == "public-bootstrap-index.json"
+        for item in raw_files
+    )
     pointer_files = (
-        _MANUAL_POINTER_FILES
+        _MANUAL_STANDALONE_POINTER_FILES
+        if schema == 2 and has_public_index
+        else _MANUAL_POINTER_FILES
         if schema == 2
         else _SIGNED_POINTER_FILES
     )

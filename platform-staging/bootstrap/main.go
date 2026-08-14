@@ -1617,21 +1617,18 @@ func ensureRuntimeDataDirectories(root string) error {
 }
 
 func installRoot(override string) (string, error) {
+	home, err := os.UserHomeDir()
+	return installRootFor(runtime.GOOS, override, home, err)
+}
+
+func installRootFor(_ string, override string, home string, homeErr error) (string, error) {
 	if override != "" {
 		if !filepath.IsAbs(override) {
 			return "", fmt.Errorf("install root must be absolute")
 		}
 		return filepath.Clean(override), nil
 	}
-	if runtime.GOOS == "windows" {
-		base := os.Getenv("LOCALAPPDATA")
-		if base == "" || !filepath.IsAbs(base) {
-			return "", fmt.Errorf("Windows LocalAppData is unavailable")
-		}
-		return filepath.Join(base, "e-Mate"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || !filepath.IsAbs(home) {
+	if homeErr != nil || !filepath.IsAbs(home) {
 		return "", fmt.Errorf("user data directory is unavailable")
 	}
 	return filepath.Join(home, ".emate"), nil

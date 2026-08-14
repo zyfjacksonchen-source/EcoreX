@@ -149,6 +149,46 @@ async function loadIndex() {
   throw new Error("下载信息暂时不可用");
 }
 
+export async function loadStandaloneAdmission() {
+  const response = await fetch("/e-mate/update/public-bootstrap-index.json", {
+    cache: "no-store",
+    credentials: "omit",
+    redirect: "error",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) throw new Error("standalone unpublished");
+  const payload = await response.text();
+  if (new TextEncoder().encode(payload).byteLength > 256 * 1024) throw new Error("standalone index too large");
+  const index = object(JSON.parse(payload), "WebUI 发布索引");
+  if (index.schema_version !== 1
+    || index.document_type !== "ecorex.public-bootstrap-discovery"
+    || index.trust !== "untrusted-discovery-hint"
+    || index.status !== "published") throw new Error("standalone unpublished");
+  const freshness = object(index.freshness, "WebUI 发布时效");
+  const issued = Date.parse(freshness.issued_at);
+  const expires = Date.parse(freshness.expires_at);
+  if (!Number.isFinite(issued) || !Number.isFinite(expires) || issued > Date.now() || expires <= Date.now()) throw new Error("standalone pointer expired");
+  const release = object(index.release, "WebUI 发布");
+  safeText(release.version, "WebUI 版本", VERSION);
+  const manifestSources = object(release.manifest, "WebUI 清单").sources;
+  if (!Array.isArray(manifestSources) || manifestSources.length !== 1) throw new Error("standalone source invalid");
+  if (manifestSources[0]?.url !== `https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev/desktop/v${release.version}/release-manifest.json`) throw new Error("standalone source invalid");
+  const artifacts = release.bootstrap_artifacts;
+  if (!Array.isArray(artifacts) || artifacts.length !== 3) throw new Error("standalone targets invalid");
+  const expected = new Set(["windows-x64", "macos-arm64", "macos-x64"]);
+  for (const artifact of artifacts) {
+    const item = object(artifact, "WebUI Bootstrap");
+    const target = `${item.platform}-${item.architecture}`;
+    safeText(item.file_name, "WebUI Bootstrap 文件名", SAFE_NAME);
+    safeText(item.sha256, "WebUI Bootstrap 摘要", SHA256);
+    if (!expected.delete(target) || !Array.isArray(item.sources) || item.sources.length !== 1) throw new Error("standalone targets invalid");
+    const url = item.sources[0]?.url;
+    if (url !== `https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev/desktop/v${release.version}/${item.file_name}`) throw new Error("standalone source invalid");
+  }
+  if (expected.size) throw new Error("standalone targets invalid");
+  return true;
+}
+
 function formatBytes(value) {
   return `${new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 }).format(value / 1024 / 1024)} MB`;
 }
@@ -275,7 +315,7 @@ if (typeof document !== "undefined") {
       if (status) status.textContent = "复制失败，请手动选择上方两行命令。";
     }
   });
-  document.querySelectorAll("[data-copy-webui-command]").forEach((button) => {
+  document.querySelectorAll("[data-copy-webui-command], [data-copy-standalone-command]").forEach((button) => {
     button.addEventListener("click", async () => {
       const card = button.closest(".download-card");
       const command = card?.querySelector("[data-webui-command]")?.textContent ?? "";
@@ -288,6 +328,8 @@ if (typeof document !== "undefined") {
       }
     });
   });
+  const standalone = document.querySelector("[data-standalone-install]");
+  if (standalone) loadStandaloneAdmission().then(() => { standalone.hidden = false; }).catch(() => {});
   if (document.querySelector("[data-downloads]")) {
     Promise.all([loadIndex(), detectTarget()]).then(([index, target]) => renderIndex(index, target)).catch(renderFailure);
   }

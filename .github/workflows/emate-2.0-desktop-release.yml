@@ -456,6 +456,7 @@ jobs:
         run: |
           python scripts/publish-emate-r2-downloads.py \
             --version "${{ needs.runtime.outputs.version }}" \
+            --runtime-root .handoff/runtime \
             --windows-root .handoff/windows-x64 \
             --macos-arm64-root .handoff/macos-arm64 \
             --macos-x64-root .handoff/macos-x64 \

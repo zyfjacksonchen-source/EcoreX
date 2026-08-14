@@ -135,7 +135,7 @@ def _runtime(root: Path, *, publication_drift_target: str | None = None):
                     "mirror",
                     SourceKind.GITHUB_CN_MIRROR,
                     0,
-                    "https://mirror.example/e-mate",
+                    f"{R2_ORIGIN}/desktop/v{VERSION}",
                 ),
                 ReleaseSource(
                     "github",
@@ -234,10 +234,36 @@ def _inputs(tmp_path: Path, *, publication_drift_target: str | None = None):
                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             }
         )
+    artifact_targets = {
+        artifact.file_name: artifact.artifact_id for artifact in runtime[0].manifest.artifacts
+    }
+    for path in sorted(runtime[0].output_dir.iterdir()):
+        if not path.is_file():
+            continue
+        target = artifact_targets.get(
+            path.name,
+            {
+                "release-manifest.json": "runtime-manifest",
+                "release-metadata.json": "runtime-metadata",
+                "sbom.cdx.json": "runtime-sbom",
+            }.get(path.name),
+        )
+        assert target is not None
+        key = f"desktop/v{VERSION}/{path.name}"
+        objects.append(
+            {
+                "target": target,
+                "file_name": path.name,
+                "key": key,
+                "url": f"{R2_ORIGIN}/{key}",
+                "size_bytes": path.stat().st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        )
     (tmp_path / "r2-receipt.json").write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "document_type": "emate.r2-download-admission",
                 "status": "verified",
                 "version": VERSION,
@@ -465,7 +491,10 @@ def test_feed_gate_prepares_explicit_unsigned_manual_activation(tmp_path: Path) 
     for path in ("latest.yml", "latest-mac.yml", "public-bootstrap-index.json"):
         assert f"location = /e-mate/update/{path}" in nginx
     assert "alias /srv/e-mate-update/current/latest.yml;" in nginx
-    assert nginx.count("return 404;") >= 2
+    assert "alias /srv/e-mate-update/current/public-bootstrap-index.json;" in nginx
+    assert "alias /srv/e-mate-update/current/install-webui.sh;" in nginx
+    assert "alias /srv/e-mate-update/current/install-webui.ps1;" in nginx
+    assert nginx.count("return 404;") >= 1
     assert "location = /e-mate/update/" in nginx and "return 302 /e-mate/;" in nginx
 
     rejected = subprocess.run(
@@ -504,6 +533,7 @@ def test_feed_gate_refuses_to_generate_without_exact_r2_admission(
     _inputs(tmp_path)
     admission = tmp_path / "r2-receipt.json"
     value = json.loads(admission.read_text())
+    pristine = json.loads(json.dumps(value))
     admission.unlink()
     rejected = subprocess.run(
         _command(tmp_path, "no-r2"), capture_output=True, text=True
@@ -520,6 +550,18 @@ def test_feed_gate_refuses_to_generate_without_exact_r2_admission(
     assert rejected.returncode == 1
     assert "does not match desktop bytes" in rejected.stderr
     assert not (tmp_path / "forged-r2").exists()
+
+    value = pristine
+    value["objects"] = [
+        item for item in value["objects"] if item["target"] != "bootstrap-windows-x64"
+    ]
+    admission.write_text(json.dumps(value), encoding="utf-8")
+    rejected = subprocess.run(
+        _command(tmp_path, "missing-bootstrap"), capture_output=True, text=True
+    )
+    assert rejected.returncode == 1
+    assert "R2 admission inventory is incomplete" in rejected.stderr
+    assert not (tmp_path / "missing-bootstrap").exists()
 
 
 def test_feed_gate_accepts_pointer_signed_by_both_runtime_trust_roles(
@@ -544,6 +586,55 @@ def test_feed_gate_accepts_pointer_signed_by_both_runtime_trust_roles(
     assert (tmp_path / "feed" / "public-bootstrap-index.json").read_bytes() == (
         pointer.read_bytes()
     )
+
+
+def test_unsigned_manual_feed_can_atomically_admit_standalone_installers(
+    tmp_path: Path,
+) -> None:
+    built, release_signer, publication_signer = _inputs(tmp_path)
+    pointer = tmp_path / "public-bootstrap-index.json"
+    pointer.write_text(
+        json.dumps(_public_index(built, release_signer, publication_signer)),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        _command(
+            tmp_path,
+            "manual-with-webui",
+            MANUAL_NGINX,
+            public_index=pointer,
+            unsigned_manual=True,
+        ),
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    output = tmp_path / "manual-with-webui"
+    receipt = json.loads((output / "feed-stage-receipt.json").read_text())
+    assert receipt["status"] == "activation-ready-unsigned-manual"
+    assert receipt["activation"]["pointer_files"] == [
+        "latest.yml",
+        "download-index.json",
+        "public-bootstrap-index.json",
+        "install-webui.sh",
+        "install-webui.ps1",
+    ]
+    shell = (output / "install-webui.sh").read_text()
+    powershell = (output / "install-webui.ps1").read_text()
+    assert R2_ORIGIN in shell and R2_ORIGIN in powershell
+    assert "github.com" not in shell + powershell
+    assert "mvdcm" not in shell + powershell
+    assert subprocess.run(
+        ["sh", "-n"], input=shell, text=True, capture_output=True
+    ).returncode == 0
+    target = tmp_path / Path(receipt["candidate_target"]).name
+    output.rename(target)
+    readback_name, _ = runpy.run_path(str(DEPLOY_SCRIPT))["_validate_target"](
+        target, receipt, target.stat().st_dev
+    )
+    assert readback_name == "download-index.json"
 
 
 def test_feed_gate_rejects_unknown_pointer_authority_and_freshness(
@@ -740,6 +831,7 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
     assert "scripts/prepare-emate-desktop-feed.py" in workflow
     assert "python scripts/install-v1-python-profile.py --profile cloud" in workflow
     assert "scripts/publish-emate-r2-downloads.py" in workflow
+    assert "--runtime-root .handoff/runtime" in workflow
     assert "--r2-receipt .handoff/r2-download-admission.json" in workflow
     assert "ECOREX_R2_ACCOUNT_ID: ${{ secrets.ECOREX_R2_ACCOUNT_ID }}" in workflow
     assert "ECOREX_R2_ACCESS_KEY_ID: ${{ secrets.ECOREX_R2_ACCESS_KEY_ID }}" in workflow

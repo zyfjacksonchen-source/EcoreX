@@ -1006,7 +1006,7 @@ def _go_bootstraps(
     publication_hash = hashlib.sha256(
         _canonical_json(dict(publication_keys)).rstrip(b"\n")
     ).hexdigest()
-    public_url = "https://mvdcm.ecoremedia.net/e-mate/update/public-bootstrap-index.json"
+    public_url = "https://dl.ecoremedia.net/e-mate/update/public-bootstrap-index.json"
     public_url_hash = hashlib.sha256(public_url.encode()).hexdigest()
     results: dict[tuple[str, str], Path] = {}
     for platform, architecture in TARGETS:
@@ -1134,14 +1134,15 @@ def _sources() -> tuple[ReleaseSource, ...]:
             "github-cn",
             SourceKind.GITHUB_CN_MIRROR,
             0,
-            f"https://gh-proxy.com/{github}",
+            "https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev/"
+            f"desktop/v{__version__}",
         ),
         ReleaseSource("github", SourceKind.GITHUB_RELEASE, 1, github),
         ReleaseSource(
             "cdn",
             SourceKind.ECOREX_CDN,
             2,
-            "https://mvdcm.ecoremedia.net/e-mate/update",
+            "https://dl.ecoremedia.net/e-mate/update",
         ),
     )
 

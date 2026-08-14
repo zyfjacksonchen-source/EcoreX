@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload and verify the immutable e-Mate desktop downloads in Cloudflare R2."""
+"""Upload and verify the immutable e-Mate desktop and Runtime downloads in R2."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ _PUBLIC_HEADERS = {"User-Agent": "e-Mate-Desktop-Publisher/1.0", "Accept": "*/*"
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", required=True)
+    parser.add_argument("--runtime-root", required=True, type=Path)
     parser.add_argument("--windows-root", required=True, type=Path)
     parser.add_argument("--macos-arm64-root", required=True, type=Path)
     parser.add_argument("--macos-x64-root", required=True, type=Path)
@@ -107,6 +108,70 @@ def _records(args: argparse.Namespace) -> list[tuple[dict[str, Any], Path]]:
                 {
                     "target": target,
                     "file_name": name,
+                    "key": key,
+                    "url": f"{PUBLIC_ORIGIN}/{key}",
+                    "size_bytes": path.stat().st_size,
+                    "sha256": digest,
+                    "source_identity": identity,
+                    "content_type": content_type,
+                },
+                path,
+            )
+        )
+    release = args.runtime_root.resolve(strict=True) / "release"
+    manifest_path = _artifact(release, "release-manifest.json")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise RuntimeError("r2_runtime_manifest_invalid") from None
+    artifacts = manifest.get("artifacts") if isinstance(manifest, dict) else None
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("version") != args.version
+        or not isinstance(artifacts, list)
+    ):
+        raise RuntimeError("r2_runtime_manifest_invalid")
+    runtime: list[tuple[str, Path, str]] = []
+    seen_targets: set[str] = set()
+    seen_names: set[str] = set()
+    for item in artifacts:
+        if not isinstance(item, dict):
+            raise RuntimeError("r2_runtime_manifest_invalid")
+        target, name = item.get("artifact_id"), item.get("file_name")
+        if (
+            not isinstance(target, str)
+            or not isinstance(name, str)
+            or target in seen_targets
+            or name in seen_names
+        ):
+            raise RuntimeError("r2_runtime_manifest_invalid")
+        path = _artifact(release, name)
+        digest, _ = _sha256(path)
+        if item.get("size_bytes") != path.stat().st_size or item.get("sha256") != digest:
+            raise RuntimeError(f"r2_runtime_artifact_mismatch:{name}")
+        seen_targets.add(target)
+        seen_names.add(name)
+        runtime.append((target, path, "application/zip"))
+    if not {
+        "bootstrap-windows-x64",
+        "bootstrap-macos-arm64",
+        "bootstrap-macos-x64",
+    }.issubset(seen_targets):
+        raise RuntimeError("r2_runtime_bootstrap_incomplete")
+    for target, name in (
+        ("runtime-manifest", "release-manifest.json"),
+        ("runtime-metadata", "release-metadata.json"),
+        ("runtime-sbom", "sbom.cdx.json"),
+    ):
+        runtime.append((target, _artifact(release, name), "application/json"))
+    for target, path, content_type in runtime:
+        digest, identity = _sha256(path)
+        key = f"desktop/v{args.version}/{path.name}"
+        result.append(
+            (
+                {
+                    "target": target,
+                    "file_name": path.name,
                     "key": key,
                     "url": f"{PUBLIC_ORIGIN}/{key}",
                     "size_bytes": path.stat().st_size,
@@ -376,7 +441,7 @@ def publish(
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = {
             executor.submit(_publish_one, client, record, path, public_probe): record
-            for record, path in records[:3]
+            for record, path in records
         }
         for future in as_completed(futures):
             try:
@@ -385,10 +450,9 @@ def publish(
                 errors.append(error)
     if errors:
         raise errors[0]
-    completed.append(_publish_one(client, *records[3], public_probe))
     completed.sort(key=lambda item: str(item["key"]))
     receipt = {
-        "schema_version": 1,
+        "schema_version": 2,
         "document_type": "emate.r2-download-admission",
         "status": "verified",
         "version": args.version,

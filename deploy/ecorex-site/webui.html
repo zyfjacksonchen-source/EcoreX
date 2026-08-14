@@ -56,6 +56,28 @@
         </div>
       </section>
 
+      <section class="downloads" data-standalone-install hidden aria-labelledby="standalone-title">
+        <div class="section-heading">
+          <p>独立 WebUI</p>
+          <h2 id="standalone-title">一行安装并启动</h2>
+          <span>沿用桌面端的同一个 Runtime、会话和 ~/.emate 用户数据；已安装桌面端时不会创建第二套状态。</span>
+        </div>
+        <div class="download-grid webui-command-grid">
+          <article class="download-card">
+            <h3>macOS</h3><p>在“终端”运行：</p>
+            <code class="webui-command" data-webui-command>curl -fsSL https://dl.ecoremedia.net/e-mate/update/install-webui.sh | sh</code>
+            <button class="download-link" type="button" data-copy-standalone-command="macos">复制 macOS 安装命令</button>
+            <p data-copy-status role="status" aria-live="polite"></p>
+          </article>
+          <article class="download-card">
+            <h3>Windows x64</h3><p>在 PowerShell 运行：</p>
+            <code class="webui-command" data-webui-command>irm https://dl.ecoremedia.net/e-mate/update/install-webui.ps1 | iex</code>
+            <button class="download-link" type="button" data-copy-standalone-command="windows">复制 Windows 安装命令</button>
+            <p data-copy-status role="status" aria-live="polite"></p>
+          </article>
+        </div>
+      </section>
+
       <section class="help-section" aria-labelledby="coexist-title">
         <div class="section-heading"><p>同一份工作状态</p><h2 id="coexist-title">桌面端与 WebUI 共存</h2></div>
         <div class="feature-grid">
@@ -67,6 +89,6 @@
     </main>
 
     <footer class="footer"><span>e-Mate</span><a href="./#download-options">返回官方下载</a></footer>
-    <script type="module" src="./site.ab4c0ff74e62.js"></script>
+    <script type="module" src="./site.c045fbb3f9a3.js"></script>
   </body>
 </html>

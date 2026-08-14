@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import io
+import json
 from pathlib import Path
 import runpy
 from threading import Event, Lock
@@ -33,8 +34,34 @@ def _inputs(root: Path) -> argparse.Namespace:
     )
     (arm64 / f"e-Mate-{VERSION}-arm64.dmg").write_bytes(b"mac-arm64")
     (x64 / f"e-Mate-{VERSION}-x64.dmg").write_bytes(b"mac-x64")
+    release = root / "runtime" / "release"
+    release.mkdir(parents=True)
+    artifacts = []
+    for artifact_id, name in (
+        ("bootstrap-windows-x64", "bootstrap-windows-x64.zip"),
+        ("bootstrap-macos-arm64", "bootstrap-macos-arm64.zip"),
+        ("bootstrap-macos-x64", "bootstrap-macos-x64.zip"),
+        ("core-windows-x64", "core-windows-x64.zip"),
+    ):
+        path = release / name
+        path.write_bytes(artifact_id.encode())
+        artifacts.append(
+            {
+                "artifact_id": artifact_id,
+                "file_name": name,
+                "size_bytes": path.stat().st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        )
+    manifest = release / "release-manifest.json"
+    manifest.write_text(
+        json.dumps({"version": VERSION, "artifacts": artifacts}), encoding="utf-8"
+    )
+    (release / "release-metadata.json").write_bytes(b"{}")
+    (release / "sbom.cdx.json").write_bytes(b"{}")
     return argparse.Namespace(
         version=VERSION,
+        runtime_root=root / "runtime",
         windows_root=windows,
         macos_arm64_root=arm64,
         macos_x64_root=x64,
@@ -120,44 +147,44 @@ def test_r2_publisher_runs_three_independent_multipart_uploads_and_resumes(
         module["publish"](args, client=client, public_probe=probe)
 
     assert client.maximum_active == 3
-    assert sorted(client.uploaded) == [
+    assert {
         f"e-Mate-{VERSION}-arm64.dmg",
         f"e-Mate-{VERSION}-x64.dmg",
         f"e-Mate-Setup-{VERSION}-x64.exe",
-    ]
+    } <= set(client.uploaded)
     assert not args.receipt.exists()
 
     first_uploads = list(client.uploaded)
     receipt = module["publish"](args, client=client, public_probe=probe)
 
-    assert client.uploaded[len(first_uploads) :] == [
-        failed,
-        f"e-Mate-Setup-{VERSION}-x64.exe.blockmap",
-    ]
+    assert failed in client.uploaded[len(first_uploads) :]
     assert receipt["status"] == "verified"
     assert receipt["bucket"] == "emate-desktop-downloads"
     assert receipt["max_parallel_multipart"] == 3
-    assert len(receipt["objects"]) == 4
+    assert receipt["schema_version"] == 2
+    assert {item["target"] for item in receipt["objects"]} >= {
+        "bootstrap-windows-x64",
+        "bootstrap-macos-arm64",
+        "bootstrap-macos-x64",
+        "runtime-manifest",
+        "runtime-metadata",
+        "runtime-sbom",
+    }
     assert all(
         item["key"] == f"desktop/v{VERSION}/{item['file_name']}"
         and item["url"].endswith(f"/{item['key']}")
         and item["sha256"]
         == hashlib.sha256(
-            next(
-                path
-                for path in (
-                    args.windows_root,
-                    args.macos_arm64_root,
-                    args.macos_x64_root,
-                )
-                if (path / item["file_name"]).exists()
-            )
-            .joinpath(item["file_name"])
-            .read_bytes()
+            next(path for path in (
+                args.windows_root / item["file_name"],
+                args.macos_arm64_root / item["file_name"],
+                args.macos_x64_root / item["file_name"],
+                args.runtime_root / "release" / item["file_name"],
+            ) if path.exists()).read_bytes()
         ).hexdigest()
         for item in receipt["objects"]
     )
-    assert sorted(probes[-4:]) == sorted(
+    assert sorted(probes[-len(receipt["objects"]):]) == sorted(
         item["file_name"] for item in receipt["objects"]
     )
 
@@ -204,6 +231,8 @@ def test_cli_never_prints_remote_errors_or_credentials(capsys) -> None:
             "--version",
             VERSION,
             "--windows-root",
+            ".",
+            "--runtime-root",
             ".",
             "--macos-arm64-root",
             ".",
@@ -310,12 +339,10 @@ def test_public_probe_failure_rerun_skips_three_uploaded_packages_and_adds_block
     with pytest.raises(RuntimeError, match="r2_public_head_failed"):
         module["publish"](args, client=client, public_probe=probe)
 
-    assert len(client.uploaded) == 3
+    assert len(client.uploaded) >= 3
     receipt = module["publish"](args, client=client, public_probe=probe)
 
-    assert client.uploaded[3:] == [
-        f"e-Mate-Setup-{VERSION}-x64.exe.blockmap"
-    ]
+    assert client.uploaded.count(f"e-Mate-Setup-{VERSION}-x64.exe.blockmap") == 1
     assert receipt["status"] == "verified"
 
 

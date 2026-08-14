@@ -476,17 +476,60 @@ def _validate_r2_admission(
     path: Path,
     version: str,
     desktop: Mapping[str, Mapping[str, Path]],
+    release_dir: Path,
+    manifest: ReleaseManifest,
 ) -> dict[str, Any]:
     try:
-        value = _json(path, 64 * 1024)
+        value = _json(path, 2 * 1024 * 1024)
     except FeedError:
         raise FeedError("R2 admission receipt is invalid") from None
-    names = {
-        "windows-x64": f"e-Mate-Setup-{version}-x64.exe",
-        "macos-arm64": f"e-Mate-{version}-arm64.dmg",
-        "macos-x64": f"e-Mate-{version}-x64.dmg",
-        "windows-x64-blockmap": f"e-Mate-Setup-{version}-x64.exe.blockmap",
+    expected: dict[str, tuple[str, Path, str]] = {
+        "windows-x64": (
+            f"e-Mate-Setup-{version}-x64.exe",
+            desktop["windows-x64"][f"e-Mate-Setup-{version}-x64.exe"],
+            "desktop",
+        ),
+        "macos-arm64": (
+            f"e-Mate-{version}-arm64.dmg",
+            desktop["macos-arm64"][f"e-Mate-{version}-arm64.dmg"],
+            "desktop",
+        ),
+        "macos-x64": (
+            f"e-Mate-{version}-x64.dmg",
+            desktop["macos-x64"][f"e-Mate-{version}-x64.dmg"],
+            "desktop",
+        ),
+        "windows-x64-blockmap": (
+            f"e-Mate-Setup-{version}-x64.exe.blockmap",
+            desktop["windows-x64"][f"e-Mate-Setup-{version}-x64.exe.blockmap"],
+            "desktop",
+        ),
     }
+    for artifact in manifest.artifacts:
+        expected[artifact.artifact_id] = (
+            artifact.file_name,
+            release_dir / artifact.file_name,
+            "Runtime",
+        )
+    expected.update(
+        {
+            "runtime-manifest": (
+                "release-manifest.json",
+                release_dir / "release-manifest.json",
+                "Runtime",
+            ),
+            "runtime-metadata": (
+                "release-metadata.json",
+                release_dir / "release-metadata.json",
+                "Runtime",
+            ),
+            "runtime-sbom": (
+                "sbom.cdx.json",
+                release_dir / "sbom.cdx.json",
+                "Runtime",
+            ),
+        }
+    )
     if (
         set(value)
         != {
@@ -499,7 +542,7 @@ def _validate_r2_admission(
             "max_parallel_multipart",
             "objects",
         }
-        or value.get("schema_version") != 1
+        or value.get("schema_version") != 2
         or value.get("document_type") != "emate.r2-download-admission"
         or value.get("status") != "verified"
         or value.get("version") != version
@@ -507,7 +550,6 @@ def _validate_r2_admission(
         or value.get("public_origin") != _R2_ORIGIN
         or value.get("max_parallel_multipart") != 3
         or not isinstance(value.get("objects"), list)
-        or len(value["objects"]) != 4
     ):
         raise FeedError("R2 admission receipt is invalid")
     observed: set[str] = set()
@@ -522,25 +564,87 @@ def _validate_r2_admission(
         }:
             raise FeedError("R2 admission object is invalid")
         target = str(item["target"])
-        name = names.get(target)
-        root = "windows-x64" if target == "windows-x64-blockmap" else target
-        source = desktop.get(root, {}).get(str(name))
+        record = expected.get(target)
+        if record is None:
+            raise FeedError("R2 admission inventory is incomplete")
+        name, source, category = record
         key = f"desktop/v{version}/{name}"
         if (
-            name is None
-            or target in observed
-            or source is None
+            target in observed
             or item["file_name"] != name
             or item["key"] != key
             or item["url"] != f"{_R2_ORIGIN}/{key}"
             or item["size_bytes"] != source.stat().st_size
             or item["sha256"] != _sha256(source)
         ):
-            raise FeedError("R2 admission object does not match desktop bytes")
+            raise FeedError(f"R2 admission object does not match {category} bytes")
         observed.add(target)
-    if observed != set(names):
+    if observed != set(expected):
         raise FeedError("R2 admission inventory is incomplete")
     return value
+
+
+def _standalone_installers(value: Mapping[str, Any]) -> tuple[bytes, bytes]:
+    release = value.get("release")
+    artifacts = release.get("bootstrap_artifacts") if isinstance(release, Mapping) else None
+    if not isinstance(artifacts, list):
+        raise FeedError("public Bootstrap index differs from signed Runtime")
+    by_target = {
+        f"{item.get('platform')}-{item.get('architecture')}": item
+        for item in artifacts
+        if isinstance(item, Mapping)
+    }
+
+    def admitted(target: str) -> tuple[str, str]:
+        artifact = by_target.get(target)
+        sources = artifact.get("sources") if isinstance(artifact, Mapping) else None
+        if not isinstance(sources, list) or len(sources) != 1:
+            raise FeedError("standalone Bootstrap is not R2-only")
+        url = sources[0].get("url") if isinstance(sources[0], Mapping) else None
+        digest = artifact.get("sha256") if isinstance(artifact, Mapping) else None
+        if (
+            not isinstance(url, str)
+            or not url.startswith(f"{_R2_ORIGIN}/desktop/v")
+            or not isinstance(digest, str)
+            or _SHA256.fullmatch(digest) is None
+        ):
+            raise FeedError("standalone Bootstrap is not R2-only")
+        return url, digest
+
+    arm_url, arm_sha = admitted("macos-arm64")
+    x64_url, x64_sha = admitted("macos-x64")
+    windows_url, windows_sha = admitted("windows-x64")
+    shell = f'''#!/bin/sh
+set -eu
+case "$(uname -s)/$(uname -m)" in
+  Darwin/arm64) url='{arm_url}'; expected='{arm_sha}' ;;
+  Darwin/x86_64) url='{x64_url}'; expected='{x64_sha}' ;;
+  *) echo 'e-Mate WebUI currently supports macOS arm64/x64 and Windows x64.' >&2; exit 1 ;;
+esac
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+curl -fsSL "$url" -o "$work/bootstrap.zip"
+actual="$(shasum -a 256 "$work/bootstrap.zip" | awk '{{print $1}}')"
+[ "$actual" = "$expected" ] || {{ echo 'e-Mate Bootstrap SHA-256 mismatch.' >&2; exit 1; }}
+ditto -x -k "$work/bootstrap.zip" "$work/bootstrap"
+"$work/bootstrap/bin/ecorex-bootstrap"
+'''.encode("utf-8")
+    powershell = f'''$ErrorActionPreference = "Stop"
+$architecture = if ($env:PROCESSOR_ARCHITEW6432) {{ $env:PROCESSOR_ARCHITEW6432 }} else {{ $env:PROCESSOR_ARCHITECTURE }}
+if ($architecture -notin @("AMD64", "x64")) {{ throw "e-Mate WebUI currently supports Windows x64." }}
+$work = Join-Path ([IO.Path]::GetTempPath()) ("emate-webui-" + [guid]::NewGuid())
+try {{
+  New-Item -ItemType Directory -Path $work | Out-Null
+  $archive = Join-Path $work "bootstrap.zip"
+  Invoke-WebRequest -UseBasicParsing -Uri "{windows_url}" -OutFile $archive
+  if ((Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant() -ne "{windows_sha}") {{ throw "e-Mate Bootstrap SHA-256 mismatch." }}
+  $expanded = Join-Path $work "bootstrap"
+  Expand-Archive -LiteralPath $archive -DestinationPath $expanded
+  & (Join-Path $expanded "bin\\ecorex-bootstrap.exe")
+  if ($LASTEXITCODE) {{ exit $LASTEXITCODE }}
+}} finally {{ Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }}
+'''.encode("utf-8")
+    return shell, powershell
 
 
 def _download_index(
@@ -605,6 +709,8 @@ def _validate_nginx(path: Path, *, unsigned_manual: bool) -> str:
         "location = /e-mate/update/latest-mac.yml",
         "location = /e-mate/update/download-index.json",
         "location = /e-mate/update/public-bootstrap-index.json",
+        "location = /e-mate/update/install-webui.sh",
+        "location = /e-mate/update/install-webui.ps1",
         "location ^~ /e-mate/update/",
         "alias /srv/e-mate-update/current/",
     )
@@ -617,7 +723,9 @@ def _validate_nginx(path: Path, *, unsigned_manual: bool) -> str:
     manual_required = (
         "alias /srv/e-mate-update/current/latest.yml;",
         "location = /e-mate/update/latest-mac.yml {\n    return 404;",
-        "location = /e-mate/update/public-bootstrap-index.json {\n    return 404;",
+        "alias /srv/e-mate-update/current/public-bootstrap-index.json;",
+        "alias /srv/e-mate-update/current/install-webui.sh;",
+        "alias /srv/e-mate-update/current/install-webui.ps1;",
         "location = /e-mate/update/ {\n    return 302 /e-mate/;",
         "application/vnd.microsoft.portable-executable exe;",
         "application/x-apple-diskimage dmg;",
@@ -767,8 +875,6 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         args.expected_source_sha
     ):
         raise FeedError("expected release identity is invalid")
-    if args.unsigned_manual and args.public_bootstrap_index is not None:
-        raise FeedError("unsigned manual feed cannot carry a public Bootstrap index")
     source_roots = {
         "runtime": args.runtime_root.resolve(strict=True),
         "windows-x64": args.windows_root.resolve(strict=True),
@@ -845,18 +951,23 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
                 expected_version=version,
                 expected_names=names,
             )
-        r2_admission = _validate_r2_admission(args.r2_receipt, version, desktop)
+        r2_admission = _validate_r2_admission(
+            args.r2_receipt, version, desktop, release_dir, manifest
+        )
         nginx_sha256 = _validate_nginx(
             nginx_config, unsigned_manual=args.unsigned_manual
         )
+        public_value: dict[str, Any] | None = None
         if public_index is not None:
-            value = _json(public_index, 256 * 1024)
+            public_value = _json(public_index, 256 * 1024)
             validate_public_bootstrap_index(
-                value,
+                public_value,
                 verifier=Ed25519SignatureVerifier(release_keys),
                 freshness_verifier=Ed25519SignatureVerifier(publication_keys),
             )
-            _bind_public_index(value, manifest, str(runtime_receipt["manifest_sha256"]))
+            _bind_public_index(
+                public_value, manifest, str(runtime_receipt["manifest_sha256"])
+            )
 
         records: list[dict[str, Any]] = []
         (staging / "latest.yml").write_bytes(
@@ -929,20 +1040,49 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
                     root=staging,
                 )
             )
+            if args.unsigned_manual:
+                assert public_value is not None
+                shell, powershell = _standalone_installers(public_value)
+                for name, payload in (
+                    ("install-webui.sh", shell),
+                    ("install-webui.ps1", powershell),
+                ):
+                    destination = staging / name
+                    destination.write_bytes(payload)
+                    records.append(
+                        _record(
+                            destination,
+                            role="pointer",
+                            source_artifact="runtime-publication",
+                            root=staging,
+                        )
+                    )
         shutil.rmtree(input_root)
         records.sort(key=lambda item: item["path"])
         build_id = hashlib.sha256(
             json.dumps(records, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
+        pointer_files = ["latest.yml"]
+        if not args.unsigned_manual:
+            pointer_files.append("latest-mac.yml")
+        pointer_files.append("download-index.json")
+        if args.unsigned_manual and public_index is not None:
+            pointer_files.extend(
+                [
+                    "public-bootstrap-index.json",
+                    "install-webui.sh",
+                    "install-webui.ps1",
+                ]
+            )
         receipt = {
             "schema_version": 2 if args.unsigned_manual else 1,
             "document_type": "emate.desktop-feed-stage",
             **({"distribution_mode": "unsigned-manual"} if args.unsigned_manual else {}),
             "status": (
-                "activation-ready"
-                if public_index is not None
-                else "activation-ready-unsigned-manual"
+                "activation-ready-unsigned-manual"
                 if args.unsigned_manual
+                else "activation-ready"
+                if public_index is not None
                 else "awaiting-public-bootstrap-index"
             ),
             "version": version,
@@ -963,16 +1103,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
                 "strategy": "same-filesystem-current-symlink-rename",
                 "allowed_operations": ["activate", "rollback"],
                 "link": "/srv/e-mate-update/current",
-                "pointer_files": (
-                    ["latest.yml", "download-index.json"]
-                    if args.unsigned_manual
-                    else [
-                        "latest.yml",
-                        "latest-mac.yml",
-                        "download-index.json",
-                        "public-bootstrap-index.json",
-                    ]
-                ),
+                "pointer_files": pointer_files,
                 "missing_files_must_return": 404,
                 "receipt_required_fields": [
                     "operation",

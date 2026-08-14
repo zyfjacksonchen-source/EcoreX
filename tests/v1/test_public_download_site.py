@@ -81,6 +81,13 @@ def test_public_download_site_exposes_cow_style_shared_runtime_webui() -> None:
     assert "先打开 e-Mate 桌面端" in webui
     assert 'data-copy-webui-command="macos"' in webui
     assert 'data-copy-webui-command="windows"' in webui
+    assert 'data-standalone-install hidden' in webui
+    assert "curl -fsSL https://dl.ecoremedia.net/e-mate/update/install-webui.sh | sh" in webui
+    assert "irm https://dl.ecoremedia.net/e-mate/update/install-webui.ps1 | iex" in webui
+    assert "loadStandaloneAdmission" in javascript
+    assert "/e-mate/update/public-bootstrap-index.json" in javascript
+    assert "pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev" in javascript
+    assert "github.com" not in webui and "mvdcm" not in webui and "aliyun" not in webui
     assert "navigator.clipboard.writeText" in javascript
     assert "9899" not in webui
     assert "9909" not in webui
@@ -252,6 +259,28 @@ assert.deepEqual(contract.indexSources({ hostname: "127.0.0.1", pathname: "/" })
 assert.deepEqual(contract.indexSources({ hostname: "mvdcm.ecoremedia.net", pathname: "/e-mate/" }), ["/e-mate/update/download-index.json"]);
 assert.deepEqual(contract.indexSources({ hostname: "dl.ecoremedia.net", pathname: "/ecorex-agent/" }), ["/e-mate/update/download-index.json"]);
 assert.deepEqual(contract.indexSources({ hostname: "example.invalid", pathname: "/" }), ["/e-mate/update/download-index.json"]);
+const bootstrap = (platform, architecture) => {
+  const file_name = `bootstrap-${platform}-${architecture}.zip`;
+  return { platform, architecture, file_name, sha256: "b".repeat(64), sources: [{
+    url: `https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev/desktop/v${version}/${file_name}`,
+  }] };
+};
+const standalone = {
+  schema_version: 1,
+  document_type: "ecorex.public-bootstrap-discovery",
+  trust: "untrusted-discovery-hint",
+  status: "published",
+  freshness: { issued_at: "2020-01-01T00:00:00Z", expires_at: "2099-01-01T00:00:00Z" },
+  release: {
+    version,
+    manifest: { sources: [{ url: `https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev/desktop/v${version}/release-manifest.json` }] },
+    bootstrap_artifacts: [bootstrap("windows", "x64"), bootstrap("macos", "arm64"), bootstrap("macos", "x64")],
+  },
+};
+globalThis.fetch = async () => ({ ok: true, text: async () => JSON.stringify(standalone) });
+assert.equal(await contract.loadStandaloneAdmission(), true);
+standalone.release.bootstrap_artifacts[0].sources[0].url = "https://github.com/old/bootstrap.zip";
+await assert.rejects(contract.loadStandaloneAdmission());
 """
     source = next(SITE.glob("site.*.js"))
     result = subprocess.run(

@@ -378,9 +378,22 @@ def test_manual_webui_release_sources_are_one_ordered_set() -> None:
         ("github", 1),
         ("cdn", 2),
     ]
-    assert sources[0].base_url.startswith("https://gh-proxy.com/")
+    assert sources[0].base_url == (
+        "https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev/"
+        f"desktop/v{__version__}"
+    )
     assert sources[1].base_url.endswith(f"/EcoreX/releases/download/v{__version__}")
-    assert sources[2].base_url == "https://mvdcm.ecoremedia.net/e-mate/update"
+    assert sources[2].base_url == "https://dl.ecoremedia.net/e-mate/update"
+
+
+def test_manual_webui_bootstrap_uses_same_origin_public_index() -> None:
+    source = (ROOT / "scripts/build-v1-manual-webui.py").read_text(encoding="utf-8")
+
+    assert (
+        'public_url = "https://dl.ecoremedia.net/e-mate/update/'
+        'public-bootstrap-index.json"'
+    ) in source
+    assert "mvdcm.ecoremedia.net/e-mate/update/public-bootstrap-index.json" not in source
 
 
 def test_manual_webui_macos_core_keeps_runtime_entries_executable() -> None:
