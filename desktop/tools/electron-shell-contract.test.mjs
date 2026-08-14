@@ -160,6 +160,12 @@ test("desktop identity and unsigned release targets are explicit", async () => {
   assert.equal(pkg.build.win.forceCodeSigning, false);
   assert.deepEqual(pkg.build.mac.target, ["dmg", "zip"]);
   assert.deepEqual(pkg.build.win.target[0].arch, ["x64"]);
+  assert.equal(pkg.build.nsis.oneClick, false);
+  assert.equal(pkg.build.nsis.perMachine, false);
+  assert.equal(pkg.build.nsis.allowToChangeInstallationDirectory, true);
+  assert.equal(pkg.build.nsis.createDesktopShortcut, true);
+  assert.equal(pkg.build.nsis.createStartMenuShortcut, true);
+  assert.equal(pkg.build.nsis.shortcutName, "e-Mate");
   assert.ok(pkg.build.files.includes("src/v1/assets/emate-logo.png"));
 });
 

@@ -460,7 +460,7 @@ jobs:
         run: |
           python scripts/publish-emate-r2-downloads.py \
             --version "${{ needs.runtime.outputs.version }}" \
-            --runtime-root .handoff/runtime \
+            --runtime-root .handoff/runtime/seed \
             --windows-root .handoff/windows-x64 \
             --macos-arm64-root .handoff/macos-arm64 \
             --macos-x64-root .handoff/macos-x64 \
@@ -471,7 +471,7 @@ jobs:
         run: |
           python scripts/prepare-emate-desktop-feed.py \
             --unsigned-manual \
-            --runtime-root .handoff/runtime \
+            --runtime-root .handoff/runtime/seed \
             --windows-root .handoff/windows-x64 \
             --macos-arm64-root .handoff/macos-arm64 \
             --macos-x64-root .handoff/macos-x64 \
@@ -495,7 +495,7 @@ jobs:
         with:
           name: e-mate-${{ needs.runtime.outputs.version }}-standalone-publication-handoff
           path: |
-            .handoff/runtime/public-bootstrap-authority.json
+            .handoff/runtime/seed/public-bootstrap-authority.json
             .handoff/release-publication-receipt.json
             .handoff/r2-download-admission.json
           if-no-files-found: error

@@ -831,7 +831,7 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
     assert "scripts/prepare-emate-desktop-feed.py" in workflow
     assert "python scripts/install-v1-python-profile.py --profile cloud" in workflow
     assert "scripts/publish-emate-r2-downloads.py" in workflow
-    assert "--runtime-root .handoff/runtime" in workflow
+    assert workflow.count("--runtime-root .handoff/runtime/seed") == 2
     assert "--r2-receipt .handoff/r2-download-admission.json" in workflow
     assert "ECOREX_R2_ACCOUNT_ID: ${{ secrets.ECOREX_R2_ACCOUNT_ID }}" in workflow
     assert "ECOREX_R2_ACCESS_KEY_ID: ${{ secrets.ECOREX_R2_ACCESS_KEY_ID }}" in workflow
@@ -866,7 +866,7 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
     assert ".handoff/feed/latest-mac.yml" not in upload
     assert ".handoff/feed/public-bootstrap-index.json" not in upload
     assert "standalone-publication-handoff" in upload
-    assert ".handoff/runtime/public-bootstrap-authority.json" in upload
+    assert ".handoff/runtime/seed/public-bootstrap-authority.json" in upload
     assert ".handoff/release-publication-receipt.json" in upload
     assert ".handoff/r2-download-admission.json" in upload
     for required_gate in (

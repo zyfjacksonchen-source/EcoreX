@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const Module = require("node:module");
 const path = require("node:path");
 const test = require("node:test");
@@ -32,5 +33,11 @@ test("macOS updater targets the installed app and quotes every filesystem path",
   assert.match(command, /ditto --rsrc --extattr --acl/u);
   assert.match(command, /'"'"'/u);
   assert.match(command, /\.emate-update-backup/u);
+  assert.match(command, /then \/bin\/rm -rf .*\.emate-update-backup/u);
   assert.match(command, /else.*backup.*exit 1/u);
+});
+
+test("Windows updates reuse Cow's silent in-place NSIS install", () => {
+  const source = fs.readFileSync(require.resolve("./updater.cjs"), "utf8");
+  assert.match(source, /autoUpdater\.quitAndInstall\(true, true\)/u);
 });
