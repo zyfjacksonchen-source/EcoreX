@@ -14,14 +14,29 @@ import stat
 import tempfile
 import time
 from typing import Any, Callable, Mapping
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 
 BUCKET = "emate-desktop-downloads"
 PUBLIC_ORIGIN = "https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev"
 _VERSION = re.compile(r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_COMMIT = re.compile(r"^[0-9a-f]{40}$")
+_RELEASE_ID = re.compile(r"^release-stable-[0-9a-f]{24}$")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,179}$")
 _PUBLIC_HEADERS = {"User-Agent": "e-Mate-Desktop-Publisher/1.0", "Accept": "*/*"}
+_LIVE_REFERENCE_URLS = (
+    "https://mvdcm.ecoremedia.net/e-mate/update/download-index.json",
+    "https://mvdcm.ecoremedia.net/e-mate/update/latest.yml",
+    "https://mvdcm.ecoremedia.net/e-mate/update/latest-mac.yml",
+    "https://mvdcm.ecoremedia.net/e-mate/update/public-bootstrap-index.json",
+    "https://dl.ecoremedia.net/e-mate/update/download-index.json",
+    "https://dl.ecoremedia.net/e-mate/update/latest.yml",
+    "https://dl.ecoremedia.net/e-mate/update/latest-mac.yml",
+    "https://dl.ecoremedia.net/e-mate/update/public-bootstrap-index.json",
+)
+_MAX_RECEIPT_BYTES = 2 * 1024 * 1024
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -33,6 +48,16 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--macos-x64-root", required=True, type=Path)
     parser.add_argument("--receipt", required=True, type=Path)
     parser.add_argument("--publication-receipt", type=Path)
+    return parser
+
+
+def _reclaim_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    for name in ("admission-receipt", "publication-receipt"):
+        parser.add_argument(f"--{name}", required=True, type=Path)
+    for name in ("admission-sha256", "version", "source-sha", "release-id"):
+        parser.add_argument(f"--expected-{name}", required=True)
+    parser.add_argument("--observed-source-sha", required=True)
     return parser
 
 
@@ -429,6 +454,157 @@ def _write_receipt(path: Path, value: Mapping[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def _strict_json(path: Path, label: str) -> tuple[dict[str, Any], str]:
+    try:
+        metadata = path.lstat()
+        payload = path.read_bytes()
+        if (
+            path.is_symlink()
+            or not stat.S_ISREG(metadata.st_mode)
+            or not 1 <= len(payload) <= _MAX_RECEIPT_BYTES
+            or len(payload) != metadata.st_size
+        ):
+            raise RuntimeError(f"r2_reclaim_{label}_invalid")
+        value = json.loads(payload.decode("utf-8"))
+        canonical = json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        if not isinstance(value, dict):
+            raise ValueError("not an object")
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+        raise RuntimeError(f"r2_reclaim_{label}_invalid") from None
+    return value, hashlib.sha256(canonical).hexdigest()
+
+
+def _reclaim_documents(
+    args: argparse.Namespace,
+) -> tuple[list[dict[str, Any]], set[str]]:
+    if (
+        _VERSION.fullmatch(str(args.expected_version)) is None
+        or _SHA256.fullmatch(str(args.expected_admission_sha256)) is None
+        or _COMMIT.fullmatch(str(args.expected_source_sha)) is None
+        or args.observed_source_sha != args.expected_source_sha
+        or _RELEASE_ID.fullmatch(str(args.expected_release_id)) is None
+    ):
+        raise RuntimeError("r2_reclaim_identity_mismatch")
+    admission, admission_sha256 = _strict_json(args.admission_receipt, "admission")
+    if (
+        admission_sha256 != args.expected_admission_sha256
+        or admission.get("document_type") != "emate.r2-download-admission"
+        or admission.get("status") != "verified"
+        or admission.get("version") != args.expected_version
+        or admission.get("bucket") != BUCKET
+        or admission.get("public_origin") != PUBLIC_ORIGIN
+        or not isinstance(admission.get("objects"), list)
+        or not 1 <= len(admission["objects"]) <= 500
+    ):
+        raise RuntimeError("r2_reclaim_admission_invalid")
+
+    records: list[dict[str, Any]] = []
+    identities: set[str] = set()
+    for item in admission["objects"]:
+        name = item.get("file_name") if isinstance(item, dict) else None
+        key = f"desktop/v{args.expected_version}/{name}"
+        if (
+            not isinstance(item, dict)
+            or set(item)
+            != {"target", "file_name", "key", "url", "size_bytes", "sha256"}
+            or not isinstance(name, str)
+            or _SAFE_NAME.fullmatch(name) is None
+            or not isinstance(item.get("size_bytes"), int)
+            or isinstance(item["size_bytes"], bool)
+            or item["size_bytes"] < 1
+            or _SHA256.fullmatch(str(item.get("sha256"))) is None
+            or item.get("key") != key
+            or item.get("url") != f"{PUBLIC_ORIGIN}/{key}"
+            or key in identities
+        ):
+            raise RuntimeError("r2_reclaim_admission_invalid")
+        identities.update((name, key, item["url"]))
+        records.append(dict(item))
+
+    publication, _ = _strict_json(args.publication_receipt, "publication")
+    manifest = next(
+        (record for record in records if record["target"] == "runtime-manifest"),
+        None,
+    )
+    if (
+        publication.get("release_id") != args.expected_release_id
+        or publication.get("version") != args.expected_version
+        or manifest is None
+        or publication.get("manifest_sha256") != manifest["sha256"]
+    ):
+        raise RuntimeError("r2_reclaim_publication_invalid")
+    identities.update((args.expected_admission_sha256, args.expected_source_sha,
+                       args.expected_release_id, publication["manifest_sha256"]))
+    return records, identities
+
+
+def _verify_no_live_references(
+    identities: set[str], *, opener: Callable[..., Any] = urlopen
+) -> None:
+    needles = {value.encode("utf-8") for value in identities}
+    for url in _LIVE_REFERENCE_URLS:
+        try:
+            with opener(
+                Request(url, headers={**_PUBLIC_HEADERS, "Cache-Control": "no-cache"}),
+                timeout=30,
+            ) as response:
+                payload = response.read(_MAX_RECEIPT_BYTES + 1)
+                if response.status != 200 or len(payload) > _MAX_RECEIPT_BYTES:
+                    raise RuntimeError("r2_reclaim_live_read_failed")
+        except HTTPError as error:
+            if error.code == 404:
+                continue
+            raise RuntimeError("r2_reclaim_live_read_failed") from None
+        except Exception:
+            raise RuntimeError("r2_reclaim_live_read_failed") from None
+        if any(needle in payload for needle in needles):
+            raise RuntimeError("r2_reclaim_live_reference")
+
+
+def _verify_public_missing(
+    record: Mapping[str, Any], *, opener: Callable[..., Any] = urlopen
+) -> None:
+    request = Request(
+        str(record["url"]),
+        headers={**_PUBLIC_HEADERS, "Cache-Control": "no-cache"},
+        method="HEAD",
+    )
+    for attempt in range(5):
+        try:
+            with opener(request, timeout=30) as response:
+                if response.status == 404:
+                    return
+        except HTTPError as error:
+            if error.code == 404:
+                return
+        except Exception:
+            pass
+        if attempt < 4:
+            time.sleep(2**attempt)
+    raise RuntimeError(
+        f"r2_reclaim_public_readback_failed:{record['file_name']}"
+    )
+
+
+def _abort_exact_multipart(client: object, keys: set[str]) -> None:
+    try:
+        pages = client.get_paginator("list_multipart_uploads").paginate(Bucket=BUCKET)
+        uploads = [
+            (item["Key"], item["UploadId"])
+            for page in pages
+            for item in page.get("Uploads", [])
+            if item.get("Key") in keys
+        ]
+        if len(uploads) != len(set(uploads)):
+            raise ValueError("duplicate upload")
+        for key, upload_id in sorted(uploads):
+            client.abort_multipart_upload(Bucket=BUCKET, Key=key, UploadId=upload_id)
+    except Exception:
+        raise RuntimeError("r2_reclaim_multipart_failed") from None
+
+
 def _release_publication_receipt(
     manifest: Mapping[str, Any], records: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -542,9 +718,51 @@ def publish(
     return receipt
 
 
+def reclaim_rejected(
+    args: argparse.Namespace,
+    *,
+    client: object | None = None,
+    reference_probe: Callable[[set[str]], None] = _verify_no_live_references,
+    public_missing_probe: Callable[[Mapping[str, Any]], None] = _verify_public_missing,
+) -> dict[str, Any]:
+    records, identities = _reclaim_documents(args)
+    client = _s3_client() if client is None else client
+    reference_probe(identities)
+    states = [_remote_matches(client, record) for record in records]
+    if False in states:
+        raise RuntimeError("r2_reclaim_remote_drift")
+    for record, state in zip(records, states):
+        if state is None:
+            public_missing_probe(record)
+    _abort_exact_multipart(client, {str(record["key"]) for record in records})
+    for record, state in zip(records, states):
+        if state is None:
+            continue
+        current = _remote_matches(client, record)
+        if current is False:
+            raise RuntimeError("r2_reclaim_remote_drift")
+        if current is None:
+            public_missing_probe(record)
+            continue
+        try:
+            client.delete_object(Bucket=BUCKET, Key=record["key"])
+        except Exception:
+            raise RuntimeError("r2_reclaim_delete_failed") from None
+        if _remote_matches(client, record) is not None:
+            raise RuntimeError("r2_reclaim_authenticated_readback_failed")
+        public_missing_probe(record)
+    return {"status": "reclaimed", "objects_reclaimed": len(records)}
+
+
 def main(argv: list[str] | None = None) -> int:
+    raw = list(os.sys.argv[1:] if argv is None else argv)
+    reclaiming = bool(raw and raw[0] == "reclaim-rejected")
     try:
-        receipt = publish(_parser().parse_args(argv))
+        receipt = (
+            reclaim_rejected(_reclaim_parser().parse_args(raw[1:]))
+            if reclaiming
+            else publish(_parser().parse_args(raw))
+        )
     except Exception as error:
         category = (
             str(error)
@@ -552,7 +770,8 @@ def main(argv: list[str] | None = None) -> int:
             and re.fullmatch(r"r2_[a-z_]+(?::[A-Za-z0-9._-]+)?", str(error))
             else "r2_operation_failed"
         )
-        print(f"emate_r2_publish_failed:{category}", file=os.sys.stderr)
+        operation = "reclaim" if reclaiming else "publish"
+        print(f"emate_r2_{operation}_failed:{category}", file=os.sys.stderr)
         return 1
     print(
         json.dumps(receipt, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
