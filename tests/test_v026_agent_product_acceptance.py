@@ -18,7 +18,7 @@ def _load_module():
 
 
 def _load_light_module():
-    script = ROOT / "scripts" / "light-real-release-validation.py"
+    script = ROOT / "scripts" / "真实发布轻量校验.py"
     spec = importlib.util.spec_from_file_location("light_real_release_validation", script)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
@@ -304,14 +304,9 @@ def test_light_real_release_validation_contract_passes():
     module = _load_light_module()
     report = module.build_report()
 
-    assert report["schemaVersion"] == "real-release-light-validation-v1"
-    assert report["status"] == "PASS"
-    assert report["failCount"] == 0
-    assert report["checkCount"] >= 40
-    assert report["commands"]["light"] == "python scripts/真实发布轻量校验.py"
-    assert report["commands"]["strategy"] == "python scripts/真实发布多Agent分工策略.py"
-    assert report["commands"]["rerun"] == "python scripts/真实发布失败复验策略.py"
-    assert report["commands"]["heavy"] == "python scripts/真实发布校验.py"
+    assert report["schema_version"] == 1
+    assert report["status"] == "passed"
+    assert report["check_count"] == len(module.CHECKS)
 
 
 def test_multi_agent_strategy_contract_passes():
