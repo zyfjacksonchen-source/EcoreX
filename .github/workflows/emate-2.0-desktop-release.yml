@@ -84,6 +84,25 @@ jobs:
               output.write(f"version={__version__}\n")
           PY
 
+      - name: Gate the managed Feishu OAuth route
+        run: |
+          status="$(curl \
+            --silent \
+            --show-error \
+            --output /dev/null \
+            --write-out '%{http_code}' \
+            --connect-timeout 5 \
+            --max-time 5 \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --header 'Idempotency-Key: connflow_release_readiness' \
+            --data '{"flow_id":"connflow_release_readiness","auth_kind":"oauth2","return_uri":"http://127.0.0.1:8765/api/v1/connectors/oauth/callback","state":"release_readiness_state","code_challenge":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","code_challenge_method":"S256"}' \
+            https://dl.ecoremedia.net/api/v1/connectors/feishu/auth/begin)"
+          test "$status" = "401" || {
+            echo "Managed Feishu OAuth route is not ready (HTTP $status)." >&2
+            exit 1
+          }
+
       - name: Install the pinned Python toolchain
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:

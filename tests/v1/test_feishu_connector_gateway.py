@@ -622,6 +622,17 @@ def test_feishu_gateway_deployment_is_same_origin_and_fail_closed() -> None:
     assert "# ECOREX_CP_FEISHU_APP_SECRET=REPLACE_ME" in secrets
     assert "# ECOREX_CP_FEISHU_TOKEN_ENCRYPTION_KEY_B64=REPLACE_ME" in secrets
     assert 'ECOREX_V1_FEISHU_CONNECTOR_ENABLED: "true"' in workflow
+    readiness = workflow.split(
+        "- name: Gate the managed Feishu OAuth route", 1
+    )[1].split("- name:", 1)[0]
+    assert "https://dl.ecoremedia.net/api/v1/connectors/feishu/auth/begin" in readiness
+    assert "--connect-timeout 5" in readiness
+    assert "--max-time 5" in readiness
+    assert "--retry" not in readiness
+    assert 'test "$status" = "401"' in readiness
+    assert workflow.index("Gate the managed Feishu OAuth route") < workflow.index(
+        "Build the accepted WebUI once"
+    )
     assert "assert runtime_config['connectors'] == {" in workflow
     with pytest.raises(
         ProductionConfigurationError,
