@@ -100,6 +100,7 @@ _GATEWAY_INSTRUCTION_LIMIT = 131_072
 _COW_WORKSPACE_CONTEXT_LIMIT = 64 * 1024
 _COW_MAX_CONTEXT_TOKENS = 64_000
 _COW_MAX_CONTEXT_TURNS = 30
+_COW_MEMORY_SHUTDOWN_DRAIN_SECONDS = 1.0
 
 
 def _cow_estimate_text_tokens(text: str) -> int:
@@ -5902,6 +5903,20 @@ class AgentTurnWorker:
         for event in self._cancel_events.values():
             event.set()
         self._cancel_events.clear()
+        deadline = time.monotonic() + _COW_MEMORY_SHUTDOWN_DRAIN_SECONDS
+        seen: set[int] = set()
+        for agent in tuple(self._cow_bridge.agents.values()):
+            flush_manager = getattr(
+                getattr(agent, "memory_manager", None), "flush_manager", None
+            )
+            drain = getattr(flush_manager, "drain", None)
+            if not callable(drain) or id(flush_manager) in seen:
+                continue
+            seen.add(id(flush_manager))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.to_thread(drain, remaining)
         self._cow_bridge.agents.clear()
 
     def _workspace(
@@ -6004,14 +6019,6 @@ class AgentTurnWorker:
                     block["text"] = text.split(marker, 1)[1]
                     return snapshot
         return snapshot
-
-    @staticmethod
-    def _wait_for_memory_compaction(agent: Any) -> None:
-        manager = getattr(agent, "memory_manager", None)
-        flush_manager = getattr(manager, "flush_manager", None)
-        thread = getattr(flush_manager, "_last_flush_thread", None)
-        if thread is not None and thread.is_alive():
-            thread.join()
 
     def _turn_image_artifact_history(self, turn_id: str) -> list[dict[str, Any]]:
         with self.kernel.database.reader() as connection:
@@ -6909,7 +6916,6 @@ class AgentTurnWorker:
                     thread_id,
                     parent_cancel_event=cancel_event,
                 )
-                self._wait_for_memory_compaction(agent)
                 self._persist_cow_history(
                     store=conversation_store,
                     session_id=thread_id,

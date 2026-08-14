@@ -11,6 +11,7 @@ Handles memory persistence when conversation context is trimmed or overflows:
 
 import re
 import threading
+import time
 from contextvars import copy_context
 from typing import Optional, Callable, Any, List, Dict
 from pathlib import Path
@@ -253,6 +254,8 @@ class MemoryFlushManager:
         self._last_flushed_content_hash: str = ""  # Content hash at last flush, for daily dedup
         self._last_dream_input_hash: str = ""  # "{date}:{daily_hash}" of last dream, for dedup
         self._last_flush_thread: Optional[threading.Thread] = None
+        self._flush_threads: set[threading.Thread] = set()
+        self._flush_threads_lock = threading.Lock()
     
     def get_today_memory_file(self, user_id: Optional[str] = None, ensure_exists: bool = False) -> Path:
         """Get today's memory file path: memory/YYYY-MM-DD.md"""
@@ -342,9 +345,9 @@ class MemoryFlushManager:
             snapshot = copy.deepcopy(deduped)
             context = copy_context()
             thread = threading.Thread(
-                target=context.run,
+                target=self._run_flush,
                 args=(
-                    self._flush_worker,
+                    context,
                     snapshot,
                     user_id,
                     reason,
@@ -353,14 +356,59 @@ class MemoryFlushManager:
                 ),
                 daemon=True,
             )
-            thread.start()
-            logger.info(f"[MemoryFlush] Async flush dispatched (reason={reason}, msgs={len(snapshot)})")
             self._last_flush_thread = thread
+            with self._flush_threads_lock:
+                self._flush_threads.add(thread)
+            try:
+                thread.start()
+            except Exception:
+                with self._flush_threads_lock:
+                    self._flush_threads.discard(thread)
+                raise
+            logger.info(f"[MemoryFlush] Async flush dispatched (reason={reason}, msgs={len(snapshot)})")
             return True
 
         except Exception as e:
             logger.warning(f"[MemoryFlush] Failed to dispatch flush (reason={reason}): {e}")
             return False
+
+    def _run_flush(
+        self,
+        context,
+        messages: List[Dict],
+        user_id: Optional[str],
+        reason: str,
+        max_messages: int,
+        context_summary_callback: Optional[Callable[[str], None]],
+    ) -> None:
+        try:
+            context.run(
+                self._flush_worker,
+                messages,
+                user_id,
+                reason,
+                max_messages,
+                context_summary_callback,
+            )
+        finally:
+            with self._flush_threads_lock:
+                self._flush_threads.discard(threading.current_thread())
+
+    def drain(self, timeout: float) -> bool:
+        """Wait up to *timeout* for every already-dispatched flush."""
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            with self._flush_threads_lock:
+                pending = tuple(
+                    thread for thread in self._flush_threads if thread.is_alive()
+                )
+            if not pending:
+                return True
+            for thread in pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                thread.join(remaining)
 
     def _flush_worker(
         self,
