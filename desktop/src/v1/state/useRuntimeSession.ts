@@ -65,7 +65,7 @@ import {
 } from "./runtimeReducer.ts";
 import { useConnectorSession } from "./useConnectorSession.ts";
 import { useExtensionSession } from "./useExtensionSession.ts";
-import { userFacingError } from "./userLanguage.ts";
+import { backgroundErrorRequiresUserAction, userFacingError } from "./userLanguage.ts";
 
 type ClientOperationSupportModule = typeof import("../deferred/clientOperationOutbox.ts");
 type ClientOperationOutboxInstance = InstanceType<
@@ -169,6 +169,11 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
   const serverClockOffsetMs = useRef(0);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [transportError, setTransportError] = useState<string | null>(null);
+  const reportBackgroundError = useCallback((error: unknown) => {
+    if (backgroundErrorRequiresUserAction(error)) {
+      setTransportError(errorMessage(error));
+    }
+  }, []);
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
   const recoveringOperationsRef = useRef(false);
@@ -637,10 +642,10 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     if (!threadId) return;
     const controller = new AbortController();
     void refreshArtifacts(threadId, controller.signal).catch((error) => {
-      if (!controller.signal.aborted) setTransportError(errorMessage(error));
+      if (!controller.signal.aborted) reportBackgroundError(error);
     });
     return () => controller.abort();
-  }, [refreshArtifacts, threadId]);
+  }, [refreshArtifacts, reportBackgroundError, threadId]);
 
   useEffect(() => {
     if (!threadId) {
@@ -728,7 +733,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
       }
       if (events.some((event) => event.event_type.startsWith("artifact."))) {
         void refreshArtifacts(threadId).catch((error) => {
-          setTransportError(errorMessage(error));
+          reportBackgroundError(error);
         });
       }
       if (events.some((event) => (
@@ -771,13 +776,17 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
       while (ownsStream()) {
         dispatch({ type: "stream.state", state: retry ? "retrying" : "connecting" });
         try {
-          dispatch({ type: "stream.state", state: "open" });
           await client.streamEvents(
             threadId,
             watermarkRef.current,
             receiveEvent,
             controller.signal,
-            () => void recoverPendingOperationsRef.current(),
+            () => {
+              if (!ownsStream()) return;
+              retry = 0;
+              dispatch({ type: "stream.state", state: "open" });
+              void recoverPendingOperationsRef.current();
+            },
           );
           if (!ownsStream()) return;
           flushEvents();
@@ -792,10 +801,10 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
               continue;
             } catch (refreshError) {
               if (!ownsStream()) return;
-              setTransportError(errorMessage(refreshError));
+              reportBackgroundError(refreshError);
             }
           } else {
-            setTransportError(errorMessage(error));
+            reportBackgroundError(error);
           }
           retry = Math.min(retry + 1, 6);
         }
@@ -821,6 +830,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     refreshConversationUsage,
     refreshProjection,
     refreshThreads,
+    reportBackgroundError,
     threadId,
   ]);
 
@@ -828,10 +838,10 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     if (!threadId || !state.resyncRequired) return;
     const controller = new AbortController();
     void refreshProjection(threadId, controller.signal).catch((error) => {
-      if (!controller.signal.aborted) setTransportError(errorMessage(error));
+      if (!controller.signal.aborted) reportBackgroundError(error);
     });
     return () => controller.abort();
-  }, [refreshProjection, state.resyncRequired, threadId]);
+  }, [refreshProjection, reportBackgroundError, state.resyncRequired, threadId]);
 
   useEffect(() => () => threadSwitchAbort.current?.abort(), []);
 
@@ -1142,7 +1152,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     const confirmed = operationOutbox.get(operation.operation_id) === null;
     if (confirmed && focusThread && selectedThreadId.current === targetThreadId) {
       void refreshArtifacts(targetThreadId).catch((error) => {
-        setTransportError(errorMessage(error));
+        reportBackgroundError(error);
       });
     }
     void refreshThreads();
@@ -1155,6 +1165,7 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     loadOperationSupport,
     refreshArtifacts,
     refreshThreads,
+    reportBackgroundError,
   ]);
 
   const recoverPendingOperations = useCallback(async () => {

@@ -113,6 +113,20 @@ export function serviceReasonMessage(
   return REASON_MESSAGES[value] ?? fallback;
 }
 
+const UNRECOVERABLE_BACKGROUND_CODES = new Set([
+  "event_page_invalid",
+  "event_stream_id_mismatch",
+  "event_stream_type_mismatch",
+]);
+
+export function backgroundErrorRequiresUserAction(error: unknown): boolean {
+  if (!(error instanceof RuntimeApiError)) return false;
+  if (error.code && UNRECOVERABLE_BACKGROUND_CODES.has(error.code)) return true;
+  return error.status >= 400
+    && error.status < 500
+    && ![408, 409, 425, 429].includes(error.status);
+}
+
 export function userFacingError(error: unknown): string {
   if (error instanceof RuntimeApiError) {
     if (error.code && CODE_MESSAGES[error.code]) return CODE_MESSAGES[error.code];

@@ -4,12 +4,31 @@ import test from "node:test";
 import { RuntimeApiError } from "../api/runtimeClient.ts";
 import {
   artifactFamilyLabel,
+  backgroundErrorRequiresUserAction,
   formatFileSize,
   serviceReasonMessage,
   technicalErrorCode,
   turnTerminalPresentation,
   userFacingError,
 } from "./userLanguage.ts";
+
+test("self-healing background transport failures stay internal", () => {
+  assert.equal(backgroundErrorRequiresUserAction(new TypeError("fetch failed")), false);
+  assert.equal(backgroundErrorRequiresUserAction(new RuntimeApiError("offline", 503)), false);
+  assert.equal(backgroundErrorRequiresUserAction(new RuntimeApiError("busy", 429)), false);
+  assert.equal(backgroundErrorRequiresUserAction(new RuntimeApiError("expired", 401)), true);
+  assert.equal(backgroundErrorRequiresUserAction(new RuntimeApiError("forbidden", 403)), true);
+  assert.equal(backgroundErrorRequiresUserAction(new RuntimeApiError("missing", 404)), true);
+  assert.equal(backgroundErrorRequiresUserAction(new RuntimeApiError("invalid", 422)), true);
+  assert.equal(
+    backgroundErrorRequiresUserAction(new RuntimeApiError(
+      "stream contract mismatch",
+      502,
+      "event_stream_id_mismatch",
+    )),
+    true,
+  );
+});
 
 test("service reasons are translated without exposing an unknown backend code", () => {
   assert.equal(

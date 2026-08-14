@@ -10,7 +10,7 @@ import {
   useState,
 } from "react";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { ArrowDown, FolderOpen, Minus, Workflow, WandSparkles } from "lucide-react";
+import { ArrowDown, Minus, WandSparkles } from "lucide-react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 
 import type {
@@ -45,7 +45,6 @@ import OperationElapsed from "./OperationElapsed.tsx";
 
 const OfficeMarkdown = lazy(() => import("./OfficeMarkdown.tsx"));
 const TimelineActivity = lazy(() => import("./TimelineActivity.tsx"));
-const NewConversationProjectSelector = lazy(() => import("./NewConversationProjectSelector.tsx"));
 const ReasoningBlock = lazy(() => import("./ReasoningBlock.tsx"));
 const TurnCompletionRow = lazy(() => import("./TurnCompletionRow.tsx"));
 const ArtifactShelf = lazy(async () => ({ default: (await import("./ArtifactShelf.tsx")).ArtifactShelf }));
@@ -452,12 +451,6 @@ export function Timeline({
   onArtifactPreviewVisible,
   retouchAvailable,
   retouchUnavailableReason,
-  projects,
-  newConversationProject,
-  projectPickerBusy,
-  onSelectConversationProject,
-  onPickProject,
-  newConversationComposer,
   onLoadAttachment,
   onLoadAttachmentThumbnail,
 }: TimelineProps) {
@@ -745,26 +738,8 @@ export function Timeline({
 
   if (!timelineTurns.length && !visibleArtifacts.length && !isThinking) {
     return (
-      <div className="ex-empty-state ex-new-conversation-start">
-        <h1>和小芯一起开始工作</h1>
-        <p>{newConversationProject ? `${newConversationProject.name} 项目会话` : "选择一个开始方式"}</p>
-        <div className="ex-new-conversation-options" role="group" aria-label="新会话入口">
-          <button className={!newConversationProject ? "is-selected" : ""} type="button" aria-pressed={!newConversationProject} onClick={() => onSelectConversationProject(null)}>
-            <Workflow aria-hidden="true" />
-            <span><strong>通用会话</strong><small>不绑定项目，适合临时问答、资料整理和轻量任务。</small></span>
-          </button>
-          <Suspense fallback={<button className="ex-new-project-trigger" type="button" disabled><FolderOpen aria-hidden="true" /><span><strong>项目会话</strong><small>正在准备项目列表…</small></span></button>}>
-            <NewConversationProjectSelector
-              projects={projects}
-              selectedProject={newConversationProject}
-              pickerBusy={projectPickerBusy}
-              onSelect={onSelectConversationProject}
-              onPick={onPickProject}
-            />
-          </Suspense>
-        </div>
-        <p className="ex-new-conversation-note">{newConversationProject ? `将从 ${newConversationProject.name} 项目开始。` : "将从不绑定项目的通用会话开始。"}</p>
-        {newConversationComposer ? <div className="ex-new-conversation-composer">{newConversationComposer}</div> : null}
+      <div className="ex-empty-state" role="status">
+        <p>此会话还没有消息，可以在下方输入框继续。</p>
       </div>
     );
   }

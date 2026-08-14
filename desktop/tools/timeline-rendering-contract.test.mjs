@@ -6,6 +6,10 @@ const timeline = await readFile(
   new URL("../src/v1/components/Timeline.tsx", import.meta.url),
   "utf-8",
 );
+const app = await readFile(
+  new URL("../src/v1/AppV1.tsx", import.meta.url),
+  "utf-8",
+);
 const turnProjection = await readFile(
   new URL("../src/v1/state/timelineTurns.ts", import.meta.url),
   "utf-8",
@@ -78,6 +82,18 @@ test("streaming deltas batch by frame but terminal facts flush synchronously", (
   assert.match(runtimeSession, /window\.requestAnimationFrame\(flushEvents\)/u);
   assert.match(runtimeSession, /window\.setTimeout\(flushEvents, 50\)/u);
   assert.match(runtimeSession, /!isFrameBatchableEvent\(event\) \|\| pendingEvents\.length >= 128/u);
+});
+
+test("bounded event-stream recovery does not leak transient failures into the global banner", () => {
+  const start = runtimeSession.indexOf("const run = async () =>");
+  const end = runtimeSession.indexOf("void run();", start);
+  const recovery = runtimeSession.slice(start, end);
+  assert.match(recovery, /EventCursorResetRequired/u);
+  assert.match(recovery, /retry = Math\.min\(retry \+ 1, 6\)/u);
+  assert.match(recovery, /abortableDelay\(Math\.min\(500 \* 2 \*\* retry, 8_000\)/u);
+  assert.match(recovery, /reportBackgroundError/u);
+  assert.match(recovery, /\(\) => \{[\s\S]{0,180}dispatch\(\{ type: "stream\.state", state: "open" \}\)/u);
+  assert.doesNotMatch(recovery, /setTransportError\(errorMessage/u);
 });
 
 test("completed rows use native rendering containment while the active row stays live", () => {
@@ -170,6 +186,13 @@ test("streaming output has one automatic scroll owner", () => {
 
 test("switching conversations gives Virtuoso a fresh measurement owner", () => {
   assert.match(timeline, /<Virtuoso[\s\S]{0,180}key=\{timelineThreadId\}/u);
+});
+
+test("a selected thread never falls back to the retired new-conversation selector", () => {
+  assert.match(app, /const isNewConversation = !runtime\.state\.thread/u);
+  assert.match(app, /isNewConversation \|\| schedulesOpen[\s\S]{0,900}<HomeDashboard[\s\S]{0,1800}: \([\s\S]{0,300}<Timeline/u);
+  assert.doesNotMatch(timeline, /和小芯一起开始工作|选择一个开始方式|新会话入口/u);
+  assert.match(timeline, /role="status"[\s\S]{0,80}此会话还没有消息/u);
 });
 
 test("assistant office Markdown is lazy, bounded, and cannot load raw HTML or images", () => {
