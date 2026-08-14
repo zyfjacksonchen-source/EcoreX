@@ -832,6 +832,14 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
     assert "python scripts/install-v1-python-profile.py --profile cloud" in workflow
     assert "scripts/publish-emate-r2-downloads.py" in workflow
     assert workflow.count("--runtime-root .handoff/runtime/seed") == 2
+    assert "destination = pathlib.Path('.runtime/seed/bootstraps') / target" in workflow
+    assert "path: .runtime/seed" in workflow
+    assert "path: .handoff/runtime/seed" in workflow
+    assert (
+        "EMATE_BOOTSTRAP_DIR: ${{ github.workspace }}/.runtime/seed/bootstraps/"
+        "${{ matrix.runtime_target }}"
+    ) in workflow
+    assert ".runtime/bootstraps" not in workflow
     assert "--r2-receipt .handoff/r2-download-admission.json" in workflow
     assert "ECOREX_R2_ACCOUNT_ID: ${{ secrets.ECOREX_R2_ACCOUNT_ID }}" in workflow
     assert "ECOREX_R2_ACCESS_KEY_ID: ${{ secrets.ECOREX_R2_ACCESS_KEY_ID }}" in workflow

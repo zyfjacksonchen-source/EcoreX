@@ -224,7 +224,7 @@ jobs:
               }
               artifact_id = f'bootstrap-{target}'
               item = next(value for value in manifest['artifacts'] if value['artifact_id'] == artifact_id)
-              destination = pathlib.Path('.runtime/bootstraps') / target
+              destination = pathlib.Path('.runtime/seed/bootstraps') / target
               destination.mkdir(parents=True)
               with zipfile.ZipFile(root / item['file_name']) as archive:
                   for member in archive.infolist():
@@ -242,7 +242,7 @@ jobs:
             .runtime/seed/release
             .runtime/seed/manual-webui-build-receipt.json
             .runtime/seed/public-bootstrap-authority.json
-            .runtime/bootstraps
+            .runtime/seed/bootstraps
           if-no-files-found: error
           retention-days: 14
 
@@ -300,7 +300,7 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: e-mate-${{ needs.runtime.outputs.version }}-runtime-seed
-          path: .runtime
+          path: .runtime/seed
 
       - name: Verify accepted UI and release identity
         run: |
@@ -330,7 +330,7 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
           EMATE_RELEASE_DIR: ${{ github.workspace }}/.runtime/seed/release
-          EMATE_BOOTSTRAP_DIR: ${{ github.workspace }}/.runtime/bootstraps/${{ matrix.runtime_target }}
+          EMATE_BOOTSTRAP_DIR: ${{ github.workspace }}/.runtime/seed/bootstraps/${{ matrix.runtime_target }}
         run: ${{ matrix.command }}
         working-directory: desktop
 
@@ -432,7 +432,7 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: e-mate-${{ needs.runtime.outputs.version }}-runtime-seed
-          path: .handoff/runtime
+          path: .handoff/runtime/seed
 
       - name: Download the Windows handoff
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
