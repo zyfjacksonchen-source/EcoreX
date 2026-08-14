@@ -18,8 +18,15 @@ from typing import Any, Iterable, Mapping
 from urllib.parse import quote
 import zipfile
 
-from ecorex.release import required_publication_sources, validate_public_bootstrap_index
-from ecorex.update import (
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ecorex.release import (  # noqa: E402
+    required_publication_sources,
+    validate_public_bootstrap_index,
+)
+from ecorex.update import (  # noqa: E402
     Ed25519SignatureVerifier,
     ReleaseManifest,
     verify_artifact_file,

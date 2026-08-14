@@ -300,7 +300,7 @@ jobs:
 
       - name: Verify accepted UI and release identity
         run: |
-          test "$(git rev-parse HEAD:desktop/src/v1)" = "8b5b1b0d921156ea841bc6a9d04e10dd109930c0"
+          test "$(git rev-parse HEAD:desktop/src/v1)" = "f5cd44efb7a8bf14e132e47dce232f2327b358f3"
           python - <<'PY'
           import json
           from pathlib import Path
