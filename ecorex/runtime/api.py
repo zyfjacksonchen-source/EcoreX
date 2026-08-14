@@ -3428,8 +3428,10 @@ def create_app(
                 )
                 if isinstance(settings.model_gateway, ManagedModelGatewayClient):
                     try:
+                        await refresh_runtime_model_catalog()
+                        composition.refresh_model_catalog()
                         current_models = project_model_catalog(
-                            await refresh_runtime_model_catalog()
+                            composition.model_catalog
                         )
                     except Exception:
                         # A transient catalog refresh cannot corrupt the signed

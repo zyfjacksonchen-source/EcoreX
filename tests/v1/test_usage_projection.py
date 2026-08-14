@@ -347,6 +347,7 @@ def test_usage_context_keeps_the_completed_turns_frozen_catalog_revision(
     new_catalog = ManagedModelCatalog((renamed,))
     active = {"catalog": old_catalog}
     composition._model_catalog_provider = lambda: active["catalog"]
+    composition.refresh_model_catalog()
 
     old_thread, old_turn = _turn(app, title="旧修订", message_id="usage-old-revision")
     pending = UsageProjectionService(
@@ -364,6 +365,7 @@ def test_usage_context_keeps_the_completed_turns_frozen_catalog_revision(
         usage={"input_tokens": 33, "output_tokens": 4},
     )
     active["catalog"] = new_catalog
+    composition.refresh_model_catalog()
     _turn(app, title="新修订", message_id="usage-new-revision")
 
     projection = UsageProjectionService(

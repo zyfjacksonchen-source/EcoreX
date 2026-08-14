@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -641,7 +642,7 @@ def test_chat_only_model_snapshot_hides_image_tools_before_invocation(tmp_path) 
     }
 
 
-def test_model_catalog_provider_refreshes_new_turn_snapshot_and_revokes_old_model(
+def test_model_catalog_refresh_is_explicit_and_never_blocks_turn_admission(
     tmp_path,
 ) -> None:
     app, _client_instance = _client(tmp_path / "source")
@@ -668,23 +669,31 @@ def test_model_catalog_provider_refreshes_new_turn_snapshot_and_revokes_old_mode
             ),
         )
     )
-    active = {"catalog": old_catalog}
+    calls = 0
+
+    def slow_provider():
+        nonlocal calls
+        calls += 1
+        time.sleep(0.2)
+        return new_catalog
+
     database = tmp_path / "hot-models.db"
     composition = RuntimeComposition(
         database_path=str(database),
         product_version="1.0.0",
         permission_snapshot_id=source.permission_snapshot.snapshot_id,
         permission_payload=source.permission_snapshot.payload,
-        full_access=False,
+        full_access=bool(source.permission_snapshot.payload["full_access"]),
         admin_hard_denies=frozenset(),
         platform="windows",
         installed_packs=frozenset(),
         connected_connectors=frozenset(),
         online=True,
         model_catalog=old_catalog,
-        model_catalog_provider=lambda: active["catalog"],
+        model_catalog_provider=slow_provider,
     )
 
+    started = time.monotonic()
     before = composition.prepare_turn(
         CreateTurnRequest(
             input="first turn",
@@ -692,7 +701,11 @@ def test_model_catalog_provider_refreshes_new_turn_snapshot_and_revokes_old_mode
             client_message_id="model-before-refresh",
         )
     )
-    active["catalog"] = new_catalog
+    assert time.monotonic() - started < 0.1
+    assert calls == 0
+
+    composition.refresh_model_catalog()
+    assert calls == 1
     after = composition.prepare_turn(
         CreateTurnRequest(
             input="new allowlisted model",
@@ -726,7 +739,7 @@ def test_model_catalog_provider_refreshes_new_turn_snapshot_and_revokes_old_mode
         )
 
 
-def test_model_catalog_provider_empty_result_fails_closed_without_stale_fallback(
+def test_explicit_model_catalog_refresh_fails_closed_without_stale_fallback(
     tmp_path,
 ) -> None:
     app, _client_instance = _client(tmp_path / "source")
@@ -748,7 +761,7 @@ def test_model_catalog_provider_empty_result_fails_closed_without_stale_fallback
         product_version="1.0.0",
         permission_snapshot_id=source.permission_snapshot.snapshot_id,
         permission_payload=source.permission_snapshot.payload,
-        full_access=False,
+        full_access=bool(source.permission_snapshot.payload["full_access"]),
         admin_hard_denies=frozenset(),
         platform="windows",
         installed_packs=frozenset(),
@@ -771,13 +784,7 @@ def test_model_catalog_provider_empty_result_fails_closed_without_stale_fallback
         UnknownModelError,
         match="managed model catalog is unavailable",
     ):
-        composition.prepare_turn(
-            CreateTurnRequest(
-                input="do not fall back to stale allowlist",
-                agent_model_id="managed-chat",
-                client_message_id="catalog-empty-fail-closed",
-            )
-        )
+        composition.refresh_model_catalog()
 
 
 @pytest.mark.parametrize(

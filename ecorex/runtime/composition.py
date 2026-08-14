@@ -679,10 +679,6 @@ class RuntimeComposition:
             raise RuntimeError(
                 "Runtime is in projection-only mode and cannot accept a Turn"
             )
-        # Capture the current signed model lease for every new Turn. Bootstrap
-        # and Turn admission must never disagree after an administrator changes
-        # the managed allowlist while the local Runtime remains online.
-        self._refresh_model_catalog()
         # Capture permission first. Product Turn admission holds the shared
         # mutation lock around this method and the accepted write; the Kernel
         # additionally verifies this frozen fact against the ledger in its
@@ -845,7 +841,6 @@ class RuntimeComposition:
             raise RuntimeError(
                 "Runtime is in projection-only mode and cannot accept a Turn"
             )
-        self._refresh_model_catalog()
         agent_model_id, image_model_id = self.resolve_model_selection(
             agent_model_id=request.agent_model_id,
             image_model_id=request.image_model_id,
@@ -887,7 +882,9 @@ class RuntimeComposition:
             ),
         )
 
-    def _refresh_model_catalog(self) -> None:
+    def refresh_model_catalog(self) -> None:
+        """Install the provider catalog only at an explicit discovery boundary."""
+
         provider = self._model_catalog_provider
         if provider is None:
             return
