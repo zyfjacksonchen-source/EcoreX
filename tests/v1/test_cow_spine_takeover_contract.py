@@ -177,8 +177,8 @@ def test_actual_initializer_keeps_the_complete_cow_catalog_for_every_profile(
         "read", "write", "edit", "bash", "subagent", "search_files", "ls",
         "send", "evolution_undo", "env_config", "scheduler", "web_search",
         "web_fetch", "vision", "ocr", "browser", "imagegen", "memory_search",
-        "memory_get", "office_documents", "office_pdf", "office_presentations",
-        "office_spreadsheets",
+            "memory_get", "office_documents", "office_pdf", "office_presentations",
+            "office_spreadsheets", "external_connections",
     }
     workspace_tools = {
         "read", "write", "edit", "bash", "search_files", "ls", "web_fetch",

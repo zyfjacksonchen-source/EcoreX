@@ -164,6 +164,16 @@ jobs:
             tests/v1/test_memory_storage_shared_db_recovery.py \
             tests/v1/test_cow_data_plane_admission.py \
             tests/v1/test_cow_spine_takeover_contract.py \
+            tests/test_cow_unbounded_turn_loop.py \
+            tests/v1/test_artifact_api_contract.py \
+            tests/v1/test_connector_persistence.py \
+            tests/v1/test_external_connections_tool.py \
+            tests/v1/test_managed_image_batch_facade.py \
+            tests/v1/test_managed_session_runtime.py \
+            tests/v1/test_openai_compatible_image_provider.py \
+            tests/v1/test_process_capability_pack.py \
+            tests/v1/test_runtime_permission_settings.py \
+            tests/v1/test_usage_panel_calibration.py \
             tests/v1/test_desktop_update_tool.py \
             tests/v1/test_usage_projection.py \
             tests/v1/test_device_identity_management.py \

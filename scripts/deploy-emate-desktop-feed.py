@@ -19,7 +19,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from ecorex.update.locking import LockUnavailable, ProductFileLock
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ecorex.update.locking import LockUnavailable, ProductFileLock  # noqa: E402
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
