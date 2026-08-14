@@ -1409,3 +1409,27 @@ environment failure until the product failure reproduces from known state.
   `126/126` without a real provider request. All eight are now enumerated in
   the formal source-contract job. No credential, third-party message,
   production service, Feed, or package was touched.
+
+### 2026-08-14 RELEASE-205-SAME-BYTE-CU-GATE-024
+
+- The formal workflow correctly stops after producing an immutable R2
+  candidate and private unsigned Feed base, but the server activation script
+  previously had no proof that macOS and Windows had exercised those exact
+  bytes. Feed activation now requires separate macOS arm64 and Windows x64
+  receipts before `_replace_current()`. Both bind the source, version,
+  release/build/manifest/feed identities and the exact installer URL,
+  filename, size, and SHA from the candidate inventory.
+- A receipt cannot pass with a generic smoke row. The exact platform scenario
+  set covers startup/login/owner, legacy restore, Hard19, Office4, single and
+  reference image calls plus multiple independent image calls, stateful
+  Browser/CDP, cold/hot OCR, file preview/open, model/Skill/settings/session
+  continuity, desktop update, shared WebUI, all four requested Agent connection
+  lifecycles, control-plane outage independence, and Usage reconciliation.
+  macOS additionally proves the rounded icon and direct relaunch; Windows
+  proves Session 1 UI, app-local MSVCP, and direct relaunch.
+- Missing or cross-candidate receipts, installer drift, any missing/failed
+  scenario, receipt/evidence symlinks or traversal, and evidence digest changes
+  all fail before the live pointer or activation receipt is touched. The
+  deploy/Feed affected set passed `42/42` with the unrelated locked-Node test
+  deselected in this environment; Ruff and diff checks passed. No Feed was
+  activated and no production state changed.

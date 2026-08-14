@@ -16,6 +16,7 @@ from ecorex import __version__
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "deploy-emate-desktop-feed.py"
+DEPLOY = runpy.run_path(str(SCRIPT))
 VERSION = __version__
 COMMIT = "a" * 40
 RELEASE_ID = "release-stable-test"
@@ -287,11 +288,16 @@ def _write_cu_receipts(root: Path, candidate: Path) -> tuple[Path, Path]:
                 "runtime_manifest_sha256", "feed_build_id",
             )},
             "installer": by_target[target],
-            "scenarios": [{
-                "name": "cow-hard19-office4",
-                "status": "passed",
-                "evidence": ["evidence/session.json"],
-            }],
+            "scenarios": [
+                {
+                    "name": name,
+                    "status": "passed",
+                    "evidence": ["evidence/session.json"],
+                }
+                for name in sorted(
+                    DEPLOY["_PLATFORM_CU_SCENARIOS"][(platform, architecture)]
+                )
+            ],
             "evidence": [{
                 "path": "evidence/session.json",
                 "sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
@@ -375,6 +381,7 @@ def test_activation_switches_relative_current_and_writes_seven_field_receipt(
         ("cross-candidate", "computer_use_identity_mismatch"),
         ("installer", "computer_use_installer_mismatch"),
         ("scenario", "computer_use_scenario_failed"),
+        ("missing-scenario", "computer_use_scenario_incomplete"),
         ("evidence", "computer_use_evidence_digest_mismatch"),
         ("escape", "computer_use_evidence_invalid"),
         ("symlink", "computer_use_receipt_invalid"),
@@ -406,6 +413,8 @@ def test_activation_requires_two_exact_same_byte_computer_use_receipts(
         elif mutation == "escape":
             receipt["evidence"][0]["path"] = "../outside.json"
             receipt["scenarios"][0]["evidence"] = ["../outside.json"]
+        elif mutation == "missing-scenario":
+            receipt["scenarios"].pop()
         else:
             receipt["scenarios"][0]["status"] = "failed"
         path.write_text(json.dumps(receipt, sort_keys=True) + "\n")

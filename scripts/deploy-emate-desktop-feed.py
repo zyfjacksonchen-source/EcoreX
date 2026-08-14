@@ -58,6 +58,39 @@ _RECEIPT_FIELDS = [
 _MAX_FILES = 500
 _MAX_FILE_BYTES = 16 * 1024 * 1024 * 1024
 _MAX_JSON_BYTES = 16 * 1024 * 1024
+_COMMON_CU_SCENARIOS = frozenset({
+    "startup-login-owner",
+    "legacy-history-restore",
+    "cow-hard19",
+    "office-documents",
+    "office-spreadsheets",
+    "office-presentations",
+    "office-pdf",
+    "image-generate",
+    "image-edit-reference",
+    "image-multiple-independent-calls",
+    "browser-cdp-stateful",
+    "ocr-cold-hot",
+    "file-preview-open",
+    "model-switch-context",
+    "local-hub-skill",
+    "settings-memory",
+    "session-switch-scroll",
+    "desktop-update",
+    "webui-shared-runtime",
+    "feishu-agent-connect",
+    "tencent-docs-agent-connect",
+    "weixin-agent-connect",
+    "dingtalk-agent-connect",
+    "control-plane-outage-local-runtime",
+    "usage-audit-reconciliation",
+})
+_PLATFORM_CU_SCENARIOS = {
+    ("macos", "arm64"): _COMMON_CU_SCENARIOS
+    | {"macos-rounded-icon", "macos-direct-relaunch"},
+    ("windows", "x64"): _COMMON_CU_SCENARIOS
+    | {"windows-app-local-msvcp", "windows-session1-ui", "windows-direct-relaunch"},
+}
 
 
 class FeedDeployError(RuntimeError):
@@ -622,6 +655,8 @@ def _validate_computer_use_receipt(
             raise FeedDeployError("computer_use_scenario_failed")
         scenario_names.add(name.casefold())
         referenced.update(refs)
+    if scenario_names != _PLATFORM_CU_SCENARIOS[(platform, architecture)]:
+        raise FeedDeployError("computer_use_scenario_incomplete")
 
     evidence = value.get("evidence")
     if not isinstance(evidence, list) or not 1 <= len(evidence) <= 128:
