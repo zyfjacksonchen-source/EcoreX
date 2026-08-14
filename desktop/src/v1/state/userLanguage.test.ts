@@ -54,6 +54,14 @@ test("primary error copy and collapsed technical code remain separate", () => {
     "扩展响应超时，e-Mate 已停止等待。你可以稍后重试。",
   );
   assert.equal(technicalErrorCode(error), "provider_timeout");
+  assert.equal(
+    userFacingError(new RuntimeApiError(
+      "managed connector authorization could not be started",
+      400,
+      "connector_auth_error",
+    )),
+    "连接授权服务未能开始登录，请稍后重试。",
+  );
   assert.equal(technicalErrorCode(new Error("ordinary")), null);
   const sharePreview = new RuntimeApiError(
     "internal path C:\\secret\\image.png",

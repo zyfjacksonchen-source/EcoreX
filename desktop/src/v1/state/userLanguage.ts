@@ -25,6 +25,7 @@ const CODE_MESSAGES: Record<string, string> = {
   managed_image_edit_not_configured: "精准修图服务尚未配置，请联系管理员。",
   signed_image_model_not_allowed: "当前账户没有可用的修图模型，请联系管理员。",
   connector_not_found: "没有找到这个连接，请刷新连接器列表。",
+  connector_auth_error: "连接授权服务未能开始登录，请稍后重试。",
   device_authorization_not_found: "这次登录已结束，请重新开始登录。",
   device_authorization_conflict: "登录状态已更新，请刷新后继续。",
   device_authorization_unavailable: "登录服务暂时不可用，请检查网络后重试。",
