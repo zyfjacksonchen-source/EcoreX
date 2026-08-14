@@ -25,7 +25,8 @@ class Agent:
         :param tools: Optional list of tools for the agent to use.
         :param output_mode: Control how execution progress is displayed: 
                            "print" for console output or "logger" for using logger
-        :param max_steps: Maximum number of steps the agent can take (default: 100)
+        :param max_steps: Legacy compatibility value; normal runs are bounded by
+                          context compaction, cancellation and loop detection.
         :param max_context_tokens: Maximum tokens to keep in context (default: None, auto-calculated based on model)
         :param context_reserve_tokens: Reserve tokens for new requests (default: None, auto-calculated)
         :param memory_manager: Optional MemoryManager instance for memory operations
@@ -40,7 +41,7 @@ class Agent:
         self.model: LLMModel = model  # Instance of LLMModel
         self.description = description
         self.tools: list = []
-        self.max_steps = max_steps  # max tool-call steps, default 100
+        self.max_steps = max_steps  # legacy config/API compatibility
         self.max_context_tokens = max_context_tokens  # max tokens in context
         self.context_reserve_tokens = context_reserve_tokens  # reserve tokens for new requests
         self.captured_actions = []  # Initialize captured actions list

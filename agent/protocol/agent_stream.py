@@ -238,7 +238,9 @@ class AgentStreamExecutor:
             model: LLM model
             system_prompt: System prompt
             tools: List of available tools
-            max_turns: Maximum number of turns
+            max_turns: Legacy compatibility value. Normal runs converge when
+                the model finishes; context compaction and loop detection are
+                the execution bounds.
             on_event: Event callback function
             messages: Optional existing message history (for persistent conversations)
             max_context_turns: Maximum number of conversation turns to keep in context
@@ -254,7 +256,7 @@ class AgentStreamExecutor:
         self.system_prompt = system_prompt
         # Convert tools list to dict
         self.tools = {tool.name: tool for tool in tools} if isinstance(tools, list) else tools
-        self.max_turns = max_turns
+        self.max_turns = max_turns  # compatibility only; not a normal-run limit
         self.on_event = on_event
         self.max_context_turns = max_context_turns
         self.cancel_event = cancel_event
@@ -550,7 +552,7 @@ class AgentStreamExecutor:
         
         # Stop at 5 consecutive calls with same args (whether success or failure)
         if same_args_calls >= 5:
-            return True, f"工具 '{tool_name}' 使用相同参数已被调用 {same_args_calls} 次，停止执行以防止无限循环。如果需要查看配置，结果已在之前的调用中返回。", False
+            return True, f"工具 '{tool_name}' 使用相同参数已被调用 {same_args_calls} 次，停止执行以防止无限循环。如果需要查看配置，结果已在之前的调用中返回。", True
         
         # Count consecutive failures for same tool + args
         same_args_failures = 0
@@ -651,7 +653,7 @@ class AgentStreamExecutor:
 
         cancelled = False
         try:
-            while turn < self.max_turns:
+            while True:
                 # Check at the very top of every turn so a cancel arriving
                 # between turns short-circuits cleanly.
                 self._check_cancelled()
@@ -948,52 +950,6 @@ class AgentStreamExecutor:
                     "has_tool_calls": True,
                     "tool_count": len(tool_calls)
                 })
-
-            if turn >= self.max_turns:
-                logger.warning(f"⚠️  Reached max decision step limit: {self.max_turns}")
-                self._drain_and_close_steering()
-                
-                # Force model to summarize without tool calls
-                logger.info("[Agent] Requesting summary from LLM after reaching max steps...")
-                
-                # Remember position before injecting the prompt so we can remove it later
-                prompt_insert_idx = len(self.messages)
-                
-                # Add a temporary prompt to force summary
-                self.messages.append({
-                    "role": "user",
-                    "content": [{
-                        "type": "text",
-                        "text": f"你已经执行了{turn}个决策步骤，达到了单次运行的最大步数限制。请总结一下你目前的执行过程和结果，告诉用户当前的进展情况。不要再调用工具，直接用文字回复。"
-                    }]
-                })
-                
-                # Call LLM one more time to get summary (without retry to avoid loops)
-                try:
-                    summary_response, summary_tools = self._call_llm_stream(retry_on_empty=False)
-                    if summary_response:
-                        final_response = summary_response
-                        logger.info(f"💭 Summary: {summary_response[:150]}{'...' if len(summary_response) > 150 else ''}")
-                    else:
-                        # Fallback if model still doesn't respond
-                        final_response = _t(
-                            f"我已经执行了{turn}个决策步骤，达到了单次运行的步数上限。任务可能还未完全完成，建议你将任务拆分成更小的步骤，或者换一种方式描述需求。",
-                            f"I've taken {turn} decision steps and reached the per-run limit. The task may not be fully complete — try breaking it into smaller steps, or describe your request differently.",
-                        )
-                except Exception as e:
-                    logger.warning(f"Failed to get summary from LLM: {e}")
-                    final_response = _t(
-                        f"我已经执行了{turn}个决策步骤，达到了单次运行的步数上限。任务可能还未完全完成，建议你将任务拆分成更小的步骤，或者换一种方式描述需求。",
-                        f"I've taken {turn} decision steps and reached the per-run limit. The task may not be fully complete — try breaking it into smaller steps, or describe your request differently.",
-                    )
-                finally:
-                    # Remove the injected user prompt from history to avoid polluting
-                    # persisted conversation records. The assistant summary (if any)
-                    # was already appended by _call_llm_stream and is kept.
-                    if (prompt_insert_idx < len(self.messages)
-                            and self.messages[prompt_insert_idx].get("role") == "user"):
-                        self.messages.pop(prompt_insert_idx)
-                        logger.debug("[Agent] Removed injected max-steps prompt from message history")
 
         except AgentCancelledError:
             # User-initiated stop: wind down message history cleanly so the

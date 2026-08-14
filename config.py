@@ -312,7 +312,7 @@ available_setting = {
     "model_context_window": 1000000,  # active chat model context window, synced by the Web model selector
     "agent_max_context_tokens": 64000,  # max context tokens in Agent mode
     "agent_max_context_turns": 30,  # max context memory turns in Agent mode
-    "agent_max_steps": 20,  # max decision steps per run in Agent mode
+    "agent_max_steps": 20,  # legacy compatibility; normal runs have no step cap
     "agent_context_budget_warn_ratio": 0.85,  # emit near-limit context-budget evidence above this fraction of the effective input limit
     "agent_context_budget_clamp_to_window": True,  # clamp configured context budget to the model window minus response reserve
     "agent_context_budget_response_reserve_tokens": 0,  # 0 means use the model-derived reserve; set a positive number to override
