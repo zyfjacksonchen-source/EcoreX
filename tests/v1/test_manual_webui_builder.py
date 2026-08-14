@@ -16,8 +16,17 @@ from types import SimpleNamespace
 import zipfile
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
 
 from ecorex import __version__
+from ecorex.release import (
+    Ed25519MemorySigner,
+    public_bootstrap_authority_signing_bytes,
+    stable_pointer_sequence,
+)
 from ecorex.release.builder import _build_deterministic_zip
 from ecorex.update.storage import _extract_zip_safely
 
@@ -42,6 +51,42 @@ def _pe_with_import(name: str) -> bytes:
     struct.pack_into("<I", payload, 0x20C, 0x1050)
     payload[0x250 : 0x251 + len(name)] = name.encode("ascii") + b"\0"
     return bytes(payload)
+
+
+def test_manual_webui_presigns_only_public_bootstrap_authority() -> None:
+    builder = _builder()
+    signer = Ed25519MemorySigner("release-test", Ed25519PrivateKey.generate())
+    manifest = SimpleNamespace(
+        release_id="release-stable-" + "a" * 24,
+        version=__version__,
+        build_digest="b" * 64,
+    )
+
+    handoff = builder["_public_bootstrap_authority_handoff"](
+        manifest, "c" * 64, signer
+    )
+
+    assert set(handoff) == {
+        "schema_version",
+        "document_type",
+        "release_id",
+        "version",
+        "manifest_sha256",
+        "sequence",
+        "revision",
+        "target",
+        "signature",
+    }
+    assert not any("private" in key.casefold() for key in handoff)
+    assert handoff["sequence"] == stable_pointer_sequence(__version__)
+    payload = public_bootstrap_authority_signing_bytes(
+        sequence=handoff["sequence"],
+        revision=handoff["revision"],
+        target=handoff["target"],
+    )
+    Ed25519PublicKey.from_public_bytes(signer.public_key_bytes).verify(
+        base64.b64decode(handoff["signature"]["value"]), payload
+    )
 
 
 def test_manual_webui_requires_pe_imported_msvc_beside_pack_python(

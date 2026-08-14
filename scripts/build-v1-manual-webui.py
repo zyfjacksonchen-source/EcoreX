@@ -63,6 +63,8 @@ from ecorex.release import (  # noqa: E402
     ReleaseBuildSpec,
     ReleaseBuilder,
     WebBundleBuildInput,
+    public_bootstrap_authority_signing_bytes,
+    stable_pointer_sequence,
 )
 from ecorex.release.build_dependency_lock import active_lock_versions  # noqa: E402
 from ecorex.release.dependency_lock import DependencyLockError  # noqa: E402
@@ -1167,6 +1169,40 @@ def _core_executable_paths(platform: str, core: Path | None = None) -> tuple[str
     return tuple(paths)
 
 
+def _public_bootstrap_authority_handoff(
+    manifest: ReleaseManifest,
+    manifest_sha256: str,
+    signer: Ed25519MemorySigner,
+) -> dict[str, Any]:
+    target = {
+        "manifest_sha256": manifest_sha256,
+        "release_id": manifest.release_id,
+        "version": manifest.version,
+        "build_digest": manifest.build_digest,
+    }
+    sequence = stable_pointer_sequence(manifest.version)
+    payload = public_bootstrap_authority_signing_bytes(
+        sequence=sequence,
+        revision=manifest.release_id,
+        target=target,
+    )
+    return {
+        "schema_version": 1,
+        "document_type": "emate.public-bootstrap-authority-handoff",
+        "release_id": manifest.release_id,
+        "version": manifest.version,
+        "manifest_sha256": manifest_sha256,
+        "sequence": sequence,
+        "revision": manifest.release_id,
+        "target": target,
+        "signature": {
+            "algorithm": "ed25519",
+            "key_id": signer.key_id,
+            "value": base64.b64encode(signer.sign(payload)).decode("ascii"),
+        },
+    }
+
+
 def _build_release(
     stages: Mapping[tuple[str, str], Mapping[str, Path]],
     bootstraps: Mapping[tuple[str, str], Path],
@@ -1518,6 +1554,11 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         ]
         manifest_sha256 = _sha256(built.manifest_path)
         shutil.copy2(built.manifest_path, staged / "release-manifest.json")
+        authority_handoff = _public_bootstrap_authority_handoff(
+            built.manifest, manifest_sha256, signer
+        )
+        authority_path = staged / "public-bootstrap-authority.json"
+        authority_path.write_bytes(_canonical_json(authority_handoff))
         receipt = {
             "schema": RECEIPT_SCHEMA,
             "status": "verified",
@@ -1544,6 +1585,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 "key_id": key_id,
                 "public_key_sha256": hashlib.sha256(public).hexdigest(),
                 "private_key_persisted": False,
+                "authority_handoff_sha256": _sha256(authority_path),
                 "os_application_signature": False,
                 "macos_signature_mode": "adhoc-code-directory",
                 "developer_id": False,

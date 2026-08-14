@@ -196,6 +196,11 @@ def _parser() -> argparse.ArgumentParser:
     public_index.add_argument("--release-dir", required=True, type=Path)
     public_index.add_argument("--publication-receipt", required=True, type=Path)
     public_index.add_argument(
+        "--authority-handoff",
+        type=Path,
+        help="use the build-time release-key authority signature without the private key",
+    )
+    public_index.add_argument(
         "--output",
         required=True,
         type=Path,
@@ -1272,7 +1277,7 @@ def _publish_assets(
 
 def _build_public_bootstrap_discovery(
     args: argparse.Namespace,
-    signer: ReleaseSigner,
+    signer: ReleaseSigner | None,
     freshness_signer: ReleaseSigner,
 ) -> dict[str, Any]:
     """Generate the browser-facing pointer only after full release verification."""
@@ -1283,6 +1288,7 @@ def _build_public_bootstrap_discovery(
         trusted_keys=args.trusted_key,
         trusted_freshness_keys=args.trusted_publication_key,
         signer=signer,
+        authority_handoff=args.authority_handoff,
         freshness_signer=freshness_signer,
     )
     output_path, output_sha256 = write_public_bootstrap_index(args.output, index)
@@ -1316,6 +1322,7 @@ def _expected_public_bootstrap_discovery(
     trusted_keys: list[str],
     trusted_freshness_keys: list[str],
     signer: ReleaseSigner | None = None,
+    authority_handoff: Path | None = None,
     authority_signature: SignatureEnvelope | None = None,
     freshness_signer: ReleaseSigner | None = None,
     freshness_signature: SignatureEnvelope | None = None,
@@ -1323,6 +1330,12 @@ def _expected_public_bootstrap_discovery(
     freshness_expires_at: str | None = None,
 ) -> tuple[VerifiedReleaseDirectory, str, dict[str, object]]:
     verified = _verify_release_directory(release_dir, trusted_keys)
+    if authority_handoff is not None:
+        if signer is not None or authority_signature is not None:
+            raise ValueError("public Bootstrap authority source is ambiguous")
+        authority_signature = _validated_authority_handoff(
+            authority_handoff, verified
+        )
     receipt_path = _publication_receipt_path(publication_receipt)
     receipt_sha256 = _file_sha256(receipt_path)
     receipt_value = _read_json(
@@ -1356,6 +1369,54 @@ def _expected_public_bootstrap_discovery(
         freshness_expires_at=freshness_expires_at,
     )
     return verified, receipt_sha256, index
+
+
+def _validated_authority_handoff(
+    path: Path,
+    verified: VerifiedReleaseDirectory,
+) -> SignatureEnvelope:
+    value = _read_json(
+        path,
+        limit=256 * 1024,
+        label="public Bootstrap authority handoff",
+    )
+    manifest = verified.manifest
+    manifest_sha256 = verified.expected_sha256["release-manifest.json"]
+    target = {
+        "manifest_sha256": manifest_sha256,
+        "release_id": manifest.release_id,
+        "version": manifest.version,
+        "build_digest": manifest.build_digest,
+    }
+    expected = {
+        "schema_version",
+        "document_type",
+        "release_id",
+        "version",
+        "manifest_sha256",
+        "sequence",
+        "revision",
+        "target",
+        "signature",
+    }
+    if (
+        not isinstance(value, dict)
+        or set(value) != expected
+        or value.get("schema_version") != 1
+        or value.get("document_type")
+        != "emate.public-bootstrap-authority-handoff"
+        or value.get("release_id") != manifest.release_id
+        or value.get("version") != manifest.version
+        or value.get("manifest_sha256") != manifest_sha256
+        or value.get("sequence") != stable_pointer_sequence(manifest.version)
+        or value.get("revision") != manifest.release_id
+        or value.get("target") != target
+    ):
+        raise ValueError("public Bootstrap authority handoff does not match release")
+    try:
+        return SignatureEnvelope.from_dict(value["signature"])
+    except (TypeError, ValueError, KeyError):
+        raise ValueError("public Bootstrap authority handoff signature is invalid") from None
 
 
 def _prepared_public_bootstrap_discovery(
@@ -2243,7 +2304,11 @@ def run(
         elif args.command == "build-public-bootstrap-index":
             result = _build_public_bootstrap_discovery(
                 args,
-                public_pointer_signer_factory(args),
+                (
+                    None
+                    if args.authority_handoff is not None
+                    else public_pointer_signer_factory(args)
+                ),
                 public_freshness_signer_factory(args),
             )
         elif args.command in {

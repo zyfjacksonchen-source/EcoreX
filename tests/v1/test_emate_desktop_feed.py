@@ -865,8 +865,13 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
     assert "path: .handoff/feed" in upload
     assert ".handoff/feed/latest-mac.yml" not in upload
     assert ".handoff/feed/public-bootstrap-index.json" not in upload
+    assert "standalone-publication-handoff" in upload
+    assert ".handoff/runtime/public-bootstrap-authority.json" in upload
+    assert ".handoff/release-publication-receipt.json" in upload
+    assert ".handoff/r2-download-admission.json" in upload
     for required_gate in (
         "tests/v1/test_public_download_site.py",
+        "tests/v1/test_public_bootstrap_index.py",
         "tests/v1/test_emate_feed_deploy.py",
         "tests/v1/test_cow_public_hotpath_contract.py",
         "tests/v1/test_memory_storage_shared_db_recovery.py",

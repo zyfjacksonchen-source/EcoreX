@@ -765,6 +765,115 @@ def test_public_index_cli_verifies_then_atomically_writes_pointer(
     assert command_result["output_sha256"] == _sha256(output)
 
 
+def test_public_index_cli_reuses_bound_authority_and_requires_freshness_signer(
+    tmp_path: Path,
+) -> None:
+    (
+        built,
+        _verifier,
+        public,
+        signer,
+        _fresh_verifier,
+        fresh_public,
+        fresh_signer,
+    ) = _release(tmp_path)
+    receipt, _receipt_digest = _receipt(built)
+    receipt_path = tmp_path / "publication-receipt.json"
+    receipt_path.write_text(
+        json.dumps(receipt, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    manifest_sha256 = _sha256(built.manifest_path)
+    target = {
+        "manifest_sha256": manifest_sha256,
+        "release_id": built.manifest.release_id,
+        "version": built.manifest.version,
+        "build_digest": built.manifest.build_digest,
+    }
+    sequence = stable_pointer_sequence(built.manifest.version)
+    payload = public_bootstrap_authority_signing_bytes(
+        sequence=sequence,
+        revision=built.manifest.release_id,
+        target=target,
+    )
+    handoff = {
+        "schema_version": 1,
+        "document_type": "emate.public-bootstrap-authority-handoff",
+        "release_id": built.manifest.release_id,
+        "version": built.manifest.version,
+        "manifest_sha256": manifest_sha256,
+        "sequence": sequence,
+        "revision": built.manifest.release_id,
+        "target": target,
+        "signature": {
+            "algorithm": "ed25519",
+            "key_id": signer.key_id,
+            "value": base64.b64encode(signer.sign(payload)).decode("ascii"),
+        },
+    }
+    handoff_path = tmp_path / "public-bootstrap-authority.json"
+    handoff_path.write_text(
+        json.dumps(handoff, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+    def pointer_signer_must_not_run(_args):  # noqa: ANN001
+        raise AssertionError("release private key must not be needed after build")
+
+    command = [
+        "build-public-bootstrap-index",
+        "--release-dir",
+        str(built.output_dir),
+        "--publication-receipt",
+        str(receipt_path),
+        "--authority-handoff",
+        str(handoff_path),
+        "--output",
+        str(tmp_path / "public-bootstrap-index.json"),
+        "--trusted-key",
+        "release-key-2026=" + base64.b64encode(public).decode("ascii"),
+        "--trusted-publication-key",
+        "publication-key-2026=" + base64.b64encode(fresh_public).decode("ascii"),
+    ]
+    assert (
+        run(
+            command,
+            public_pointer_signer_factory=pointer_signer_must_not_run,
+            public_freshness_signer_factory=lambda _args: fresh_signer,
+        )
+        == 0
+    )
+
+    wrong_target = {**handoff, "target": {**target, "build_digest": "0" * 64}}
+    handoff_path.write_text(json.dumps(wrong_target), encoding="utf-8")
+    command[command.index("--output") + 1] = str(tmp_path / "wrong-target.json")
+    assert (
+        run(
+            command,
+            public_pointer_signer_factory=pointer_signer_must_not_run,
+            public_freshness_signer_factory=lambda _args: fresh_signer,
+        )
+        == 1
+    )
+    assert not Path(command[command.index("--output") + 1]).exists()
+
+    handoff_path.write_text(json.dumps(handoff), encoding="utf-8")
+
+    def missing_freshness_signer(_args):  # noqa: ANN001
+        raise ValueError("public freshness signer configuration is incomplete")
+
+    command[command.index("--output") + 1] = str(tmp_path / "missing-signer.json")
+    assert (
+        run(
+            command,
+            public_pointer_signer_factory=pointer_signer_must_not_run,
+            public_freshness_signer_factory=missing_freshness_signer,
+        )
+        == 1
+    )
+    assert not Path(command[command.index("--output") + 1]).exists()
+
+
 def test_public_index_cli_never_replaces_placeholder_after_failed_verification(
     tmp_path: Path,
 ) -> None:

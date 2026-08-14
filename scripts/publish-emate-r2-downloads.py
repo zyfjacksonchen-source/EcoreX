@@ -32,6 +32,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--macos-arm64-root", required=True, type=Path)
     parser.add_argument("--macos-x64-root", required=True, type=Path)
     parser.add_argument("--receipt", required=True, type=Path)
+    parser.add_argument("--publication-receipt", type=Path)
     return parser
 
 
@@ -428,6 +429,69 @@ def _write_receipt(path: Path, value: Mapping[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def _release_publication_receipt(
+    manifest: Mapping[str, Any], records: list[dict[str, Any]]
+) -> dict[str, Any]:
+    sources = manifest.get("sources")
+    artifacts = manifest.get("artifacts")
+    if (
+        not isinstance(sources, list)
+        or not sources
+        or not isinstance(sources[0], dict)
+        or sources[0].get("source_id") != "github-cn"
+        or sources[0].get("kind") != "github-cn-mirror"
+        or sources[0].get("priority") != 0
+        or sources[0].get("base_url")
+        != f"{PUBLIC_ORIGIN}/desktop/v{manifest.get('version')}"
+        or re.fullmatch(r"release-stable-[0-9a-f]{24}", str(manifest.get("release_id")))
+        is None
+        or not isinstance(artifacts, list)
+    ):
+        raise RuntimeError("r2_publication_manifest_invalid")
+    by_name = {str(item.get("file_name")): item for item in records}
+    expected = {
+        "release-manifest.json",
+        "release-metadata.json",
+        "sbom.cdx.json",
+        *(str(item.get("file_name")) for item in artifacts if isinstance(item, dict)),
+    }
+    if len(expected) != len(artifacts) + 3 or any(name not in by_name for name in expected):
+        raise RuntimeError("r2_publication_inventory_invalid")
+    return {
+        "schema_version": 2,
+        "release_id": manifest.get("release_id"),
+        "version": manifest.get("version"),
+        "manifest_sha256": by_name["release-manifest.json"]["sha256"],
+        "publication_policy": "stable-primary-only",
+        "source_receipts": {
+            "github-cn": [
+                {
+                    "name": name,
+                    "size_bytes": by_name[name]["size_bytes"],
+                    "sha256": by_name[name]["sha256"],
+                    "url": by_name[name]["url"],
+                }
+                for name in sorted(expected)
+            ]
+        },
+    }
+
+
+def _write_canonical_receipt(path: Path, value: Mapping[str, Any]) -> None:
+    payload = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.is_symlink():
+        raise RuntimeError("r2_receipt_path_invalid")
+    with tempfile.NamedTemporaryFile(
+        "wb", dir=path.parent, prefix=f".{path.name}.", delete=False
+    ) as output:
+        output.write(payload)
+        temporary = Path(output.name)
+    os.replace(temporary, path)
+
+
 def publish(
     args: argparse.Namespace,
     *,
@@ -462,6 +526,19 @@ def publish(
         "objects": completed,
     }
     _write_receipt(args.receipt, receipt)
+    publication_receipt = getattr(args, "publication_receipt", None)
+    if publication_receipt is not None:
+        manifest_path = args.runtime_root.resolve(strict=True) / "release/release-manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            raise RuntimeError("r2_publication_manifest_invalid") from None
+        if not isinstance(manifest, dict):
+            raise RuntimeError("r2_publication_manifest_invalid")
+        _write_canonical_receipt(
+            publication_receipt,
+            _release_publication_receipt(manifest, completed),
+        )
     return receipt
 
 

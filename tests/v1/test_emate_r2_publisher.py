@@ -55,7 +55,25 @@ def _inputs(root: Path) -> argparse.Namespace:
         )
     manifest = release / "release-manifest.json"
     manifest.write_text(
-        json.dumps({"version": VERSION, "artifacts": artifacts}), encoding="utf-8"
+        json.dumps(
+            {
+                "version": VERSION,
+                "release_id": "release-stable-" + "a" * 24,
+                "sources": [
+                    {
+                        "source_id": "github-cn",
+                        "kind": "github-cn-mirror",
+                        "priority": 0,
+                        "base_url": (
+                            "https://pub-ada3f610c0234a76838f4e19fe2bb25e.r2.dev/"
+                            f"desktop/v{VERSION}"
+                        ),
+                    }
+                ],
+                "artifacts": artifacts,
+            }
+        ),
+        encoding="utf-8",
     )
     (release / "release-metadata.json").write_bytes(b"{}")
     (release / "sbom.cdx.json").write_bytes(b"{}")
@@ -66,6 +84,7 @@ def _inputs(root: Path) -> argparse.Namespace:
         macos_arm64_root=arm64,
         macos_x64_root=x64,
         receipt=root / "r2-receipt.json",
+        publication_receipt=root / "release-publication-receipt.json",
     )
 
 
@@ -187,6 +206,18 @@ def test_r2_publisher_runs_three_independent_multipart_uploads_and_resumes(
     assert sorted(probes[-len(receipt["objects"]):]) == sorted(
         item["file_name"] for item in receipt["objects"]
     )
+    publication = json.loads(args.publication_receipt.read_text(encoding="utf-8"))
+    assert publication["release_id"] == "release-stable-" + "a" * 24
+    assert publication["publication_policy"] == "stable-primary-only"
+    assert set(publication["source_receipts"]) == {"github-cn"}
+    assert {item["name"] for item in publication["source_receipts"]["github-cn"]} == {
+        "release-manifest.json",
+        "release-metadata.json",
+        "sbom.cdx.json",
+        *(item["file_name"] for item in json.loads(
+            (args.runtime_root / "release/release-manifest.json").read_text()
+        )["artifacts"]),
+    }
 
 
 def test_r2_client_reads_credentials_only_from_environment(monkeypatch) -> None:
