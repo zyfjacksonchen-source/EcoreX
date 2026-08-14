@@ -39,6 +39,25 @@ OFFICE_SECTION_SCHEMA = {
     "required": ["heading"],
     "additionalProperties": False,
 }
+OFFICE_TABLE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "rows": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 128,
+            "items": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 32,
+                "items": {"type": "string", "minLength": 1},
+            },
+            "description": "Rectangular rows of DOCX table cell text.",
+        },
+    },
+    "required": ["rows"],
+    "additionalProperties": False,
+}
 
 
 class OfficeAuthoringContractError(ValueError):
@@ -53,7 +72,7 @@ def validated_authoring_request(
     if family not in MIME_TYPES or parameters.get("operation") != "create":
         raise OfficeAuthoringContractError("office_create_parameters_invalid")
     allowed = {
-        "document": {"operation", "file_name", "title", "sections"},
+        "document": {"operation", "file_name", "title", "sections", "tables"},
         "pdf": {"operation", "file_name", "title", "sections"},
         "presentation": {"operation", "file_name", "title", "slides"},
         "spreadsheet": {"operation", "file_name", "title", "sheets"},
@@ -101,6 +120,23 @@ def validated_authoring_request(
                 }
             )
         payload["sections"] = normalized_sections
+        if family == "document":
+            normalized_tables = []
+            for table in _list(parameters.get("tables") or [], 32, empty=True):
+                if not isinstance(table, Mapping) or set(table) != {"rows"}:
+                    raise OfficeAuthoringContractError("office_tables_invalid")
+                rows = _list(table.get("rows"), 128)
+                width = 0
+                normalized_rows = []
+                for row in rows:
+                    if not isinstance(row, list) or not 1 <= len(row) <= 32:
+                        raise OfficeAuthoringContractError("office_tables_invalid")
+                    if width and len(row) != width:
+                        raise OfficeAuthoringContractError("office_tables_invalid")
+                    width = len(row)
+                    normalized_rows.append([_text(cell, 4096) for cell in row])
+                normalized_tables.append({"rows": normalized_rows})
+            payload["tables"] = normalized_tables
     elif family == "presentation":
         slides = _list(parameters.get("slides"), 120)
         payload["slides"] = [

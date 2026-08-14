@@ -198,6 +198,13 @@ def test_v025_public_office_schema_matches_verified_formats_pack():
         if "parameters" in schema:
             schema = schema["parameters"]
         assert schema["properties"]["action"]["enum"] == expected_actions
+        if name == "office_documents":
+            table_schema = schema["properties"]["tables"]["items"]
+            assert table_schema["additionalProperties"] is False
+            assert set(table_schema["properties"]) == {"rows"}
+            assert table_schema["properties"]["rows"]["items"]["minItems"] == 1
+        else:
+            assert "tables" not in schema["properties"]
 
     result = manager.create_tool("office_pdf").execute({
         "action": "render_preview",
@@ -210,6 +217,80 @@ def test_v025_public_office_schema_matches_verified_formats_pack():
         "allowedActions": expected_actions,
         "redacted": True,
     }
+
+
+def test_v025_document_table_contract_create_edit_and_inspect_exact_cells():
+    import docx
+    import pytest
+
+    from common.office_authoring_contract import (
+        OfficeAuthoringContractError,
+        validated_authoring_request,
+    )
+    from ecorex.integration.dependency_pack_worker import (
+        _office_create,
+        _office_edit,
+        _office_read,
+    )
+
+    runtime = Path(docx.__file__).resolve().parents[1]
+    request = {
+        "operation": "create",
+        "file_name": "table.docx",
+        "title": "Table acceptance",
+        "sections": [{"heading": "Results", "level": 1}],
+        "tables": [{"rows": [["A1", "B1"], ["A2", "B2"]]}],
+    }
+    payload, _ = validated_authoring_request("document", ".docx", request)
+    created = _office_create({"family": "document", **payload}, runtime)
+    created_content = base64.b64decode(created["content_base64"])
+    created_inspection = _office_read(
+        {
+            "family": "document",
+            "content_base64": base64.b64encode(created_content).decode("ascii"),
+        },
+        runtime,
+    )
+    assert created["validation"]["table_count"] == 1
+    assert created_inspection["structure"]["table_count"] == 1
+    assert "# Table 1\nA1\tB1\nA2\tB2" in created_inspection["text"]
+
+    edited_payload, _ = validated_authoring_request(
+        "document",
+        ".docx",
+        {
+            **request,
+            "tables": [{"rows": [["C1", "D1"], ["C2", "D2"]]}],
+        },
+    )
+    edited = _office_edit(
+        {
+            "family": "document",
+            "content_base64": base64.b64encode(created_content).decode("ascii"),
+            **edited_payload,
+        },
+        runtime,
+    )
+    edited_inspection = _office_read(
+        {
+            "family": "document",
+            "content_base64": edited["content_base64"],
+        },
+        runtime,
+    )
+    assert edited["validation"] == {
+        "paragraph_count": 2,
+        "table_count": 1,
+        "source_opened": True,
+    }
+    assert "# Table 1\nC1\tD1\nC2\tD2" in edited_inspection["text"]
+
+    with pytest.raises(OfficeAuthoringContractError, match="office_tables_invalid"):
+        validated_authoring_request(
+            "document",
+            ".docx",
+            {**request, "tables": [{"rows": [["A", "B"]], "unknown": True}]},
+        )
 
 
 def test_v024_public_cow_office_tools_create_edit_and_emit_artifacts(
@@ -237,10 +318,15 @@ def test_v024_public_cow_office_tools_create_edit_and_emit_artifacts(
                     "level": 0,
                     "paragraphs": [],
                 }
+                assert payload["tables"] == [
+                    {"rows": [["Name", "Status"], ["DOCX", "passed"]]}
+                ]
             return self._result(family, payload["title"])
 
         def edit(self, family, content, payload, *, timeout_seconds):
             assert content
+            if family == "document":
+                assert payload["tables"][0]["rows"][1] == ["DOCX", "passed"]
             result = self._result(family, payload["title"])
             result["validation"]["source_opened"] = True
             return result
@@ -295,6 +381,7 @@ def test_v024_public_cow_office_tools_create_edit_and_emit_artifacts(
                 "sheets": [{"name": "Data", "rows": [["version", 1]]}],
                 "slides": [{"title": "Summary", "bullets": ["v1"]}],
             }[field]
+            extra = {}
             if tool_name == "office_documents":
                 section_schema = manager.list_tools()[tool_name]["parameters"][
                     "parameters"
@@ -314,8 +401,19 @@ def test_v024_public_cow_office_tools_create_edit_and_emit_artifacts(
                         "paragraphs": ["DOCX create path passed"],
                     },
                 ]
+                extra = {
+                    "tables": [
+                        {"rows": [["Name", "Status"], ["DOCX", "passed"]]}
+                    ]
+                }
             created = tool.execute(
-                {"action": "create", "path": file_name, "title": "v1", field: content}
+                {
+                    "action": "create",
+                    "path": file_name,
+                    "title": "v1",
+                    field: content,
+                    **extra,
+                }
             )
             assert created.status == "success"
             assert created.result["operation"] == "create"
@@ -341,7 +439,13 @@ def test_v024_public_cow_office_tools_create_edit_and_emit_artifacts(
             original = Path(created.result["path"]).read_bytes()
 
             edited = tool.execute(
-                {"action": "edit", "path": file_name, "title": "v2", field: content}
+                {
+                    "action": "edit",
+                    "path": file_name,
+                    "title": "v2",
+                    field: content,
+                    **extra,
+                }
             )
             assert edited.status == "success"
             assert edited.result["operation"] == "edit"
@@ -360,6 +464,7 @@ def test_v024_public_cow_office_tools_create_edit_and_emit_artifacts(
                     "output_path": file_name,
                     "title": "v3",
                     field: content,
+                    **extra,
                 }
             )
             assert replaced.status == "success"

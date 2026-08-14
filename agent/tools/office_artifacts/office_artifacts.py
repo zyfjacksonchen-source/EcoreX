@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 from agent.tools.base_tool import BaseTool, ToolResult
-from common.office_authoring_contract import OFFICE_SECTION_SCHEMA
+from common.office_authoring_contract import OFFICE_SECTION_SCHEMA, OFFICE_TABLE_SCHEMA
 from common.office_pdf_runtime import (
     OfficePdfRuntimeError,
     probe_office_pdf_runtime,
@@ -85,6 +85,18 @@ _COMMON_PARAMS: dict[str, Any] = {
         },
     },
     "required": ["action"],
+}
+_DOCUMENT_PARAMS = {
+    **_COMMON_PARAMS,
+    "properties": {
+        **_COMMON_PARAMS["properties"],
+        "tables": {
+            "type": "array",
+            "items": OFFICE_TABLE_SCHEMA,
+            "maxItems": 32,
+            "description": "Complete rectangular tables for DOCX create or replacement edit.",
+        },
+    },
 }
 
 
@@ -205,6 +217,8 @@ class _OfficeArtifactTool(BaseTool):
         }[self.artifact_kind]
         structured[field] = args.get(field)
         family = self.artifact_kind
+        if family == "document":
+            structured["tables"] = args.get("tables")
         payload, _ = validated_authoring_request(family, extension, structured)
         service = _office_pack_service()
         result = (
@@ -297,6 +311,7 @@ class OfficeDocumentsTool(_OfficeArtifactTool):
     artifact_kind = "document"
     compatibility_id = "office-documents"
     official_skill = "documents"
+    params = _DOCUMENT_PARAMS
     description = (
         "Create, replacement-edit, and inspect Word/DOCX files "
         "through the verified Office Pack. Create/edit return a workspace file path."

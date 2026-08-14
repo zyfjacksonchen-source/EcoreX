@@ -382,9 +382,31 @@ def _office_create(payload: Mapping[str, Any], runtime: Path) -> Mapping[str, An
                 raise ValueError("document paragraphs are invalid")
             for paragraph in paragraphs:
                 document.add_paragraph(_text(paragraph))
+        tables = payload.get("tables") or []
+        if not isinstance(tables, list):
+            raise ValueError("document tables are invalid")
+        for table_payload in tables:
+            if not isinstance(table_payload, Mapping):
+                raise ValueError("document table is invalid")
+            rows = table_payload.get("rows")
+            if not isinstance(rows, list) or not rows:
+                raise ValueError("document table rows are invalid")
+            width = len(rows[0]) if isinstance(rows[0], list) else 0
+            if not 1 <= width <= 32:
+                raise ValueError("document table rows are invalid")
+            table = document.add_table(rows=len(rows), cols=width)
+            table.style = "Table Grid"
+            for target_row, values in zip(table.rows, rows):
+                if not isinstance(values, list) or len(values) != width:
+                    raise ValueError("document table rows are invalid")
+                for target_cell, value in zip(target_row.cells, values):
+                    target_cell.text = _text(value)
         document.save(body)
         reopened = docx.Document(BytesIO(body.getvalue()))
-        validation = {"paragraph_count": len(reopened.paragraphs)}
+        validation = {
+            "paragraph_count": len(reopened.paragraphs),
+            "table_count": len(reopened.tables),
+        }
         mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         extension = ".docx"
     elif family == "spreadsheet":
