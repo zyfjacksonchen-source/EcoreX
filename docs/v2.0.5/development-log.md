@@ -977,3 +977,364 @@ environment failure until the product failure reproduces from known state.
   Runtime client test passed `56/56`, and the login/layout contract passed
   `3/3`. The stopped DMG is not a release candidate; a new frozen same-byte
   build must prove successful login before Hard19 acceptance resumes.
+
+### 2026-08-14 CU-205-MAC-35DF-DISCOVERY-002
+
+- The exact `35dfba71` arm64 DMG was downloaded once from R2 and kept in one
+  isolated HOME/data/workspace. Runtime owner challenge/HMAC proof and the
+  immutable release identity passed. The same process then exercised the full
+  Cow Hard19 catalog, Office4 create/edit/inspect, managed Web Search followed
+  by stateful Browser navigation/snapshot/evaluate, cold OCR, single image
+  generation, cross-model image editing, Scheduler lifecycle, memory controls,
+  local/Hub Skills, channel entry points, and Agent desktop update admission.
+- PASS evidence includes Hard19 `19/19`, Web Search with five readable results,
+  Browser continuity without a repeated URL, Office content validation,
+  one real `gpt-image-2-pro` generation and one real `gpt-image-2-pro` edit with
+  `fallback=false`, DeepSeek context continuity, Weixin QR generation, memory
+  learning/dream persistence, and the rounded macOS icon alpha boundary.
+- Findings were shifted left instead of patched in the running candidate. The
+  exact UI process was preserved read-only while the fixes below were tested
+  from source. Password rotation remains a Computer Use hand-off; legacy ECoreX
+  restoration remains a final-candidate disposable-profile test rather than a
+  mutation of the real multi-gigabyte user database.
+
+### 2026-08-14 CU-205-MAC-AUTH-HANDOFF-002
+
+- Login persistence completed in about 0.18 seconds, but the old renderer then
+  polled the old Runtime for about 20 seconds before Electron began replacing
+  it. The new immutable Runtime needed a further 21.6 seconds to provide owner
+  proof, producing the observed 68.68-second login despite an already committed
+  session.
+- Commit `4d34d61e` calls the existing Electron `restartRuntime` hand-off as
+  soon as the successful desktop receipt arrives. Non-desktop clients retain
+  the bounded credential-rotation poll; authentication, durable session commit,
+  immutable loading, and owner proof are unchanged. The exact layout/login
+  contract, type-check, and Electron shell checks passed.
+
+### 2026-08-14 CU-205-OCR-OFFICE-ARTIFACT-003
+
+- OCR first received an attachment path missing the workspace segment, failed
+  immediately, and only succeeded after the model reconstructed the full path.
+  Commit `2ae1c14a` now projects the already-materialized attachment as the Cow
+  workspace-relative `.emate/attachments/...` reference; no retry, duplicate
+  file, schema fork, or host path bypass was added.
+- DOCX could not author a real table even though its reader already understood
+  one. Commit `dd994adf` adds the single shared strict rectangular table schema
+  to `office_documents`, carries it through the existing facade, and uses the
+  packaged `python-docx` writer. The create/edit/inspect regression proved a
+  real 2x2 table and retained heading-only/level behavior.
+- All four Office tools returned successful workspace files but no public
+  Artifact. Commit `c512cad8` projects successful create/edit results once at
+  the Cow `tool_execution_end` boundary into the existing scoped CAS; inspect
+  does not duplicate an Artifact and workspace escape fails closed. Web links
+  use a visible blue underlined focusable style, while arbitrary local paths
+  remain plain text and can open only through a trusted Artifact identity.
+
+### 2026-08-14 CU-205-IMAGE-USAGE-004
+
+- Production Usage showed one real image Artifact but recorded
+  `image_count=515` and `job_status=running`; the producer had reused provider
+  output tokens as image count and the pre-settlement job state as terminal
+  status. The same defect reproduced with a 229-output-unit image edit.
+- Commit `a02df6dc` records one completed fact for each now-single-image Codex
+  style provider result, retains the provider usage payload unchanged, records
+  failed results as no fact, and preserves exactly-once recovery. Old immutable
+  production facts were not rewritten. Exact tests passed `2/2`; affected
+  image/management tests passed `35/35`.
+
+### 2026-08-14 CU-205-LOCAL-SKILL-CALL-005
+
+- Local ZIP and Hub installation both staged and enabled valid CAS revisions,
+  but DeepSeek and Luna guessed from the Skill name instead of following the
+  unique `SKILL.md` instruction. The live Agent already refreshed Skills each
+  turn; the shared prompt builder discarded the whole Skill section unless the
+  removed legacy `skill_search/read/run` trio was present.
+- Commit `93630574` keeps the old controlled-tool path intact and, on the Cow
+  Hard19 path, includes only enabled, CAS-verified user `extra` Skill
+  instructions. Disable removes them on the next turn; built-in Skills are not
+  bulk-inlined. The exact same-Agent enable/disable regression passed and the
+  affected Skill/Cow set passed `21/21`.
+
+### 2026-08-14 CU-205-FEISHU-OAUTH-006
+
+- Feishu personal OAuth failed twice before any browser URL existed. Direct
+  Runtime timing showed a 1.218-second upstream HTTP 400, not a five-second UI
+  timeout. Public production returned 404 for the managed Feishu begin route
+  while adjacent managed routes returned 401, proving the desktop feature was
+  enabled before its server route/secrets/application were ready.
+- Commit `227a16b3` adds a no-credential, no-retry, five-second release gate:
+  the managed begin route must return 401 before any WebUI/Runtime build may
+  start. Commit `ca7d00b3` maps `connector_auth_error` to an accurate
+  authorization-start failure instead of claiming that e-Mate did not respond.
+  Real OAuth still requires the server-only Feishu configuration and application
+  publication; the client does not fabricate or weaken a callback URL.
+
+### 2026-08-14 CU-205-DESKTOP-UPDATE-RECEIPT-007
+
+- The old candidate returned a local update result with
+  `status=accepted, completed=false, willRelaunch=true` but rendered the Tool
+  row as completed. Commit `e1f80b41` keeps the invocation terminal without
+  claiming installation: the public summary and Timeline label now say the
+  request was accepted and is waiting for the desktop updater. The original
+  structured result remains unchanged.
+- This builds on `c3b2de98`, which restricts the tool to the current packaged
+  Electron owner and requires its nonce/tool-call-bound receipt. No owner,
+  cloud execution, stale receipt, or rejected watcher can report acceptance.
+  The final candidate must still prove the existing electron-updater/R2
+  2.0.4-to-2.0.5 relaunch and new owner receipt on both platforms.
+
+### 2026-08-14 CU-205-MEMORY-FLUSH-LATENCY-008
+
+- Three same-thread probes reached Agent Done in 3.6--5.1 seconds, including an
+  `ls` Tool that itself completed in 0.00 seconds, but the UI reached terminal
+  state only after 12, 13, and 30 seconds. Each turn crossed the trim threshold;
+  the enterprise worker performed an unbounded join on Cow's already-background
+  MemoryFlush after `agent_end`, adding 9--26 seconds to the hot path.
+- Commit `23241a5a` removes that join, tracks every existing background flush,
+  and gives worker shutdown one shared one-second best-effort drain. Original
+  conversation messages are persisted first; when the summary finishes it is
+  visible to the same live Agent on the next turn. Exact tests passed `2/2` and
+  affected memory/context/worker/Cow tests passed `55/55`.
+
+### 2026-08-14 CU-205-TURN-STEP-LIMIT-009
+
+- A long poster task stopped after the configured twentieth Agent step even
+  though the workspace and context were still valid, then exposed an internal
+  “single run maximum steps” explanation to the user. The stop came from the
+  Cow stream loop's fixed `max_turns` condition and its forced no-tool summary,
+  not from provider context exhaustion.
+- Commit `afc3a4d8` removes the fixed turn termination while retaining the
+  legacy constructor/config fields as compatibility inputs. Normal long work
+  now continues until model completion and keeps the existing whole-turn trim,
+  MemoryFlush summary, and provider-overflow aggressive trim/retry paths.
+  User cancellation and tool-call idempotency remain active; deterministic
+  same-tool/same-arguments non-progress is terminal instead of an infinite
+  loop.
+- The red regression previously stopped at a threshold of two and now reaches
+  the fourth model call and completes. Four exact tests and 17 affected Cow
+  context/cancel/provider-stream/duplicate-call checks passed.
+
+### 2026-08-14 CU-205-SESSION-RECOVERY-010
+
+- An already-selected conversation could temporarily have no projected turns
+  during catalog/SSE recovery. Timeline treated that transport state as a new
+  task and rendered the removed general/project conversation selector. The
+  same reconnect catch persisted a global “e-Mate temporarily did not
+  respond” banner even though cursor replay and bounded backoff were already
+  recovering automatically.
+- Commit `655c07a2` makes a selected empty conversation render only a neutral
+  in-conversation empty state; the old selector can be reached only from the
+  real no-thread Home dashboard. Transient network, 429, and 503 stream errors
+  stay inside existing cursor replay and 0.5--8-second bounded backoff. Auth,
+  permission, missing-resource, invalid-input, and event-contract errors remain
+  visible, and the stream is marked open only after HTTP SSE really opens.
+- Exact renderer/recovery checks passed `22/22`; Runtime client, language,
+  product-language, and Timeline affected checks passed `92/92`; contracts and
+  TypeScript checks passed.
+
+### 2026-08-14 CU-205-CODEXLIKE-REFERENCE-EDIT-011
+
+- A reference-poster edit tried unsupported pixel dimensions, then 3:4 and
+  9:16, and finally dropped the reference to redraw from prose. This produced
+  repeated unfinished rows and broke the user's text/layout fidelity request.
+- Commit `26ba2e85` keeps the single Codex-style image call: the model-visible
+  schema exposes only `auto`, `1024x1024`, `1536x1024`, and `1024x1536`; legacy
+  sizes normalize once to `auto`; the current-turn attachment/reference is
+  bound even when the model omits it, preserving Artifact lineage. After a
+  deterministic failure, later same-turn changes to size, prompt, or reference
+  cannot call the provider again; a new user turn may retry.
+- No batch/tasks path, second provider, or fallback redraw was added. Successful
+  Pro results retain `gpt-image-2-pro` and `fallback=false`. Image facade,
+  provider, managed integration, and release-pack checks passed `49/49`.
+
+### 2026-08-14 CU-205-COW-SIDEBAR-PREVIEW-012
+
+- The e-Mate renderer had made the sidebar permanently visible on desktop and
+  limited its existing close/open state to mobile. Office Artifact cards also
+  preferred the system `open` action, while their authenticated preview
+  endpoint returned raw OOXML bytes that Chromium cannot render in-app.
+- Commit `f58d9c6d` restores one desktop navigation toggle; hiding the sidebar
+  changes the existing shell to a single content column, while the mobile
+  drawer behavior is unchanged. Artifact cards now prefer the existing preview
+  action. PDF/media retain their existing rendition path; DOCX/XLSX/PPTX use a
+  bounded, script-free, no-external-resource semantic HTML preview generated
+  from validated OOXML. Native open/reveal/download remain secondary actions,
+  and arbitrary local paths are never linkified.
+- Artifact API/classification/hardening affected checks passed `58/58`; preview,
+  layout, lazy-feature, and accessibility contracts passed `38/38`; TypeScript,
+  Ruff, and diff checks passed. The 8-file cross-boundary change was isolated
+  and received the expanded affected checks required by the project rules.
+
+### 2026-08-14 CU-205-WINDOWS-ISOLATED-SOURCE-013
+
+- The Windows source gate now runs from a disposable acceptance root with its
+  own HOME, USERPROFILE, LOCALAPPDATA, APPDATA, TEMP, npm/uv caches, Node
+  22.23.1, and CPython 3.11.9. The Python base executable remains inside that
+  root, so an installed system Python, Node, or VC runtime cannot make a clean
+  user package appear healthy. The final installer must still prove that the
+  loaded `msvcp140.dll` is app-local rather than inherited from System32.
+- Three Windows-only failures were shifted left. Commit `ebc8a635` uses the
+  standard-library file identity comparison for Knowledge directory leases,
+  renders attachment references with POSIX separators for Cow prompts, and
+  restores direct unrestricted Cow Shell execution for `danger-full-access`;
+  `workspace-write` keeps its OS-enforced sandbox and Windows process-tree
+  cleanup is unchanged.
+- The three exact regressions passed `3/3`; the affected Windows Knowledge,
+  attachment, and process contracts passed `53` with two platform skips.
+  Electron startup/update contracts passed `18` with one skip, and the
+  isolated MSVCP/PE package-shape set passed `8/8`. No installer was built or
+  launched during this development gate.
+
+### 2026-08-14 CU-205-COW-WEBUI-014
+
+- Cow 2.1.5 treats its desktop client and browser console as two views of one
+  Runtime and one local data plane. Commit `2b280e17` adds the same independent
+  WebUI entry to the e-Mate download page and opens the current verified
+  `backend.origin` from the macOS application menu or Windows tray. A dynamic
+  loopback port remains authoritative, so port-conflict recovery cannot leave
+  the browser command pointing at another process.
+- The browser page explicitly requires the desktop Runtime and does not start
+  a second Agent, state store, schema interpreter, or user-data directory.
+  Desktop and WebUI therefore share tasks, conversations, tools, and files.
+  Public-site checks passed `6` with one environment skip, the ten-asset static
+  gate passed, and Electron shell contracts passed `17/17`.
+- Cow's separate standalone CLI installer is not yet claimed complete. The
+  existing e-Mate release publishes only the three desktop packages and its
+  old Windows bootstrap used a different data root. Restoring that one-line
+  installer requires one unified data root plus admitted R2 bootstrap objects;
+  publishing a placeholder URL would create two incompatible local products.
+
+### 2026-08-14 CU-205-FEISHU-QR-ROOT-015
+
+- The reported QR flow did not fail while sending an otherwise valid Feishu
+  login. The managed begin endpoint returned public HTTP 404 before it could
+  create an OAuth challenge, while an adjacent managed endpoint returned 401.
+  The Agent prompt nevertheless instructed a nonexistent `feishu_cli` and
+  allowed Browser plus `send`, so it could show or describe an unrelated login
+  QR and imply that scanning it would connect the e-Mate Connector.
+- Commit `04422d35` derives the instruction from the actual Tool catalog. A Cow
+  environment that really publishes `feishu_cli` keeps the upstream flow; the
+  managed e-Mate catalog accepts only its session-owned Connector challenge.
+  Browser automation, raw shell, `send`, screenshots, QR codes, and text can no
+  longer substitute for authorization. If the challenge is unavailable, the
+  Agent reports that exact blocker.
+- The affected Cow admission and same-origin Connector checks passed `10/10`.
+  Production secret values or booleans were not inferred: the existing operator
+  credential was unavailable. Real Feishu acceptance remains blocked until the
+  server enables its Connector with all three server-only secrets, the exact
+  loopback callback URI, published app capabilities, scopes, and test-account
+  availability; the existing release readiness gate requires HTTP 401 before a
+  desktop candidate can be built.
+
+### 2026-08-14 CU-205-ENTERPRISE-SIDECAR-016
+
+- A full local Runtime audit found two enterprise claims on the Cow hot path.
+  Turn admission synchronously called the managed model-catalog provider even
+  though bootstrap had already validated an immutable revision; a 200ms fault
+  injection added about 200ms to every Turn. Historical `admin_denies` claims
+  did not hide a Tool directly, but they still changed the managed-session
+  runtime binding and refresh policy, so an administrator could restart or
+  reject an otherwise unchanged local Runtime.
+- Commits `796fea2f` and `b554b458` move model discovery to the explicit bounded
+  bootstrap/catalog boundary and make `admin_denies` signed audit facts only.
+  Turn admission reads the current immutable snapshot with zero catalog-provider
+  calls and zero management RTT. The Gateway still fences the real model request
+  against that revision; login/session authentication remains local and model
+  calls retain the account bearer. Audit/trace outbox dispatch, usage reads,
+  auth refresh, and update polling remain background or explicit endpoints.
+- The audit found no enterprise dependency in local Skills, MCP, Scheduler,
+  Browser, Shell, Office, Image, tool schemas/results, context compaction, or
+  MemoryFlush. Fault-injection and exact boundary checks passed `11/11`, the
+  managed-session affected set passed `17/17`, and five post-integration
+  high-value regressions passed on the authoritative branch.
+
+### 2026-08-14 CU-205-CODEXLIKE-CUSTOM-SIZE-017
+
+- Codex's current built-in ImageGen contract exposes only a prompt and one of
+  the mutually exclusive reference-injection mechanisms. It does not expose
+  provider model, quality, output pixels, aspect ratio, crop, fit, or padding
+  to the model. The previous e-Mate schema did expose size and quality, causing
+  the Agent to guess unsupported pixel/aspect values and retry a fixed-size Pro
+  upstream. The provider could then make a second billed request to the regular
+  image model after a definite Pro rejection.
+- Commit `06065ddc` removes those model-visible controls. Runtime submits one
+  `gpt-image-2-pro` request with `size=auto`, keeps reference Artifact lineage,
+  and reads the completed CAS raster to return truthful `width`, `height`, and
+  `actual_size`. It does not claim the user's requested exact pixels and does
+  not crop, stretch, or pad without an explicit unambiguous intent. A Pro model
+  rejection is terminal; no second model, provider, retry, batch, or task path
+  is used, and successful usage remains one billed provider result with
+  `fallback=false`.
+- Four red contract/provider regressions turned green. The complete focused
+  and affected image set passed `59/59`; after mainline integration the two
+  direct facade/provider files passed `31/31`. Ruff and diff checks passed, and
+  no real image provider request was made during development verification.
+
+### 2026-08-14 CU-205-USAGE-FIELD-RECONCILIATION-018
+
+- Historical usage rows without an exact immutable product generation and
+  version were previously omitted from the product split or displayed as zero.
+  Commit `1b9c514e` classifies missing, empty, and legacy identities as
+  `unknown/null`; it never attributes them to ECoreX or e-Mate. For tasks,
+  usage records, Tokens, image facts, and image count, the ledger now proves
+  `all = emate + ecorex + unknown`.
+- Requested model no longer substitutes for actual model. Image fallback is a
+  true/false/null fact, and Token/cache/image values distinguish a reported
+  zero from an unreported field. Usage scenarios are derived only from
+  structured tool IDs, Artifact kinds, and event types; prompt words cannot
+  classify a task. API, UI, summary CSV, RAW CSV, and RAW JSON share the same
+  nullable fields and data dictionary.
+- The exact mixed historical/current calibration passed `24/24`; the affected
+  Usage Panel and atomic-release set passed `30/30`, with Python compile, Node
+  syntax, and Ruff checks green. The production read-only endpoint could not
+  be reached from the development host because TLS ended with
+  `SSL_ERROR_SYSCALL`, so no production counts were inferred or rewritten.
+
+### 2026-08-14 CU-205-FOUR-CHANNEL-AGENT-CONNECT-019
+
+- The four connection UIs existed, but a Cow Agent conversation could not own
+  their formal start/poll lifecycle. Commit `60cb6aa2` adds one model-visible
+  `external_connections(status|start|poll)` boundary and reuses the existing
+  Feishu Connector, Cow MCP OAuth, WeChat ChannelSelfService QR, and DingTalk
+  ChannelManager state machines. It does not add a credential store, transport,
+  or second dynamic Tool registrar.
+- Feishu flows are session-bound and fail accurately while the production begin
+  route remains HTTP 404. Tencent Docs now defaults to its official OAuth MCP
+  path and, after user authorization, still hot-registers Tools through the Cow
+  ToolManager. WeChat returns only a verified Runtime QR as a 0600 workspace
+  Artifact and waits for a user scan. DingTalk requests credential handoff when
+  needed and exposes only presence/configuration booleans, never secret values.
+  Browser, raw shell, screenshots, text, and `send` cannot impersonate a
+  successful connection.
+- Focused and affected Python sets passed `44/44` and `50/50`; TypeScript and
+  the Tencent Docs Playwright contract passed. No external message was sent and
+  no production credential or service state was changed. Real completion
+  remains blocked on each provider's account/scan/credential handoff and, for
+  Feishu, the server route plus its three server-only secrets and published app.
+
+### 2026-08-14 CU-205-COW-STANDALONE-WEBUI-020
+
+- Commit `86693073` completes the previously deferred Cow-style standalone
+  entry without creating another product. Desktop and Bootstrap now use the
+  same canonical `~/.emate` data root on Windows and macOS, while an explicit
+  install root remains available. Both views use the same Runtime owner,
+  conversations, workspace, Tools, and local stores.
+- The existing R2 publisher now admits the desktop objects plus every artifact
+  named by the signed Runtime manifest, including all three current Bootstrap
+  targets, with the same at-most-three parallel uploads, per-object resume,
+  metadata digest, authenticated HEAD, public HEAD, and first/last Range proof.
+  Feed generation binds those exact bytes and atomically publishes the public
+  Bootstrap pointer with macOS/Windows one-line installers only after its
+  freshness signature is admitted. Until then the download-page entry remains
+  hidden and the script aliases remain 404.
+- Public pointers and installers contain only the R2/same-origin paths; old
+  GitHub, proxy, and mvdcm download sources are excluded. Linux is not displayed
+  because the signed release has no Linux Bootstrap artifact. Publisher, Feed,
+  deploy, data-root, and public-site affected checks passed; static site,
+  Python compile, and diff checks passed. Post-integration commit `0b2c11e4`
+  made the Feed script self-contained when invoked directly from a source
+  checkout and advanced the workflow's exact UI-tree admission pin; the full
+  Feed file then passed `12/12` with one environment skip. No Runtime,
+  installer, upload, Feed activation, or production change was made. A
+  production freshness signer is still required before this entry can become
+  visible.
