@@ -56,11 +56,16 @@
       </article>
       <article>
         <strong>任务状态</strong>
-        <span>任务分为成功、失败、中止；中止表示用户主动停止任务，不再混入失败。</span>
+        <span>任务分为成功、部分完成、失败、中止、进行中；中止仅认 run.cancelled，工具步骤失败但最终有结果为部分完成。</span>
       </article>
       <article>
         <strong>使用场景</strong>
-        <span>创作内容=创作文案/标题/报告/脚本等；制作素材=制作图片、海报图片编辑等；搜索查询=网页搜索抓取等；处理数据=数据处理（Excel/word/ppt/pdf）等；编辑文档=操作在线文档（飞书/腾讯文档）等；交付通知=打包/展示/发消息/提醒等；系统维护=环境检查/排错/配置等。</span>
+        <span>只按 tool_id、artifact_kind、event_type 等结构化事实固定映射；不扫描提示词、说明文字或文件名。无法可靠分类统一归“其他/未标识”。</span>
+      </article>
+      <article>
+        <strong>产品代际对账</strong>
+        <span id="generationReconciliation">等待服务器对账数据</span>
+        <span id="modelReconciliation">等待实际模型与 fallback 数据</span>
       </article>
     </section>
 
@@ -71,7 +76,8 @@
           <select id="productGeneration">
             <option value="all">全部</option>
             <option value="emate">新版 e-Mate</option>
-            <option value="ecorex">旧版 EcoreX / 历史未标识</option>
+            <option value="ecorex">EcoreX（有 exact 版本）</option>
+            <option value="unknown">旧版未标识 / 不可分类</option>
           </select>
         </label>
         <label>
@@ -97,11 +103,24 @@
       </div>
       <div class="status-help">
         <strong>任务状态说明：</strong>
-        <span>成功 = 当天有成功完成的任务</span>
+        <span>成功 = 任务存在完成终态且无失败/取消/受限步骤</span>
+        <span>部分完成 = 有完成终态，但至少一个工具步骤失败/取消/受限</span>
         <span>失败 = 已接收但未成功且非用户主动停止</span>
-        <span>中止 = 用户主动停止任务</span>
+        <span>中止 = 存在 run.cancelled 用户主动停止事实</span>
+        <span>进行中 = 已接收但没有终态</span>
       </div>
     </section>
+
+    <details class="panel table-panel">
+      <summary><strong>数据字段、单位与权威来源</strong></summary>
+      <p class="muted small">以下字典由本次 API 投影一并返回；空值/未上报与数值 0 严格区分。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>字段</th><th>单位</th><th>权威表 / 字段</th><th>null / unknown 语义</th></tr></thead>
+          <tbody id="dataDictionaryBody"></tbody>
+        </table>
+      </div>
+    </details>
 
     <section class="analysis-grid">
       <div class="panel wide">

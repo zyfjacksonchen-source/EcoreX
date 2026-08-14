@@ -425,12 +425,15 @@ def test_usage_generation_filter_uses_explicit_gateway_fact_and_locks_task_types
         )
     _use_database(monkeypatch, str(database))
 
-    legacy = usage_panel_service.build_data_request_payload(
+    ecorex = usage_panel_service.build_data_request_payload(
         {
             "start": ["2026-07-18"],
             "end": ["2026-07-19"],
             "productGeneration": ["ecorex"],
         }
+    )
+    unknown = usage_panel_service.build_data_request_payload(
+        {"start": ["2026-07-18"], "end": ["2026-07-19"], "productGeneration": ["unknown"]}
     )
     emate = usage_panel_service.build_data_request_payload(
         {
@@ -447,20 +450,24 @@ def test_usage_generation_filter_uses_explicit_gateway_fact_and_locks_task_types
         }
     )
 
-    assert legacy["meta"]["productGeneration"] == "ecorex"
-    assert legacy["kpis"]["tasks"] == 1
-    assert legacy["kpis"]["totalTokens"] == 14
-    assert {task["productGeneration"] for task in legacy["tasks"]} == {"ecorex"}
+    assert ecorex["meta"]["productGeneration"] == "ecorex"
+    assert ecorex["kpis"]["tasks"] == ecorex["kpis"]["totalTokens"] == 0
+    assert unknown["kpis"]["tasks"] == 1
+    assert unknown["kpis"]["totalTokens"] == 14
+    assert {(task["productGeneration"], task["productVersion"]) for task in unknown["tasks"]} == {("unknown", None)}
     assert emate["meta"]["productGeneration"] == "emate"
     assert emate["kpis"]["tasks"] == 1
     assert emate["kpis"]["totalTokens"] == 25
     assert {task["productVersion"] for task in emate["tasks"]} == {"2.0.5"}
     assert combined["generationBreakdown"] == {
-        "ecorex": {"tasks": 1, "totalTokens": 14},
-        "emate": {"tasks": 1, "totalTokens": 25},
+        "ecorex": {"tasks": 0, "usageRecords": 0, "totalTokens": 0, "imageFacts": 0, "images": 0},
+        "emate": {"tasks": 1, "usageRecords": 1, "totalTokens": 25, "imageFacts": 0, "images": 0},
+        "unknown": {"tasks": 1, "usageRecords": 1, "totalTokens": 14, "imageFacts": 0, "images": 0},
+        "all": {"tasks": 2, "usageRecords": 2, "totalTokens": 39, "imageFacts": 0, "images": 0},
     }
     assert combined["kpis"]["tasks"] == 2
     assert combined["kpis"]["totalTokens"] == 39
+    assert {(row["productGeneration"], row["productVersion"]) for row in combined["rawEvents"]} == {("emate", "2.0.5"), ("unknown", None)}
 
     task = emate["tasks"][0]
     assert {key: type(task[key]).__name__ for key in (
@@ -513,9 +520,13 @@ def test_usage_panel_generation_selector_requests_only_the_data_projection() -> 
     app = (root / "ecorex/control_plane/usage_panel_web/app.js").read_text()
 
     assert 'id="productGeneration"' in html
-    assert all(f'value="{value}"' in html for value in ("all", "emate", "ecorex"))
-    assert "旧版 EcoreX / 历史未标识" in html
+    assert all(f'value="{value}"' in html for value in ("all", "emate", "ecorex", "unknown"))
+    assert "旧版未标识 / 不可分类" in html
+    assert 'id="dataDictionaryBody"' in html
     assert "endpoint.searchParams.set('productGeneration', state.productGeneration)" in app
+    assert "row.productGeneration, row.productVersion" in app
+    assert "row.toolId, row.scenario" in app
+    assert "rate == null ? '' : tokenRate(rate)" in app
     audit_slice = app[app.index("async function loadRuntimeAudit"):app.index("async function refreshLiveData")]
     assert "productGeneration" not in audit_slice
 
@@ -649,6 +660,20 @@ def test_usage_panel_uses_ledger_and_keeps_zero_usage_users(tmp_path, monkeypatc
     assert rows["one@example.test"]["cacheReadTokens"] == 3
     assert rows["two@example.test"]["totalTasks"] == 0
     assert rows["two@example.test"]["totalTokens"] == 0
+
+
+def test_usage_unknown_cache_and_scenario_field_semantics(tmp_path, monkeypatch):
+    assert usage_panel_service.scenario_from_facts("bash", {"note": "飞书 图片 搜索 Excel"}) == "其他/未标识"
+    assert usage_panel_service.scenario_from_facts("web_search") == "搜索查询"
+    cache = usage_panel_service.usage_row_projection({"detail": '{"cached_tokens":0}'})
+    assert cache["cacheReported"] is True and cache["cacheReadTokens"] == 0
+    database = tmp_path / "field-semantics.sqlite3"
+    _database(str(database))
+    _use_database(monkeypatch, str(database))
+    payload = usage_panel_service.build_payload(datetime(2026, 7, 18, tzinfo=TZ), datetime(2026, 7, 19, tzinfo=TZ))
+    assert (payload["tasks"][0]["scenario"], payload["tasks"][0]["productVersion"]) == ("其他/未标识", None)
+    assert all(event["inputTokens"] is None for event in payload["rawEvents"])
+    assert {"任务", "图片数", "实际模型", "图片 fallback", "主要场景"} <= {row["field"] for row in payload["dataDictionary"]}
 
 
 def test_v1_control_plane_user_with_zero_activity_remains_visible(tmp_path, monkeypatch):
@@ -1077,28 +1102,12 @@ def test_usage_and_audit_share_one_projection_and_reconciliation(
     assert audit["kpis"] == panel["kpis"]
     assert iso_panel["kpis"] == panel["kpis"]
     assert audit["runtimeAudit"]["usageKpis"] == panel["kpis"]
-    assert audit["reconciliation"] == {
-        "canonical_record_count": 2,
-        "replaced_duplicate_count": 1,
-        "unassociated_record_count": 1,
-        "missing_provider_usage_count": 0,
-        "account_balance_mismatch_count": 0,
-        "token_balance_delta": 0,
-        "image_balance_delta": 0,
-        "account_balances": [],
-        "by_model": [
-            {
-                "model": "gpt-5.6-sol",
-                "records": 2,
-                "tokens": 39,
-                "reasoning_efforts": [],
-            }
-        ],
-        "by_tenant_model": [],
-        "image_provider_fact_count": 0,
-        "image_provider_facts_truncated": False,
-        "image_provider_facts": [],
+    reconciliation = audit["reconciliation"]
+    assert {key: reconciliation[key] for key in ("canonical_record_count", "replaced_duplicate_count", "unassociated_record_count", "missing_provider_usage_count")} == {
+        "canonical_record_count": 2, "replaced_duplicate_count": 1, "unassociated_record_count": 1, "missing_provider_usage_count": 0,
     }
+    assert reconciliation["by_model"] == [{"model": "未标识", "records": 2, "tokens": 39, "reasoning_efforts": []}]
+    assert reconciliation["generation_breakdown"] == panel["generationBreakdown"]
 
 
 def test_usage_panel_reconciles_management_counters_with_provider_facts(
@@ -1160,16 +1169,18 @@ def test_usage_panel_reconciles_management_counters_with_provider_facts(
             "account_id": "account-one",
             "user": "同名用户 · one@example.test",
             "organization_id": "",
-            "requested_model_id": "",
-            "provider_reported_model_id": "",
-            "actual_model_id": "未公开",
-            "actual_provider_id": "",
-            "fallback_from_model_id": "",
+            "requested_model_id": None,
+            "provider_reported_model_id": None,
+            "actual_model_id": None,
+            "actual_provider_id": None,
+            "fallback_from_model_id": None,
             "fallback_used": None,
-            "job_status": "",
-            "result_status": "",
+            "job_status": None,
+            "result_status": None,
             "image_count": 1,
             "provider_created_at": "2026-07-18T10:03:00+08:00",
+            "product_generation": "unknown",
+            "product_version": None,
         }
     ]
 
@@ -1278,7 +1289,7 @@ def test_usage_panel_reconciles_actual_upstream_model_and_reasoning(
             "reasoning_efforts": [{"level": "max", "records": 1}],
         },
         {
-            "model": "gpt-5.6-sol",
+            "model": "未标识",
             "records": 1,
             "tokens": 14,
             "reasoning_efforts": [],

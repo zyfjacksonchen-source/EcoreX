@@ -16,8 +16,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from ecorex import __version__
 
 VERSION = __version__
-USAGE_PROJECTION_VERSION = "e-mate-2.0-usage-3"
-PRODUCT_GENERATIONS = frozenset({"all", "emate", "ecorex"})
+USAGE_PROJECTION_VERSION = "e-mate-2.0-usage-4"
+PRODUCT_GENERATIONS = frozenset({"all", "emate", "ecorex", "unknown"})
 DB_PATH = "/srv/ecorex-agent-admin/data/ecorex-admin.sqlite3"
 CONTROL_PLANE_DB_PATH = os.environ.get(
     "ECOREX_CONTROL_PLANE_DATABASE_PATH",
@@ -133,6 +133,18 @@ DETAIL_KEY_ZH = {
     "output_tokens": "输出 Token",
     "total_tokens": "总 Token",
 }
+DATA_DICTIONARY = (
+    ("任务", "次", "sync_events.request_id + event_type；gateway_requests.request_id + gateway_model_attempts.turn_id", "缺少 run.accepted/Gateway 请求不计任务；同一 Turn 的多轮模型请求合并为 1 次"),
+    ("事件", "条", "sync_events.id + event_type", "每条不可变运行事件计 1 条；事件数不等于任务数"),
+    ("成功/部分完成/失败/中止/进行中", "个任务", "sync_events.event_type/status；gateway_requests.terminal_event_type", "中止仅认 run.cancelled；无终态为进行中；工具失败后仍有完成结果为部分完成"),
+    ("输入/输出/总 Token", "Token", "usage_events.input_tokens/output_tokens/total_tokens；gateway_events.payload_json.usage；admin_ops_provider_usage_facts 同名字段", "无用量事实为 null/未上报，不解释为 0；同 request_id 以 Gateway/结算事实替换旧副本"),
+    ("缓存读取/写入 Token", "Token", "usage_events.detail.cache_read_input_tokens/cache_write_input_tokens（含兼容字段）", "字段缺失为未上报；已上报数值 0 才是 0；命中率分母为 input_tokens"),
+    ("图片数", "张", "admin_ops_provider_usage_facts.image_count WHERE usage_kind='image'", "旧事实缺产品标识仍计入 unknown；没有事实为未上报，不用产物数代替"),
+    ("实际模型", "次请求/Token", "gateway_model_attempts.upstream_model_id；图片为 admin_ops_provider_usage_facts.actual_model_id", "字段为空为未标识；不得用 requested model 补作 actual model"),
+    ("图片 fallback", "次图片事实", "admin_ops_provider_usage_facts.fallback_used/fallback_from_model_id", "true/false 为已上报；null 为旧事实未上报"),
+    ("主要场景", "个任务", "sync_events.detail.tool_id/tool、artifact_kind 与 event_type 的固定映射", "只使用结构化标识；不扫描提示词/自然语言；无法证明时归其他/未标识"),
+    ("产品代际/版本", "个任务/Token/张", "gateway_requests.product_generation/product_version；admin_ops_provider_usage_facts 同名字段", "仅 generation in {ecorex,emate} 且 version 为 exact 非 legacy 值时可分类；否则为 unknown/null"),
+)
 
 
 def parse_date(value: str, fallback: datetime) -> datetime:
@@ -322,6 +334,10 @@ def token_number(value) -> int:
     return 0
 
 
+def nullable_text(value: object) -> str | None:
+    return str(value) if value not in (None, "") else None
+
+
 def token_usage_from_detail(value: str) -> dict:
     obj = json_loads(value, {})
     usage = {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0, "hasUsage": None}
@@ -367,6 +383,12 @@ def token_usage_from_detail(value: str) -> dict:
 
 def canonical_email(value: object) -> str:
     return str(value or "").strip().casefold()
+
+
+def product_identity_values(generation: object, version: object) -> tuple[str, str | None]:
+    generation = str(generation or "").strip().casefold()
+    version = str(version or "").strip()
+    return (generation, version) if generation in {"ecorex", "emate"} and version and version.casefold() != "legacy" else ("unknown", None)
 
 
 def parse_product_generation(query: dict[str, list[str]]) -> str:
@@ -729,16 +751,11 @@ def usage_row_projection(row: dict) -> dict:
     detail = json_loads(row.get("detail"), {})
     if not isinstance(detail, dict):
         detail = {}
-    cache_read = token_number(
-        detail.get("cache_read_input_tokens")
-        or detail.get("cacheReadInputTokens")
-        or detail.get("cached_tokens")
-        or detail.get("cachedTokens")
-    )
-    cache_write = token_number(
-        detail.get("cache_write_input_tokens")
-        or detail.get("cacheWriteInputTokens")
-    )
+    read_keys = ("cache_read_input_tokens", "cacheReadInputTokens", "cached_tokens", "cachedTokens")
+    write_keys = ("cache_write_input_tokens", "cacheWriteInputTokens")
+    cache_reported = any(key in detail for key in read_keys + write_keys)
+    cache_read = token_number(next((detail[key] for key in read_keys if key in detail), None))
+    cache_write = token_number(next((detail[key] for key in write_keys if key in detail), None))
     usage_source = str(
         detail.get("usageSource")
         or detail.get("usage_source")
@@ -750,6 +767,7 @@ def usage_row_projection(row: dict) -> dict:
         "totalTokens": total_tokens,
         "cacheReadTokens": max(0, cache_read),
         "cacheWriteTokens": max(0, cache_write),
+        "cacheReported": cache_reported,
         "usageSource": usage_source[:64],
         "estimated": usage_source.casefold() == "estimated",
     }
@@ -789,52 +807,43 @@ def result_class(status: str, event_type: str) -> str:
     return "过程事件"
 
 
-SCENARIO_ORDER = ["创作内容", "制作素材", "搜索查询", "处理数据", "编辑文档", "交付通知", "系统维护"]
+SCENARIO_ORDER = ["制作素材", "搜索查询", "处理数据", "编辑文档", "交付通知", "系统维护", "其他/未标识"]
+SCENARIO_TOOL_IDS = {
+    "制作素材": {"vision", "ocr", "imagegen", "image", "image_edit"},
+    "搜索查询": {"web_search", "web_fetch"},
+    "处理数据": {"data", "spreadsheet", "sheet"},
+    "编辑文档": {"feishu_cli", "lark_doc", "lark_sheets", "tencent_docs"},
+    "交付通知": {"send", "scheduler"},
+    "系统维护": {"host_diagnostics"},
+}
+SCENARIO_ARTIFACT_KINDS = {"制作素材": {"image", "poster", "video"}, "处理数据": {"spreadsheet", "table", "dataset"}, "编辑文档": {"online_document", "lark_document", "tencent_document"}, "交付通知": {"package", "notification"}, "系统维护": {"diagnostic", "log"}}
+SCENARIO_EVENT_TYPES = {"message.sent": "交付通知", "notification.sent": "交付通知", "diagnostic.completed": "系统维护"}
 
 
-def scenario_from_tool(tool: str, detail: dict | None = None) -> str:
-    """Map old tool-centric buckets to the board taxonomy defined in the Tencent Doc."""
-    normalized = (tool or "").strip().lower()
-    text = json.dumps(detail or {}, ensure_ascii=False).lower()
-    if any(token in text for token in ("飞书", "lark", "腾讯文档", "docs.qq", "docx", "online doc")):
+def scenario_from_facts(tool: object = "", detail: dict | None = None, event_type: object = "") -> str:
+    detail = detail if isinstance(detail, dict) else {}
+    tool_id = str(tool or detail.get("tool_id") or detail.get("tool") or "").strip().casefold()
+    artifact_kind = str(detail.get("artifact_kind") or detail.get("artifactKind") or "").strip().casefold()
+    for scenario, identifiers in SCENARIO_TOOL_IDS.items():
+        if tool_id in identifiers:
+            return scenario
+    if tool_id.startswith(("mcp__feishu__", "mcp__lark__", "mcp__tencent_docs__")):
         return "编辑文档"
-    if any(token in text for token in ("xlsx", "excel", "csv", "word", "ppt", "pdf", "表格", "数据")):
-        return "处理数据"
-    if any(token in text for token in ("海报", "图片", "image", "ocr", "视觉", ".png", ".jpg", ".jpeg", ".webp")):
-        return "制作素材"
-    if any(token in text for token in ("搜索", "检索", "抓取", "http://", "https://", "网页")):
-        return "搜索查询"
-    if any(token in text for token in ("部署", "安装", "配置", "日志", "排错", "环境", "版本", "权限")):
-        return "系统维护"
-    if any(token in text for token in ("打包", "发送", "通知", "提醒", "展示", "预览")):
-        return "交付通知"
-
-    if normalized in {"feishu_cli", "lark_doc", "lark_sheets", "tencent_docs", "docs", "mcp"}:
-        return "编辑文档"
-    if normalized in {"vision", "ocr", "imagegen", "image", "image_edit"}:
-        return "制作素材"
-    if normalized in {"web_search", "web_fetch", "browser", "find"}:
-        return "搜索查询"
-    if normalized in {"read", "data", "spreadsheet", "sheet"}:
-        return "处理数据"
-    if normalized in {"write", "edit"}:
-        return "创作内容"
-    if normalized in {"send", "scheduler"}:
-        return "交付通知"
-    if normalized in {"bash", "host_diagnostics", "subagent", "terminal", "shell"}:
-        return "系统维护"
-    return "创作内容"
+    for scenario, identifiers in SCENARIO_ARTIFACT_KINDS.items():
+        if artifact_kind in identifiers:
+            return scenario
+    return SCENARIO_EVENT_TYPES.get(str(event_type or "").strip().casefold(), "其他/未标识")
 
 
 def task_status_category(rec: dict) -> str:
+    if rec.get("cancelled"):
+        return "中止"
     if rec.get("failed"):
         return "失败"
     if rec.get("completedAt") and rec.get("problemEvents"):
         return "部分完成"
     if rec.get("completedAt"):
         return "成功"
-    if rec.get("cancelled"):
-        return "中止"
     return "进行中"
 
 
@@ -936,7 +945,7 @@ def build_payload(
         """
         SELECT requests.request_id, requests.account_id,
                requests.organization_id, requests.model_id,
-               COALESCE(attempts.upstream_model_id, requests.model_id) AS actual_model_id,
+               attempts.upstream_model_id AS actual_model_id,
                attempts.reasoning_effort, attempts.thread_id, attempts.turn_id,
                requests.trace_id, requests.status, requests.terminal_event_type,
                requests.product_generation, requests.product_version,
@@ -960,7 +969,7 @@ def build_payload(
             """
             SELECT requests.request_id, requests.account_id,
                    requests.organization_id, requests.model_id,
-                   COALESCE(attempts.upstream_model_id, requests.model_id) AS actual_model_id,
+                   attempts.upstream_model_id AS actual_model_id,
                    attempts.reasoning_effort, attempts.thread_id, attempts.turn_id,
                    requests.trace_id, requests.status, requests.terminal_event_type,
                    requests.created_at, requests.updated_at
@@ -977,14 +986,14 @@ def build_payload(
             (start.isoformat(), end.isoformat(), start.isoformat(), end.isoformat()),
         )
         for row in gateway_request_rows:
-            row["product_generation"] = "ecorex"
-            row["product_version"] = "legacy"
+            row["product_generation"] = "unknown"
+            row["product_version"] = None
     if not gateway_request_rows:
         gateway_request_rows = _read_optional_rows(
             [GATEWAY_DB_PATH, DB_PATH],
             "gateway_requests",
             """
-            SELECT request_id, account_id, model_id, model_id AS actual_model_id,
+            SELECT request_id, account_id, model_id, NULL AS actual_model_id,
                    trace_id, status, terminal_event_type,
                    product_generation, product_version, created_at, updated_at
             FROM gateway_requests
@@ -1002,7 +1011,7 @@ def build_payload(
             [GATEWAY_DB_PATH, DB_PATH],
             "gateway_requests",
             """
-            SELECT request_id, account_id, model_id, model_id AS actual_model_id,
+            SELECT request_id, account_id, model_id, NULL AS actual_model_id,
                    trace_id, status, terminal_event_type, created_at, updated_at
             FROM gateway_requests
             WHERE (
@@ -1015,8 +1024,8 @@ def build_payload(
             (start.isoformat(), end.isoformat(), start.isoformat(), end.isoformat()),
         )
         for row in gateway_request_rows:
-            row["product_generation"] = "ecorex"
-            row["product_version"] = "legacy"
+            row["product_generation"] = "unknown"
+            row["product_version"] = None
     gateway_event_rows = _read_optional_rows(
         [GATEWAY_DB_PATH, DB_PATH],
         "gateway_events",
@@ -1031,17 +1040,14 @@ def build_payload(
 
     all_gateway_requests = gateway_request_rows
     gateway_product_identity = {
-        str(row.get("request_id") or "").strip(): (
-            str(row.get("product_generation") or "ecorex"),
-            str(row.get("product_version") or "legacy"),
-        )
+        str(row.get("request_id") or "").strip(): product_identity_values(row.get("product_generation"), row.get("product_version"))
         for row in all_gateway_requests
         if str(row.get("request_id") or "").strip()
     }
 
-    def product_identity(request_id: object) -> tuple[str, str]:
+    def product_identity(request_id: object) -> tuple[str, str | None]:
         return gateway_product_identity.get(
-            str(request_id or "").strip(), ("ecorex", "legacy")
+            str(request_id or "").strip(), ("unknown", None)
         )
 
     def generation_selected(generation: str) -> bool:
@@ -1057,10 +1063,10 @@ def build_payload(
             product_identity(usage_request_id(row, set(gateway_product_identity)))[0]
         )
     ]
-    artifact_rows = artifact_rows if generation_selected("ecorex") else []
+    artifact_rows = artifact_rows if generation_selected("unknown") else []
     gateway_request_rows = [
         row for row in all_gateway_requests
-        if generation_selected(str(row.get("product_generation") or "ecorex"))
+        if generation_selected(product_identity_values(row.get("product_generation"), row.get("product_version"))[0])
     ]
     selected_gateway_request_ids = {
         str(row.get("request_id") or "").strip() for row in gateway_request_rows
@@ -1072,7 +1078,7 @@ def build_payload(
     all_provider_fact_rows = provider_fact_rows
     provider_fact_rows = [
         row for row in all_provider_fact_rows
-        if generation_selected(str(row.get("product_generation") or "ecorex"))
+        if generation_selected(product_identity_values(row.get("product_generation"), row.get("product_version"))[0])
     ]
 
     observed_emails = {
@@ -1139,6 +1145,7 @@ def build_payload(
         normalized["_request_id"] = request_id
         normalized["_product_generation"] = generation
         normalized["_product_version"] = version
+        normalized["model"] = ""
         merged_usage[key] = normalized
         if request_id:
             legacy_request_ids.add(request_id)
@@ -1180,9 +1187,7 @@ def build_payload(
                     "requestId": request_id,
                     "organizationId": request.get("organization_id") or "",
                     "localModelId": request.get("model_id") or "",
-                    "actualModelId": request.get("actual_model_id")
-                    or request.get("model_id")
-                    or "",
+                    "actualModelId": request.get("actual_model_id"),
                     "reasoningEffort": request.get("reasoning_effort") or "",
                     "threadId": request.get("thread_id") or "",
                     "turnId": request.get("turn_id") or "",
@@ -1193,7 +1198,7 @@ def build_payload(
             "created_at": event.get("created_at") or request.get("updated_at"),
             "device_id": "",
             "session_id": request.get("trace_id") or "",
-            "model": request.get("actual_model_id") or request.get("model_id") or "",
+            "model": request.get("actual_model_id") or "",
             "organization_id": request.get("organization_id") or "",
             "reasoning_effort": request.get("reasoning_effort") or "",
             "provider": "managed_gateway",
@@ -1202,10 +1207,8 @@ def build_payload(
             "total_tokens": max(total_tokens, input_tokens + output_tokens),
             "_identity": identity,
             "_request_id": request_id,
-            "_product_generation": str(
-                request.get("product_generation") or "ecorex"
-            ),
-            "_product_version": str(request.get("product_version") or "legacy"),
+            "_product_generation": product_identity_values(request.get("product_generation"), request.get("product_version"))[0],
+            "_product_version": product_identity_values(request.get("product_generation"), request.get("product_version"))[1],
         }
     for request_id, row in gateway_completion_by_request.items():
         merged_usage[("request", request_id)] = row
@@ -1239,7 +1242,7 @@ def build_payload(
             "created_at": created.isoformat(),
             "device_id": "",
             "session_id": request.get("trace_id") or "",
-            "model": request.get("actual_model_id") or request.get("model_id") or "",
+            "model": request.get("actual_model_id") or "",
             "organization_id": fact.get("organization_id") or request.get("organization_id") or "",
             "reasoning_effort": request.get("reasoning_effort") or "",
             "provider": "managed_gateway",
@@ -1248,10 +1251,8 @@ def build_payload(
             "total_tokens": max(0, token_number(fact.get("total_tokens"))),
             "_identity": identity,
             "_request_id": request_id,
-            "_product_generation": str(
-                fact.get("product_generation") or "ecorex"
-            ),
-            "_product_version": str(fact.get("product_version") or "legacy"),
+            "_product_generation": product_identity_values(fact.get("product_generation"), fact.get("product_version"))[0],
+            "_product_version": product_identity_values(fact.get("product_generation"), fact.get("product_version"))[1],
         }
     usage_rows = sorted(
         merged_usage.values(),
@@ -1297,38 +1298,38 @@ def build_payload(
             continue
         account = canonical_email(fact.get("account_id"))
         identity = account_aliases.get(account, account)
+        fact_generation, fact_version = product_identity_values(fact.get("product_generation"), fact.get("product_version"))
         image_fact_rows.append(
             {
                 "job_id": str(fact.get("source_id") or ""),
                 "account_id": str(fact.get("account_id") or ""),
                 "user": labels_by_email.get(identity, identity or "未识别用户"),
                 "organization_id": str(fact.get("organization_id") or ""),
-                "requested_model_id": str(fact.get("requested_model_id") or ""),
-                "provider_reported_model_id": str(
-                    fact.get("provider_reported_model_id") or ""
-                ),
-                "actual_model_id": str(fact.get("actual_model_id") or "未公开"),
-                "actual_provider_id": str(fact.get("actual_provider_id") or ""),
-                "fallback_from_model_id": str(
-                    fact.get("fallback_from_model_id") or ""
-                ),
+                "requested_model_id": nullable_text(fact.get("requested_model_id")),
+                "provider_reported_model_id": nullable_text(fact.get("provider_reported_model_id")),
+                "actual_model_id": nullable_text(fact.get("actual_model_id")),
+                "actual_provider_id": nullable_text(fact.get("actual_provider_id")),
+                "fallback_from_model_id": nullable_text(fact.get("fallback_from_model_id")),
                 "fallback_used": (
                     None
                     if fact.get("fallback_used") is None
                     else bool(fact.get("fallback_used"))
                 ),
-                "job_status": str(fact.get("job_status") or ""),
-                "result_status": str(fact.get("result_status") or ""),
+                "job_status": nullable_text(fact.get("job_status")),
+                "result_status": nullable_text(fact.get("result_status")),
                 "image_count": max(0, token_number(fact.get("image_count"))),
                 "provider_created_at": created.isoformat(),
+                "product_generation": fact_generation,
+                "product_version": fact_version,
             }
         )
     image_fact_count = len(image_fact_rows)
+    all_image_fact_rows = image_fact_rows
     image_fact_rows = image_fact_rows[:MAX_DATA_RESPONSE_ROWS]
     model_totals: dict[str, dict] = {}
     tenant_model_totals: dict[tuple[str, str, str], dict[str, int]] = {}
     for row in usage_rows:
-        model = str(row.get("model") or "unattributed")
+        model = str(row.get("model") or "未标识")
         totals = model_totals.setdefault(
             model,
             {"records": 0, "tokens": 0, "reasoning_efforts": Counter()},
@@ -1396,6 +1397,11 @@ def build_payload(
             )
         ],
         "image_provider_fact_count": image_fact_count,
+        "image_count": sum(int(row["image_count"]) for row in all_image_fact_rows),
+        "image_actual_model_known_count": sum(1 for row in all_image_fact_rows if row["actual_model_id"] is not None),
+        "image_fallback_true_count": sum(1 for row in all_image_fact_rows if row["fallback_used"] is True),
+        "image_fallback_false_count": sum(1 for row in all_image_fact_rows if row["fallback_used"] is False),
+        "image_fallback_unknown_count": sum(1 for row in all_image_fact_rows if row["fallback_used"] is None),
         "image_provider_facts_truncated": image_fact_count > len(image_fact_rows),
         "image_provider_facts": image_fact_rows,
     }
@@ -1406,6 +1412,11 @@ def build_payload(
         user = labels_by_email.get(email, "未识别用户")
         raw_event = event.get("event_type") or "unknown"
         raw_status = event.get("status") or "unknown"
+        structured_detail = json_loads(event.get("detail"), {})
+        if not isinstance(structured_detail, dict):
+            structured_detail = {}
+        tool_id = str(structured_detail.get("tool_id") or structured_detail.get("tool") or "").strip()
+        generation, version = product_identity(event.get("request_id"))
         created = parse_time(event.get("created_at"))
         raw_events.append(
             {
@@ -1422,16 +1433,17 @@ def build_payload(
                 "sessionId": event.get("session_id") or "",
                 "device": (event.get("device_id") or "")[:16],
                 "detail": detail_summary(event.get("detail")),
-                # Token facts come only from usage_events below.  Event prose is
-                # diagnostic data and is never a billing/usage source.
+                "toolId": tool_id or None,
+                "scenario": scenario_from_facts(tool_id, structured_detail, raw_event),
+                # This event is not a Token authority: null is not measured zero.
                 "hasUsage": False,
-                "inputTokens": 0,
-                "outputTokens": 0,
-                "totalTokens": 0,
+                "inputTokens": None,
+                "outputTokens": None,
+                "totalTokens": None,
                 "rawEventType": raw_event,
                 "rawStatus": raw_status,
-                "productGeneration": product_identity(event.get("request_id"))[0],
-                "productVersion": product_identity(event.get("request_id"))[1],
+                "productGeneration": generation,
+                "productVersion": version,
             }
         )
 
@@ -1494,7 +1506,7 @@ def build_payload(
             rec["acceptedAt"] = min([item for item in [rec["acceptedAt"], created] if item], default=created)
         if event_type == "run.completed":
             rec["completedAt"] = max([item for item in [rec["completedAt"], created] if item], default=created)
-        if event_type == "run.cancelled" or status == "cancelled":
+        if event_type == "run.cancelled":
             rec["cancelled"] = True
         if event_type == "run.failed":
             rec["failed"] = True
@@ -1508,10 +1520,12 @@ def build_payload(
         }:
             rec["problemEvents"] += 1
         detail = json_loads(event.get("detail"), {})
-        tool = detail.get("tool") if isinstance(detail, dict) else None
+        tool = (detail.get("tool_id") or detail.get("tool")) if isinstance(detail, dict) else None
+        artifact_kind = (detail.get("artifact_kind") or detail.get("artifactKind")) if isinstance(detail, dict) else None
         if tool:
             rec["tools"][TOOL_ZH.get(str(tool), str(tool))] += 1
-            rec["scenarios"][scenario_from_tool(str(tool), detail)] += 1
+        if tool or artifact_kind or event_type in SCENARIO_EVENT_TYPES:
+            rec["scenarios"][scenario_from_facts(tool, detail, event_type)] += 1
 
     for request in gateway_request_rows:
         request_id = str(request.get("request_id") or "").strip()
@@ -1546,10 +1560,8 @@ def build_payload(
                 "inputTokens": 0,
                 "outputTokens": 0,
                 "totalTokens": 0,
-                "productGeneration": str(
-                    request.get("product_generation") or "ecorex"
-                ),
-                "productVersion": str(request.get("product_version") or "legacy"),
+                "productGeneration": product_identity_values(request.get("product_generation"), request.get("product_version"))[0],
+                "productVersion": product_identity_values(request.get("product_generation"), request.get("product_version"))[1],
             },
         )
         # The v1 account directory is authoritative for Gateway facts. This
@@ -1614,7 +1626,7 @@ def build_payload(
         duration = None
         if rec["completedAt"]:
             duration = max(0, (rec["completedAt"] - rec["acceptedAt"]).total_seconds() / 60)
-        scenario = rec["scenarios"].most_common(1)[0][0] if rec["scenarios"] else "创作内容"
+        scenario = rec["scenarios"].most_common(1)[0][0] if rec["scenarios"] else "其他/未标识"
         task_usage = usage_by_task.get(rec["_taskKey"])
         if (
             task_usage is None
@@ -1689,7 +1701,7 @@ def build_payload(
         ):
             bucket[field] += projection[field]
         bucket["estimatedRecords"] += int(projection["estimated"])
-        bucket["cacheReportedRecords"] += int(projection["cacheReadTokens"] > 0)
+        bucket["cacheReportedRecords"] += int(projection["cacheReported"])
         model = str(row.get("model") or "").strip()
         provider = str(row.get("provider") or "").strip()
         if model:
@@ -1728,9 +1740,7 @@ def build_payload(
                 + int(usage.get("unlinkedRecords", 0))
             )
             remarks = []
-            if date in {"2026-06-22", "2026-06-23"} and total == 0:
-                remarks.append("服务器未收到详细事件上报")
-            elif total == 0:
+            if total == 0:
                 remarks.append("当天无任务记录")
             if interventions:
                 remarks.append(f"{interventions} 个任务需复查")
@@ -1790,21 +1800,30 @@ def build_payload(
     total_tokens = sum(usage_row_projection(row)["totalTokens"] for row in usage_rows)
     token_usage_tasks = sum(1 for task in tasks if task.get("hasUsage"))
     generation_breakdown = {}
-    for generation in ("ecorex", "emate"):
+    for generation in ("ecorex", "emate", "unknown"):
         generation_tasks = [
             task for task in tasks if task["productGeneration"] == generation
         ]
         generation_usage = [
             row
             for row in usage_rows
-            if str(row.get("_product_generation") or "ecorex") == generation
+            if str(row.get("_product_generation") or "unknown") == generation
         ]
+        generation_images = [fact for fact in all_image_fact_rows if fact["product_generation"] == generation]
         generation_breakdown[generation] = {
             "tasks": len(generation_tasks),
+            "usageRecords": len(generation_usage),
             "totalTokens": sum(
                 usage_row_projection(row)["totalTokens"] for row in generation_usage
             ),
+            "imageFacts": len(generation_images),
+            "images": sum(int(fact["image_count"]) for fact in generation_images),
         }
+    generation_breakdown["all"] = {
+        field: sum(generation_breakdown[generation][field] for generation in ("ecorex", "emate", "unknown"))
+        for field in ("tasks", "usageRecords", "totalTokens", "imageFacts", "images")
+    }
+    reconciliation["generation_breakdown"] = generation_breakdown
     scenario_counts = Counter(task["scenario"] for task in tasks)
     daily_counts = []
     for date in dates:
@@ -1833,10 +1852,10 @@ def build_payload(
     user_counts.sort(key=lambda item: (-item["total"], item["user"]))
     busiest = max(daily_counts, key=lambda item: item["total"], default={"date": "", "total": 0})
     insights = [
-        f"当前范围服务器 RAW 共 {len(raw_events)} 条事件，按 request_id 去重后为 {total_tasks} 个任务。",
+        f"当前范围服务器 RAW 共 {len(raw_events)} 条事件，合并运行事件与 Gateway Turn 后为 {total_tasks} 个任务。",
         f"任务集中在 {busiest['date']}，当天有 {busiest['total']} 个任务。",
         f"成功任务 {success_tasks} 个，部分完成 {partial_tasks} 个，失败 {failed_tasks} 个，中止 {stopped_tasks} 个，进行中 {running_tasks} 个；按已结束任务口径成功率为 {round(success_tasks / terminal_tasks * 100, 1) if terminal_tasks else 0}%。",
-        "6 月 22 日和 6 月 23 日服务器未收到详细事件上报，图表里保留为 0，避免补造数据。",
+        "产品代际只认不可变事实里的 generation + exact version；旧记录缺字段时归其他/未标识，不补造版本。",
         "人工干预次数为根据失败、取消、受限事件推算的需复查任务数，RAW 中没有单独的人工点击字段。",
     ]
     return {
@@ -1849,7 +1868,7 @@ def build_payload(
             "endDate": (end - timedelta(days=1)).strftime("%Y-%m-%d"),
             "generatedAt": datetime.now(TZ).isoformat(timespec="seconds"),
             "rawSheetUrl": "https://my.feishu.cn/sheets/KGias0a8OhQvrNtX9lict6Jznkg",
-            "source": "服务器 sync_events RAW 实时查询",
+            "source": "服务器运行事件 + Gateway/Provider 不可变事实实时投影",
             "version": VERSION,
             "productGeneration": product_generation,
             "live": True,
@@ -1864,7 +1883,7 @@ def build_payload(
             "runningTasks": running_tasks,
             "terminalTasks": terminal_tasks,
             "successRate": round(success_tasks / terminal_tasks * 100, 1) if terminal_tasks else 0,
-            "avgCompletionMinutes": round(sum(durations) / len(durations), 2) if durations else 0,
+            "avgCompletionMinutes": round(sum(durations) / len(durations), 2) if durations else None,
             "interventions": interventions,
             "interventionRate": round(interventions / total_tasks * 100, 1) if total_tasks else 0,
             "users": len(users_list),
@@ -1876,6 +1895,7 @@ def build_payload(
             "tokenUsageRate": round(token_usage_tasks / total_tasks * 100, 1) if total_tasks else 0,
             "effectiveArtifacts": sum(effective_artifact_counts.values()),
             "invalidArtifacts": sum(invalid_artifact_counts.values()),
+            "images": sum(int(row["image_count"]) for row in all_image_fact_rows),
         },
         "users": users_list,
         "dates": dates,
@@ -1884,6 +1904,10 @@ def build_payload(
         "tasks": tasks,
         "rawEvents": raw_events,
         "generationBreakdown": generation_breakdown,
+        "dataDictionary": [
+            {"field": field, "unit": unit, "authority": authority, "unknownSemantics": unknown}
+            for field, unit, authority, unknown in DATA_DICTIONARY
+        ],
         "charts": {
             "daily": daily_counts,
             "users": user_counts,

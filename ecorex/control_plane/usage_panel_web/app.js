@@ -21,6 +21,9 @@ function emptyUsageData() {
     summaryRows: [],
     tasks: [],
     rawEvents: [],
+    generationBreakdown: {},
+    reconciliation: {},
+    dataDictionary: [],
     charts: { daily: [], users: [], scenarios: [] },
     insights: []
   };
@@ -68,16 +71,14 @@ const auditState = {
 };
 
 const statusOptions = ['成功', '部分完成', '失败', '中止', '进行中'];
-const mainstreamCacheReferenceRate = 90;
-const mainstreamCacheReferenceText = 'Artificial Analysis 公开编码 Agent 榜单显示 Claude Code 96%、Cursor CLI 89%，面板取 90% 做对标线';
 const scenarioDefinitions = {
-  '创作内容': '创作文案/标题/报告/脚本等',
-  '制作素材': '制作图片、海报图片编辑等',
-  '搜索查询': '网页搜索抓取等',
-  '处理数据': '数据处理（Excel/word/ppt/pdf）等',
-  '编辑文档': '操作在线文档（飞书/腾讯文档）等',
-  '交付通知': '打包/展示/发消息/提醒等',
-  '系统维护': '环境检查/排错/配置等'
+  '制作素材': '结构化工具标识为 imagegen / image_edit / vision / ocr，或产物类型明确为图片/视频',
+  '搜索查询': '结构化工具标识为 web_search / web_fetch',
+  '处理数据': '结构化工具或产物类型明确为 spreadsheet / sheet / dataset',
+  '编辑文档': '结构化工具标识为飞书/腾讯文档工具，或产物类型明确为在线文档',
+  '交付通知': '结构化工具/事件明确为 send / scheduler / message.sent / notification.sent',
+  '系统维护': '结构化工具/事件明确为 host_diagnostics / diagnostic.completed',
+  '其他/未标识': '没有足够结构化事实；不使用提示词、说明文字或文件名猜测'
 };
 const statusOptionMeta = {
   '成功': {
@@ -185,13 +186,19 @@ function tokenRate(value) {
 }
 
 function cacheHitRate(stats) {
+  if (!Number((stats && stats.cacheReportedRecords) || 0)) return null;
   const basis = Number((stats && (stats.cacheInputTokens || stats.inputTokens)) || 0);
-  return basis ? Number((Number(stats.cacheReadTokens || 0) / basis * 100).toFixed(1)) : 0;
+  return basis ? Number((Number(stats.cacheReadTokens || 0) / basis * 100).toFixed(1)) : null;
+}
+
+function cacheRateLabel(stats) {
+  const rate = cacheHitRate(stats);
+  return rate == null ? '未上报' : tokenRate(rate);
 }
 
 function cacheReportedLabel(stats) {
   const records = Number((stats && stats.cacheReportedRecords) || 0);
-  return records ? `${number(records)} 条有缓存上报` : '当前未上报缓存字段';
+  return records ? `${number(records)} 条已上报缓存字段（数值可为 0）` : '当前记录未上报缓存字段';
 }
 
 function serverArtifactCount(row) {
@@ -271,7 +278,7 @@ function taskStatus(task) {
 }
 
 function scenarioDefinition(name) {
-  return scenarioDefinitions[name] || '按当前任务工具和内容自动归类。';
+  return scenarioDefinitions[name] || scenarioDefinitions['其他/未标识'];
 }
 
 function scenarioDetailText(name, value, total) {
@@ -381,33 +388,6 @@ function firstTokenValue(source, keys) {
     }
   }
   return 0;
-}
-
-function matchTokenValue(text, patterns) {
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match) return tokenValue(match[1]);
-  }
-  return 0;
-}
-
-function tokensFromDetail(detail) {
-  const text = String(detail || '');
-  const input = matchTokenValue(text, [
-    /(?:input[_\s-]?tokens?|prompt[_\s-]?tokens?)["'：:\s=]+([0-9][0-9,]*)/i,
-    /(?:输入|提示词|请求)(?:\s*Token|\s*tokens?)?[^0-9]{0,18}([0-9][0-9,]*)/i
-  ]);
-  const output = matchTokenValue(text, [
-    /(?:output[_\s-]?tokens?|completion[_\s-]?tokens?)["'：:\s=]+([0-9][0-9,]*)/i,
-    /(?:输出|回答|生成)(?:\s*Token|\s*tokens?)?[^0-9]{0,18}([0-9][0-9,]*)/i
-  ]);
-  const total = matchTokenValue(text, [
-    /(?:total[_\s-]?tokens?)["'：:\s=]+([0-9][0-9,]*)/i,
-    /(?:总计|总量|总)(?:\s*Token|\s*tokens?)?[^0-9]{0,18}([0-9][0-9,]*)/i
-  ]) || input + output;
-  const hasUsage = /包含用量信息：是|hasUsage["'：:\s=]+true/i.test(text) || total > 0 || input > 0 || output > 0;
-  const explicitNoUsage = /包含用量信息：否|hasUsage["'：:\s=]+false/i.test(text);
-  return { input, output, total, hasUsage, explicitNoUsage };
 }
 
 function tokenUsageFromSource(source) {
@@ -629,6 +609,49 @@ function updateMetaLine() {
   $('#metaLine').textContent = parts.join(' · ');
 }
 
+function renderGenerationReconciliation() {
+  const node = $('#generationReconciliation');
+  if (!node) return;
+  const breakdown = DATA.generationBreakdown || DATA.reconciliation?.generation_breakdown || {};
+  const generationText = (generation) => {
+    const row = breakdown[generation] || {};
+    const tokens = Number(row.usageRecords || 0) ? tokenNumber(row.totalTokens) : 'Token 未上报';
+    const images = Number(row.imageFacts || 0) ? `${number(row.images)} 张图片` : '图片未上报';
+    return `${number(row.tasks)} 任务/${tokens}/${images}`;
+  };
+  const all = breakdown.all || {};
+  node.textContent = `当前返回账本：全部 ${generationText('all')} = `
+    + `e-Mate ${generationText('emate')} + EcoreX ${generationText('ecorex')} + 旧版未标识 ${generationText('unknown')}。`;
+  const modelNode = $('#modelReconciliation');
+  if (!modelNode) return;
+  const reconciliation = DATA.reconciliation || {};
+  const chatModels = Array.isArray(reconciliation.by_model) ? reconciliation.by_model : [];
+  const unknownChatModels = chatModels
+    .filter(row => row.model === '未标识')
+    .reduce((sum, row) => sum + Number(row.records || 0), 0);
+  const knownChatModels = chatModels.reduce((sum, row) => sum + Number(row.records || 0), 0) - unknownChatModels;
+  const imageFacts = Number(reconciliation.image_provider_fact_count || 0);
+  const imageModels = imageFacts
+    ? `图片 ${number(reconciliation.image_actual_model_known_count)} / ${number(imageFacts)} 条已标识`
+    : '图片实际模型未上报';
+  const imageFallback = imageFacts
+    ? `图片 fallback：是 ${number(reconciliation.image_fallback_true_count)}、否 ${number(reconciliation.image_fallback_false_count)}、未上报 ${number(reconciliation.image_fallback_unknown_count)}`
+    : '图片 fallback 未上报';
+  modelNode.textContent = `实际模型：聊天 ${number(knownChatModels)} 条已标识、${number(unknownChatModels)} 条未标识；${imageModels}。${imageFallback}。`;
+}
+
+function renderDataDictionary() {
+  const body = $('#dataDictionaryBody');
+  if (!body) return;
+  const rows = Array.isArray(DATA.dataDictionary) ? DATA.dataDictionary : [];
+  body.innerHTML = rows.length ? rows.map(row => `<tr>
+    <td><strong>${escapeHtml(row.field || '')}</strong></td>
+    <td>${escapeHtml(row.unit || '')}</td>
+    <td>${escapeHtml(row.authority || '')}</td>
+    <td>${escapeHtml(row.unknownSemantics || '')}</td>
+  </tr>`).join('') : '<tr><td colspan="4"><div class="empty">服务端尚未返回字段字典。</div></td></tr>';
+}
+
 function setLiveStatus(text, tone = '') {
   const node = $('#liveStatus');
   if (!node) return;
@@ -710,13 +733,14 @@ function renderKpis(rows) {
 
 function renderTokenKpis(rows) {
   const a = aggregateTokenRows(rows);
-  const activeUsers = new Set(rows.map(row => row.user)).size;
+  const activeUsers = new Set(rows.filter(row => row.tokenStats.recordCount).map(row => row.user)).size;
   const currentCacheRate = cacheHitRate(a);
+  const tokenValue = (field) => a.recordCount ? tokenNumber(a[field]) : '未上报';
   const cards = [
-    { label: '总 Token', value: tokenNumber(a.totalTokens), foot: '服务端合并账本', icon: 'database', color: colors.blue, tip: '总 Token 来自旧版用量事实与 v1 Gateway 终态事实的服务端去重投影，不解析任务说明文字。' },
-    { label: '输入 Token', value: tokenNumber(a.inputTokens), foot: '提供商实报汇总', icon: 'target', color: colors.teal, tip: '输入 Token 来自提供商完成事实，按请求 ID 幂等去重。' },
-    { label: '输出 Token', value: tokenNumber(a.outputTokens), foot: '提供商实报汇总', icon: 'check', color: colors.green, tip: '输出 Token 来自提供商完成事实，按请求 ID 幂等去重。' },
-    { label: '缓存命中率', value: tokenRate(currentCacheRate), foot: `参考线 ${tokenRate(mainstreamCacheReferenceRate)}`, icon: 'clock', color: currentCacheRate >= mainstreamCacheReferenceRate ? colors.green : colors.orange, tip: `缓存命中率 = 缓存命中输入 Token / 输入 Token。当前命中 ${tokenNumber(a.cacheReadTokens)}，输入 ${tokenNumber(a.cacheInputTokens || a.inputTokens)}；${cacheReportedLabel(a)}。${mainstreamCacheReferenceText}。` },
+    { label: '总 Token', value: tokenValue('totalTokens'), foot: '服务端合并账本', icon: 'database', color: colors.blue, tip: '总 Token 来自用量事实与 Gateway 终态事实的服务端去重投影；无事实显示未上报，不显示为 0。' },
+    { label: '输入 Token', value: tokenValue('inputTokens'), foot: '提供商事实汇总', icon: 'target', color: colors.teal, tip: '输入 Token 来自结构化用量事实，按请求 ID 幂等去重。' },
+    { label: '输出 Token', value: tokenValue('outputTokens'), foot: '提供商事实汇总', icon: 'check', color: colors.green, tip: '输出 Token 来自结构化用量事实，按请求 ID 幂等去重。' },
+    { label: '缓存命中率', value: cacheRateLabel(a), foot: cacheReportedLabel(a), icon: 'clock', color: currentCacheRate == null ? colors.slate : colors.teal, tip: `缓存命中率 = 缓存读取输入 Token / 输入 Token。只有结构化缓存字段存在时才计算；字段缺失显示未上报。` },
     { label: '用量记录数', value: number(a.recordCount), foot: `${number(a.estimatedRecords)} 条历史估算`, icon: 'table', color: colors.purple, tip: '用量记录数为服务端合并后的唯一用量事实数；历史旧版记录若只能估算会明确标记。' },
     { label: '涉及用户', value: number(activeUsers), foot: '按当前筛选', icon: 'users', color: colors.red, tip: '当前筛选下有 Token 用量记录的用户数。' }
   ];
@@ -932,7 +956,7 @@ function tokenEmptyMessage(stats) {
 
 function renderTokenDailyChart(rows) {
   const aggregate = aggregateTokenRows(rows);
-  if (!aggregate.totalTokens) {
+  if (!aggregate.recordCount) {
     $('#dailyChart').innerHTML = tokenEmptyMessage(aggregate);
     return;
   }
@@ -1006,7 +1030,7 @@ function renderUserChart(rows) {
 
 function renderTokenUserChart(rows) {
   const aggregate = aggregateTokenRows(rows);
-  if (!aggregate.totalTokens) {
+  if (!aggregate.recordCount) {
     $('#userChart').innerHTML = tokenEmptyMessage(aggregate);
     return;
   }
@@ -1062,7 +1086,7 @@ function renderScenarioChart() {
 
 function renderTokenScenarioChart(rows) {
   const aggregate = aggregateTokenRows(rows);
-  if (!aggregate.totalTokens) {
+  if (!aggregate.recordCount) {
     $('#scenarioChart').innerHTML = tokenEmptyMessage(aggregate);
     return;
   }
@@ -1164,12 +1188,15 @@ function renderInsights(rows = filteredRows()) {
 function renderTokenInsights(rows) {
   const a = aggregateTokenRows(rows);
   const insights = [];
-  insights.push(`当前筛选包含 ${a.recordCount} 条 Token 用量记录，总 Token ${tokenNumber(a.totalTokens)}。`);
-  if (a.totalTokens) {
+  insights.push(a.recordCount
+    ? `当前筛选包含 ${a.recordCount} 条 Token 用量记录，总 Token ${tokenNumber(a.totalTokens)}。`
+    : '当前筛选没有 Token 用量事实；空值不会解释为 0。');
+  if (a.recordCount) {
     const currentCacheRate = cacheHitRate(a);
     insights.push(`总 Token ${tokenNumber(a.totalTokens)}，其中输入 ${tokenNumber(a.inputTokens)}，输出 ${tokenNumber(a.outputTokens)}。`);
-    insights.push(`缓存命中率 ${tokenRate(currentCacheRate)}：命中 ${tokenNumber(a.cacheReadTokens)}，输入 ${tokenNumber(a.cacheInputTokens || a.inputTokens)}；${cacheReportedLabel(a)}。`);
-    insights.push(`Artificial Analysis 公开编码 Agent 榜单显示 Claude Code 96%、Cursor CLI 89%，这里取 ${tokenRate(mainstreamCacheReferenceRate)} 做对标线；当前相差 ${tokenRate(Math.max(0, mainstreamCacheReferenceRate - currentCacheRate))}。`);
+    insights.push(currentCacheRate == null
+      ? `缓存命中率未上报；${cacheReportedLabel(a)}。`
+      : `缓存命中率 ${tokenRate(currentCacheRate)}：命中 ${tokenNumber(a.cacheReadTokens)}，输入 ${tokenNumber(a.cacheInputTokens || a.inputTokens)}。`);
     const topUser = [...rows.reduce((map, row) => {
       const item = map.get(row.user) || { user: row.user, totalTokens: 0 };
       item.totalTokens += row.tokenStats.totalTokens;
@@ -1313,12 +1340,12 @@ function renderViewCopy() {
   });
   if (state.metricView === 'tokens') {
     $('#dailyChartTitle').textContent = '分日 Token 用量';
-    $('#dailyChartHelp').textContent = '来自 usage_events 表，按输入 / 输出 Token 分日汇总。';
+    $('#dailyChartHelp').textContent = '来自服务端去重用量事实；空值表示未上报，不当作 0。';
     $('#dailyLegend').innerHTML = '<i class="dot blue"></i>输入 <i class="dot green"></i>输出';
     $('#userChartTitle').textContent = '用户 Token 用量';
     $('#scenarioChartTitle').textContent = '用量来源';
     $('#summaryTableTitle').textContent = '用户 × 分日 Token 用量';
-    $('#summaryTableHelp').textContent = 'Token 数字来自服务器 usage_events 表；缓存命中率按已上报缓存命中 Token 计算，未上报时显示 0.0%。';
+    $('#summaryTableHelp').textContent = 'Token 来自结构化用量事实；缓存字段缺失显示“未上报”，已上报的 0 才显示 0。';
     $('#personTableTitle').textContent = '个人 Token 明细';
     $('#personTableHelp').textContent = '按个人先汇总；点击个人行可展开查看每天的 Token 和缓存命中情况。';
   } else {
@@ -1339,14 +1366,14 @@ function renderTableHeaders() {
     $('#summaryHead').innerHTML = `<tr>
       ${headerCell('用户', '这个用户是谁；没有姓名时会显示邮箱前半段')}
       ${headerCell('分日', '按天拆开看 Token 上报情况')}
-      ${headerCell('用量记录数', 'usage_events 表里的记录条数')}
-      ${headerCell('输入 Token', 'usage_events.input_tokens 汇总')}
-      ${headerCell('缓存命中 Token', '已上报的缓存命中输入 Token；本期没有上报时为 0')}
-      ${headerCell('缓存命中率', '缓存命中率 = 缓存命中输入 Token / 输入 Token；主流编码 Agent 参考约 89%-96%')}
-      ${headerCell('输出 Token', 'usage_events.output_tokens 汇总')}
-      ${headerCell('总 Token', 'usage_events.total_tokens 汇总')}
+      ${headerCell('用量记录数', '服务端按 request_id 去重后的用量事实条数')}
+      ${headerCell('输入 Token', '结构化用量事实 input_tokens 汇总')}
+      ${headerCell('缓存读取 Token', 'usage_events.detail 的结构化缓存字段；缺失为未上报，已上报的 0 才是 0')}
+      ${headerCell('缓存命中率', '缓存读取输入 Token / 输入 Token；缓存字段缺失或分母不可用时为未上报')}
+      ${headerCell('输出 Token', '结构化用量事实 output_tokens 汇总')}
+      ${headerCell('总 Token', '结构化用量事实 total_tokens 汇总')}
       ${headerCell('估算记录数', 'usageSource=estimated 的记录数')}
-      ${headerCell('主要模型', '当前范围内最常见的模型')}
+      ${headerCell('实际模型', '仅 gateway_model_attempts.upstream_model_id；旧记录或仅有 requested model 时为未标识')}
       ${headerCell('用量来源', 'usage_events.detail 里的 usageSource')}
       ${headerCell('有效产物数', '优先使用服务器自动统计；你也可以手动修正，导出汇总时会带上')}
       ${headerCell('备注', '需要你手动填写；适合写当天补充说明、异常说明或业务侧判断')}
@@ -1354,14 +1381,14 @@ function renderTableHeaders() {
     $('#personDetailHead').innerHTML = `<tr>
       ${headerCell('用户', '点击个人行可展开或收起分日数据')}
       ${headerCell('日期', '个人汇总行显示当前筛选范围；展开后显示具体日期')}
-      ${headerCell('用量记录数', 'usage_events 表里的记录条数')}
-      ${headerCell('输入 Token', 'usage_events.input_tokens 汇总')}
-      ${headerCell('缓存命中 Token', '已上报的缓存命中输入 Token；本期没有上报时为 0')}
-      ${headerCell('缓存命中率', '缓存命中率 = 缓存命中输入 Token / 输入 Token；主流编码 Agent 参考约 89%-96%')}
-      ${headerCell('输出 Token', 'usage_events.output_tokens 汇总')}
-      ${headerCell('总 Token', 'usage_events.total_tokens 汇总')}
+      ${headerCell('用量记录数', '服务端按 request_id 去重后的用量事实条数')}
+      ${headerCell('输入 Token', '结构化用量事实 input_tokens 汇总')}
+      ${headerCell('缓存读取 Token', '结构化缓存字段；缺失为未上报，已上报的 0 才是 0')}
+      ${headerCell('缓存命中率', '缓存读取输入 Token / 输入 Token；缓存字段缺失或分母不可用时为未上报')}
+      ${headerCell('输出 Token', '结构化用量事实 output_tokens 汇总')}
+      ${headerCell('总 Token', '结构化用量事实 total_tokens 汇总')}
       ${headerCell('估算记录数', 'usageSource=estimated 的记录数')}
-      ${headerCell('主要模型', '当前范围内最常见的模型')}
+      ${headerCell('实际模型', '仅 gateway_model_attempts.upstream_model_id；旧记录或仅有 requested model 时为未标识')}
       ${headerCell('用量来源', 'usage_events.detail 里的 usageSource')}
       ${headerCell('有效产物数', '个人汇总行会累加自动统计或已手动修正的有效产物数')}
       ${headerCell('备注', '展开到分日后可手动填写；适合写个人每天的补充说明')}
@@ -1381,7 +1408,7 @@ function renderTableHeaders() {
     ${headerCell('平均完成时间', '只看已完成任务，从开始到完成平均用了多久')}
     ${headerCell('人工干预次数', '取消、失败、受限这类需要人工看一下的任务数量')}
     ${headerCell('干预率', '人工干预次数除以总任务数；用于看这一天需要复查的比例')}
-    ${headerCell('主要使用场景', '按创作内容、制作素材、搜索查询、处理数据、编辑文档、交付通知、系统维护归类')}
+    ${headerCell('主要使用场景', '只按结构化 tool_id / artifact_kind / event_type 映射；无法证明归其他/未标识')}
     ${headerCell('有效产物数', '未被用户勾选下拇指且状态可用的产物；仍可手动修正')}
     ${headerCell('无效产物数', '用户勾选 👎 的产物定义为无效产物')}
     ${headerCell('备注', '需要你手动填写；适合写当天补充说明、异常说明或业务侧判断')}
@@ -1472,17 +1499,18 @@ function renderTokenTable(rows) {
     const manualNote = manualNotes[row.id] ?? '';
     const tokenClass = stats.totalTokens ? 'metric-good' : 'metric-warn';
     const rate = cacheHitRate(stats);
-    const cacheClass = stats.cacheReportedRecords ? (rate >= mainstreamCacheReferenceRate ? 'metric-good' : 'metric-warn') : 'metric-warn';
+    const cacheClass = rate == null ? 'metric-warn' : 'metric-good';
+    const tokenText = (field) => stats.recordCount ? tokenNumber(stats[field]) : '—';
     return `
-      <tr title="${escapeAttr(`${row.user} ${row.date}: 总 Token ${tokenNumber(stats.totalTokens)}，缓存命中率 ${tokenRate(rate)}，${cacheReportedLabel(stats)}`)}">
+      <tr title="${escapeAttr(`${row.user} ${row.date}: 总 Token ${tokenText('totalTokens')}，缓存命中率 ${cacheRateLabel(stats)}，${cacheReportedLabel(stats)}`)}">
         <td><strong>${escapeHtml(row.user)}</strong><br><span class="muted small">${escapeHtml(row.email || '')}</span></td>
         <td>${row.date}</td>
         <td>${number(stats.recordCount)}</td>
-        <td>${tokenNumber(stats.inputTokens)}</td>
-        <td>${tokenNumber(stats.cacheReadTokens)}</td>
-        <td class="${cacheClass}" title="${escapeAttr(cacheReportedLabel(stats))}">${tokenRate(rate)}</td>
-        <td>${tokenNumber(stats.outputTokens)}</td>
-        <td class="${tokenClass}">${tokenNumber(stats.totalTokens)}</td>
+        <td>${tokenText('inputTokens')}</td>
+        <td>${stats.cacheReportedRecords ? tokenNumber(stats.cacheReadTokens) : '—'}</td>
+        <td class="${cacheClass}" title="${escapeAttr(cacheReportedLabel(stats))}">${cacheRateLabel(stats)}</td>
+        <td>${tokenText('outputTokens')}</td>
+        <td class="${tokenClass}">${tokenText('totalTokens')}</td>
         <td>${number(stats.estimatedRecords)}</td>
         <td>${escapeHtml(stats.modelText)}</td>
         <td>${escapeHtml(stats.sourceText)}</td>
@@ -1740,17 +1768,17 @@ function renderTokenPersonDetailTable(rows) {
     const modelText = topTextFromRows(item.rows, 'modelText');
     const sourceText = topTextFromRows(item.rows, 'sourceText');
     const rate = cacheHitRate(summary);
-    const cacheClass = summary.cacheReportedRecords ? (rate >= mainstreamCacheReferenceRate ? 'metric-good' : 'metric-warn') : 'metric-warn';
+    const cacheClass = rate == null ? 'metric-warn' : 'metric-good';
     const parent = `
       <tr class="person-row" data-user="${escapeAttr(item.user)}" title="${escapeAttr(`点击查看 ${item.user} 的分日 Token 数据`)}">
         <td><button class="expand-toggle" type="button">${expanded ? '收起' : '展开'}</button><strong>${escapeHtml(item.user)}</strong><br><span class="muted small">${escapeHtml(item.email || '')}</span></td>
         <td>当前筛选范围</td>
         <td>${number(summary.recordCount)}</td>
-        <td>${tokenNumber(summary.inputTokens)}</td>
-        <td>${tokenNumber(summary.cacheReadTokens)}</td>
-        <td class="${cacheClass}" title="${escapeAttr(cacheReportedLabel(summary))}">${tokenRate(rate)}</td>
-        <td>${tokenNumber(summary.outputTokens)}</td>
-        <td class="${summary.totalTokens ? 'metric-good' : 'metric-warn'}">${tokenNumber(summary.totalTokens)}</td>
+        <td>${summary.recordCount ? tokenNumber(summary.inputTokens) : '—'}</td>
+        <td>${summary.cacheReportedRecords ? tokenNumber(summary.cacheReadTokens) : '—'}</td>
+        <td class="${cacheClass}" title="${escapeAttr(cacheReportedLabel(summary))}">${cacheRateLabel(summary)}</td>
+        <td>${summary.recordCount ? tokenNumber(summary.outputTokens) : '—'}</td>
+        <td class="${summary.totalTokens ? 'metric-good' : 'metric-warn'}">${summary.recordCount ? tokenNumber(summary.totalTokens) : '—'}</td>
         <td>${number(summary.estimatedRecords)}</td>
         <td>${escapeHtml(modelText)}</td>
         <td>${escapeHtml(sourceText)}</td>
@@ -1765,17 +1793,17 @@ function renderTokenPersonDetailTable(rows) {
         const stats = row.tokenStats;
         const manualNote = manualNotes[row.id] ?? '';
         const rowRate = cacheHitRate(stats);
-        const rowCacheClass = stats.cacheReportedRecords ? (rowRate >= mainstreamCacheReferenceRate ? 'metric-good' : 'metric-warn') : 'metric-warn';
+        const rowCacheClass = rowRate == null ? 'metric-warn' : 'metric-good';
         return `
           <tr class="detail-child-row">
             <td><span class="muted small">分日</span></td>
             <td>${row.date}</td>
             <td>${number(stats.recordCount)}</td>
-            <td>${tokenNumber(stats.inputTokens)}</td>
-            <td>${tokenNumber(stats.cacheReadTokens)}</td>
-            <td class="${rowCacheClass}" title="${escapeAttr(cacheReportedLabel(stats))}">${tokenRate(rowRate)}</td>
-            <td>${tokenNumber(stats.outputTokens)}</td>
-            <td class="${stats.totalTokens ? 'metric-good' : 'metric-warn'}">${tokenNumber(stats.totalTokens)}</td>
+            <td>${stats.recordCount ? tokenNumber(stats.inputTokens) : '—'}</td>
+            <td>${stats.cacheReportedRecords ? tokenNumber(stats.cacheReadTokens) : '—'}</td>
+            <td class="${rowCacheClass}" title="${escapeAttr(cacheReportedLabel(stats))}">${cacheRateLabel(stats)}</td>
+            <td>${stats.recordCount ? tokenNumber(stats.outputTokens) : '—'}</td>
+            <td class="${stats.totalTokens ? 'metric-good' : 'metric-warn'}">${stats.recordCount ? tokenNumber(stats.totalTokens) : '—'}</td>
             <td>${number(stats.estimatedRecords)}</td>
             <td>${escapeHtml(stats.modelText)}</td>
             <td>${escapeHtml(stats.sourceText)}</td>
@@ -1819,6 +1847,8 @@ function refresh(options = {}) {
   renderInsights(rows);
   renderTable(rows);
   renderPersonDetailTable(rows);
+  renderGenerationReconciliation();
+  renderDataDictionary();
   mountIcons();
 }
 
@@ -1937,10 +1967,11 @@ function exportSummaryCsv() {
     exportTokenSummaryCsv();
     return;
   }
-  const headers = ['用户', '分日', '总任务数', '成功任务数', '部分完成', '失败任务数', '中止任务数', '进行中', '成功任务率', '平均完成时间', '人工干预次数', '干预率', '主要使用场景', '有效产物数', '无效产物数', '备注'];
+  const headers = ['产品代际筛选', '用户', '分日', '总任务数', '成功任务数', '部分完成', '失败任务数', '中止任务数', '进行中', '成功任务率', '平均完成时间', '人工干预次数', '干预率', '主要使用场景', '有效产物数', '无效产物数', '备注'];
   const lines = [headers];
   filteredRows().forEach(row => {
     lines.push([
+      state.productGeneration,
       row.user,
       row.date,
       row.totalTasks,
@@ -1963,19 +1994,21 @@ function exportSummaryCsv() {
 }
 
 function exportTokenSummaryCsv() {
-  const headers = ['用户', '分日', '用量记录数', '输入Token', '缓存命中Token', '缓存命中率', '输出Token', '总Token', '缓存上报记录数', '估算记录数', '主要模型', '用量来源', '有效产物数', '备注'];
+  const headers = ['产品代际筛选', '用户', '分日', '用量记录数', '输入Token', '缓存读取Token', '缓存命中率', '输出Token', '总Token', '缓存上报记录数', '估算记录数', '实际模型', '用量来源', '有效产物数', '备注'];
   const lines = [headers];
   filteredTokenRows().forEach(row => {
     const stats = row.tokenStats;
+    const rate = cacheHitRate(stats);
     lines.push([
+      state.productGeneration,
       row.user,
       row.date,
       stats.recordCount,
-      stats.inputTokens,
-      stats.cacheReadTokens,
-      tokenRate(cacheHitRate(stats)),
-      stats.outputTokens,
-      stats.totalTokens,
+      stats.recordCount ? stats.inputTokens : '',
+      stats.cacheReportedRecords ? stats.cacheReadTokens : '',
+      rate == null ? '' : tokenRate(rate),
+      stats.recordCount ? stats.outputTokens : '',
+      stats.recordCount ? stats.totalTokens : '',
       stats.cacheReportedRecords,
       stats.estimatedRecords,
       stats.modelText,
@@ -1988,10 +2021,10 @@ function exportTokenSummaryCsv() {
 }
 
 function exportRawCsv() {
-  const headers = ['序号', '用户', '邮箱', '日期', '时间', '事件类型', '结果分类', '状态', '来源', '请求ID', '会话ID', '设备标识', '个人事件分析', '原始事件类型', '原始状态'];
+  const headers = ['序号', '产品代际', '产品版本', '用户', '邮箱', '日期', '时间', '事件类型', '结果分类', '状态', '结构化工具ID', '结构化场景', '来源', '请求ID', '会话ID', '设备标识', '个人事件分析', '原始事件类型', '原始状态'];
   const lines = [headers];
   filteredRawEvents().forEach(row => {
-    lines.push([row.seq, row.user, row.email, row.date, row.time, row.eventType, row.resultClass, row.status, row.source, row.requestId, row.sessionId, row.device, personalEventAnalysis(row), row.rawEventType, row.rawStatus]);
+    lines.push([row.seq, row.productGeneration, row.productVersion, row.user, row.email, row.date, row.time, row.eventType, row.resultClass, row.status, row.toolId, row.scenario, row.source, row.requestId, row.sessionId, row.device, personalEventAnalysis(row), row.rawEventType, row.rawStatus]);
   });
   downloadFile(`e-Mate_使用情况_${state.dateRange.start}_至_${state.dateRange.end}_RAW中文明细.csv`, '\uFEFF' + lines.map(line => line.map(csvEscape).join(',')).join('\n'), 'text/csv;charset=utf-8');
 }
