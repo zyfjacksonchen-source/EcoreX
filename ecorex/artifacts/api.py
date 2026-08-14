@@ -8,6 +8,7 @@ publishes that already-committed intent after the transaction returns.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import inspect
 import logging
 import re
@@ -52,6 +53,7 @@ from .models import (
     RetouchJobProjection,
     RetouchRequest,
 )
+from .office_preview import OfficePreviewError, render_office_preview
 from .actions import ArtifactActionExecutor
 from .service import ArtifactService
 from .wire import (
@@ -649,6 +651,21 @@ def create_artifact_router(
             )
             mime_type = projection.mime_type
             sha256 = projection.sha256
+        if rendition is None and projection.family in {
+            ArtifactFamily.DOCUMENT,
+            ArtifactFamily.SPREADSHEET,
+            ArtifactFamily.PRESENTATION,
+        }:
+            try:
+                content = render_office_preview(
+                    projection.family,
+                    content,
+                    display_name=projection.display_name,
+                )
+            except OfficePreviewError as error:
+                raise ArtifactActionUnavailable("Office preview is unavailable") from error
+            mime_type = "text/html"
+            sha256 = hashlib.sha256(content).hexdigest()
         return Response(
             content=content,
             media_type=_safe_media_type(mime_type),

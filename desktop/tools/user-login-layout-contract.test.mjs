@@ -14,7 +14,7 @@ test("unauthenticated users see only the account login surface", async () => {
   ]);
 
   const gate = app.indexOf("if (bootstrap && !authenticated)");
-  const shell = app.indexOf('<div className="ex-app-shell">');
+  const shell = app.indexOf('<div className={`ex-app-shell');
   assert.ok(gate >= 0 && shell > gate, "login gate must precede the complete app shell");
   assert.match(app, /<LoginPage[\s\S]*onLogin=\{runtime\.loginSession\}/u);
   assert.doesNotMatch(app, /DeviceLoginCard|session\/device|beginDeviceLogin/u);
@@ -50,7 +50,8 @@ test("unauthenticated users see only the account login surface", async () => {
 });
 
 test("the fixed viewport gives summaries and the conversation independent scrolling", async () => {
-  const [layout, features, sidebar] = await Promise.all([
+  const [app, layout, features, sidebar] = await Promise.all([
+    read("src/v1/AppV1.tsx"),
     read("src/v1/styles/layout.css"),
     read("src/v1/styles/features.css"),
     read("src/v1/components/Sidebar.tsx"),
@@ -58,6 +59,11 @@ test("the fixed viewport gives summaries and the conversation independent scroll
 
   assert.match(layout, /html,\s*body,\s*#root\s*\{[\s\S]*overflow:\s*hidden;/u);
   assert.match(layout, /\.ex-app-shell\s*\{[\s\S]*height:\s*100dvh;[\s\S]*max-height:\s*100dvh;/u);
+  assert.match(app, /const \[desktopSidebarVisible, setDesktopSidebarVisible\] = useState\(true\)/u);
+  assert.match(app, /ex-app-shell\$\{desktopSidebarVisible \? "" : " is-sidebar-hidden"\}/u);
+  assert.match(app, /desktopSidebarVisible \? "隐藏任务导航" : "显示任务导航"/u);
+  assert.match(layout, /\.ex-app-shell\.is-sidebar-hidden\s*\{[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\);/u);
+  assert.match(layout, /\.ex-app-shell\.is-sidebar-hidden > \.ex-sidebar\s*\{[\s\S]*display:\s*none;/u);
   assert.match(layout, /\.ex-sidebar\s*\{[\s\S]*overflow:\s*clip;/u);
   assert.match(
     layout,

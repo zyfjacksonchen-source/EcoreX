@@ -255,6 +255,20 @@ textarea {
   display: none;
 }
 
+.ex-sidebar-toggle {
+  display: inline-grid;
+}
+
+@media (min-width: 840px) {
+  .ex-app-shell.is-sidebar-hidden {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ex-app-shell.is-sidebar-hidden > .ex-sidebar {
+    display: none;
+  }
+}
+
 .ex-new-task {
   margin: 0 var(--space-2) var(--space-1);
   padding-inline: var(--space-2);

@@ -20,18 +20,11 @@ const OVERFLOW_ACTIONS = [
   "download",
 ] as const satisfies readonly ArtifactAction[];
 
-const NATIVE_OPEN_FAMILIES = new Set<ArtifactFamily>([
-  "document",
-  "spreadsheet",
-  "presentation",
-]);
-
 export function artifactPrimaryAction(
-  family: ArtifactFamily,
+  _family: ArtifactFamily,
   actions: readonly ArtifactAction[],
 ): "preview" | "open" | null {
   const projected = new Set(actions);
-  if (NATIVE_OPEN_FAMILIES.has(family) && projected.has("open")) return "open";
   if (projected.has("preview")) return "preview";
   return projected.has("open") ? "open" : null;
 }

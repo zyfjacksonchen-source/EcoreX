@@ -50,11 +50,24 @@ const markdown = await readFile(
   new URL("../src/v1/components/OfficeMarkdown.tsx", import.meta.url),
   "utf-8",
 );
+const artifactActions = await readFile(
+  new URL("../src/v1/state/artifactActions.ts", import.meta.url),
+  "utf-8",
+);
 
 test("the Artifact card executes its backend-authorized primary action", () => {
   assert.match(shelf, /const primaryAction = artifactPrimaryAction\(artifact\.family, artifact\.actions\)/u);
   assert.match(shelf, /className="ex-artifact-primary"[\s\S]*onClick=\{\(\) => onAction\(artifact, primaryAction\)\}/u);
   assert.doesNotMatch(shelf, /label="(?:放大|缩小|打开)预览"/u);
+});
+
+test("Office files use the authenticated in-app preview before native open", () => {
+  assert.doesNotMatch(artifactActions, /NATIVE_OPEN_FAMILIES/u);
+  assert.match(
+    artifactActions,
+    /if \(projected\.has\("preview"\)\) return "preview";[\s\S]*projected\.has\("open"\)/u,
+  );
+  assert.match(preview, /<iframe src=\{url\} sandbox=""/u);
 });
 
 test("image preview opens fitted and keeps explicit bounded zoom controls", () => {

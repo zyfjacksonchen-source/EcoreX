@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import io
 import json
+import zipfile
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -183,6 +184,48 @@ def test_image_thumbnail_and_preview_are_bounded_persisted_and_idempotent(tmp_pa
             "SELECT COUNT(*) FROM artifact_renditions WHERE parent_revision_id = ?",
             (image.revision_id,),
         ).fetchone()[0] == 2
+
+
+def test_office_preview_is_safe_in_app_html_instead_of_raw_ooxml(tmp_path):
+    service, client = make_client(tmp_path)
+    cases = (
+        (
+            "验收.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "word/document.xml",
+            """<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+            <w:body><w:p><w:r><w:t>预算 &amp; 验收 &lt;完成&gt;</w:t></w:r></w:p></w:body></w:document>""",
+            "预算 &amp; 验收 &lt;完成&gt;",
+        ),
+        (
+            "验收.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "xl/worksheets/sheet1.xml",
+            """<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+            <sheetData><row><c t="inlineStr"><is><t>合计 25</t></is></c></row></sheetData></worksheet>""",
+            "合计 25",
+        ),
+        (
+            "验收.pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "ppt/slides/slide1.xml",
+            """<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+            xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><a:t>交付页</a:t></p:cSld></p:sld>""",
+            "交付页",
+        ),
+    )
+    for name, mime_type, member, xml, expected in cases:
+        body = io.BytesIO()
+        with zipfile.ZipFile(body, "w") as archive:
+            archive.writestr(member, xml)
+        artifact = service.create_artifact(
+            body.getvalue(), requested_name=name, mime_type=mime_type
+        )
+        response = client.get(f"/api/v1/artifacts/{artifact.artifact_id}/preview")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+        assert member.encode() not in response.content
+        assert expected in response.text
 
 
 def test_concurrent_rendition_recovery_has_one_authority_and_no_orphans(tmp_path):

@@ -170,6 +170,7 @@ export function AppV1() {
     }
   });
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [desktopSidebarVisible, setDesktopSidebarVisible] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsReturnFocusRef = useRef<HTMLElement | null>(null);
   const [skillsOpen, setSkillsOpen] = useState(false);
@@ -667,7 +668,7 @@ export function AppV1() {
 
   return (
     <Tooltip.Provider skipDelayDuration={250}>
-      <div className="ex-app-shell">
+      <div className={`ex-app-shell${desktopSidebarVisible ? "" : " is-sidebar-hidden"}`}>
         <Suspense fallback={<aside className="ex-sidebar is-loading" aria-label="正在加载任务导航" />}>
           <Sidebar
           open={sidebarOpen}
@@ -819,10 +820,13 @@ export function AppV1() {
           <header className="ex-workspace-header">
             <div className="ex-header-title">
               <IconButton
-                className="ex-mobile-menu"
-                label="打开任务导航"
+                className="ex-mobile-menu ex-sidebar-toggle"
+                label={mobileNavigation ? "打开任务导航" : desktopSidebarVisible ? "隐藏任务导航" : "显示任务导航"}
                 data-ecorex-feature-trigger="navigation"
-                onClick={() => setSidebarOpen(true)}
+                onClick={() => {
+                  if (mobileNavigation) setSidebarOpen(true);
+                  else setDesktopSidebarVisible((visible) => !visible);
+                }}
               >
                 <Menu aria-hidden="true" />
               </IconButton>
