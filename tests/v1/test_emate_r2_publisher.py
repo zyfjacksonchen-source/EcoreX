@@ -727,10 +727,13 @@ def test_public_reclaim_readback_requires_404(monkeypatch) -> None:
 
 def test_release_workflow_exposes_reclaim_without_new_secrets() -> None:
     workflow = (ROOT / ".github/workflows/emate-2.0-desktop-release.yml").read_text()
+    reclaim = workflow.split("reclaim-rejected-r2:", 1)[1]
 
     assert "reclaim-rejected-r2:" in workflow
     assert "actions: read" in workflow
     assert "reclaim-rejected" in workflow
+    assert "actions/setup-python@" in reclaim
+    assert 'python-version: "3.11.9"' in reclaim
     assert "--expected-admission-sha256" in workflow
     assert "--observed-source-sha" in workflow
     assert workflow.count("ECOREX_R2_ACCESS_KEY_ID: ${{ secrets.ECOREX_R2_ACCESS_KEY_ID }}") >= 2

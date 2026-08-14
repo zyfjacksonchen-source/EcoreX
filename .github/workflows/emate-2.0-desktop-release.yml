@@ -550,6 +550,11 @@ jobs:
           run-id: ${{ inputs.rejected_run_id }}
           github-token: ${{ github.token }}
 
+      - name: Set up the locked Python toolchain
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
       - name: Install the locked R2 client
         run: python scripts/install-v1-python-profile.py --profile cloud
 
