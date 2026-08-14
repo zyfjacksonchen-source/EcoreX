@@ -1375,3 +1375,17 @@ environment failure until the product failure reproduces from known state.
   GitHub and configured release environments also currently contain no R2
   credentials, so no upload, pointer publication, Feed activation, or production
   mutation was attempted during this preflight.
+
+### 2026-08-14 RELEASE-205-LIGHT-PREFLIGHT-022
+
+- The documented daily command `python scripts/真实发布轻量校验.py` failed
+  before doing any work because its wrapper still imported the retired
+  `scripts/light-real-release-validation.py`, which the v1 cutoff deliberately
+  removed. Commit `0a8cb085` makes the existing public command invoke the
+  current v1 source-tree, server-schema-authority, reproducibility, and public
+  download-site gates directly; it does not restore a legacy executable.
+- The exact new regression and the retained historical caller both passed
+  `2/2`, and the command completed all four current gates with status `passed`.
+  The same regression is now enumerated in the formal source-contract job so
+  the documented preflight cannot silently break again. No production,
+  package, credential, or release state was touched.

@@ -156,6 +156,7 @@ jobs:
             tests/v1/test_wechat_callback_gateway.py \
             tests/v1/test_weixin_channel_adapter.py \
             tests/v1/test_dependency_pack_process.py \
+            tests/v1/test_light_real_release_validation.py \
             tests/v1/test_office_skill_runtime.py \
             tests/v1/test_release_process_boundary.py \
             tests/v1/test_user_mcp_self_service.py \
