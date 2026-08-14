@@ -1,6 +1,6 @@
 # e-Mate 2.0.5 development log
 
-Last updated: 2026-08-13 (Asia/Shanghai)
+Last updated: 2026-08-14 (Asia/Shanghai)
 
 This is the recovery ledger for the 2.0.5 development train. Record only
 observed evidence. A pending test, intended fix, or narrower proxy is not a
@@ -1338,3 +1338,40 @@ environment failure until the product failure reproduces from known state.
   installer, upload, Feed activation, or production change was made. A
   production freshness signer is still required before this entry can become
   visible.
+
+### 2026-08-14 RELEASE-205-PREFLIGHT-021
+
+- The reported reference-poster edit was re-read from its immutable share. It
+  repeatedly changed size and prompt, dropped the reference, attempted a local
+  pixel repair, and finally stopped at the retired fixed step cap. The current
+  train already closes every branch: `26ba2e85` binds the Turn image and fences
+  a deterministic same-Turn rejection, `06065ddc` exposes no model-visible
+  size/quality control and makes one Pro request, and `afc3a4d8` replaces the
+  fixed step cap with Cow context compaction. The four exact Codex-like image
+  regressions passed, so no parallel image path or case-specific retry was
+  added.
+- Renderer contracts passed `261/261`. A production Web build then exposed a
+  stale bundle assertion that still required the retired full-page conversation
+  selector as its own chunk; the real no-thread dashboard keeps only its compact
+  project picker, while an existing empty thread renders a neutral in-thread
+  state. Commit `87ba32fd` also migrates an existing Tencent Docs MCP entry from
+  the former Bearer preset to the single OAuth entry instead of creating a
+  second server. The bundle gate passed, focused MCP flows passed `2/2`,
+  TypeScript passed, and the rebuilt GA WebUI suite passed `60/60`.
+- Commit `5103efc5` preserves the standalone publication trust split without a
+  private-key handoff. The immutable Runtime build emits only a pre-signed
+  authority document; R2 admission emits a canonical schema-2 publication
+  receipt; the existing independent publication signer must still sign the
+  bounded freshness lease before the Feed can expose the pointer or one-line
+  installers. Changed Feed/publication checks passed `80/80` after putting the
+  locked Node runtime on `PATH`; the first run's only failure was that missing
+  test-runner executable, not a product assertion.
+- Production Feishu readiness remains a real external blocker. The active
+  `e-mate-cloud-2.0.5-35dfba71` release and Nginx Connector proxy are healthy,
+  but the enable flag is absent, all three server-only secret declarations are
+  absent, and the Connector schema has not been migrated; loopback and public
+  begin therefore return 404. No value was read or logged. The desktop release
+  gate correctly requires anonymous POST to return 401 before any Runtime build.
+  GitHub and configured release environments also currently contain no R2
+  credentials, so no upload, pointer publication, Feed activation, or production
+  mutation was attempted during this preflight.
