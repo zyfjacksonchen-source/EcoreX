@@ -683,9 +683,12 @@ def test_cow_terminal_fallback_is_projected_once_without_repeating_streamed_text
     assert worker.kernel.deltas[-1][1] == "streamed"
 
 
-def test_cow_office_file_events_become_account_scoped_public_artifacts(
+def test_cow_office_tool_results_become_account_scoped_public_artifacts_once(
     tmp_path: Path,
 ) -> None:
+    import pytest
+
+    from ecorex.capabilities import CapabilityDeniedError
     from ecorex.protocol import CreateThreadRequest, CreateTurnRequest, ItemKind
     from ecorex.runtime import RuntimeSettings, create_app
     from ecorex.runtime.worker import AgentTurnWorker
@@ -729,17 +732,138 @@ def test_cow_office_file_events_become_account_scoped_public_artifacts(
         "thread_id": thread.thread_id,
     }
 
-    for filename in ("report.docx", "budget.xlsx", "slides.pptx"):
-        path = workspace / filename
-        path.write_bytes(b"PK\x03\x04cow-office")
+    office = (
+        (
+            "office_documents",
+            "document",
+            ".docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+        (
+            "office_spreadsheets",
+            "spreadsheet",
+            ".xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+        (
+            "office_presentations",
+            "presentation",
+            ".pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ),
+        ("office_pdf", "pdf", ".pdf", "application/pdf"),
+    )
+    first_result = None
+    for tool_name, _family, extension, mime_type in office:
+        for action in ("create", "edit"):
+            path = workspace / f"{tool_name}-{action}{extension}"
+            path.write_bytes(f"{tool_name}:{action}".encode())
+            call_id = f"{tool_name}-{action}"
+            result = {
+                "status": "completed",
+                "operation": action,
+                "path": str(path),
+                "file_name": path.name,
+                "mime_type": mime_type,
+            }
+            first_result = first_result or result
+            worker._project_event(
+                {
+                    "type": "tool_execution_start",
+                    "data": {
+                        "tool_call_id": call_id,
+                        "tool_name": tool_name,
+                        "arguments": {"action": action, "path": str(path)},
+                    },
+                },
+                state=state,
+                job_id=leased.job_id,
+                lease_token=leased.lease_token,
+                turn_id=created.turn.turn_id,
+            )
+            worker._project_event(
+                {
+                    "type": "tool_execution_end",
+                    "data": {
+                        "tool_call_id": call_id,
+                        "tool_name": tool_name,
+                        "status": "success",
+                        "result": result,
+                    },
+                },
+                state=state,
+                job_id=leased.job_id,
+                lease_token=leased.lease_token,
+                turn_id=created.turn.turn_id,
+            )
+
+    assert first_result is not None
+    worker._project_event(
+        {"type": "artifact", "data": first_result},
+        state=state,
+        job_id=leased.job_id,
+        lease_token=leased.lease_token,
+        turn_id=created.turn.turn_id,
+    )
+    inspected = workspace / "office_pdf-create.pdf"
+    worker._project_event(
+        {
+            "type": "tool_execution_start",
+            "data": {
+                "tool_call_id": "inspect",
+                "tool_name": "office_pdf",
+                "arguments": {"action": "inspect", "path": str(inspected)},
+            },
+        },
+        state=state,
+        job_id=leased.job_id,
+        lease_token=leased.lease_token,
+        turn_id=created.turn.turn_id,
+    )
+    worker._project_event(
+        {
+            "type": "tool_execution_end",
+            "data": {
+                "tool_call_id": "inspect",
+                "status": "success",
+                "result": {"path": str(inspected), "family": "pdf"},
+            },
+        },
+        state=state,
+        job_id=leased.job_id,
+        lease_token=leased.lease_token,
+        turn_id=created.turn.turn_id,
+    )
+
+    escaped = tmp_path / "forged.pdf"
+    escaped.write_bytes(b"forged")
+    worker._project_event(
+        {
+            "type": "tool_execution_start",
+            "data": {
+                "tool_call_id": "forged",
+                "tool_name": "office_pdf",
+                "arguments": {"action": "create", "path": str(escaped)},
+            },
+        },
+        state=state,
+        job_id=leased.job_id,
+        lease_token=leased.lease_token,
+        turn_id=created.turn.turn_id,
+    )
+    with pytest.raises(CapabilityDeniedError, match="escaped its workspace"):
         worker._project_event(
             {
-                "type": "artifact",
+                "type": "tool_execution_end",
                 "data": {
-                    "type": "artifact",
-                    "path": str(path),
-                    "file_name": filename,
-                    "kind": "office",
+                    "tool_call_id": "forged",
+                    "status": "success",
+                    "result": {
+                        "status": "completed",
+                        "operation": "create",
+                        "path": str(escaped),
+                        "mime_type": "application/pdf",
+                    },
                 },
             },
             state=state,
@@ -750,19 +874,13 @@ def test_cow_office_file_events_become_account_scoped_public_artifacts(
 
     projection = kernel.projection(thread.thread_id)
     items = [item for item in projection.items if item.kind is ItemKind.ARTIFACT]
+    assert len(items) == 8
     assert [item.content["artifact"]["family"] for item in items] == [
-        "document",
-        "spreadsheet",
-        "presentation",
-    ]
-    assert [Path(item.content["artifact"]["display_name"]).suffix for item in items] == [
-        ".docx",
-        ".xlsx",
-        ".pptx",
+        family for _tool, family, _extension, _mime in office for _action in range(2)
     ]
     for item in items:
         artifact = item.content["artifact"]
-        assert {"open", "download", "reveal"} <= set(artifact["actions"])
+        assert {"preview", "open", "download", "reveal"} <= set(artifact["actions"])
         scope = app.state.artifact_service.get_artifact_scope(artifact["artifact_id"])
         assert scope.account_id == app.state.input_attachment_service.account_id
         assert scope.thread_id == thread.thread_id

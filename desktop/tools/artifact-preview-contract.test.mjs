@@ -42,6 +42,10 @@ const runtimeClient = await readFile(
   new URL("../src/v1/api/runtimeClient.ts", import.meta.url),
   "utf-8",
 );
+const artifactOperations = await readFile(
+  new URL("../src/v1/api/artifactRuntimeOperations.ts", import.meta.url),
+  "utf-8",
+);
 const markdown = await readFile(
   new URL("../src/v1/components/OfficeMarkdown.tsx", import.meta.url),
   "utf-8",
@@ -165,6 +169,16 @@ test("private artifact links are not rendered as external Markdown links", () =>
   assert.match(markdown, /isPrivateArtifactUrl/u);
   assert.match(markdown, /\/api\/v1\/artifacts\//u);
   assert.match(markdown, /if \(isPrivateArtifactUrl\(url\)\) return "";/u);
+});
+
+test("assistant web links stay blue and local files require an Artifact identity", () => {
+  assert.match(markdown, /SAFE_PROTOCOLS = new Set\(\["http:", "https:", "mailto:"\]\)/u);
+  assert.match(markdown, /<a href=\{href\} rel="noreferrer noopener" target="_blank">/u);
+  assert.match(features, /\.ex-rich-text a\s*\{[\s\S]*color:\s*var\(--color-link\)[\s\S]*text-decoration-line:\s*underline/u);
+  assert.match(features, /\.ex-rich-text a:focus-visible\s*\{[\s\S]*outline:\s*2px solid var\(--color-focus\)/u);
+  assert.doesNotMatch(markdown, /file:|openExternal|shell\./u);
+  assert.match(shelf, /data-emate-artifact-id=\{artifact\.artifact_id\}/u);
+  assert.match(artifactOperations, /artifacts\/\$\{encodeURIComponent\(artifactId\)\}\/actions\/\$\{action\}/u);
 });
 
 test("non-previewable files keep Cow-compatible local open and reveal actions", () => {

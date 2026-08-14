@@ -6463,7 +6463,7 @@ class AgentTurnWorker:
             call_id = str(data.get("tool_call_id") or "")
             stored = state["tools"].get(call_id)
             if stored is not None:
-                item_id, activity, _arguments = stored
+                item_id, activity, arguments = stored
                 if data.get("status") == "success":
                     completed = activity.model_copy(
                         update={
@@ -6480,6 +6480,34 @@ class AgentTurnWorker:
                         job_id=job_id,
                         lease_token=lease_token,
                     )
+                    result = data.get("result")
+                    action = (
+                        str(arguments.get("action") or "")
+                        .strip()
+                        .lower()
+                        .replace("-", "_")
+                    )
+                    if (
+                        activity.tool_id in {
+                            "office_documents",
+                            "office_pdf",
+                            "office_presentations",
+                            "office_spreadsheets",
+                        }
+                        and action in {"create", "edit"}
+                        and isinstance(result, Mapping)
+                        and result.get("status") == "completed"
+                        and result.get("operation") == action
+                    ):
+                        self._project_cow_artifact(
+                            "artifact",
+                            result,
+                            state=state,
+                            seq=seq,
+                            job_id=job_id,
+                            lease_token=lease_token,
+                            turn_id=turn_id,
+                        )
                 else:
                     self.kernel.transition_item(
                         item_id,
@@ -6514,7 +6542,7 @@ class AgentTurnWorker:
         event_type: str,
         data: Mapping[str, Any],
         *,
-        state: Mapping[str, Any],
+        state: dict[str, Any],
         seq: int,
         job_id: str,
         lease_token: str,
@@ -6547,6 +6575,10 @@ class AgentTurnWorker:
             file_content = path.read_bytes()
         except OSError as error:
             raise ConflictError("Cow Artifact could not be read") from error
+        identity = (str(path), hashlib.sha256(file_content).hexdigest())
+        projected = state.setdefault("projected_artifacts", set())
+        if identity in projected:
+            return
         from ecorex.artifacts import ArtifactScope
 
         prepared = service.prepare_artifact(
@@ -6629,6 +6661,7 @@ class AgentTurnWorker:
                 },
                 idempotency_key=f"{turn_id}:cow:artifact:{seq}:created",
             )
+        projected.add(identity)
 
     async def _heartbeat_loop(
         self,

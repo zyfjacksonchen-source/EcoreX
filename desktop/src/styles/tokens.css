@@ -96,6 +96,7 @@
   --control-hover-border: var(--color-rule);
   --control-hover-surface: var(--color-raised);
   --color-model-icon-surface: oklch(1 0 0);
+  --color-link: var(--color-accent-strong);
 
 }
 
