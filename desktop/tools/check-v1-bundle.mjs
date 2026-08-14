@@ -14,7 +14,6 @@ const FEATURE_STEMS = [
   "ComposerModelSelector",
   "SkillsWorkspace",
   "InteractionStack",
-  "NewConversationProjectSelector",
   "OfficeMarkdown",
   "ReplayDialog",
   "RetouchWorkspace",

@@ -823,12 +823,19 @@ test("Tencent Docs stable card configures the single Cow remote MCP path", async
   await workspace.getByRole("tab", { name: /已安装/u }).click();
   await workspace.getByRole("button", { name: "通道", exact: true }).click();
 
+  const mcp = workspace.getByRole("region", { name: "远程 MCP" });
+  await mcp.getByRole("button", { name: "添加远程 MCP" }).click();
+  await mcp.getByLabel("显示名称").fill("旧腾讯文档");
+  await mcp.getByLabel("HTTPS 地址").fill("https://docs.qq.com/openapi/mcp");
+  await mcp.getByLabel("认证方式").selectOption("bearer");
+  await mcp.getByLabel("Bearer 令牌", { exact: true }).fill("legacy-token-never-echoed");
+  await mcp.getByRole("button", { name: "保存配置" }).click();
+
   const channels = workspace.getByRole("region", { name: "能力中心通道" });
   const tencentDocs = channels.locator("article.ex-connector-row").filter({ hasText: "腾讯文档" });
   await expect(tencentDocs).not.toContainText("当前安装未包含这个连接所需的组件");
   await tencentDocs.getByRole("button", { name: "使用远程 MCP 连接" }).click();
 
-  const mcp = workspace.getByRole("region", { name: "远程 MCP" });
   await expect(mcp.getByLabel("显示名称")).toHaveValue("腾讯文档");
   await expect(mcp.getByLabel("HTTPS 地址")).toHaveValue("https://docs.qq.com/openapi/mcp");
   await expect(mcp.getByLabel("认证方式")).toHaveValue("oauth2");

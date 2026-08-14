@@ -177,8 +177,17 @@ export function UserMCPPanel({
   useEffect(() => {
     if (!preset || !loaded) return;
     const existing = items.find((item) => item.endpoint === preset.endpoint);
-    if (existing) startEdit(existing);
-    else {
+    if (existing) {
+      setEditingId(existing.server_id);
+      setForm({
+        ...formFor(existing),
+        displayName: preset.displayName,
+        endpoint: preset.endpoint,
+        authKind: preset.authKind,
+        credential: "",
+      });
+      setNotice(null);
+    } else {
       setEditingId("new");
       setForm({
         ...EMPTY_FORM,

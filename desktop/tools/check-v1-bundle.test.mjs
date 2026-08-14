@@ -12,7 +12,6 @@ const FEATURES = [
   "ComposerModelSelector",
   "SkillsWorkspace",
   "InteractionStack",
-  "NewConversationProjectSelector",
   "OfficeMarkdown",
   "ReplayDialog",
   "RetouchWorkspace",
