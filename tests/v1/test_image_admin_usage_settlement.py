@@ -25,11 +25,13 @@ class _CompletedProvider:
         self,
         model_id: str = "gpt-image-2",
         *,
+        output_units: int = 515,
         actual_model_id: str | None = None,
         fallback_from_model_id: str | None = None,
         fallback_used: bool | None = None,
     ) -> None:
         self.model_id = model_id
+        self.output_units = output_units
         self.actual_model_id = actual_model_id
         self.fallback_from_model_id = fallback_from_model_id
         self.fallback_used = fallback_used
@@ -56,7 +58,10 @@ class _CompletedProvider:
             mime_type="image/png",
             sha256="0" * 64,
             usage=ImageUsage(
-                "managed-image", self.model_id, output_units=1, billed_units=1
+                "managed-image",
+                self.model_id,
+                output_units=self.output_units,
+                billed_units=1,
             ),
             actual_model_id=self.actual_model_id,
             fallback_from_model_id=self.fallback_from_model_id,
@@ -98,34 +103,54 @@ def test_admin_image_usage_settlement_is_exactly_once_across_recovery(tmp_path) 
     job = SimpleNamespace(
         job_id="imgjob_" + "1" * 32,
         account_id="account-1",
-        request=SimpleNamespace(count=1, model_id="gpt-image-2"),
+        request=SimpleNamespace(count=8, model_id="gpt-image-2"),
         status=ImageJobStatus.RUNNING,
         created_at=datetime.now(UTC),
     )
 
     async def scenario() -> None:
-        await provider.submit(job, idempotency_key="image-provider-request-1")
+        completed = await provider.submit(
+            job, idempotency_key="image-provider-request-1"
+        )
+        assert completed.usage is not None
+        assert completed.usage.output_units == 515
         await provider.recover(
             job,
             idempotency_key="image-provider-request-1",
             provider_request_id="provider-request-1",
         )
+        failed = await provider._settle(
+            SimpleNamespace(
+                job_id="imgjob_" + "9" * 32,
+                account_id="account-1",
+                request=SimpleNamespace(count=1, model_id="gpt-image-2"),
+                status=ImageJobStatus.RUNNING,
+                created_at=datetime.now(UTC),
+            ),
+            ProviderResult(ProviderState.FAILED, error_code="provider_rejected"),
+        )
+        assert failed.state is ProviderState.FAILED
 
     asyncio.run(scenario())
     assert repository.get_user("account-1").images_used == 1
     connection = repository._connect()
     try:
         row = connection.execute(
-            "SELECT COUNT(*),organization_id,requested_model_id,"
+            "SELECT COUNT(*),image_count,organization_id,requested_model_id,"
             "provider_reported_model_id,actual_model_id,"
             "actual_provider_id,fallback_from_model_id,fallback_used,job_status,result_status "
             "FROM admin_ops_provider_usage_facts "
             "WHERE source_service='image_service' AND source_id=?",
             (job.job_id,),
         ).fetchone()
+        fact_count = connection.execute(
+            "SELECT COUNT(*) FROM admin_ops_provider_usage_facts "
+            "WHERE source_service='image_service'"
+        ).fetchone()[0]
     finally:
         connection.close()
     assert tuple(row) == (
+        1,
         1,
         "org-1",
         "gpt-image-2",
@@ -134,12 +159,13 @@ def test_admin_image_usage_settlement_is_exactly_once_across_recovery(tmp_path) 
         "managed-image",
         None,
         0,
-        "running",
+        "completed",
         "completed",
     )
+    assert fact_count == 1
 
 
-def test_admin_image_usage_records_reported_model_and_one_fact_per_batch_job(tmp_path) -> None:
+def test_admin_image_usage_records_reported_model_and_one_fact_per_independent_job(tmp_path) -> None:
     database = tmp_path / "management.db"
     AdminManagementSchemaManager(database).migrate()
     repository = AdminManagementRepository(database, encryption_key=b"m" * 32)
@@ -206,7 +232,7 @@ def test_admin_image_usage_records_reported_model_and_one_fact_per_batch_job(tmp
             actual_provider_id="managed-image",
             fallback_from_model_id="gpt-image-2-pro",
             fallback_used=True,
-            job_status="running",
+            job_status="completed",
             result_status="completed",
         )
     connection = repository._connect()

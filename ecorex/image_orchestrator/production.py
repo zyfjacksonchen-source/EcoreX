@@ -1040,7 +1040,7 @@ class _AdminManagementImageUsageProvider:
                 source_id=job.job_id,
                 usage_kind="image",
                 account_id=job.account_id,
-                image_count=usage.output_units,
+                image_count=1,
                 provider_created_at=job.created_at.isoformat(),
                 requested_model_id=requested_model_id,
                 provider_reported_model_id=usage.model_id,
@@ -1048,7 +1048,7 @@ class _AdminManagementImageUsageProvider:
                 actual_provider_id=usage.provider,
                 fallback_from_model_id=result.fallback_from_model_id,
                 fallback_used=result.fallback_used,
-                job_status=job.status.value,
+                job_status=result.state.value,
                 result_status=result.state.value,
             )
         return result
