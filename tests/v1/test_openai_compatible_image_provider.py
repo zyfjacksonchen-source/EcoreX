@@ -229,43 +229,70 @@ def test_image_operations_can_complete_after_two_minutes_without_widening_health
     asyncio.run(scenario())
 
 
-def test_pro_model_falls_back_once_only_after_definite_model_unavailable() -> None:
+def test_pro_model_rejection_is_terminal_after_one_call() -> None:
     async def scenario() -> None:
-        requests: list[httpx.Request] = []
+        models: list[str] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
-            requests.append(request)
             model = json.loads(request.content)["model"]
-            if model == "gpt-image-2-pro":
-                return httpx.Response(
-                    404,
-                    json={"error": {"code": "model_not_found"}},
-                )
-            assert model == "gpt-image-2"
-            return _completed()
+            models.append(model)
+            return httpx.Response(
+                404,
+                json={"error": {"code": "model_not_found"}},
+            )
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         provider = _provider(
             client,
             allowed_models=frozenset({"gpt-image-2-pro", "gpt-image-2"}),
         )
+        with pytest.raises(ProviderRejected):
+            await provider.submit(
+                _job(model_id="gpt-image-2-pro"),
+                idempotency_key="provider-idempotency-0001",
+            )
+        assert models == ["gpt-image-2-pro"]
+        await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_pro_custom_size_uses_auto_once_and_preserves_actual_pixels() -> None:
+    actual = _image_bytes("RGB", (1024, 1536), (9, 8, 7), format="PNG")
+
+    async def scenario() -> None:
+        payloads: list[dict] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            payloads.append(json.loads(request.content))
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"b64_json": base64.b64encode(actual).decode("ascii")}
+                    ],
+                    "usage": {"output_tokens": 1},
+                },
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        provider = _provider(
+            client,
+            allowed_models=frozenset({"gpt-image-2-pro"}),
+        )
         result = await provider.submit(
-            _job(model_id="gpt-image-2-pro"),
+            _job(model_id="gpt-image-2-pro", width=800, height=1200),
             idempotency_key="provider-idempotency-0001",
         )
-        assert result.state is ProviderState.COMPLETED
-        assert result.usage is not None
-        assert result.usage.model_id == "gpt-image-2"
-        assert result.actual_model_id == "gpt-image-2"
-        assert result.fallback_used is True
-        assert result.fallback_from_model_id == "gpt-image-2-pro"
-        assert [json.loads(request.content)["model"] for request in requests] == [
-            "gpt-image-2-pro",
-            "gpt-image-2",
-        ]
-        assert requests[0].headers["idempotency-key"] != requests[1].headers[
-            "idempotency-key"
-        ]
+
+        assert len(payloads) == 1
+        assert payloads[0]["model"] == "gpt-image-2-pro"
+        assert payloads[0]["size"] == "auto"
+        assert result.payload == actual
+        assert result.actual_model_id == "gpt-image-2-pro"
+        assert result.fallback_used is False
+        assert result.fallback_from_model_id is None
+        assert result.usage is not None and result.usage.billed_units == 1
         await client.aclose()
 
     asyncio.run(scenario())

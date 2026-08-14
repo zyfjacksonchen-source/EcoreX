@@ -2,8 +2,7 @@
 
 This adapter runs only in the cloud Image Orchestrator.  Administrator-managed
 credentials therefore never cross into the local Runtime.  A submit is never
-replayed after an uncertain response.  The sole in-adapter fallback follows a
-definite model-unavailable rejection, before the provider accepted any work.
+replayed after an uncertain response or switched to a different image model.
 """
 
 from __future__ import annotations
@@ -12,7 +11,6 @@ import asyncio
 import base64
 import binascii
 from collections.abc import Callable, Mapping
-from dataclasses import replace
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from io import BytesIO
@@ -175,29 +173,7 @@ class OpenAICompatibleImageProvider:
     async def submit(self, job: ImageJob, *, idempotency_key: str) -> ProviderResult:
         self._validate_job(job)
         self._validate_idempotency_key(idempotency_key)
-        try:
-            return await self._submit_once(job, idempotency_key=idempotency_key)
-        except ProviderModelUnavailable:
-            if (
-                job.request.model_id != "gpt-image-2-pro"
-                or "gpt-image-2" not in self.allowed_models
-            ):
-                raise
-            fallback_job = replace(
-                job, request=replace(job.request, model_id="gpt-image-2")
-            )
-            fallback_key = "image-fallback-" + hashlib.sha256(
-                idempotency_key.encode("utf-8")
-            ).hexdigest()
-            result = await self._submit_once(
-                fallback_job,
-                idempotency_key=fallback_key,
-            )
-            return replace(
-                result,
-                fallback_from_model_id=job.request.model_id,
-                fallback_used=True,
-            )
+        return await self._submit_once(job, idempotency_key=idempotency_key)
 
     async def _submit_once(
         self, job: ImageJob, *, idempotency_key: str

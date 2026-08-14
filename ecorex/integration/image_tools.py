@@ -24,6 +24,7 @@ from ecorex.artifacts import (
     ArtifactService,
     QualityEvidence,
 )
+from ecorex.artifacts.retouch_surface import inspect_raster
 from ecorex.capabilities import (
     ModelModality,
     ToolInvocationContext,
@@ -679,7 +680,11 @@ class RuntimeImageToolBackend:
                 publication_key,
                 cloud_job_id,
             )
-            return self._cow_result(result, turn.image_model_id)
+            return self._cow_result(
+                result,
+                turn.image_model_id,
+                actual_size=self._artifact_size(recovered),
+            )
         row = await asyncio.to_thread(self.publications.row, publication_key)
         if row is not None and row["status"] == "completed":
             if (
@@ -712,7 +717,11 @@ class RuntimeImageToolBackend:
                 publication_key,
                 cloud_job_id,
             )
-            return self._cow_result(result, turn.image_model_id)
+            return self._cow_result(
+                result,
+                turn.image_model_id,
+                actual_size=self._artifact_size(recovered),
+            )
         assets, source_ids = await self._image_sources(
             arguments.get("image_url"),
             scope=context.execution_scope,
@@ -737,6 +746,7 @@ class RuntimeImageToolBackend:
                 "quality": str(arguments.get("quality") or "auto")[:64],
                 "size": str(arguments.get("size") or "auto"),
             },
+            max_attempts=1,
         )
         _marker, token = await asyncio.to_thread(
             self.publications.claim,
@@ -771,7 +781,11 @@ class RuntimeImageToolBackend:
                 publication_key,
                 row["cloud_job_id"],
             )
-            return self._cow_result(result, turn.image_model_id)
+            return self._cow_result(
+                result,
+                turn.image_model_id,
+                actual_size=self._artifact_size(artifact),
+            )
         lease_stop, lease_heartbeat = self._start_publication_lease(
             publication_key, token
         )
@@ -858,7 +872,11 @@ class RuntimeImageToolBackend:
             publication_key,
             downloaded.job.job_id,
         )
-        return self._cow_result(result, downloaded.job.model_id)
+        return self._cow_result(
+            result,
+            downloaded.job.model_id,
+            actual_size=self._artifact_size(artifact),
+        )
 
     async def _image_sources(
         self,
@@ -1006,9 +1024,33 @@ class RuntimeImageToolBackend:
             content=content,
         )
 
+    def _artifact_size(self, artifact: Any) -> tuple[int, int]:
+        content = self.artifacts.read_user_content(
+            artifact.artifact_id,
+            artifact.revision_id,
+            account_id=self.account_id,
+        )
+        descriptor = inspect_raster(content, artifact.mime_type)
+        return descriptor.width_px, descriptor.height_px
+
     @classmethod
-    def _cow_result(cls, result: Mapping[str, Any], model: str) -> dict[str, Any]:
-        return {**dict(result), "model": model, "images": cls._result_images(result)}
+    def _cow_result(
+        cls,
+        result: Mapping[str, Any],
+        model: str,
+        *,
+        actual_size: tuple[int, int] | None = None,
+    ) -> dict[str, Any]:
+        payload = {**dict(result), "model": model}
+        if actual_size is not None:
+            width, height = actual_size
+            payload.update(
+                width=width,
+                height=height,
+                actual_size=f"{width}x{height}",
+            )
+        payload["images"] = cls._result_images(payload)
+        return payload
 
     async def _execute_with_publication_lease(
         self,

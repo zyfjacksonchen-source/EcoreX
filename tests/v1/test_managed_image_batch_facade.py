@@ -39,7 +39,7 @@ def _context() -> ToolInvocationContext:
 
 
 def test_imagegen_public_contract_is_one_codex_style_output() -> None:
-    expected = {"prompt", "image_url", "size", "quality"}
+    expected = {"prompt", "image_url"}
     schemas = [
         ImageGenTool.params,
         builtin_capability_registry().get("imagegen").input_schema,
@@ -53,8 +53,6 @@ def test_imagegen_public_contract_is_one_codex_style_output() -> None:
             {
                 "prompt": "combine the references",
                 "image_url": ["first.png", "second.png"],
-                "size": "1536x1024",
-                "quality": "high",
             },
             schema,
             label="imagegen arguments",
@@ -87,6 +85,29 @@ def test_imagegen_public_contract_is_one_codex_style_output() -> None:
     output = builtin_capability_registry().get("imagegen").output_schema
     assert output["properties"]["images"]["maxItems"] == 1
     assert "separate imagegen call" in ImageGenTool.description
+
+
+def test_custom_pixel_prompt_reports_provider_actual_size() -> None:
+    result = RuntimeImageToolBackend._cow_result(
+        {
+            "preview_url": "/api/v1/artifacts/art_actual/preview",
+            "artifact_id": "art_actual",
+            "revision_id": "rev_actual",
+        },
+        "gpt-image-2-pro",
+        actual_size=(1024, 1536),
+    )
+
+    assert result["model"] == "gpt-image-2-pro"
+    assert result["actual_size"] == "1024x1536"
+    assert (result["width"], result["height"]) == (1024, 1536)
+    assert result["images"] == [
+        {
+            "url": "/api/v1/artifacts/art_actual/preview",
+            "artifact_id": "art_actual",
+            "revision_id": "rev_actual",
+        }
+    ]
 
 
 def test_reference_edit_binds_once_normalizes_size_and_fences_terminal_failure() -> None:

@@ -383,16 +383,6 @@ _COW_IMAGE_TASK_PARAMS = {
         "maxLength": 4096,
         "maxItems": 16,
     },
-    "size": {
-        "type": "string",
-        "description": "Optional provider-supported output size.",
-        "enum": ["auto", "1024x1024", "1536x1024", "1024x1536"],
-    },
-    "quality": {
-        "type": "string",
-        "description": "Optional quality hint.",
-        "enum": ["low", "medium", "high", "auto"],
-    },
 }
 
 
