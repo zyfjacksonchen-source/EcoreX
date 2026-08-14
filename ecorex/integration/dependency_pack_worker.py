@@ -103,6 +103,36 @@ def _text(value: Any, *, maximum: int = 4096) -> str:
     return text
 
 
+def _register_embedded_pdf_font(pdfmetrics: Any, ttfont: Any, text: str) -> str:
+    font_name = "eMatePDFEmbedded"
+    windows_fonts = Path(os.environ.get("WINDIR") or "C:/Windows") / "Fonts"
+    candidates = (
+        (Path("/System/Library/Fonts/STHeiti Medium.ttc"), 1),
+        (Path("/System/Library/Fonts/STHeiti Light.ttc"), 1),
+        (Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"), 0),
+        (Path("/Library/Fonts/Arial Unicode.ttf"), 0),
+        (windows_fonts / "msyh.ttc", 0),
+        (windows_fonts / "msyhbd.ttc", 0),
+        (windows_fonts / "simhei.ttf", 0),
+        (windows_fonts / "simsun.ttc", 0),
+        (windows_fonts / "msjh.ttc", 0),
+        (Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"), 0),
+    )
+    for path, subfont_index in candidates:
+        if not path.is_file():
+            continue
+        try:
+            font = ttfont(font_name, path, subfontIndex=subfont_index)
+        except Exception:
+            continue
+        glyphs = font.face.charToGlyph
+        if any(not character.isspace() and ord(character) not in glyphs for character in text):
+            continue
+        pdfmetrics.registerFont(font)
+        return font_name
+    raise RuntimeError("no embeddable system font covers the PDF text")
+
+
 class _TextCollector:
     def __init__(self) -> None:
         self.parts: list[str] = []
@@ -472,19 +502,26 @@ def _office_create(payload: Mapping[str, Any], runtime: Path) -> Mapping[str, An
         import reportlab
         from reportlab.lib.pagesizes import A4
         from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+        from reportlab.pdfbase.ttfonts import TTFont
         from reportlab.pdfgen import canvas
 
         for module in (pypdf, reportlab):
             _inside(module, runtime)
-        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+        required_text = [title]
+        for section in payload.get("sections") or []:
+            if isinstance(section, Mapping):
+                required_text.append(str(section.get("heading") or ""))
+                paragraphs = section.get("paragraphs") or []
+                if isinstance(paragraphs, list):
+                    required_text.extend(str(value or "") for value in paragraphs)
+        font_name = _register_embedded_pdf_font(pdfmetrics, TTFont, "".join(required_text))
         writer = canvas.Canvas(body, pagesize=A4)
         width, height = A4
         y = height - 64
-        writer.setFont("STSong-Light", 20)
+        writer.setFont(font_name, 20)
         writer.drawString(56, y, title)
         y -= 36
-        writer.setFont("STSong-Light", 11)
+        writer.setFont(font_name, 11)
         for section in payload.get("sections") or []:
             if not isinstance(section, Mapping):
                 raise ValueError("PDF section is invalid")
@@ -494,7 +531,7 @@ def _office_create(payload: Mapping[str, Any], runtime: Path) -> Mapping[str, An
                 for line in textwrap.wrap(_text(value), width=55, replace_whitespace=False):
                     if y < 56:
                         writer.showPage()
-                        writer.setFont("STSong-Light", 11)
+                        writer.setFont(font_name, 11)
                         y = height - 56
                     writer.drawString(56, y, line)
                     y -= 18

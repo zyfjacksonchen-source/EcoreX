@@ -5,6 +5,7 @@ import hashlib
 from io import BytesIO
 import json
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import sys
@@ -27,7 +28,11 @@ from ecorex.integration.dependency_pack_process import (
     PackOfficeServiceAdapter,
     VerifiedDependencyPackProcessAdapter,
 )
-from ecorex.integration.dependency_pack_worker import _verify_ooxml_archive
+from ecorex.integration.dependency_pack_worker import (
+    _office_create,
+    _register_embedded_pdf_font,
+    _verify_ooxml_archive,
+)
 from ecorex.integration.pack_python import PackPythonIdentity
 from ecorex.release.process_boundary import BoundedProcessResult
 from ecorex.update import SignatureEnvelope
@@ -361,6 +366,91 @@ def test_office_native_dependency_service_is_executable_without_sys_path_polluti
         }
     finally:
         process.close()
+
+
+def test_office_pdf_create_renders_embedded_chinese_text(tmp_path: Path) -> None:
+    reportlab = pytest.importorskip("reportlab")
+    pypdf = pytest.importorskip("pypdf")
+    pdftoppm = shutil.which("pdftoppm")
+    if not pdftoppm:
+        pytest.skip("pdftoppm is required for the PDF visibility regression")
+    runtime = Path(reportlab.__file__).resolve(strict=True).parents[1]
+    result = _office_create(
+        {
+            "family": "pdf",
+            "title": "办公验收报告",
+            "sections": [
+                {"heading": "结论", "paragraphs": ["中文内容必须真实可见"]}
+            ],
+        },
+        runtime,
+    )
+    content = base64.b64decode(result["content_base64"], validate=True)
+    reader = pypdf.PdfReader(BytesIO(content))
+    assert "办公验收报告" in (reader.pages[0].extract_text() or "")
+    fonts = reader.pages[0]["/Resources"]["/Font"]
+    assert any(
+        "/FontFile2" in font["/FontDescriptor"].get_object()
+        for reference in fonts.values()
+        if (font := reference.get_object()).get("/FontDescriptor")
+    )
+    pdf_path = tmp_path / "visible-chinese.pdf"
+    pdf_path.write_bytes(content)
+    render_prefix = tmp_path / "rendered"
+    subprocess.run(
+        (
+            pdftoppm,
+            "-f",
+            "1",
+            "-l",
+            "1",
+            "-r",
+            "96",
+            "-singlefile",
+            str(pdf_path),
+            str(render_prefix),
+        ),
+        check=True,
+        stderr=subprocess.PIPE,
+    )
+    rendered = render_prefix.with_suffix(".ppm").read_bytes()
+    header, pixels = rendered.split(b"\n255\n", 1)
+    assert header.startswith(b"P6\n")
+    assert min(pixels) < 128
+
+
+def test_office_pdf_font_selection_covers_windows_and_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    windows = tmp_path / "Windows"
+    font_path = windows / "Fonts" / "msyh.ttc"
+    font_path.parent.mkdir(parents=True)
+    font_path.write_bytes(b"system-font-fixture")
+    monkeypatch.setenv("WINDIR", str(windows))
+
+    class Font:
+        class face:
+            charToGlyph = {ord(value): 1 for value in "中文Windows"}
+
+    def ttfont(_name, path, *, subfontIndex):
+        if Path(path) != font_path:
+            raise OSError("candidate unavailable")
+        assert subfontIndex == 0
+        return Font()
+
+    class Metrics:
+        registered = None
+
+        @classmethod
+        def registerFont(cls, font):
+            cls.registered = font
+
+    assert _register_embedded_pdf_font(Metrics, ttfont, "中文 Windows") == (
+        "eMatePDFEmbedded"
+    )
+    assert Metrics.registered is not None
+    with pytest.raises(RuntimeError, match="no embeddable system font"):
+        _register_embedded_pdf_font(Metrics, lambda *_args, **_kwargs: Font(), "🧪")
 
 
 def test_dependency_worker_does_not_require_core_installed_in_pack_python(
