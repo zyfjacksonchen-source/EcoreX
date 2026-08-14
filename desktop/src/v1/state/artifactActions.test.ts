@@ -40,13 +40,14 @@ test("the WebUI never fabricates actions absent from the backend projection", ()
   assert.deepEqual(artifactUiActions(["download"], true), ["download"]);
 });
 
-test("office files open natively while PDFs and images keep in-app preview", () => {
+test("office, PDF, and image artifacts prefer in-app preview", () => {
   const actions = ["preview", "open", "download", "reveal"] as const;
-  assert.equal(artifactPrimaryAction("document", actions), "open");
-  assert.equal(artifactPrimaryAction("spreadsheet", actions), "open");
-  assert.equal(artifactPrimaryAction("presentation", actions), "open");
+  assert.equal(artifactPrimaryAction("document", actions), "preview");
+  assert.equal(artifactPrimaryAction("spreadsheet", actions), "preview");
+  assert.equal(artifactPrimaryAction("presentation", actions), "preview");
   assert.equal(artifactPrimaryAction("pdf", actions), "preview");
   assert.equal(artifactPrimaryAction("image", actions), "preview");
+  assert.equal(artifactPrimaryAction("document", ["open"]), "open");
 });
 
 test("the latest Artifact endpoint projection overrides the replay Item fallback", () => {
