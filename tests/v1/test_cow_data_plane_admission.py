@@ -138,9 +138,10 @@ def test_tool_manager_does_not_publish_channel_transport_cli_tools(monkeypatch) 
     manager.load_tools(start_mcp=False)
 
     assert {"feishu_cli", "tongxin_cli"}.isdisjoint(manager.list_tools())
+    assert "external_connections" in manager.list_tools()
 
 
-def test_managed_feishu_auth_never_falls_back_to_browser_or_fake_qr() -> None:
+def test_external_connection_auth_never_falls_back_to_browser_or_fake_qr() -> None:
     from agent.prompt.builder import _build_tooling_section
 
     managed_prompt = "\n".join(
@@ -151,7 +152,28 @@ def test_managed_feishu_auth_never_falls_back_to_browser_or_fake_qr() -> None:
     )
     assert "real e-Mate Connector login challenge owned by this session" in managed_prompt
     assert "Never use browser automation, raw shell, `send`, screenshots, QR codes" in managed_prompt
+    assert all(
+        provider in managed_prompt
+        for provider in ("Feishu/Lark", "Tencent Docs", "Weixin/WeChat", "DingTalk")
+    )
+    assert "never proof of connection" in managed_prompt
+    assert "without an owned challenge and confirmed Runtime state" in managed_prompt
     assert "call `feishu_cli` first" not in managed_prompt
+
+    structured_prompt = "\n".join(
+        _build_tooling_section(
+            [
+                SimpleNamespace(name="external_connections"),
+                SimpleNamespace(name="feishu_cli"),
+                SimpleNamespace(name="browser"),
+                SimpleNamespace(name="send"),
+            ],
+            "en",
+        )
+    )
+    assert "call `external_connections`" in structured_prompt
+    assert "send only that exact local file" in structured_prompt
+    assert "call `feishu_cli` first" not in structured_prompt
 
     cow_prompt = "\n".join(
         _build_tooling_section([SimpleNamespace(name="feishu_cli")], "en")

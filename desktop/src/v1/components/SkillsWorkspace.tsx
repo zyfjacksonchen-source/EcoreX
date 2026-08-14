@@ -516,7 +516,7 @@ export function SkillsWorkspace({
                   key: tencentDocsMcpKey,
                   displayName: "腾讯文档",
                   endpoint: "https://docs.qq.com/openapi/mcp",
-                  authKind: "bearer",
+                  authKind: "oauth2",
                 } : null}
               />
             </>

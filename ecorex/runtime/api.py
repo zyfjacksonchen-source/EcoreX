@@ -2228,6 +2228,20 @@ def create_app(
         stop_timeout_seconds=settings.lifecycle_shutdown_seconds,
         native_service=cow_channel_service,
     )
+    from agent.tools.external_connections import (
+        ExternalConnectionRuntime,
+        bind_external_connection_runtime,
+    )
+
+    bind_external_connection_runtime(
+        ExternalConnectionRuntime(
+            connector_service=connector_composition.service,
+            connector_repository=connector_composition.repository,
+            connector_oauth_return_uri=oauth_return_uri,
+            channel_service=channel_self_service,
+            mcp_service=cow_mcp_service,
+        )
+    )
     app.state.cow_channel_service = cow_channel_service
     app.state.channel_self_service = channel_self_service
     scheduler_service = None

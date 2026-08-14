@@ -1328,6 +1328,35 @@ class SQLiteConnectorRepository:
             ),
         )
 
+    def auth_completion_for_flow(self, flow_id: str) -> tuple[str, str] | None:
+        """Return only the public connector/instance identity for an owned flow."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT connector_id, completed_instance_id "
+                "FROM connector_auth_completions WHERE flow_id=?",
+                (flow_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row["connector_id"]), str(row["completed_instance_id"])
+
+    def lifecycle_owner_has_flow(self, owner_prefix: str, flow_id: str) -> bool:
+        """Check flow ownership against the existing durable lifecycle request."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT result_json FROM connector_lifecycle_requests "
+                "WHERE client_request_id LIKE ? AND status='completed'",
+                (owner_prefix + "%",),
+            ).fetchall()
+        for row in rows:
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if isinstance(result, dict) and result.get("flow_id") == flow_id:
+                return True
+        return False
+
     def remove_flow(self, flow_id: str, operation_token: str) -> None:
         with self._write() as connection:
             connection.execute(

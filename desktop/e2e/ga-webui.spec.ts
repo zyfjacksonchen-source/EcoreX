@@ -831,17 +831,15 @@ test("Tencent Docs stable card configures the single Cow remote MCP path", async
   const mcp = workspace.getByRole("region", { name: "远程 MCP" });
   await expect(mcp.getByLabel("显示名称")).toHaveValue("腾讯文档");
   await expect(mcp.getByLabel("HTTPS 地址")).toHaveValue("https://docs.qq.com/openapi/mcp");
-  await expect(mcp.getByLabel("认证方式")).toHaveValue("bearer");
-  const secret = mcp.getByLabel("Bearer 令牌", { exact: true });
-  await expect(secret).toHaveAttribute("type", "password");
-  await secret.fill("ga-tencent-token-never-echoed");
+  await expect(mcp.getByLabel("认证方式")).toHaveValue("oauth2");
   await mcp.getByRole("button", { name: "保存配置" }).click();
 
   const row = mcp.locator("article.ex-mcp-server-row").filter({ hasText: "腾讯文档" });
+  await row.getByRole("button", { name: "刷新授权状态" }).click();
+  await row.getByRole("button", { name: "开始授权" }).click();
   await row.getByRole("button", { name: "真实测试" }).click();
   await row.getByRole("button", { name: "启用" }).click();
   await expect(row.getByText("已启用", { exact: true })).toBeVisible();
-  await expect(workspace).not.toContainText("ga-tencent-token-never-echoed");
   await row.getByRole("button", { name: "停用" }).click();
   await row.getByRole("button", { name: "删除" }).click();
   await row.getByRole("button", { name: "确认删除并清除凭据" }).click();

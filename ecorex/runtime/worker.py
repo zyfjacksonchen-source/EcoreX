@@ -6359,7 +6359,7 @@ class AgentTurnWorker:
 
     @staticmethod
     def _tool_effects(name: str) -> tuple[list[str], str]:
-        if name in {"write", "edit", "send", "env_config", "scheduler"}:
+        if name in {"write", "edit", "send", "env_config", "scheduler", "external_connections"}:
             return ["write"], "high"
         if name in {"bash", "terminal"}:
             return ["execute"], "high"

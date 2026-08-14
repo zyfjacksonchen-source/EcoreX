@@ -202,6 +202,7 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
             "browser": "control the browser (screenshot key results or send to the user when help is needed)",
             "host_diagnostics": "inspect local runtime capabilities, MCP state, permissions, ports, and packaged helpers",
             "optional_abilities": "discover, enable, disable, or install optional EcoreX abilities and capability packs",
+            "external_connections": "start or check the real Feishu, Tencent Docs, Weixin, or DingTalk connection lifecycle",
             "feishu_cli": "preferred Feishu/Lark CLI wrapper with auth, setup, and bounded command execution",
             "memory_search": "search memory",
             "memory_get": "read memory content",
@@ -225,6 +226,7 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
             "browser": "控制浏览器（关键结果或需要协助可截图发送给用户）",
             "host_diagnostics": "inspect EcoreX host capabilities, MCP/CDP state, permissions, logs, and packaged helpers",
             "optional_abilities": "discover, enable, disable, or install optional EcoreX abilities and capability packs",
+            "external_connections": "发起或检查飞书、腾讯文档、微信或钉钉的真实连接流程",
             "feishu_cli": "preferred Feishu/Lark CLI wrapper for auth, setup, docs/base/drive commands, and bounded timeouts",
             "memory_search": "搜索记忆",
             "memory_get": "读取记忆内容",
@@ -237,7 +239,7 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
     # Preferred display order
     tool_order = [
         "read", "write", "edit", "ls", "grep", "find",
-        "host_diagnostics", "optional_abilities", "feishu_cli",
+        "host_diagnostics", "optional_abilities", "external_connections", "feishu_cli",
         "bash", "terminal",
         "web_search", "web_fetch", "browser",
         "memory_search", "memory_get",
@@ -297,13 +299,14 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
     lines.extend(
         _build_host_boundary_tooling_rules(
             feishu_cli_available="feishu_cli" in available_names,
+            external_connections_available="external_connections" in available_names,
         )
     )
     return lines
 
 
 def _build_host_boundary_tooling_rules(
-    *, feishu_cli_available: bool,
+    *, feishu_cli_available: bool, external_connections_available: bool = False,
 ) -> List[str]:
     """Rules that make the local host boundary explicit to the model.
 
@@ -311,6 +314,9 @@ def _build_host_boundary_tooling_rules(
     encoding paths.
     """
     feishu_rule = (
+        "- For Feishu/Lark connection or authentication, call `external_connections`; use `feishu_cli` for document operations only after the Runtime reports connected."
+        if external_connections_available
+        else
         "- For Feishu/Lark documents, Base, Drive, Wiki, or auth flows, call `feishu_cli` first. Let `feishu_cli agent_auth` choose between official config/login flows; do not probe `lark-cli` through raw `bash` unless `feishu_cli` reports an unrecoverable setup issue."
         if feishu_cli_available
         else "- Feishu/Lark documents, Base, Drive, Wiki, messaging, and auth require a real e-Mate Connector login challenge owned by this session. If that interaction is unavailable, report connector authorization unavailable. Never use browser automation, raw shell, `send`, screenshots, QR codes, or text as an authentication fallback."
@@ -321,6 +327,8 @@ def _build_host_boundary_tooling_rules(
         "- Use `host_diagnostics` when a task appears stuck, a tool is missing, MCP/CDP state is unclear, permissions look wrong, or a packaged helper may not be installed.",
         "- Use `optional_abilities` to list, enable, disable, or install optional heavy abilities. Do not start MCP, CDP, browser packs, or Feishu setup through raw shell when this tool applies.",
         "- For external connection setup/auth/install work, call the declared structured tool's status/diagnose/agent_auth action first and follow its official diagnostics. Do not hardcode vendor auth parameters in WebUI, prompts, or raw shell.",
+        "- Feishu/Lark, Tencent Docs, Weixin/WeChat, and DingTalk connection state must come only from their declared Connector, channel, or MCP authorization flow. A browser page, raw shell, `send`, screenshot, QR image, or assistant text is never proof of connection; without an owned challenge and confirmed Runtime state, report authorization unavailable.",
+        "- When `external_connections` returns `qr_artifact_path`, send only that exact local file to the user. Never fabricate, redraw, screenshot, or substitute a QR code.",
         feishu_rule,
         "- For browser automation, prefer the configured CDP/chrome-devtools path first; use fallback browser or shell only after CDP state is known.",
         "- For semantic image generation, image editing, reference-image generation, and batch or multi-image generation, call the native `imagegen` tool one or more times according to the visible tool schema and the user's requested ordering. Local Python/PIL/HTML/SVG/canvas is only for deterministic post-processing such as contact sheets, resizing, masks, or format conversion; do not use it as a substitute for final image generation.",

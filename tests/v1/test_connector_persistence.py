@@ -301,6 +301,12 @@ def test_lifecycle_request_replays_across_restart_and_conflicts_fail_closed(
     )
     assert replay == challenge
     assert adapter.begin_auth_calls == 1
+    assert restarted.repository.lifecycle_owner_has_flow(
+        "connector-auth-", challenge.flow_id
+    )
+    assert not restarted.repository.lifecycle_owner_has_flow(
+        "different-owner-", challenge.flow_id
+    )
     with pytest.raises(ConnectorIdempotencyConflict):
         asyncio.run(
             restarted.begin_connect(
@@ -314,6 +320,10 @@ def test_lifecycle_request_replays_across_restart_and_conflicts_fail_closed(
     state = parse_qs(urlsplit(challenge.authorization_url).query)["state"][0]
     instance = asyncio.run(
         restarted.complete_connect(challenge.flow_id, {"state": state})
+    )
+    assert restarted.repository.auth_completion_for_flow(challenge.flow_id) == (
+        "feishu",
+        instance.instance_id,
     )
     health = asyncio.run(
         restarted.refresh_health(
