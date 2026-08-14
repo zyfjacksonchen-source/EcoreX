@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from agent.skills.manager import SkillManager
+from agent.protocol.agent import Agent
 from agent.tools.scheduler.scheduler_service import SchedulerService
 from agent.tools.scheduler.scheduler_tool import SchedulerTool
 from agent.tools.scheduler.task_store import TaskStore
@@ -170,6 +171,12 @@ def test_enabled_local_skill_is_discovered_by_cow_and_disable_removes_it(
         builtin_dir=str(tmp_path / "empty-builtins"),
         custom_dir=str(tmp_path / "workspace" / "skills"),
     )
+    agent = Agent(
+        system_prompt="",
+        tools=[],
+        workspace_dir=str(tmp_path / "workspace"),
+        skill_manager=manager,
+    )
     assert manager.filter_skills() == []
     staged = service.install_local_skill_zip(
         _skill_bundle(),
@@ -193,6 +200,7 @@ def test_enabled_local_skill_is_discovered_by_cow_and_disable_removes_it(
     assert [entry.skill.name for entry in manager.filter_skills()] == ["shared-helper"]
     assert "shared-helper" in manager.build_skills_prompt()
     assert "SHARED-SKILL-OK" in manager.get_skill("shared-helper").skill.content
+    assert "SHARED-SKILL-OK" in agent.get_full_system_prompt()
 
     service.disable(
         enabled.extension_id,
@@ -203,6 +211,7 @@ def test_enabled_local_skill_is_discovered_by_cow_and_disable_removes_it(
     manager.refresh_skills()
     assert manager.filter_skills() == []
     assert manager.get_skill("shared-helper") is None
+    assert "SHARED-SKILL-OK" not in agent.get_full_system_prompt()
 
 
 def test_skill_switch_does_not_hide_cow_first_party_tools(tmp_path: Path) -> None:

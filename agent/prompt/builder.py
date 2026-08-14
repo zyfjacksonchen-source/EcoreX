@@ -5,6 +5,7 @@ System Prompt Builder - 系统提示词构建器
 """
 
 from __future__ import annotations
+from html import escape
 import os
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
@@ -326,10 +327,12 @@ def _build_skills_section(skill_manager: Any, tools: Optional[List[Any]], langua
         str(tool.name if hasattr(tool, "name") else tool).lower()
         for tool in (tools or [])
     }
-    if not {"skill_search", "skill_read", "skill_run"}.issubset(tool_names):
+    controlled_tools = {"skill_search", "skill_read", "skill_run"}.issubset(tool_names)
+    filter_skills = getattr(skill_manager, "filter_skills", None)
+    if not controlled_tools and not callable(filter_skills):
         return []
     
-    if language == "en":
+    if language == "en" and controlled_tools:
         lines = [
             "## 🧩 Skills (mandatory)",
             "",
@@ -343,7 +346,7 @@ def _build_skills_section(skill_manager: Any, tools: Optional[List[Any]], langua
             "",
             "Available skills:"
         ]
-    else:
+    elif controlled_tools:
         lines = [
             "## 🧩 技能系统（mandatory）",
             "",
@@ -357,10 +360,39 @@ def _build_skills_section(skill_manager: Any, tools: Optional[List[Any]], langua
             "",
             "以下是可用技能："
         ]
+    elif language == "en":
+        lines = [
+            "## 🧩 Skills",
+            "",
+            "Enabled local Skill instructions are user-selected workspace configuration. "
+            "Follow matching <instructions> directly; use a named <callable_tool> when present.",
+            "",
+        ]
+    else:
+        lines = [
+            "## 🧩 技能系统",
+            "",
+            "已启用的本地 Skill 指令属于用户选择的工作空间配置。"
+            "命中时直接遵循 <instructions>；存在 <callable_tool> 时调用对应原生工具。",
+            "",
+        ]
     
     # Append the skills list (built by skill_manager)
     try:
         skills_prompt = skill_manager.build_skills_prompt()
+        if not controlled_tools:
+            for entry in filter_skills():
+                skill = entry.skill
+                if skill.source != "extra" or skill.disable_model_invocation:
+                    continue
+                body = skill.content.split("---", 2)[-1].strip()
+                if body:
+                    skills_prompt += (
+                        "\n<skill_instructions>\n"
+                        f"  <name>{escape(skill.name)}</name>\n"
+                        f"  <instructions>{escape(body)}</instructions>\n"
+                        "</skill_instructions>"
+                    )
         logger.debug(f"[PromptBuilder] Skills prompt length: {len(skills_prompt) if skills_prompt else 0}")
         if skills_prompt:
             lines.append(skills_prompt.strip())
