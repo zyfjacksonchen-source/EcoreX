@@ -2201,24 +2201,8 @@ def create_app(
             close_gateway_on_stop=settings.close_model_gateway_on_shutdown,
         )
     app.state.model_worker_supervisor = worker_supervisor
-    bindable_channel_adapters = tuple(
-        adapter
-        for adapter in settings.channel_lifecycle_adapters.values()
-        if callable(getattr(adapter, "bind_runtime", None))
-    )
     channel_runtime_dispatcher = None
-    if bindable_channel_adapters:
-        if worker_supervisor is None:
-            raise ValueError("message channel adapters require the Agent worker")
-        channel_runtime_dispatcher = ChannelRuntimeDispatcher(
-            owner=channel_owner,
-            composition=composition,
-            kernel=kernel,
-            worker=worker_supervisor,
-        )
-        for adapter in bindable_channel_adapters:
-            adapter.bind_runtime(channel_owner, channel_runtime_dispatcher)
-    elif worker_supervisor is not None and not settings.acceptance_preview:
+    if worker_supervisor is not None and not settings.acceptance_preview:
         channel_runtime_dispatcher = ChannelRuntimeDispatcher(
             owner=channel_owner,
             composition=composition,
@@ -2226,23 +2210,18 @@ def create_app(
             worker=worker_supervisor,
         )
     app.state.channel_runtime_dispatcher = channel_runtime_dispatcher
-    cow_channel_service = (
-        None
-        if settings.channel_lifecycle_adapters
-        else CowChannelService(
-            config_path=Path(settings.database_path).expanduser().resolve().parent
-            / "config.json",
-            bridge=(
-                CowChannelRuntimeBridge(channel_runtime_dispatcher)
-                if channel_runtime_dispatcher is not None
-                else None
-            ),
-        )
+    cow_channel_service = CowChannelService(
+        config_path=Path(settings.database_path).expanduser().resolve().parent
+        / "config.json",
+        bridge=(
+            CowChannelRuntimeBridge(channel_runtime_dispatcher)
+            if channel_runtime_dispatcher is not None
+            else None
+        ),
     )
     channel_self_service = ChannelSelfService(
         owner=channel_owner,
         vault=connector_vault,
-        adapters=settings.channel_lifecycle_adapters,
         audit_sink=lambda event: connector_event_sink.publish(
             channel_audit_outbox_event(event)
         ),
@@ -2950,11 +2929,6 @@ def create_app(
         (2, "agent_worker", worker_supervisor),
         (1, "mcp", composition.mcp_supervisor),
         (1, "cow_channel", cow_channel_service if channel_runtime_dispatcher else None),
-        (
-            1,
-            "channel_self_service",
-            channel_self_service if settings.channel_lifecycle_adapters else None,
-        ),
         (1, "scheduler", scheduler_lifecycle),
         (4, "model_gateway", gateway_lifecycle),
         (4, "image_gateway", image_client_lifecycle),
