@@ -135,6 +135,7 @@ type DesktopUpdateStatus =
 declare global {
   interface Window {
     eMateDesktop?: {
+      restartRuntime?: () => Promise<boolean>;
       checkForUpdates?: () => Promise<void>;
       downloadDesktopUpdate?: () => Promise<void>;
       installDesktopUpdate?: () => Promise<void>;

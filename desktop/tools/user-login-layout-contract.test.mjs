@@ -33,6 +33,12 @@ test("unauthenticated users see only the account login surface", async () => {
   assert.match(client, /if \(error\.status === 401\) return true/u);
   assert.match(client, /if \(error\.status !== 409\)/u);
   assert.match(session, /if \(!receipt\.restart_scheduled\)/u);
+  const desktopRestart = session.indexOf("window.eMateDesktop?.restartRuntime");
+  const fallbackPoll = session.indexOf("client.waitForCredentialRotation({ timeoutMs: handoffTimeoutMs })");
+  assert.ok(
+    desktopRestart >= 0 && fallbackPoll > desktopRestart,
+    "a successful desktop login must request the existing controlled restart before polling the old Runtime",
+  );
   assert.match(session, /terminalDeadline = Date\.now\(\) \+ SESSION_LOGIN_TERMINAL_TIMEOUT_MS/u);
   assert.match(session, /handoffTimeoutMs = Math\.max\(0, terminalDeadline - Date\.now\(\)\)/u);
   assert.match(session, /client\.waitForCredentialRotation\(\{ timeoutMs: handoffTimeoutMs \}\)/u);

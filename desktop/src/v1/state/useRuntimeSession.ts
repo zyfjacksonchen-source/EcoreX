@@ -1629,6 +1629,11 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
     try {
       const terminalDeadline = Date.now() + SESSION_LOGIN_TERMINAL_TIMEOUT_MS;
       const receipt = await client.loginSession(identifier, password);
+      const desktopRestart = window.eMateDesktop?.restartRuntime;
+      if (desktopRestart) {
+        void desktopRestart();
+        return receipt;
+      }
       if (!receipt.restart_scheduled) {
         setSessionError(
           "登录已完成，正在自动重新连接 e-Mate…",
