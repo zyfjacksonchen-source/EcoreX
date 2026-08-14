@@ -333,12 +333,14 @@ def _image_task_properties():
             "maxLength": 4096,
             "maxItems": 16,
         },
-        "size": {"type": "string", "maxLength": 64},
+        "size": {
+            "type": "string",
+            "enum": ["auto", "1024x1024", "1536x1024", "1024x1536"],
+        },
         "quality": {
             "type": "string",
             "enum": ["low", "medium", "high", "auto"],
         },
-        "aspect_ratio": {"type": "string", "minLength": 3, "maxLength": 16},
     }
 
 
@@ -1509,11 +1511,12 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
         ),
         ToolSpec(
             tool_id="imagegen",
-            version="2.1.0",
+            version="2.2.0",
             display_name="图片生成与编辑",
             description=(
                 "使用固定图片模型生成或编辑一张图片；兼容 CowAgent 的 "
-                "prompt/image_url/quality/size/aspect_ratio 语义；多张结果需分别调用"
+                "prompt/image_url/quality 语义，并仅公开供应商实际支持的 size；"
+                "多张结果需分别调用"
             ),
             input_schema=_IMAGE_INPUT,
             output_schema=_IMAGE_OUTPUT,

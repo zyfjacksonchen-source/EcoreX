@@ -385,14 +385,8 @@ _COW_IMAGE_TASK_PARAMS = {
     },
     "size": {
         "type": "string",
-        "description": "Optional size, for example 1024x1024.",
-        "maxLength": 64,
-    },
-    "aspect_ratio": {
-        "type": "string",
-        "description": "Optional aspect ratio, for example 1:1, 16:9, or 9:16.",
-        "minLength": 3,
-        "maxLength": 16,
+        "description": "Optional provider-supported output size.",
+        "enum": ["auto", "1024x1024", "1536x1024", "1024x1536"],
     },
     "quality": {
         "type": "string",
@@ -409,6 +403,8 @@ class ImageGenTool(BaseTool):
         "Use this tool for text-to-image, image edits, reference-image generation, "
         "multi-image fusion, and visual asset requests. Each call produces one independent "
         "asset or variant; for multiple outputs, make one separate imagegen call per output. "
+        "If a referenced edit is rejected, keep its references and report that failure; do not "
+        "retry it with a different size or as a text-only redraw. "
         "Do not pass a provider, model, output directory, timeout, or concurrency policy; "
         "the Runtime owns them. Do not replace image edits or reference-image "
         "generation with Python/PIL/HTML/SVG scripts."

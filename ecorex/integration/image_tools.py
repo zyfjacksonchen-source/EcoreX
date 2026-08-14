@@ -462,7 +462,73 @@ class RuntimeImageToolBackend:
         if "tasks" in arguments:
             raise ImageToolError("imagegen_tasks_unsupported")
         task = self._canonical_task(arguments)
-        return await self._generate_single(task, context)
+        task = self._bind_turn_image_references(task, context)
+        fence_key = self._edit_fence_key(task, context)
+        failures = getattr(self, "_terminal_edit_failures", None)
+        if failures is None:
+            failures = self._terminal_edit_failures = {}
+        if fence_key is not None and fence_key in failures:
+            raise ImageToolError(failures[fence_key])
+        try:
+            return await self._generate_single(task, context)
+        except ImageToolError as error:
+            if fence_key is not None and not error.retryable:
+                failures[fence_key] = error.code
+                if len(failures) > 1024:
+                    failures.pop(next(iter(failures)))
+            raise
+
+    def _bind_turn_image_references(
+        self,
+        task: Mapping[str, Any],
+        context: ToolInvocationContext,
+    ) -> dict[str, Any]:
+        scope = context.execution_scope
+        if scope is None:
+            return dict(task)
+        metadata = getattr(self.kernel.get_turn(scope.turn_id), "metadata", {})
+        raw = metadata.get("input_attachments") if isinstance(metadata, Mapping) else None
+        bound = [
+            str(item["attachment_id"])
+            for item in (raw if isinstance(raw, list) else [])
+            if isinstance(item, Mapping)
+            and isinstance(item.get("attachment_id"), str)
+            and (
+                item.get("media_kind") == "image"
+                or str(item.get("mime_type") or "").startswith("image/")
+            )
+        ]
+        if not bound:
+            return dict(task)
+        existing = task.get("image_url")
+        sources = existing if isinstance(existing, list) else [existing] if existing else []
+        merged = list(dict.fromkeys([*bound, *sources]))
+        if len(merged) > 16:
+            raise ImageToolError("image_url contains too many references")
+        return {
+            **dict(task),
+            "image_url": merged[0] if len(merged) == 1 else merged,
+        }
+
+    @staticmethod
+    def _edit_fence_key(
+        task: Mapping[str, Any], context: ToolInvocationContext
+    ) -> str | None:
+        scope = context.execution_scope
+        sources = task.get("image_url")
+        if scope is None or not sources:
+            return None
+        return hashlib.sha256(
+            json.dumps(
+                {
+                    "turn_id": scope.turn_id,
+                    "image_url": sources,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
 
     @staticmethod
     def _canonical_task(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -538,9 +604,16 @@ class RuntimeImageToolBackend:
             canonical[field] = value.strip()
         if canonical.get("quality") not in {None, "low", "medium", "high", "auto"}:
             raise ImageToolError("image quality is unsupported")
-        ratio = canonical.get("aspect_ratio")
+        ratio = canonical.pop("aspect_ratio", None)
         if ratio is not None and re.fullmatch(r"[1-9]\d{0,2}:[1-9]\d{0,2}", ratio) is None:
             raise ImageToolError("image aspect ratio is invalid")
+        size = str(canonical.get("size") or "auto").casefold()
+        canonical["size"] = (
+            size
+            if ratio is None
+            and size in {"auto", "1024x1024", "1536x1024", "1024x1536"}
+            else "auto"
+        )
         return canonical
 
     @staticmethod
@@ -662,6 +735,7 @@ class RuntimeImageToolBackend:
             metadata={
                 "request_kind": "imagegen_tool",
                 "quality": str(arguments.get("quality") or "auto")[:64],
+                "size": str(arguments.get("size") or "auto"),
             },
         )
         _marker, token = await asyncio.to_thread(
@@ -1331,66 +1405,15 @@ class RuntimeImageToolBackend:
 
     @staticmethod
     def _size(value: str, aspect_ratio: str | None = None) -> tuple[int, int]:
-        aliases = {
-            "square": (1024, 1024),
-            "landscape": (1536, 1024),
-            "portrait": (1024, 1536),
+        sizes = {
             "auto": (1024, 1024),
-            "512": (1024, 1024),
             "1024x1024": (1024, 1024),
             "1536x1024": (1536, 1024),
             "1024x1536": (1024, 1536),
         }
-        normalized = value.strip().upper()
-        if re.fullmatch(r"\d{2,4}x\d{2,4}", value.casefold()):
-            width, height = (int(part) for part in value.casefold().split("x", 1))
-            if (
-                not 64 <= width <= 3840
-                or not 64 <= height <= 3840
-                or width % 16
-                or height % 16
-            ):
-                raise ImageToolError("unsupported image size")
-            return width, height
-        if aspect_ratio is None and value.casefold() in aliases:
-            return aliases[value.casefold()]
-
-        table = {
-            ("1K", "1:1"): (1024, 1024),
-            ("1K", "3:2"): (1536, 1024),
-            ("1K", "2:3"): (1024, 1536),
-            ("2K", "1:1"): (2048, 2048),
-            ("2K", "16:9"): (2048, 1152),
-            ("2K", "9:16"): (1152, 2048),
-            ("2K", "21:9"): (2240, 960),
-            ("3K", "1:1"): (2880, 2880),
-            ("3K", "3:2"): (2880, 1920),
-            ("3K", "2:3"): (1920, 2880),
-            ("3K", "16:9"): (3072, 1728),
-            ("3K", "9:16"): (1728, 3072),
-            ("3K", "21:9"): (3136, 1344),
-            ("4K", "1:1"): (2880, 2880),
-            ("4K", "16:9"): (3840, 2160),
-            ("4K", "9:16"): (2160, 3840),
-            ("4K", "21:9"): (3808, 1632),
-        }
-        defaults = {
-            "1K": "1:1",
-            "2K": "1:1",
-            "3K": "1:1",
-            "4K": "16:9",
-            "AUTO": "1:1",
-            "512": "1:1",
-        }
-        tier = "1K" if normalized in {"AUTO", "512"} else normalized
-        ratio = aspect_ratio or defaults.get(normalized)
-        if ratio is not None and (tier, ratio) in table:
-            return table[(tier, ratio)]
-        if aspect_ratio is not None:
-            for fallback_tier in ("1K", "2K", "3K", "4K"):
-                if (fallback_tier, aspect_ratio) in table:
-                    return table[(fallback_tier, aspect_ratio)]
-        raise ImageToolError("unsupported image size or aspect ratio")
+        if aspect_ratio is not None or value.casefold() not in sizes:
+            return sizes["auto"]
+        return sizes[value.casefold()]
 
     @staticmethod
     def _client_request_id(value: str) -> str:

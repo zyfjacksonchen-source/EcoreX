@@ -39,7 +39,7 @@ def _context() -> ToolInvocationContext:
 
 
 def test_imagegen_public_contract_is_one_codex_style_output() -> None:
-    expected = {"prompt", "image_url", "size", "quality", "aspect_ratio"}
+    expected = {"prompt", "image_url", "size", "quality"}
     schemas = [
         ImageGenTool.params,
         builtin_capability_registry().get("imagegen").input_schema,
@@ -53,9 +53,8 @@ def test_imagegen_public_contract_is_one_codex_style_output() -> None:
             {
                 "prompt": "combine the references",
                 "image_url": ["first.png", "second.png"],
-                "size": "2K",
+                "size": "1536x1024",
                 "quality": "high",
-                "aspect_ratio": "16:9",
             },
             schema,
             label="imagegen arguments",
@@ -73,10 +72,99 @@ def test_imagegen_public_contract_is_one_codex_style_output() -> None:
                     schema,
                     label="imagegen arguments",
                 )
+        for unsupported in (
+            {"size": "800x1200"},
+            {"size": "3:4"},
+            {"aspect_ratio": "9:16"},
+        ):
+            with pytest.raises(SchemaInstanceError):
+                validate_schema_instance(
+                    {"prompt": "edit the reference", **unsupported},
+                    schema,
+                    label="imagegen arguments",
+                )
 
     output = builtin_capability_registry().get("imagegen").output_schema
     assert output["properties"]["images"]["maxItems"] == 1
     assert "separate imagegen call" in ImageGenTool.description
+
+
+def test_reference_edit_binds_once_normalizes_size_and_fences_terminal_failure() -> None:
+    async def scenario() -> None:
+        backend = object.__new__(RuntimeImageToolBackend)
+        backend.kernel = SimpleNamespace(
+            get_turn=lambda turn_id: SimpleNamespace(
+                metadata={
+                    "input_attachments": [
+                        {
+                            "attachment_id": "att_reference_poster",
+                            "media_kind": "image",
+                            "mime_type": "image/png",
+                        }
+                    ]
+                }
+            )
+        )
+        attempts: list[dict] = []
+
+        async def rejected(self, arguments, context):
+            attempts.append(dict(arguments))
+            raise ImageToolError("provider_rejected")
+
+        backend._generate_single = MethodType(rejected, backend)
+        prompt = "Keep every word and rearrange this poster"
+        for arguments in (
+            {"prompt": prompt, "size": "800x1200"},
+            {"prompt": prompt, "size": "3:4"},
+            {"prompt": prompt, "aspect_ratio": "9:16"},
+        ):
+            with pytest.raises(ImageToolError) as failure:
+                await backend.generate_image(arguments, _context())
+            assert failure.value.code == "provider_rejected"
+
+        assert attempts == [
+            {
+                "prompt": prompt,
+                "image_url": "att_reference_poster",
+                "size": "auto",
+            }
+        ]
+
+        next_turn = ToolInvocationContext(
+            invocation_id="invoke-imagegen-2",
+            capability_snapshot_id="capabilities-1",
+            policy_snapshot_id="policy-1",
+            tool_id="imagegen",
+            idempotency_key="turn-2:call-1",
+            approved=True,
+            effective_sandbox=SandboxLevel.READ_ONLY,
+            execution_scope=ToolExecutionScope("job-2", "thread-1", "turn-2"),
+            tool_call_id="call-2",
+        )
+        with pytest.raises(ImageToolError):
+            await backend.generate_image({"prompt": prompt}, next_turn)
+        assert len(attempts) == 2
+
+    asyncio.run(scenario())
+
+
+def test_pro_provider_uses_auto_for_non_codex_size() -> None:
+    from ecorex.image_orchestrator.openai_provider import OpenAICompatibleImageProvider
+
+    assert OpenAICompatibleImageProvider._provider_size(
+        "gpt-image-2-pro", 800, 1200
+    ) == "auto"
+    assert OpenAICompatibleImageProvider._provider_size(
+        "gpt-image-2-pro", 1024, 1536
+    ) == "1024x1536"
+    assert OpenAICompatibleImageProvider._request_size(
+        SimpleNamespace(
+            model_id="gpt-image-2-pro",
+            width=1024,
+            height=1024,
+            metadata={"size": "auto"},
+        )
+    ) == "auto"
 
 
 def test_runtime_rejects_removed_tasks_before_any_generation_or_artifact() -> None:
@@ -137,6 +225,7 @@ def test_public_imagegen_keeps_only_first_unexpected_provider_result(
 
     assert result.status == "success"
     assert result.result["model"] == "gpt-image-2-pro"
+    assert result.result["fallbackUsed"] is False
     assert [image["url"] for image in result.result["images"]] == [
         "https://safe.example/first.png"
     ]

@@ -297,9 +297,7 @@ class OpenAICompatibleImageProvider:
             "model": request.model_id,
             "prompt": request.prompt,
             "n": 1,
-            "size": self._provider_size(
-                request.model_id, request.width, request.height
-            ),
+            "size": self._request_size(request),
             "quality": self._quality(request.metadata.get("quality")),
             "output_format": "png",
         }
@@ -349,9 +347,7 @@ class OpenAICompatibleImageProvider:
         fields = {
             "model": request.model_id,
             "prompt": instruction,
-            "size": self._provider_size(
-                request.model_id, request.width, request.height
-            ),
+            "size": self._request_size(request),
             "quality": self._quality(request.metadata.get("quality")),
             "output_format": "png",
         }
@@ -640,7 +636,7 @@ class OpenAICompatibleImageProvider:
     @staticmethod
     def _provider_size(model_id: str, width: int, height: int) -> str:
         candidate = f"{width}x{height}"
-        if model_id == "gpt-image-2" or model_id.startswith("gpt-image-2-"):
+        if model_id == "gpt-image-2":
             pixels = width * height
             shorter, longer = sorted((width, height))
             if (
@@ -657,6 +653,14 @@ class OpenAICompatibleImageProvider:
             candidate
             if candidate in {"1024x1024", "1536x1024", "1024x1536"}
             else "auto"
+        )
+
+    @classmethod
+    def _request_size(cls, request: Any) -> str:
+        return (
+            "auto"
+            if request.metadata.get("size") == "auto"
+            else cls._provider_size(request.model_id, request.width, request.height)
         )
 
     @staticmethod
@@ -784,11 +788,7 @@ class OpenAICompatibleImageProvider:
                     or width * height * 4 > self.max_image_bytes
                 ):
                     raise ProviderRejected("image provider dimensions are invalid")
-                requested = self._provider_size(
-                    job.request.model_id,
-                    job.request.width,
-                    job.request.height,
-                )
+                requested = self._request_size(job.request)
                 if requested != "auto" and (width, height) != (
                     job.request.width,
                     job.request.height,
