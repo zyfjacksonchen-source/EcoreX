@@ -192,6 +192,9 @@ test("desktop loads the existing loopback Runtime and never packages a second re
   assert.match(main, /buttons: \["重试", "退出"\]/);
   assert.match(main, /console\.error\(`\[e-Mate\] Runtime startup failed \(\$\{diagnosticCode\}\)\.`\)/);
   assert.match(main, /function createWindow\(runtimeOrigin = \(\) => backend\.origin\)/);
+  assert.match(main, /function openWebUIInBrowser\(\)/);
+  assert.match(main, /shell\.openExternal\(backend\.origin\)/);
+  assert.match(main, /label: "在浏览器中打开 WebUI"/);
   assert.match(main, /const origin = runtimeOrigin\(\)/);
   assert.match(main, /src", "v1", "assets", "emate-logo\.png"/);
   assert.match(main, /titleBarStyle: "hiddenInset"/);

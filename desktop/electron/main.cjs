@@ -156,6 +156,10 @@ function focusWindow() {
   mainWindow.focus();
 }
 
+function openWebUIInBrowser() {
+  if (backend) void shell.openExternal(backend.origin);
+}
+
 function startupPage() {
   const logo = eMateLogoDataUrl();
   const document = `<!doctype html>
@@ -320,6 +324,7 @@ function buildMenu() {
       },
       { label: "检查更新…", click: () => void updater?.check(true) },
       { label: "重启 Runtime", click: () => void restartRuntime() },
+      { label: "在浏览器中打开 WebUI", click: openWebUIInBrowser },
       { type: "separator" },
       ...(process.platform === "darwin" ? [{ role: "hide" }, { role: "hideOthers" }, { type: "separator" }] : []),
       { label: `退出 ${PRODUCT_NAME}`, accelerator: process.platform === "darwin" ? "Cmd+Q" : "Alt+F4", click: () => app.quit() },
@@ -340,6 +345,7 @@ function createTray() {
   tray.setToolTip(PRODUCT_NAME);
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: `打开 ${PRODUCT_NAME}`, click: focusWindow },
+    { label: "在浏览器中打开 WebUI", click: openWebUIInBrowser },
     { label: "检查更新…", click: () => void updater?.check(true) },
     { type: "separator" },
     { label: "退出", click: () => app.quit() },

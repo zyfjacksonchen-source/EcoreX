@@ -275,6 +275,19 @@ if (typeof document !== "undefined") {
       if (status) status.textContent = "复制失败，请手动选择上方两行命令。";
     }
   });
+  document.querySelectorAll("[data-copy-webui-command]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const card = button.closest(".download-card");
+      const command = card?.querySelector("[data-webui-command]")?.textContent ?? "";
+      const status = card?.querySelector("[data-copy-status]");
+      try {
+        await navigator.clipboard.writeText(command);
+        if (status) status.textContent = "已复制，请粘贴到终端运行。";
+      } catch {
+        if (status) status.textContent = "复制失败，请手动选择上方命令。";
+      }
+    });
+  });
   if (document.querySelector("[data-downloads]")) {
     Promise.all([loadIndex(), detectTarget()]).then(([index, target]) => renderIndex(index, target)).catch(renderFailure);
   }

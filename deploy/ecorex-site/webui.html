@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Cache-Control" content="no-store" />
+    <title>e-Mate WebUI</title>
+    <meta name="description" content="在浏览器中使用 e-Mate 桌面端正在运行的同一个本机 Runtime。" />
+    <link rel="icon" type="image/png" href="./assets/emate-mark.1a6dbbe3b5fe.png" />
+    <link rel="stylesheet" href="./styles.edbcea7b392a.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="./#product" aria-label="返回 e-Mate 下载页">
+        <img src="./assets/emate-logo.e0bf52b1480f.png" alt="e-Mate" />
+      </a>
+      <nav class="nav-links" aria-label="页面导航">
+        <a href="./#download-options">桌面端下载</a>
+        <a class="is-active" href="#start">WebUI</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="feature-section" id="start" aria-labelledby="webui-title">
+        <div class="section-heading">
+          <p>浏览器入口</p>
+          <h1 id="webui-title">e-Mate WebUI</h1>
+          <span>与桌面端使用同一个本机 Runtime，任务、会话、工具和文件都来自同一份本机数据；无需安装第二套运行环境。</span>
+        </div>
+        <div class="help-grid">
+          <article><span>01</span><h3>安装桌面端</h3><p>如果还没有安装，请先从<a href="./#download-options">官方下载页</a>选择这台电脑的版本。</p></article>
+          <article><span>02</span><h3>启动 Runtime</h3><p>先打开 e-Mate 桌面端，等待本机连接就绪。</p></article>
+          <article><span>03</span><h3>浏览器打开</h3><p>在 e-Mate 应用菜单中选择“在浏览器中打开 WebUI”。桌面窗口和浏览器可以同时使用。</p></article>
+        </div>
+      </section>
+
+      <section class="downloads" aria-labelledby="command-title">
+        <div class="section-heading">
+          <p>一行命令打开</p>
+          <h2 id="command-title">使用默认本机端口</h2>
+          <span>桌面端已连接且使用默认端口时，也可以复制命令直接打开；应用菜单会始终使用当前实际端口。</span>
+        </div>
+        <div class="download-grid webui-command-grid">
+          <article class="download-card">
+            <h3>macOS</h3><p>在“终端”运行：</p>
+            <code class="webui-command" data-webui-command>open "http://127.0.0.1:8765/"</code>
+            <button class="download-link" type="button" data-copy-webui-command="macos">复制 macOS 命令</button>
+            <p data-copy-status role="status" aria-live="polite"></p>
+          </article>
+          <article class="download-card">
+            <h3>Windows</h3><p>在 PowerShell 运行：</p>
+            <code class="webui-command" data-webui-command>Start-Process "http://127.0.0.1:8765/"</code>
+            <button class="download-link" type="button" data-copy-webui-command="windows">复制 Windows 命令</button>
+            <p data-copy-status role="status" aria-live="polite"></p>
+          </article>
+        </div>
+      </section>
+
+      <section class="help-section" aria-labelledby="coexist-title">
+        <div class="section-heading"><p>同一份工作状态</p><h2 id="coexist-title">桌面端与 WebUI 共存</h2></div>
+        <div class="feature-grid">
+          <article><h3>同一个 Agent</h3><p>WebUI 不会启动第二套 Agent，也不会复制任务、会话或工具状态。</p></article>
+          <article><h3>同一份本机数据</h3><p>桌面端与浏览器访问的是同一个 Runtime 和同一用户数据目录。</p></article>
+          <article><h3>独立窗口</h3><p>关闭浏览器页面不会停止桌面端 Runtime；需要时可再次从应用菜单打开。</p></article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer"><span>e-Mate</span><a href="./#download-options">返回官方下载</a></footer>
+    <script type="module" src="./site.ab4c0ff74e62.js"></script>
+  </body>
+</html>

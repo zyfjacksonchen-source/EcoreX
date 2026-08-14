@@ -68,6 +68,24 @@ def test_public_download_site_uses_real_product_assets_and_dynamic_release_data(
         assert version not in javascript
 
 
+def test_public_download_site_exposes_cow_style_shared_runtime_webui() -> None:
+    html = (SITE / "index.html").read_text(encoding="utf-8")
+    webui = (SITE / "webui.html").read_text(encoding="utf-8")
+    javascript = next(SITE.glob("site.*.js")).read_text(encoding="utf-8")
+
+    assert 'href="./webui.html"' in html
+    assert "WebUI 浏览器入口" in html
+    assert "http://127.0.0.1:8765/" in webui
+    assert "同一个本机 Runtime" in webui
+    assert "无需安装第二套运行环境" in webui
+    assert "先打开 e-Mate 桌面端" in webui
+    assert 'data-copy-webui-command="macos"' in webui
+    assert 'data-copy-webui-command="windows"' in webui
+    assert "navigator.clipboard.writeText" in javascript
+    assert "9899" not in webui
+    assert "9909" not in webui
+
+
 def test_macos_unsigned_install_guide_is_local_accessible_and_safe() -> None:
     html = (SITE / "index.html").read_text(encoding="utf-8")
     guide = (SITE / "install-macos.html").read_text(encoding="utf-8")
