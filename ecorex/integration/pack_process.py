@@ -623,12 +623,7 @@ class ProcessCapabilityPackAdapter:
         use_backend = bool(
             tool_id == "bash"
             and sandbox_contract is not None
-            and (
-                sandbox_contract.os_enforced
-                or (
-                    os.name == "nt" and sandbox_contract.profile == "danger-full-access"
-                )
-            )
+            and sandbox_contract.os_enforced
         )
         if use_backend:
             try:
@@ -692,18 +687,9 @@ class ProcessCapabilityPackAdapter:
                 stderr_limit_bytes=MAX_STDERR_BYTES,
             )
         if effective_sandbox == "danger-full-access":
-            probe = self.sandbox_probe
-            if os.name == "nt" and (probe is None or not probe.complete):
-                raise CapabilityPackProcessError(
-                    "shell_process_supervisor_unavailable", retryable=False
-                )
             return SandboxIsolationContract(
                 profile="danger-full-access",
-                backend_id=(
-                    probe.backend_id
-                    if os.name == "nt" and probe is not None
-                    else "explicit-unrestricted-process"
-                ),
+                backend_id="explicit-unrestricted-process",
                 os_enforced=False,
                 workspace_roots_sha256=roots_digest,
                 filesystem_read_scope="host-unrestricted",
@@ -913,9 +899,8 @@ async def _kill_process_tree(process: asyncio.subprocess.Process) -> None:
             # return success while leaving a detached descendant alive.
             os.killpg(process.pid, signal.SIGKILL)
         else:
-            # The trusted Windows launcher owns a kill-on-close Job Object.
-            # taskkill /T is retained as a defense in depth for a still-live
-            # launcher; a naked Windows shell is never made available.
+            # Workspace-write may use a Job Object; direct full-access follows
+            # Cow semantics and relies on explicit descendant traversal.
             await asyncio.to_thread(_windows_kill_process_tree, process.pid)
             if process.returncode is None:
                 process.kill()

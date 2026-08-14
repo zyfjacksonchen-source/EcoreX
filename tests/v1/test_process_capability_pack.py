@@ -601,9 +601,7 @@ def test_explicit_full_access_uses_auditable_danger_contract_without_claiming_sa
     )
     assert result.record.effective_sandbox == "danger-full-access"
     assert result.value["sandbox"] == "danger-full-access"
-    assert result.value["sandbox_backend_id"] == (
-        "unit-contract-only" if os.name == "nt" else "explicit-unrestricted-process"
-    )
+    assert result.value["sandbox_backend_id"] == "explicit-unrestricted-process"
     assert result.value["sandbox_os_enforced"] is False
     assert result.value["read_scope"] == "host-unrestricted"
     assert result.value["write_scope"] == "host-unrestricted"

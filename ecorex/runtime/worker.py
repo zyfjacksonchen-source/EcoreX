@@ -6205,7 +6205,7 @@ class AgentTurnWorker:
                 raise ConflictError("Turn input attachment is unavailable") from error
             label = "Image" if projection.media_kind == "image" else "File"
             references.append(
-                f"[{label}: {path.relative_to(workspace.resolve())}]"
+                f"[{label}: {path.relative_to(workspace.resolve()).as_posix()}]"
             )
         references_text = "\n".join(references)
         return (

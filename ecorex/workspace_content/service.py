@@ -240,19 +240,18 @@ class WorkspaceContentService:
                 raise WorkspaceContentUnavailable(
                     "knowledge category is unavailable"
                 ) from error
-            identity = (int(before.st_dev), int(before.st_ino), int(before.st_ctime_ns))
             try:
                 yield None, path
-                after = path.lstat()
-            except WorkspaceContentError:
+            except BaseException:
                 raise
+            try:
+                after = path.lstat()
             except OSError as error:
                 raise WorkspaceContentUnavailable(
                     "knowledge category changed during access"
                 ) from error
             if (
-                identity
-                != (int(after.st_dev), int(after.st_ino), int(after.st_ctime_ns))
+                not os.path.samestat(before, after)
                 or stat.S_ISLNK(after.st_mode)
                 or _is_reparse(after)
             ):
