@@ -160,6 +160,78 @@ def test_public_cow_worker_sends_initial_and_steer_images_to_gateway(
     ]
 
 
+def test_public_cow_ocr_uses_the_canonical_workspace_attachment_reference(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from agent.tools.ocr import ocr
+    from common.ecorex_tool_permissions import (
+        bind_cow_direct_tools,
+        reset_cow_direct_tools,
+    )
+
+    workspace = tmp_path / "home" / ".emate" / "workspace"
+    app = create_app(settings=RuntimeSettings(database_path=tmp_path / "runtime.db"))
+    kernel = app.state.runtime
+    composition = app.state.runtime_composition
+    uploaded = app.state.input_attachment_service.upload(
+        _png((20, 80, 220)),
+        filename="ocr.png",
+        mime_type="image/png",
+        client_request_id="cow-hotpath-ocr-image",
+    )
+    thread = kernel.create_thread(CreateThreadRequest(title="attachment OCR"))
+    prepared = composition.prepare_turn(
+        CreateTurnRequest(
+            input="Read the image text",
+            metadata={"input_attachments": [uploaded.model_dump(mode="json")]},
+            client_message_id="cow-hotpath-ocr-turn",
+        )
+    )
+    created = kernel.create_turn(
+        thread.thread_id,
+        prepared.request,
+        snapshot_context=prepared.snapshot_context,
+    )
+    worker = AgentTurnWorker(
+        kernel,
+        gateway=SimpleNamespace(),
+        workspace_root=workspace,
+        input_attachments=app.state.input_attachment_service,
+    )
+
+    prompt = worker._input_with_attachments(
+        created.turn.input,
+        created.turn.metadata,
+        thread_id=thread.thread_id,
+        turn_id=created.turn.turn_id,
+        workspace=workspace,
+    )
+    reference = re.search(r"\[Image: ([^\]]+)\]", prompt).group(1)
+    assert reference.startswith(".emate/attachments/")
+    assert not Path(reference).is_absolute()
+
+    monkeypatch.setattr(
+        ocr,
+        "_local_ocr",
+        lambda content, _timeout: {
+            "status": "success",
+            "provider": "fixture",
+            "text": "FIRST CALL",
+            "latencyMs": 1,
+            "cacheHit": False,
+        },
+    )
+    token = bind_cow_direct_tools()
+    try:
+        result = ocr.OcrTool({"cwd": str(workspace)}).execute(
+            {"action": "extract_text", "image": reference, "timeout": 8}
+        )
+    finally:
+        reset_cow_direct_tools(token)
+    assert result.status == "success"
+    assert result.result["text"] == "FIRST CALL"
+
+
 def test_public_cow_worker_materializes_steer_file_and_redirects_pending_read(
     tmp_path: Path, monkeypatch,
 ) -> None:
@@ -223,8 +295,10 @@ def test_public_cow_worker_materializes_steer_file_and_redirects_pending_read(
                 )
                 self.paths = re.findall(r"\[File: ([^\]]+)\]", text)
                 assert len(self.paths) == 1
-                materialized = Path(self.paths[0])
-                assert materialized.is_relative_to(workspace)
+                reference = Path(self.paths[0])
+                assert not reference.is_absolute()
+                materialized = workspace / reference
+                assert materialized.resolve().is_relative_to(workspace.resolve())
                 assert materialized.stat().st_mode & 0o222 == 0
                 first_request_started.set()
                 assert await asyncio.to_thread(steer_received.wait, 2)
@@ -259,8 +333,10 @@ def test_public_cow_worker_materializes_steer_file_and_redirects_pending_read(
                 )
                 steer_paths = re.findall(r"\[File: ([^\]]+)\]", text)
                 assert len(steer_paths) == 2
-                materialized = Path(steer_paths[-1])
-                assert materialized.is_relative_to(workspace)
+                reference = Path(steer_paths[-1])
+                assert not reference.is_absolute()
+                materialized = workspace / reference
+                assert materialized.resolve().is_relative_to(workspace.resolve())
                 assert materialized.stat().st_mode & 0o222 == 0
                 self.paths.append(steer_paths[-1])
                 yield GatewayEvent(
