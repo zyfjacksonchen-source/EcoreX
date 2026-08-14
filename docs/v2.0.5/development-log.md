@@ -1433,3 +1433,62 @@ environment failure until the product failure reproduces from known state.
   deploy/Feed affected set passed `42/42` with the unrelated locked-Node test
   deselected in this environment; Ruff and diff checks passed. No Feed was
   activated and no production state changed.
+
+### 2026-08-14 RELEASE-205-R2-REJECTED-CANDIDATE-025
+
+- Formal run `31776396835`, attempt 2, built exact source
+  `77786087753e734db96912107746f321f57e3f1d`. The Windows native handoff,
+  signed Runtime seed, Windows x64, macOS arm64/x64, and final Feed/R2 jobs all
+  completed successfully. R2 admitted 38 exact objects under
+  `desktop/v2.0.5/` with the existing at-most-three parallel upload,
+  per-object resume, authenticated metadata, public HEAD, and first/last Range
+  checks. Attempt 2 reused the exact bytes written by attempt 1 rather than
+  retransmitting verified objects.
+- The unsigned Feed artifact `9211030615` was reconstructed from contiguous
+  Range bytes, measured 2,776,041,727 bytes, had SHA-256
+  `78ba9f917e48b3503bdd3b8462afaba626c53085539ed9f23ce24fcf1c51b07e`,
+  and passed complete ZIP CRC. The official deploy validator accepted all 46
+  inventory entries, 2,845,557,051 uncompressed bytes, exact source/release/
+  build/manifest identities, Feed build
+  `b15b693af8ecc3160d0c5e15a3b75d13d8c352937153d3d4b8ae960362fafade`,
+  and download-index SHA-256
+  `325a3ad32ec01e8a873d300a2f622deb39c55b74ac063c4f39f233f97c66714e`.
+- The candidate is nevertheless **rejected**, not staged for activation. A
+  same-byte macOS Runtime invocation produced a PDF Artifact marked ready whose
+  Chinese CID font was not embedded; Poppler rendered a fully white page and
+  Quartz rendered a fully black page. The live Feed and server `current`
+  remained `releases/v2.0.4-df1fef67bf032a47` before and after validation,
+  with index SHA-256
+  `57868d8b3f9f5cc924a5fb35398a42742fd61490c3d87ed962e4a8c5dc9dc6ca`.
+  No CU receipt, public Bootstrap pointer, activation receipt, or 2.0.5 Feed
+  was generated. The rejected validation receipt is retained outside the
+  repository with SHA-256
+  `a6ea2d2932e0800a67ce8544dbd83389f4415aedb5e20457935a907102715ca7`.
+- The rejected R2 namespace is not referenced by the live Feed or either
+  public Bootstrap pointer. Its 38 immutable-cache objects must be reclaimed
+  only by their exact admission keys after authenticated size/SHA comparison;
+  a prefix delete or same-key overwrite is forbidden. A new freeze must be
+  rebuilt from the PDF root fix before any activation can resume.
+
+### 2026-08-14 USAGE-205-FIELD-RECONCILIATION-026
+
+- The existing atomic Usage Panel deployer promoted exact source `77786087`
+  as release `v2.0.5-77786087753e-8f116d9b4bca`. Health, candidate inventory,
+  current/previous/backup links, Usage/Audit reconciliation, and rollback
+  readback passed; the prior release and its complete backup remain available.
+  Projection identity is now `e-mate-2.0-usage-4`.
+- The production seven-day readback proves the generation ledger is additive:
+  `all = emate + ecorex + unknown` independently for tasks, usage records,
+  total Tokens, image facts, and reported image count. The current window has
+  53 e-Mate tasks, 0 explicitly identified ECoreX tasks, and 273 unknown legacy
+  tasks. Missing or legacy generation/version facts remain `unknown/null` and
+  are never backfilled from prompts or nearby metrics.
+- The production data dictionary now names the unit, immutable authority, and
+  unknown semantics for tasks, events, five terminal states, Token/cache
+  fields, images, actual model, image fallback, structured usage scenario, and
+  product generation/version. Requested model never substitutes for actual
+  model, absent facts render as not reported rather than zero, and scenario
+  classification uses only structured tool/Artifact/event fields. Historical
+  image facts still contain pre-fix inflated counts; they remain visible and
+  attributable instead of being rewritten. New producer facts use one image
+  per completed result and terminal `completed` status.
