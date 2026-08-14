@@ -7,17 +7,11 @@ import time
 from typing import Any, Mapping
 
 import httpx
-from fastapi.testclient import TestClient
-import pytest
 
-from ecorex.connectors import InMemoryCredentialVault
 from ecorex.connectors.channel_runtime import ChannelTurnReceipt
 from ecorex.connectors.channel_self_service import ChannelCredentialOwner
 from ecorex.connectors.models import ConnectorHealth
 from ecorex.connectors.telegram import TelegramBotAdapter
-from ecorex.gateway import GatewayEvent
-from ecorex.runtime import RuntimeSettings, create_app
-from ecorex.session import Ed25519SessionLeaseVerifier, ManagedSessionService
 
 
 _TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd"
@@ -148,24 +142,6 @@ class _Dispatcher:
         return True
 
 
-class _Gateway:
-    async def stream(self, _request):
-        yield GatewayEvent.model_validate({
-            "seq": 1,
-            "event_type": "output_text.delta",
-            "response_id": "telegram-response",
-            "delta": "已完成本周进展整理",
-        })
-        yield GatewayEvent.model_validate({
-            "seq": 2,
-            "event_type": "response.completed",
-            "response_id": "telegram-response",
-        })
-
-    async def aclose(self) -> None:
-        return None
-
-
 def _wait(predicate, *, seconds: float = 2) -> None:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -283,86 +259,6 @@ def test_telegram_refuses_to_replace_an_existing_webhook(tmp_path: Path) -> None
     )
     assert api.paths == ["getMe", "getWebhookInfo", "getMe", "getWebhookInfo"]
     assert "getUpdates" not in api.paths
-
-
-def test_telegram_product_adapter_uses_the_existing_runtime_end_to_end(
-    tmp_path: Path,
-) -> None:
-    api = _TelegramAPI()
-    adapter = TelegramBotAdapter(
-        tmp_path / "telegram.db",
-        client_factory=api.factory,
-    )
-    app = create_app(
-        settings=RuntimeSettings(
-            database_path=tmp_path / "runtime.db",
-            model_gateway=_Gateway(),
-            allow_unmanaged_model_gateway_for_testing=True,
-            connector_vault=InMemoryCredentialVault(),
-            channel_lifecycle_adapters={"telegram": adapter},
-            model_worker_poll_seconds=0.01,
-            model_worker_shutdown_seconds=1,
-        )
-    )
-
-    catalog = app.state.channel_self_service.catalog()["items"]
-    telegram = next(item for item in catalog if item["channel_id"] == "telegram")
-    assert telegram["adapter_available"] is True
-    assert telegram["instance"] is None
-    assert app.state.channel_runtime_dispatcher is not None
-    assert adapter.health().health is ConnectorHealth.DISABLED
-
-    with TestClient(app):
-        service = app.state.channel_self_service
-        saved = service.save(
-            "telegram",
-            display_name="办公机器人",
-            config={},
-            secrets={"telegram_token": _TOKEN},
-            request_id="telegram-save",
-        )
-        assert saved["enabled"] is False
-        assert (
-            service.enable("telegram", request_id="telegram-enable")["health"]
-            == "connected"
-        )
-        _wait(lambda: any(item["text"] == "已完成本周进展整理" for item in api.sent))
-        assert api.names == ["e-Mate"]
-
-        threads, _ = app.state.runtime.list_threads()
-        assert len([thread for thread in threads if thread.title == "Telegram 会话"]) == 1
-        assert "-1000123" not in repr(threads)
-        assert (
-            service.disable("telegram", request_id="telegram-disable")["health"]
-            == "disabled"
-        )
-
-
-def test_telegram_cannot_bind_without_a_managed_agent_worker(tmp_path: Path) -> None:
-    api = _TelegramAPI()
-    api.update_available = False
-    adapter = TelegramBotAdapter(tmp_path / "telegram.db", client_factory=api.factory)
-    vault = InMemoryCredentialVault()
-    session = ManagedSessionService(
-        tmp_path / "runtime.db",
-        vault=vault,
-        verifier=Ed25519SessionLeaseVerifier({"unused": bytes(range(32))}),
-    )
-    with pytest.raises(ValueError, match="require the Agent worker"):
-        create_app(
-            settings=RuntimeSettings(
-                database_path=tmp_path / "runtime.db",
-                managed_session_service=session,
-                require_managed_session=True,
-                model_gateway=_Gateway(),
-                allow_unmanaged_model_gateway_for_testing=True,
-                connector_vault=vault,
-                channel_lifecycle_adapters={"telegram": adapter},
-                model_worker_poll_seconds=0.01,
-                model_worker_shutdown_seconds=1,
-            )
-        )
-    assert api.paths == []
 
 
 def stat_mode(path: Path) -> int:

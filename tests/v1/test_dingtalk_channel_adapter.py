@@ -9,15 +9,11 @@ import time
 from typing import Any, Mapping
 
 import httpx
-from fastapi.testclient import TestClient
 
-from ecorex.connectors import InMemoryCredentialVault
 from ecorex.connectors.channel_runtime import ChannelTurnReceipt
 from ecorex.connectors.channel_self_service import ChannelCredentialOwner
 from ecorex.connectors.dingtalk import DingTalkStreamAdapter
 from ecorex.connectors.models import ConnectorHealth
-from ecorex.gateway import GatewayEvent
-from ecorex.runtime import RuntimeSettings, create_app
 
 
 _CLIENT_ID = "ding-client-123456"
@@ -206,28 +202,6 @@ class _Dispatcher:
             idempotency_key=f"delivery-{receipt.turn_id}",
         )
         return True
-
-
-class _Gateway:
-    async def stream(self, _request):
-        yield GatewayEvent.model_validate(
-            {
-                "seq": 1,
-                "event_type": "output_text.delta",
-                "response_id": "dingtalk-response",
-                "delta": "已完成本周进展整理",
-            }
-        )
-        yield GatewayEvent.model_validate(
-            {
-                "seq": 2,
-                "event_type": "response.completed",
-                "response_id": "dingtalk-response",
-            }
-        )
-
-    async def aclose(self) -> None:
-        return None
 
 
 def _wait(predicate, *, seconds: float = 2) -> None:
@@ -425,62 +399,3 @@ def test_dingtalk_disconnect_reconnects_and_stop_is_bounded(tmp_path: Path) -> N
     started = time.monotonic()
     assert adapter.stop(1) is True
     assert time.monotonic() - started < 1
-
-
-def test_dingtalk_product_adapter_uses_existing_runtime_end_to_end(
-    tmp_path: Path,
-) -> None:
-    api = _DingTalkAPI()
-    sockets = _SocketFactory([_callback("runtime-stream-message")])
-    adapter = DingTalkStreamAdapter(
-        tmp_path / "dingtalk.db",
-        client_factory=api.factory,
-        socket_factory=sockets,
-    )
-    app = create_app(
-        settings=RuntimeSettings(
-            database_path=tmp_path / "runtime.db",
-            model_gateway=_Gateway(),
-            allow_unmanaged_model_gateway_for_testing=True,
-            connector_vault=InMemoryCredentialVault(),
-            channel_lifecycle_adapters={"dingtalk": adapter},
-            model_worker_poll_seconds=0.01,
-            model_worker_shutdown_seconds=1,
-        )
-    )
-
-    item = next(
-        item
-        for item in app.state.channel_self_service.catalog()["items"]
-        if item["channel_id"] == "dingtalk"
-    )
-    assert item["adapter_available"] is True
-    assert app.state.channel_runtime_dispatcher is not None
-
-    with TestClient(app):
-        service = app.state.channel_self_service
-        service.save(
-            "dingtalk",
-            display_name="办公钉钉",
-            config={"dingtalk_client_id": _CLIENT_ID},
-            secrets={"dingtalk_client_secret": _CLIENT_SECRET},
-            request_id="dingtalk-save",
-        )
-        assert (
-            service.enable("dingtalk", request_id="dingtalk-enable")["health"]
-            == "connected"
-        )
-        _wait(
-            lambda: any(
-                item["text"]["content"] == "已完成本周进展整理"
-                for item in api.sent
-            )
-        )
-
-        threads, _ = app.state.runtime.list_threads()
-        assert len([thread for thread in threads if thread.title == "钉钉 会话"]) == 1
-        assert _CONVERSATION not in repr(threads)
-        assert (
-            service.disable("dingtalk", request_id="dingtalk-disable")["health"]
-            == "disabled"
-        )

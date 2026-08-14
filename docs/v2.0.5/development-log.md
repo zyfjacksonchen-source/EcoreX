@@ -1389,3 +1389,23 @@ environment failure until the product failure reproduces from known state.
   The same regression is now enumerated in the formal source-contract job so
   the documented preflight cannot silently break again. No production,
   package, credential, or release state was touched.
+
+### 2026-08-14 RELEASE-205-AFFECTED-GATES-023
+
+- A completion audit found that existing Office table-schema, Usage Panel
+  atomic-release, and eight shipped external-channel suites were not named in
+  the manual desktop release workflow. The Office schema plus Usage atomic
+  set passed `8/8` and are now part of the existing source-contract job.
+- The first expanded channel run correctly exposed four retired
+  product-adapter tests: DingTalk, Slack, and Telegram bypassed the current Cow
+  channel composition and reached installed third-party SDK authentication;
+  a fourth Telegram assertion required the removed managed-worker fork. The
+  main path was not changed to satisfy obsolete tests. Those four cases and
+  their unused test-only Gateway imports were deleted; per-adapter fake
+  transport coverage remains, while Cow product integration continues to be
+  proven once by the shared channel runtime, self-service, dispatcher, and
+  terminal-convergence contracts.
+- The eight external-channel files plus the shared Cow integration set passed
+  `126/126` without a real provider request. All eight are now enumerated in
+  the formal source-contract job. No credential, third-party message,
+  production service, Feed, or package was touched.

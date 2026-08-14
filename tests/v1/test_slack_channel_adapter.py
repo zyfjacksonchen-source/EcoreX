@@ -9,15 +9,11 @@ import time
 from typing import Any, Mapping
 
 import httpx
-from fastapi.testclient import TestClient
 
-from ecorex.connectors import InMemoryCredentialVault
 from ecorex.connectors.channel_runtime import ChannelTurnReceipt
 from ecorex.connectors.channel_self_service import ChannelCredentialOwner
 from ecorex.connectors.models import ConnectorHealth
 from ecorex.connectors.slack import SlackSocketModeAdapter
-from ecorex.gateway import GatewayEvent
-from ecorex.runtime import RuntimeSettings, create_app
 
 
 _BOT_TOKEN = "xox" + "b-" + "B" * 24
@@ -236,28 +232,6 @@ class _Dispatcher:
         return True
 
 
-class _Gateway:
-    async def stream(self, _request):
-        yield GatewayEvent.model_validate(
-            {
-                "seq": 1,
-                "event_type": "output_text.delta",
-                "response_id": "slack-response",
-                "delta": "已完成本周进展整理",
-            }
-        )
-        yield GatewayEvent.model_validate(
-            {
-                "seq": 2,
-                "event_type": "response.completed",
-                "response_id": "slack-response",
-            }
-        )
-
-    async def aclose(self) -> None:
-        return None
-
-
 def _wait(predicate, *, seconds: float = 2) -> None:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -474,52 +448,3 @@ def test_slack_start_opens_one_socket_and_closes_it_on_later_failure(
     assert len(failed_sockets.sockets) == 1
     assert failed_sockets.sockets[0].closed is True
     assert failed_api.clients[0].closed is True
-
-
-def test_slack_product_adapter_uses_existing_runtime_end_to_end(tmp_path: Path) -> None:
-    api = _SlackAPI()
-    sockets = _SocketFactory([_event_frame("runtime-envelope")])
-    adapter = SlackSocketModeAdapter(
-        tmp_path / "slack.db",
-        client_factory=api.factory,
-        socket_factory=sockets,
-    )
-    app = create_app(
-        settings=RuntimeSettings(
-            database_path=tmp_path / "runtime.db",
-            model_gateway=_Gateway(),
-            allow_unmanaged_model_gateway_for_testing=True,
-            connector_vault=InMemoryCredentialVault(),
-            channel_lifecycle_adapters={"slack": adapter},
-            model_worker_poll_seconds=0.01,
-            model_worker_shutdown_seconds=1,
-        )
-    )
-
-    slack = next(
-        item
-        for item in app.state.channel_self_service.catalog()["items"]
-        if item["channel_id"] == "slack"
-    )
-    assert slack["adapter_available"] is True
-    assert app.state.channel_runtime_dispatcher is not None
-
-    with TestClient(app):
-        service = app.state.channel_self_service
-        service.save(
-            "slack",
-            display_name="办公 Slack",
-            config={},
-            secrets={
-                "slack_bot_token": _BOT_TOKEN,
-                "slack_app_token": _APP_TOKEN,
-            },
-            request_id="slack-save",
-        )
-        assert service.enable("slack", request_id="slack-enable")["health"] == "connected"
-        _wait(lambda: any(item["text"] == "已完成本周进展整理" for item in api.sent))
-
-        threads, _ = app.state.runtime.list_threads()
-        assert len([thread for thread in threads if thread.title == "Slack 会话"]) == 1
-        assert _CHANNEL not in repr(threads)
-        assert service.disable("slack", request_id="slack-disable")["health"] == "disabled"

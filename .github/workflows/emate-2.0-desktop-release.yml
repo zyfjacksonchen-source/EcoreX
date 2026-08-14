@@ -152,6 +152,14 @@ jobs:
             tests/v1/test_channel_self_service.py \
             tests/v1/test_channel_runtime_dispatcher.py \
             tests/v1/test_channel_terminal_convergence.py \
+            tests/v1/test_external_office_channel_contract_matrix.py \
+            tests/v1/test_dingtalk_channel_adapter.py \
+            tests/v1/test_discord_channel_adapter.py \
+            tests/v1/test_feishu_markdown_images.py \
+            tests/v1/test_qq_channel_adapter.py \
+            tests/v1/test_slack_channel_adapter.py \
+            tests/v1/test_telegram_channel_adapter.py \
+            tests/v1/test_wecom_bot_channel_adapter.py \
             tests/v1/test_connector_vault.py \
             tests/v1/test_wechat_callback_gateway.py \
             tests/v1/test_weixin_channel_adapter.py \
