@@ -679,31 +679,25 @@ def test_live_reference_gate_checks_same_origin_current_and_all_pointer_files() 
     module = _module()
     requested: list[str] = []
 
-    def open_request(request, *, timeout: int):
-        assert timeout == 30
-        requested.append(request.full_url)
-        if request.full_url.endswith("latest-mac.yml"):
-            raise HTTPError(request.full_url, 404, "missing", {}, None)
-        return _Response(200, {"Content-Length": "7"}, b"current")
+    def probe(url: str, method: str) -> tuple[int, bytes]:
+        assert method == "GET"
+        requested.append(url)
+        return (404, b"") if url.endswith("latest-mac.yml") else (200, b"current")
 
     module["_verify_no_live_references"](
         {"release-stable-" + "a" * 24, "7" * 40, "https://r2/rejected.exe"},
-        opener=open_request,
+        probe=probe,
     )
 
     assert requested == list(module["_LIVE_REFERENCE_URLS"])
 
-    def leaked(request, *, timeout: int):
-        return _Response(
-            200,
-            {},
-            b"https://r2/rejected.exe",
-        )
+    def leaked(_url: str, _method: str) -> tuple[int, bytes]:
+        return 200, b"https://r2/rejected.exe"
 
     with pytest.raises(RuntimeError, match="^r2_reclaim_live_reference$"):
         module["_verify_no_live_references"](
             {"release-stable-" + "a" * 24, "7" * 40, "https://r2/rejected.exe"},
-            opener=leaked,
+            probe=leaked,
         )
 
 
@@ -712,17 +706,46 @@ def test_public_reclaim_readback_requires_404(monkeypatch) -> None:
     monkeypatch.setattr(module["time"], "sleep", lambda _seconds: None)
     record = {"file_name": "rejected.exe", "url": "https://r2/rejected.exe"}
 
-    def missing(request, *, timeout: int):
-        assert request.headers["Cache-control"] == "no-cache"
-        raise HTTPError(request.full_url, 404, "missing", {}, None)
+    def missing(url: str, method: str) -> tuple[int, bytes]:
+        assert (url, method) == ("https://r2/rejected.exe", "HEAD")
+        return 404, b""
 
-    module["_verify_public_missing"](record, opener=missing)
+    module["_verify_public_missing"](record, probe=missing)
 
     with pytest.raises(RuntimeError, match="^r2_reclaim_public_readback_failed:rejected.exe$"):
         module["_verify_public_missing"](
             record,
-            opener=lambda *_args, **_kwargs: _Response(200, {}),
+            probe=lambda *_args: (200, b""),
         )
+
+
+def test_reclaim_public_reads_have_one_total_curl_deadline(monkeypatch) -> None:
+    module = _module()
+    captured: list[tuple[tuple[str, ...], int]] = []
+
+    def run(command, **kwargs):
+        captured.append((tuple(command), kwargs["timeout"]))
+        return SimpleNamespace(returncode=0, stdout=b"current\n200")
+
+    monkeypatch.setattr(module["subprocess"], "run", run)
+
+    assert module["_bounded_public_request"]("https://dl.example/current", "GET") == (
+        200,
+        b"current",
+    )
+    command, timeout = captured[0]
+    assert command[-1] == "https://dl.example/current"
+    connect = command.index("--connect-timeout")
+    total = command.index("--max-time")
+    assert command[connect : connect + 2] == ("--connect-timeout", "5")
+    assert command[total : total + 2] == ("--max-time", "15")
+    assert "--max-filesize" in command
+    assert timeout == 20
+
+    assert module["_bounded_public_request"]("https://r2.example/large", "HEAD")[0] == 200
+    head = captured[1][0]
+    assert "--head" in head
+    assert "--max-filesize" not in head
 
 
 def test_release_workflow_exposes_reclaim_without_new_secrets() -> None:

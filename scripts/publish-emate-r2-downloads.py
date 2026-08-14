@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import subprocess
 import tempfile
 import time
 from typing import Any, Callable, Mapping
@@ -541,43 +542,66 @@ def _reclaim_documents(
 
 
 def _verify_no_live_references(
-    identities: set[str], *, opener: Callable[..., Any] = urlopen
+    identities: set[str],
+    *,
+    probe: Callable[[str, str], tuple[int, bytes]] | None = None,
 ) -> None:
+    probe = _bounded_public_request if probe is None else probe
     needles = {value.encode("utf-8") for value in identities}
     for url in _LIVE_REFERENCE_URLS:
         try:
-            with opener(
-                Request(url, headers={**_PUBLIC_HEADERS, "Cache-Control": "no-cache"}),
-                timeout=30,
-            ) as response:
-                payload = response.read(_MAX_RECEIPT_BYTES + 1)
-                if response.status != 200 or len(payload) > _MAX_RECEIPT_BYTES:
-                    raise RuntimeError("r2_reclaim_live_read_failed")
-        except HTTPError as error:
-            if error.code == 404:
-                continue
-            raise RuntimeError("r2_reclaim_live_read_failed") from None
+            status, payload = probe(url, "GET")
         except Exception:
             raise RuntimeError("r2_reclaim_live_read_failed") from None
+        if status == 404:
+            continue
+        if status != 200 or len(payload) > _MAX_RECEIPT_BYTES:
+            raise RuntimeError("r2_reclaim_live_read_failed")
         if any(needle in payload for needle in needles):
             raise RuntimeError("r2_reclaim_live_reference")
 
 
+def _bounded_public_request(url: str, method: str) -> tuple[int, bytes]:
+    command = [
+        "curl", "--noproxy", "*", "--silent", "--show-error",
+        "--proto", "=https", "--connect-timeout", "5", "--max-time", "15",
+        "--header", f"User-Agent: {_PUBLIC_HEADERS['User-Agent']}",
+        "--header", "Accept: */*", "--header", "Cache-Control: no-cache",
+        "--output", "-", "--write-out", "\n%{http_code}",
+    ]
+    if method == "HEAD":
+        command.append("--head")
+    elif method == "GET":
+        command.extend(("--max-filesize", str(_MAX_RECEIPT_BYTES)))
+    else:
+        raise ValueError("unsupported method")
+    try:
+        result = subprocess.run(
+            (*command, url),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+            check=False,
+        )
+        payload, raw_status = result.stdout.rsplit(b"\n", 1)
+        status = int(raw_status)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        raise RuntimeError("r2_public_request_failed") from None
+    if result.returncode != 0 or not 100 <= status <= 599:
+        raise RuntimeError("r2_public_request_failed")
+    return status, payload
+
+
 def _verify_public_missing(
-    record: Mapping[str, Any], *, opener: Callable[..., Any] = urlopen
+    record: Mapping[str, Any],
+    *,
+    probe: Callable[[str, str], tuple[int, bytes]] | None = None,
 ) -> None:
-    request = Request(
-        str(record["url"]),
-        headers={**_PUBLIC_HEADERS, "Cache-Control": "no-cache"},
-        method="HEAD",
-    )
+    probe = _bounded_public_request if probe is None else probe
     for attempt in range(5):
         try:
-            with opener(request, timeout=30) as response:
-                if response.status == 404:
-                    return
-        except HTTPError as error:
-            if error.code == 404:
+            if probe(str(record["url"]), "HEAD")[0] == 404:
                 return
         except Exception:
             pass
