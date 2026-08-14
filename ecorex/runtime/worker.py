@@ -6465,12 +6465,23 @@ class AgentTurnWorker:
             if stored is not None:
                 item_id, activity, arguments = stored
                 if data.get("status") == "success":
+                    result = data.get("result")
+                    accepted_desktop_update = (
+                        activity.tool_id == "desktop_update"
+                        and isinstance(result, Mapping)
+                        and result.get("status") == "accepted"
+                        and result.get("completed") is False
+                    )
                     completed = activity.model_copy(
                         update={
                             "phase": "completed",
                             "status": "completed",
-                            "result_summary": f"已完成 {activity.tool_id}"[:160],
-                            "result_sha256": self._digest(data.get("result")),
+                            "result_summary": (
+                                "更新请求已受理，等待桌面更新器处理"
+                                if accepted_desktop_update
+                                else f"已完成 {activity.tool_id}"[:160]
+                            ),
+                            "result_sha256": self._digest(result),
                         }
                     )
                     self.kernel.complete_tool_item(
@@ -6480,7 +6491,6 @@ class AgentTurnWorker:
                         job_id=job_id,
                         lease_token=lease_token,
                     )
-                    result = data.get("result")
                     action = (
                         str(arguments.get("action") or "")
                         .strip()

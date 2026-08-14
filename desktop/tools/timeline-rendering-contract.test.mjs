@@ -67,6 +67,9 @@ test("the chat DOM virtualizes durable turn projections", () => {
   assert.doesNotMatch(activity, /content\.(?:arguments|result|path)/u);
   assert.match(activity, /activity\.display_label/u);
   assert.match(activity, /工作步骤/u);
+  assert.match(activity, /toolId === "desktop_update" && status === "completed"/u);
+  assert.match(activity, /statusLabel\(item\.status, activity\.tool_id\)/u);
+  assert.match(activity, /return "已受理"/u);
   assert.doesNotMatch(activity, /TOOL_LABELS|function toolLabel/u);
 });
 

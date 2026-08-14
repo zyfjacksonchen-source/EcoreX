@@ -415,6 +415,65 @@ def test_cow_browser_success_is_stateful_and_projects_completed(
     )
 
 
+def test_cow_desktop_update_projects_acceptance_not_install_completion() -> None:
+    from ecorex.protocol import ItemStatus
+    from ecorex.runtime.worker import AgentTurnWorker
+
+    class Kernel:
+        def __init__(self):
+            self.items = {}
+
+        def create_item(self, **values):
+            self.items["item-update"] = values
+            return SimpleNamespace(item_id="item-update")
+
+        def complete_tool_item(self, item_id, activity, **_kwargs):
+            self.items[item_id]["status"] = ItemStatus.COMPLETED
+            self.items[item_id]["content"] = activity.model_dump(mode="json")
+
+        def transition_item(self, *_args, **_kwargs):
+            raise AssertionError("accepted desktop update projected as failed")
+
+    worker = object.__new__(AgentTurnWorker)
+    worker.kernel = Kernel()
+    state = {"seq": 0, "message_item": None, "tools": {}, "errors": []}
+    scope = {"job_id": "job", "lease_token": "lease", "turn_id": "turn"}
+    worker._project_event(
+        {
+            "type": "tool_execution_start",
+            "data": {
+                "tool_call_id": "call-update-205",
+                "tool_name": "desktop_update",
+                "arguments": {"action": "install_latest"},
+            },
+        },
+        state=state,
+        **scope,
+    )
+    worker._project_event(
+        {
+            "type": "tool_execution_end",
+            "data": {
+                "tool_call_id": "call-update-205",
+                "tool_name": "desktop_update",
+                "status": "success",
+                "result": {
+                    "status": "accepted",
+                    "action": "install_latest",
+                    "completed": False,
+                    "willRelaunch": True,
+                },
+            },
+        },
+        state=state,
+        **scope,
+    )
+
+    item = worker.kernel.items["item-update"]
+    assert item["status"] is ItemStatus.COMPLETED
+    assert item["content"]["result_summary"] == "更新请求已受理，等待桌面更新器处理"
+
+
 def test_cow_direct_tools_do_not_reenter_the_settings_permission_broker(
     tmp_path: Path, monkeypatch,
 ) -> None:

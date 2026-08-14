@@ -14,7 +14,8 @@ import type { ReactNode } from "react";
 
 import type { ItemProjection, PublicToolActivity } from "../api/contracts.ts";
 
-function statusLabel(status: string): string {
+function statusLabel(status: string, toolId?: string): string {
+  if (toolId === "desktop_update" && status === "completed") return "已受理";
   return ({
     created: "已准备",
     in_progress: "进行中",
@@ -80,7 +81,7 @@ export default function TimelineActivity({ item, elapsed }: { item: ItemProjecti
         <summary className="ex-activity-row">
           {icon}
           <span className={webSearch && item.status === "in_progress" ? "ex-activity-shimmer" : undefined}>{summary}</span>
-          <small>{statusLabel(item.status)} {elapsed}</small>
+          <small>{statusLabel(item.status, activity.tool_id)} {elapsed}</small>
           <ChevronDown className="ex-activity-chevron" aria-hidden="true" />
         </summary>
         <div className="ex-activity-detail">
