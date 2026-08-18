@@ -27,7 +27,10 @@ from ecorex.control_plane.production import (
 )
 from ecorex.control_plane.app import UpdateSignalHub, _ClientConnection
 from ecorex.control_plane.models import ControlPrincipal
-from ecorex.control_plane.production_auth import Ed25519JWTAuthenticator
+from ecorex.control_plane.production_auth import (
+    Ed25519JWTAuthenticator,
+    EMateSessionJWTAuthenticator,
+)
 from ecorex.control_plane.production_storage import (
     ControlPlaneInstanceLock,
     ProductionStorageError,
@@ -233,6 +236,40 @@ def _jwt(private: Ed25519PrivateKey, *, expired: bool = False) -> str:
     signature = (
         base64.urlsafe_b64encode(private.sign(signing.encode())).decode().rstrip("=")
     )
+    return f"{signing}.{signature}"
+
+
+def _emate_session_jwt(
+    private: Ed25519PrivateKey,
+    *,
+    issuer: str = "e-mate-auth",
+    audience: str = "e-mate-desktop",
+    key_id: str = "session-2026",
+    token_type: str = "e-mate-auth-session+jwt",
+) -> str:
+    now = int(datetime.now(UTC).timestamp())
+    header = {"alg": "EdDSA", "typ": token_type, "kid": key_id}
+    claims = {
+        "schemaVersion": 1,
+        "iss": issuer,
+        "aud": audience,
+        "sub": "cae2a9ef-2110-41ab-990d-151658c549e7",
+        "sid": "11111111-1111-4111-8111-111111111111",
+        "tenantId": "emate-v2",
+        "roles": ["MEMBER"],
+        "weeklyTokenLimit": 50_000,
+        "iat": now,
+        "nbf": now,
+        "exp": now + 900,
+        "jti": "22222222-2222-4222-8222-222222222222",
+    }
+
+    def segment(value: Mapping[str, Any]) -> str:
+        encoded = json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
+        return base64.urlsafe_b64encode(encoded).decode().rstrip("=")
+
+    signing = f"{segment(header)}.{segment(claims)}"
+    signature = base64.urlsafe_b64encode(private.sign(signing.encode())).decode().rstrip("=")
     return f"{signing}.{signature}"
 
 
@@ -785,6 +822,54 @@ def test_ed25519_jwt_authenticator_is_short_lived_and_redacts_token(
     tampered = expired[:-1] + ("A" if expired[-1] != "A" else "B")
     with pytest.raises(PermissionError):
         authenticator.authenticate(tampered)
+
+
+def test_emate_session_authenticator_is_scoped_to_skill_hub(tmp_path: Path) -> None:
+    config, secrets, legacy_private = _material(tmp_path)
+    session_private = Ed25519PrivateKey.generate()
+    session_public = session_private.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    configured = replace(
+        config,
+        skill_hub_auth_issuer="e-mate-auth",
+        skill_hub_auth_audience="e-mate-desktop",
+        skill_hub_auth_public_keys_json=json.dumps(
+            {"session-2026": base64.b64encode(session_public).decode()}
+        ),
+    )
+    provider = SingleNodeSQLiteS3Provider(FakeS3Factory())
+    provider.migrate(configured, secrets)
+    bundle = provider.compose(configured, secrets)
+    assert isinstance(bundle.skill_hub_authenticator, EMateSessionJWTAuthenticator)
+    endpoint = "/ecorex-agent/client/skill-hub/v1/skills"
+    session_token = _emate_session_jwt(session_private)
+    with TestClient(bundle.create_app()) as client:
+        assert client.get(
+            endpoint,
+            headers={"Authorization": f"Bearer {_jwt(legacy_private)}"},
+        ).status_code == 200
+        assert client.get(
+            endpoint,
+            params={"query": "office", "limit": 24},
+            headers={"Authorization": f"Bearer {session_token}"},
+        ).status_code == 200
+        assert client.get(
+            "/api/v1/admin/distribution",
+            headers={"Authorization": f"Bearer {session_token}"},
+        ).status_code == 401
+        for invalid in (
+            _emate_session_jwt(session_private, issuer="other"),
+            _emate_session_jwt(session_private, audience="other"),
+            _emate_session_jwt(session_private, key_id="other"),
+            _emate_session_jwt(session_private, token_type="JWT"),
+        ):
+            assert client.get(
+                endpoint,
+                headers={"Authorization": f"Bearer {invalid}"},
+            ).status_code == 401
+    bundle.lifecycle.force_close()
 
 
 def test_cli_has_no_secret_or_path_arguments_and_redacts_failures(
