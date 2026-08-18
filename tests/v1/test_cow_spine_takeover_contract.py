@@ -162,6 +162,55 @@ def test_actual_initializer_and_tool_manager_are_the_default_tool_contract(
             assert Path(tool.config["cwd"]) == tmp_path
 
 
+def test_actual_initializer_keeps_the_complete_cow_catalog_for_every_profile(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A local e-Mate feature flag must not hide a Cow model-visible tool."""
+
+    import config as config_module
+    from agent.protocol import Agent
+    from agent.tools.memory.memory_get import MemoryGetTool
+    from agent.tools.memory.memory_search import MemorySearchTool
+    from bridge.agent_initializer import AgentInitializer
+
+    required = {
+        "read", "write", "edit", "bash", "subagent", "search_files", "ls",
+        "send", "evolution_undo", "env_config", "scheduler", "web_search",
+        "web_fetch", "vision", "ocr", "browser", "imagegen", "memory_search",
+        "memory_get", "office_documents", "office_pdf", "office_presentations",
+        "office_spreadsheets",
+    }
+    workspace_tools = {
+        "read", "write", "edit", "bash", "search_files", "ls", "web_fetch",
+        "send", "browser", "ocr", "office_documents", "office_pdf",
+        "office_presentations", "office_spreadsheets",
+    }
+
+    for profile_name, profile in (
+        ("fresh", {}),
+        ("legacy-disabled-evolution", {"self_evolution_enabled": False}),
+    ):
+        monkeypatch.setattr(config_module, "config", config_module.Config(profile))
+        workspace = tmp_path / profile_name
+        memory_manager = SimpleNamespace()
+        memory_tools = [
+            MemorySearchTool(memory_manager),
+            MemoryGetTool(memory_manager),
+        ]
+        initializer = AgentInitializer(SimpleNamespace(), SimpleNamespace())
+        tools = initializer._load_tools(
+            str(workspace), memory_manager, memory_tools, "contract-session"
+        )
+        by_name = {tool.name: tool for tool in tools}
+
+        assert len(tools) == len(required)
+        assert set(by_name) == required
+        for name in workspace_tools:
+            assert Path(by_name[name].config["cwd"]) == workspace
+        agent = Agent("contract", tools=tools, workspace_dir=str(workspace), enable_skills=False)
+        assert Path(agent._find_tool("evolution_undo").context.workspace_dir) == workspace
+
+
 def test_public_cow_worker_does_not_replace_the_cow_browser_executor(
     tmp_path: Path,
 ) -> None:
@@ -175,6 +224,194 @@ def test_public_cow_worker_does_not_replace_the_cow_browser_executor(
 
     assert not hasattr(worker, "browser_handler")
     assert not hasattr(worker, "_bind_browser_pack")
+
+
+def test_browser_runtime_matches_the_cow_desktop_contract(tmp_path: Path, monkeypatch) -> None:
+    from agent.tools.browser import browser_env
+    from agent.tools.browser.browser_tool import BrowserTool
+
+    monkeypatch.setenv("COW_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("COW_DESKTOP", "1")
+    monkeypatch.setattr(browser_env, "detect_system_chrome", lambda: None)
+    tool = BrowserTool()
+
+    assert tool.config.get("cdp_endpoint") is None
+    assert browser_env.browsers_download_dir() == str(tmp_path / "ms-playwright")
+    assert tool._check_engine_ready().status == "error"
+    assert "/install-browser" in tool._check_engine_ready().result
+
+
+def test_cow_browser_only_uses_cdp_when_the_user_configures_an_endpoint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from agent.tools.browser import browser_env
+    from agent.tools.browser.browser_service import BrowserService
+
+    monkeypatch.setattr(
+        browser_env,
+        "resolve_engine",
+        lambda _config: {
+            "mode": "system-chrome",
+            "channel": "chrome",
+            "path": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "has_playwright": True,
+            "reason": "test system Chrome",
+        },
+    )
+
+    default = BrowserService({"user_data_dir": str(tmp_path / "profile")})
+    explicit = BrowserService({"cdp_endpoint": "http://127.0.0.1:9222"})
+
+    assert default._launch_mode == "persistent"
+    assert default._channel == "chrome"
+    assert explicit._launch_mode == "cdp"
+
+
+def test_cow_browser_honours_the_packaged_playwright_browser_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from agent.tools.browser import browser_env
+
+    bundled = tmp_path / "runtime" / "payload" / "ms-playwright"
+    (bundled / "chromium_headless_shell-1169").mkdir(parents=True)
+    monkeypatch.setenv("COW_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(bundled))
+
+    assert browser_env.browsers_download_dir() == str(bundled)
+    assert browser_env.has_downloaded_chromium() is True
+
+
+def test_packaged_cow_browser_uses_its_relocatable_headless_shell(monkeypatch) -> None:
+    from agent.tools.browser import browser_env
+    from agent.tools.browser.browser_service import BrowserService
+
+    monkeypatch.setenv("EMATE_PACKAGED_RUNTIME", "1")
+    monkeypatch.setattr(
+        browser_env,
+        "resolve_engine",
+        lambda _config: {
+            "mode": "playwright-chromium",
+            "channel": None,
+            "path": None,
+            "has_playwright": True,
+            "reason": "test bundled Chromium",
+        },
+    )
+
+    service = BrowserService()
+
+    assert service._launch_mode == "persistent"
+    assert service._channel is None
+    assert service._headless is True
+
+
+def test_packaged_cow_browser_prefers_bundled_chromium_over_host_chrome(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from agent.tools.browser import browser_env
+
+    bundled = tmp_path / "ms-playwright"
+    (bundled / "chromium_headless_shell-1169").mkdir(parents=True)
+    monkeypatch.setenv("EMATE_PACKAGED_RUNTIME", "1")
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(bundled))
+    monkeypatch.setattr(
+        browser_env,
+        "detect_system_chrome",
+        lambda: {"channel": "chrome", "path": "/host/chrome"},
+    )
+    monkeypatch.setattr(browser_env, "has_playwright_package", lambda: True)
+
+    engine = browser_env.resolve_engine()
+
+    assert engine["mode"] == "playwright-chromium"
+
+
+def test_cow_browser_success_is_stateful_and_projects_completed(
+    monkeypatch,
+) -> None:
+    from agent.tools.browser.browser_tool import BrowserTool
+    from ecorex.protocol import ItemStatus
+    from ecorex.runtime.worker import AgentTurnWorker
+
+    class Browser:
+        url = ""
+
+        def navigate(self, url, **_kwargs):
+            self.url = url
+            return {"url": url, "title": "Example Domain", "status": 200}
+
+        def snapshot(self, **_kwargs):
+            assert self.url == "https://example.com"
+            return "Example Domain\nexample.com"
+
+    class Kernel:
+        def __init__(self):
+            self.items = {}
+
+        def create_item(self, **values):
+            item_id = f"item-{len(self.items) + 1}"
+            self.items[item_id] = values
+            return SimpleNamespace(item_id=item_id)
+
+        def complete_tool_item(self, item_id, activity, **_kwargs):
+            self.items[item_id]["status"] = ItemStatus.COMPLETED
+            self.items[item_id]["content"] = activity.model_dump(mode="json")
+
+        def transition_item(self, *_args, **_kwargs):
+            raise AssertionError("successful BrowserTool result projected as failed")
+
+    browser = Browser()
+    tool = BrowserTool()
+    monkeypatch.setattr(tool, "_check_engine_ready", lambda: None)
+    monkeypatch.setattr(tool, "_get_service", lambda: browser)
+    worker = object.__new__(AgentTurnWorker)
+    worker.kernel = Kernel()
+    state = {"seq": 0, "message_item": None, "tools": {}, "errors": []}
+    scope = {"job_id": "job", "lease_token": "lease", "turn_id": "turn"}
+
+    for call_id, arguments in (
+        ("navigate", {"action": "navigate", "url": "https://example.com"}),
+        ("snapshot", {"action": "snapshot"}),
+    ):
+        result = tool.execute(arguments)
+        assert result.status == "success"
+        worker._project_event(
+            {
+                "type": "tool_execution_start",
+                "data": {
+                    "tool_call_id": call_id,
+                    "tool_name": "browser",
+                    "arguments": arguments,
+                },
+            },
+            state=state,
+            **scope,
+        )
+        worker._project_event(
+            {
+                "type": "tool_execution_end",
+                "data": {
+                    "tool_call_id": call_id,
+                    "tool_name": "browser",
+                    "status": result.status,
+                    "result": result.result,
+                },
+            },
+            state=state,
+            **scope,
+        )
+
+    assert [item["status"] for item in worker.kernel.items.values()] == [
+        ItemStatus.COMPLETED,
+        ItemStatus.COMPLETED,
+    ]
+    assert all(
+        item["content"]["status"] == "completed"
+        for item in worker.kernel.items.values()
+    )
 
 
 def test_cow_direct_tools_do_not_reenter_the_settings_permission_broker(

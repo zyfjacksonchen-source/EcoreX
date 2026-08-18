@@ -73,7 +73,7 @@ def test_gateway_stream_requires_contiguous_terminal_ndjson_and_authenticates() 
         return httpx.Response(
             200,
             headers={"content-type": "application/x-ndjson"},
-            content="\n".join(json.dumps(item) for item in events) + "\n",
+            content="\n\n" + "\n".join(json.dumps(item) for item in events) + "\n\n",
         )
 
     client, http = _client(handler)

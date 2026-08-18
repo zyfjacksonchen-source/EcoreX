@@ -211,6 +211,36 @@ def test_managed_client_restart_recovers_before_submit_and_downloads_verified_re
     asyncio.run(scenario())
 
 
+def test_uncertain_dead_letter_does_not_invite_a_new_provider_submit() -> None:
+    async def scenario() -> None:
+        now = datetime.now(UTC)
+        client = object.__new__(ManagedImageOrchestrationClient)
+        client.max_poll_seconds = 10
+        for error_code, retryable in (
+            ("provider_uncertain", False),
+            ("provider_unavailable", True),
+        ):
+            job = ManagedImageJob(
+                job_id="imgjob_" + "1" * 32,
+                operation="retouch",
+                model_id="gpt-image-2",
+                status="dead_letter",
+                attempt=4,
+                max_attempts=4,
+                created_at=now,
+                updated_at=now,
+                deadline=now + timedelta(minutes=10),
+                result=None,
+                last_error_code=error_code,
+            )
+            with pytest.raises(ManagedImageClientError) as raised:
+                await client.poll(job)
+            assert raised.value.code == error_code
+            assert raised.value.retryable is retryable
+
+    asyncio.run(scenario())
+
+
 def test_client_accepts_same_account_refresh_between_execute_operations(
     tmp_path: Path,
 ) -> None:

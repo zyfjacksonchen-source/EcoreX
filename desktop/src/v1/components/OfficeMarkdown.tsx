@@ -9,9 +9,18 @@ interface OfficeMarkdownProps {
   streaming: boolean;
 }
 
+function isPrivateArtifactUrl(value: string): boolean {
+  try {
+    return new URL(value, "http://emate.local").pathname.startsWith("/api/v1/artifacts/");
+  } catch {
+    return false;
+  }
+}
+
 function safeLinkUrl(value: string): string {
   const url = value.trim();
   if (!url) return "";
+  if (isPrivateArtifactUrl(url)) return "";
   if (
     url.startsWith("#")
     || url.startsWith("/")

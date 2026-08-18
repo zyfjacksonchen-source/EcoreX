@@ -1,6 +1,6 @@
 ---
 name: office-spreadsheets
-description: Create basic XLSX workbooks and inspect cell text, sheet structure, and observed formulas from existing e-Mate XLSX artifacts. Use for new tabular workbooks or read-only review of a current same-thread workbook Artifact.
+description: Create, replacement-edit, and inspect basic XLSX workbooks through the verified Office Pack.
 mentionable: true
 mention-category: document
 user-invocable: true
@@ -16,25 +16,26 @@ metadata: {"default_enabled":true,"requires":{"modules":["openpyxl"]}}
 
 # Office Spreadsheets
 
-The packaged e-Mate native facade supports two operations in the first release:
+The packaged Cow tool supports these operations through the verified Office Pack:
 
 - `create`: create a basic XLSX workbook from bounded sheets and rows.
-- `inspect`: extract bounded cell text, sheet names, row counts, and observed formula strings from an existing e-Mate XLSX Artifact.
+- `edit`: write a new `-edited.xlsx` from complete sheets/rows content after the source opens successfully. Set `output_path` explicitly to replace that exact path atomically.
+- `inspect`: extract bounded cell text, sheet names, row counts, and observed formula strings.
 
 ## Native calls
 
 Create with:
 
-`{"operation":"create","file_name":"workbook.xlsx","title":"...","sheets":[{"name":"Data","rows":[["Column",1]]}]}`
+`{"action":"create","path":"workbook.xlsx","title":"...","sheets":[{"name":"Data","rows":[["Column",1]]}]}`
 
-Inspect with the exact current Artifact identities:
+Edit with the same complete structured content and the returned path:
 
-`{"operation":"inspect","artifact_id":"art_...","revision_id":"rev_..."}`
+`{"action":"edit","path":"workbook.xlsx","output_path":"workbook-v2.xlsx","title":"...","sheets":[{"name":"Data","rows":[["Column",2]]}]}`
 
-Inspection accepts only a ready XLSX Artifact owned by the current account and created in the current thread. It reads immutable Artifact bytes, never caller-provided filesystem paths. Formula strings are observable, but formulas are not recalculated and cached results are not treated as verified calculations.
+Inspect with `{"action":"inspect","path":"workbook.xlsx"}`.
 
-## First-release boundary
+Inspection resolves the supplied local path through the Cow file-access broker and opens it in the same verified Office Pack. Formula strings are observable, but formulas are not recalculated and cached results are not treated as verified calculations.
 
-The native facade does not edit an existing workbook, calculate or audit formulas, preserve complex formatting, create charts or dashboards, convert CSV/XLS/XLSM, import Google Sheets, render ranges, or perform visual QA. Do not claim those actions succeeded. When one is requested, state that the packaged native operation is unavailable instead of presenting a newly created workbook as an edit of the original.
+Replacement edit rewrites the complete simple sheets/rows structure; it does not calculate formulas or preserve complex formatting/charts. Do not claim those unsupported properties survived.
 
 Created files receive structural-open validation only. Report that calculation and visual layout were not verified.

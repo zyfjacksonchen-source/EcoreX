@@ -5,11 +5,13 @@ Provides vector and keyword search capabilities
 """
 
 from __future__ import annotations
+import os
 import re
 import sqlite3
 import json
 import hashlib
 import threading
+import time
 from typing import List, Dict, Optional, Any
 from pathlib import Path
 from dataclasses import dataclass
@@ -41,6 +43,38 @@ _CJK_RANGES = (
 _RE_CONTAINS_CJK   = re.compile(f'[{_CJK_RANGES}]')
 _RE_CJK_WORDS      = re.compile(f'[{_CJK_RANGES}]+')
 _RE_TRIGRAM_TOKENS = re.compile(f'[{_CJK_RANGES}]+|[A-Za-z0-9_]+')
+
+# sqlite3.OperationalError subclasses DatabaseError, so "database is locked",
+# "disk I/O error" and friends must be told apart from actual corruption before
+# any recovery is attempted.
+_CORRUPTION_MARKERS = ("malformed", "corrupt", "file is not a database", "encrypted")
+
+
+def _is_corruption_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _CORRUPTION_MARKERS)
+
+
+def _is_fts5_damage(text: str) -> bool:
+    lowered = text.lower()
+    return "fts5" in lowered or "chunks_fts" in lowered
+
+
+def _split_fts5_damage(report: str) -> tuple[list[str], list[str]]:
+    """Split an integrity_check report into FTS5 findings and everything else.
+
+    SQLite 3.44 taught integrity_check to validate FTS3/FTS5 content too, so a
+    merely stale search index now shows up as a failure. Those indexes are
+    derived data and get rebuilt from the chunks table, whereas other findings
+    mean the b-tree itself is damaged.
+    """
+    fts5, other = [], []
+    for line in report.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        (fts5 if _is_fts5_damage(line) else other).append(line)
+    return fts5, other
 
 
 @dataclass
@@ -94,13 +128,128 @@ class MemoryStorage:
             if "no such module: fts5" in str(e):
                 return False
             raise
-    
+
+    def _open_conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        try:
+            conn.row_factory = sqlite3.Row
+            # WAL and busy_timeout must be set before any long read (notably
+            # integrity_check), otherwise a concurrent writer makes it fail with
+            # SQLITE_BUSY, which used to be misread as corruption.
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+        except Exception:
+            conn.close()
+            raise
+        return conn
+
+    def _check_integrity(self):
+        """Verify the database, recovering without destroying user data.
+
+        This file is shared with the conversation history (sessions / messages
+        tables), which is irreplaceable — unlike chunks/files, which are
+        re-derivable from the workspace. So it is never deleted here:
+          - FTS5-only damage is repaired later from the chunks table.
+          - Real corruption quarantines the file so it stays recoverable.
+          - Transient failures (locked, disk I/O) are logged and ignored.
+        """
+        from common.log import logger
+        try:
+            rows = self.conn.execute("PRAGMA integrity_check").fetchall()
+            report = "\n".join(str(r[0]) for r in rows).strip()
+        except sqlite3.DatabaseError as e:
+            if not (_is_corruption_error(e) or _is_fts5_damage(str(e))):
+                logger.warning(f"[MemoryStorage] Integrity check skipped: {e}")
+                return
+            report = str(e)
+
+        if report == "ok":
+            return
+
+        fts5_lines, other_lines = _split_fts5_damage(report)
+        if fts5_lines:
+            self._trigram_needs_rebuild = any(
+                "chunks_fts_trigram" in ln for ln in fts5_lines
+            )
+            self._fts5_needs_rebuild = any(
+                "chunks_fts" in ln and "chunks_fts_trigram" not in ln
+                for ln in fts5_lines
+            )
+            logger.warning(
+                f"[MemoryStorage] FTS5 index damaged, will rebuild from chunks: "
+                f"{'; '.join(fts5_lines)}"
+            )
+        if not other_lines:
+            return
+
+        logger.error(
+            f"[MemoryStorage] Database corrupted: {'; '.join(other_lines)}"
+        )
+        self._quarantine_and_recreate()
+
+    def _quarantine_and_recreate(self):
+        """Move an unusable database aside (never delete it) and open a fresh one.
+
+        Conversation history lives in the same file, so the old bytes are kept
+        under a .corrupt-<ts> suffix for manual recovery.
+        """
+        from common.log import logger
+        if self.conn is not None:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            self.conn = None
+
+        backup = Path(f"{self.db_path}.corrupt-{time.time_ns()}")
+        moves = [
+            (self.db_path, backup),
+            (Path(f"{self.db_path}-wal"), Path(f"{backup}-wal")),
+            (Path(f"{self.db_path}-shm"), Path(f"{backup}-shm")),
+        ]
+        moved = []
+        try:
+            for source, destination in moves:
+                if source.exists():
+                    os.replace(source, destination)
+                    moved.append((source, destination))
+        except OSError:
+            for source, destination in reversed(moved):
+                try:
+                    os.replace(destination, source)
+                except OSError:
+                    logger.exception(
+                        "[MemoryStorage] Failed to roll back quarantine move %s", source
+                    )
+            raise
+
+        logger.error(
+            f"[MemoryStorage] Corrupt database moved to {backup} and "
+            f"replaced by an empty one. Conversation history can be recovered from "
+            f"the quarantined copy."
+        )
+        self.conn = self._open_conn()
+
     def _init_db(self):
         """Initialize database with schema"""
+        self._fts5_needs_rebuild = False
+        self._trigram_needs_rebuild = False
         try:
-            self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-            self.conn.row_factory = sqlite3.Row
-            
+            try:
+                self.conn = self._open_conn()
+            except sqlite3.DatabaseError as e:
+                # A destroyed header makes the file unopenable, so the integrity
+                # check below can never run; quarantine it and start fresh.
+                if not _is_corruption_error(e):
+                    raise
+                from common.log import logger
+                logger.error(f"[MemoryStorage] Database unreadable: {e}")
+                self._quarantine_and_recreate()
+
+            # Never write probe objects into a damaged shared database: verify
+            # and, when necessary, preserve/quarantine it first.
+            self._check_integrity()
+
             # Check FTS5 support
             self.fts5_available = self._check_fts5_support()
             if not _HAS_UPSERT:
@@ -114,41 +263,10 @@ class MemoryStorage:
             if not self.fts5_available:
                 from common.log import logger
                 logger.debug("[MemoryStorage] FTS5 not available, using LIKE-based keyword search")
-            
-            # Check database integrity
-            try:
-                result = self.conn.execute("PRAGMA integrity_check").fetchone()
-                if result[0] != 'ok':
-                    print(f"⚠️  Database integrity check failed: {result[0]}")
-                    print(f"   Recreating database...")
-                    self.conn.close()
-                    self.conn = None
-                    # Remove corrupted database
-                    self.db_path.unlink(missing_ok=True)
-                    # Remove WAL files
-                    Path(str(self.db_path) + '-wal').unlink(missing_ok=True)
-                    Path(str(self.db_path) + '-shm').unlink(missing_ok=True)
-                    # Reconnect to create new database
-                    self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-                    self.conn.row_factory = sqlite3.Row
-            except sqlite3.DatabaseError:
-                # Database is corrupted, recreate it
-                print(f"⚠️  Database is corrupted, recreating...")
-                if self.conn:
-                    self.conn.close()
-                    self.conn = None
-                self.db_path.unlink(missing_ok=True)
-                Path(str(self.db_path) + '-wal').unlink(missing_ok=True)
-                Path(str(self.db_path) + '-shm').unlink(missing_ok=True)
-                self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-                self.conn.row_factory = sqlite3.Row
-            
-            # Enable WAL mode for better concurrency
-            self.conn.execute("PRAGMA journal_mode=WAL")
-            # Set busy timeout to avoid "database is locked" errors
-            self.conn.execute("PRAGMA busy_timeout=5000")
+
         except Exception as e:
-            print(f"⚠️  Unexpected error during database initialization: {e}")
+            from common.log import logger
+            logger.error(f"[MemoryStorage] Unexpected error during database initialization: {e}")
             raise
         
         # Create chunks table with embeddings
@@ -210,7 +328,7 @@ class MemoryStorage:
             # surfaces as "database disk image is malformed" on bm25 / MATCH.
             # We rebuild from the chunks table when that happens; data isn't
             # lost because chunks (the content table) is the source of truth.
-            if self._fts5_shadow_corrupt():
+            if self._fts5_needs_rebuild or self._fts5_shadow_corrupt():
                 from common.log import logger
                 logger.warning(
                     "[MemoryStorage] FTS5 shadow tables corrupt; rebuilding from chunks."
@@ -273,7 +391,7 @@ class MemoryStorage:
                 chunks_count = self.conn.execute(
                     "SELECT COUNT(*) as c FROM chunks"
                 ).fetchone()['c']
-                if chunks_count > 0 and not backfill_done:
+                if self._trigram_needs_rebuild or (chunks_count > 0 and not backfill_done):
                     self.conn.execute(
                         "INSERT INTO chunks_fts_trigram(chunks_fts_trigram) VALUES('rebuild')"
                     )
@@ -369,7 +487,25 @@ class MemoryStorage:
         self.conn.execute("DROP TRIGGER IF EXISTS chunks_ai")
         self.conn.execute("DROP TRIGGER IF EXISTS chunks_ad")
         self.conn.execute("DROP TRIGGER IF EXISTS chunks_au")
-        self.conn.execute("DROP TABLE IF EXISTS chunks_fts")
+        try:
+            self.conn.execute("DROP TABLE IF EXISTS chunks_fts")
+        except sqlite3.DatabaseError as error:
+            if not _is_fts5_damage(str(error)):
+                raise
+            # Some SQLite builds cannot instantiate a damaged FTS vtable even
+            # to DROP it. writable_schema makes DROP remove only that derived
+            # vtable and its shadow tables; chunks and conversation rows stay
+            # untouched and the canonical FTS schema is recreated below.
+            self.conn.execute("PRAGMA writable_schema=ON")
+            try:
+                self.conn.execute(
+                    "DELETE FROM sqlite_schema WHERE name = 'chunks_fts' "
+                    "OR name GLOB 'chunks_fts_*'"
+                )
+            finally:
+                self.conn.execute("PRAGMA writable_schema=RESET")
+            version = int(self.conn.execute("PRAGMA schema_version").fetchone()[0])
+            self.conn.execute(f"PRAGMA schema_version = {version + 1}")
         self._create_fts5_objects()
         self.conn.commit()
 
@@ -386,8 +522,7 @@ class MemoryStorage:
             ).fetchone()
             return False
         except sqlite3.DatabaseError as e:
-            msg = str(e).lower()
-            return "malformed" in msg or "corrupt" in msg
+            return _is_corruption_error(e) or _is_fts5_damage(str(e))
         except Exception:
             # Any other error (e.g. table missing) is handled by the
             # state-inconsistent path; treat as healthy here.

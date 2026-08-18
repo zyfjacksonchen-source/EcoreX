@@ -256,7 +256,7 @@ def test_manifest_enforces_the_release_package_hard_limit() -> None:
         ReleaseManifest.from_json(b" " * (MAX_MANIFEST_BYTES + 1))
 
 
-def test_manifest_keeps_core_at_150_mib_while_allowing_real_browser_pack() -> None:
+def test_manifest_keeps_core_bounded_while_allowing_real_browser_pack() -> None:
     artifact = _manifest().artifacts[0]
     with pytest.raises(ManifestError, match="between"):
         ReleaseArtifact(
@@ -273,7 +273,7 @@ def test_manifest_keeps_core_at_150_mib_while_allowing_real_browser_pack() -> No
         platform="windows",
         architecture="x64",
         file_name="browser.zip",
-        size_bytes=208 * 1024 * 1024,
+        size_bytes=300 * 1024 * 1024,
         sha256=artifact.sha256,
         signature=artifact.signature,
     )

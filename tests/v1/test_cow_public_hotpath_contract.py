@@ -319,6 +319,138 @@ def test_public_cow_worker_materializes_steer_file_and_redirects_pending_read(
     assert result.outcome is WorkerOutcome.COMPLETED
 
 
+def test_public_cow_worker_materializes_owned_artifact_for_ocr_and_projects_failures(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from ecorex.artifacts import ArtifactFamily, ArtifactScope
+    from agent.tools.ocr import ocr
+
+    workspace = tmp_path / "workspace"
+    app = create_app(settings=RuntimeSettings(database_path=tmp_path / "runtime.db"))
+    kernel = app.state.runtime
+    composition = app.state.runtime_composition
+    artifacts = app.state.artifact_service
+    thread = kernel.create_thread(CreateThreadRequest(title="artifact OCR"))
+    foreign_thread = kernel.create_thread(CreateThreadRequest(title="foreign artifact"))
+    declaration = artifacts.issue_trusted_deliverable_declaration(
+        "imagegen", family=ArtifactFamily.IMAGE
+    )
+
+    def image_artifact(target_thread, name, color):
+        return artifacts.create_artifact(
+            _png(color),
+            requested_name=name,
+            mime_type="image/png",
+            declaration=declaration,
+            scope=ArtifactScope(
+                account_id=app.state.runtime_settings.account_id,
+                thread_id=target_thread.thread_id,
+                created_by_tool_id="imagegen",
+            ),
+        )
+
+    owned = image_artifact(thread, "EMATE204.png", (255, 140, 0))
+    foreign = image_artifact(foreign_thread, "foreign.png", (0, 0, 0))
+    prepared = composition.prepare_turn(
+        CreateTurnRequest(
+            input="Read EMATE204 from the prior image artifact",
+            client_message_id="cow-hotpath-artifact-ocr-turn",
+        )
+    )
+    kernel.create_turn(
+        thread.thread_id,
+        prepared.request,
+        snapshot_context=prepared.snapshot_context,
+    )
+
+    observed_paths = []
+    original_image_bytes = ocr._image_bytes_from_source
+
+    def observe_image_bytes(source, cwd=None):
+        observed_paths.append(Path(source))
+        return original_image_bytes(source, cwd=cwd)
+
+    monkeypatch.setattr(ocr, "_image_bytes_from_source", observe_image_bytes)
+    monkeypatch.setattr(
+        ocr,
+        "_local_ocr",
+        lambda content, _timeout: {
+            "status": "success",
+            "provider": "fixture",
+            "text": "EMATE204" if content == _png((255, 140, 0)) else "WRONG",
+            "latencyMs": 1,
+            "cacheHit": False,
+        },
+    )
+
+    class Gateway:
+        def __init__(self) -> None:
+            self.requests = []
+
+        async def stream(self, request):
+            self.requests.append(request)
+            round_index = len(self.requests)
+            response_id = f"artifact-ocr-{round_index}"
+            outputs = [
+                item
+                for item in request.ordered_input_items()
+                if isinstance(item, GatewayFunctionCallOutputInput)
+            ]
+            if round_index < 3:
+                if round_index == 2:
+                    assert "EMATE204" in json.dumps(
+                        outputs[-1].output, ensure_ascii=False
+                    )
+                target = owned if round_index == 1 else foreign
+                yield GatewayEvent(
+                    seq=1,
+                    event_type="tool_call.requested",
+                    response_id=response_id,
+                    tool_call_id=f"ocr-{'owned' if round_index == 1 else 'foreign'}",
+                    tool_name="ocr",
+                    arguments={
+                        "action": "extract_text",
+                        "image": f"/api/v1/artifacts/{target.artifact_id}/preview",
+                        "timeout": 8,
+                    },
+                )
+            else:
+                assert str(outputs[-1].output).startswith("Error:")
+                assert "'status': 'error'" in str(outputs[-1].output)
+                yield GatewayEvent(
+                    seq=1,
+                    event_type="output_text.delta",
+                    response_id=response_id,
+                    delta="OCR boundary verified",
+                )
+            yield GatewayEvent(
+                seq=2,
+                event_type="response.completed",
+                response_id=response_id,
+                usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            )
+
+    result = asyncio.run(
+        AgentTurnWorker(
+            kernel,
+            gateway=Gateway(),
+            workspace_root=workspace,
+            input_attachments=app.state.input_attachment_service,
+        ).run_once("cow-hotpath-artifact-ocr-worker")
+    )
+
+    assert result.outcome is WorkerOutcome.COMPLETED
+    assert len(observed_paths) == 1
+    assert observed_paths[0].read_bytes() == _png((255, 140, 0))
+    assert observed_paths[0].stat().st_mode & 0o222 == 0
+    tool_items = [
+        item
+        for item in kernel.projection(thread.thread_id).items
+        if item.kind.value == "tool_call"
+    ]
+    assert [item.status.value for item in tool_items] == ["completed", "failed"]
+
+
 def test_public_tool_catalog_is_cow_owned_and_does_not_hide_web_search(
     tmp_path: Path, monkeypatch,
 ) -> None:
@@ -578,6 +710,83 @@ def test_official_scheduler_is_default_and_isolated_per_workspace(
     finally:
         tools[0][0].scheduler_service.stop()
         tools[1][0].scheduler_service.stop()
+
+
+def test_product_scheduler_binding_is_reused_by_cow_initializer(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from agent.tools.scheduler import integration
+
+    workspace = tmp_path / "workspace"
+    store = TaskStore(str(workspace / "scheduler" / "tasks.json"))
+    service = SchedulerService(store, lambda _task: True)
+    integration.bind_scheduler_runtime(store, service, workspace)
+
+    def fail_if_initialized(*_args, **_kwargs):
+        raise AssertionError("started a second scheduler")
+
+    monkeypatch.setattr(
+        integration,
+        "init_scheduler",
+        fail_if_initialized,
+    )
+    tool = SchedulerTool({"channel_type": "web"})
+
+    try:
+        AgentInitializer(SimpleNamespace(), SimpleNamespace(scheduler_initialized=False))._initialize_scheduler(
+            [tool], str(workspace), "cow-scheduler-singleton"
+        )
+        assert tool.task_store is store
+        assert tool.scheduler_service is service
+        assert integration.get_task_store(workspace) is store
+        assert integration.get_scheduler_service(workspace) is service
+    finally:
+        integration.bind_scheduler_runtime(None, None, workspace)
+
+
+def test_scheduler_executes_without_legacy_permission_broker(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from agent.tools.scheduler import integration
+    from bridge.context import Context
+    from common import ecorex_tool_permissions as permissions
+
+    monkeypatch.setattr(
+        permissions,
+        "get_tool_permission_broker",
+        lambda: (_ for _ in ()).throw(AssertionError("legacy broker consulted")),
+    )
+    store = TaskStore(str(tmp_path / "scheduler" / "tasks.json"))
+    tool = SchedulerTool({"channel_type": "web"})
+    tool.task_store = store
+    tool.current_context = Context(
+        kwargs={
+            "thread_id": "thread-1",
+            "session_id": "session-1",
+            "receiver": "receiver-1",
+        }
+    )
+    created = tool.execute(
+        {
+            "action": "create",
+            "name": "direct Cow scheduler",
+            "message": "run once",
+            "schedule_type": "once",
+            "schedule_value": "+5m",
+        }
+    )
+    assert created.status == "success"
+
+    executed = []
+    monkeypatch.setattr(integration, "_is_channel_ready", lambda *_args: True)
+    monkeypatch.setattr(
+        integration,
+        "_execute_send_message",
+        lambda task, _bridge: executed.append(task["id"]) or True,
+    )
+    task = store.list_tasks()[0]
+    assert integration._execute_scheduled_task(task, SimpleNamespace()) is True
+    assert executed == [task["id"]]
 
 
 def test_public_worker_passes_channel_delivery_context_to_scheduler(

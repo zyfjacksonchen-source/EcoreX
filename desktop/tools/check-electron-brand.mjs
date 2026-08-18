@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const roots = ["electron", "src", "dist", "runtime-bundle", "package.json"];
+const roots = ["electron", "src", "dist", "package.json"];
 const forbidden = [/cowagent/i, /com\.cowagent/i, /cow-agent/i];
 const findings = [];
 

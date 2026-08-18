@@ -7,7 +7,6 @@ from types import MappingProxyType
 
 CAPABILITY_PACK_TOOL_IDS = MappingProxyType(
     {
-        "browser": ("browser", "web_fetch", "web_search"),
         "channels": (),
         "image": ("imagegen", "vision"),
         "ocr": (),
@@ -16,7 +15,6 @@ CAPABILITY_PACK_TOOL_IDS = MappingProxyType(
 )
 CAPABILITY_PACK_SERVICE_IDS = MappingProxyType(
     {
-        "browser": (),
         "channels": ("channels.adapters",),
         "image": (),
         "ocr": ("ocr.extract",),

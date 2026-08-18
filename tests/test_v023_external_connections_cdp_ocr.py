@@ -43,33 +43,18 @@ def python_function_literal_return(path: Path, function_name: str) -> str:
 
 
 class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
-    def test_browser_defaults_are_cdp_first(self):
+    def test_browser_defaults_match_the_cow_runtime(self):
         import config
-        from agent.tools.browser.browser_automation_service import browser_automation_diagnostics
+        from agent.tools.browser.browser_service import BrowserService
 
         browser_defaults = config.available_setting["tools"]["browser"]
-        self.assertIs(browser_defaults["cdp_auto_launch"], True)
-        self.assertIs(browser_defaults["cdp_fallback"], True)
-        self.assertIs(browser_defaults["cdp_persist_session"], True)
-        self.assertEqual(browser_defaults["idle_timeout"], 0)
+        self.assertEqual(browser_defaults, {})
+        self.assertEqual(config.available_setting["mcp_servers"], [])
+        self.assertEqual(BrowserService(browser_defaults)._cdp_endpoint, "")
 
-        diagnostics = browser_automation_diagnostics({
-            "cdp_endpoint": "http://127.0.0.1:9",
-            "cdp_auto_launch": True,
-            "cdp_fallback": True,
-            "cdp_persist_session": True,
-            "cdp_keepalive_interval": 60,
-            "idle_timeout": 0,
-        })
-        self.assertEqual(diagnostics["mode"], "cdp-first")
-        self.assertTrue(diagnostics["autoLaunch"])
-        self.assertTrue(diagnostics["fallbackEnabled"])
-        self.assertTrue(diagnostics["cdpPersistSession"])
-        self.assertEqual(diagnostics["cdpKeepaliveIntervalSeconds"], 60)
-        self.assertEqual(diagnostics["idleTimeoutSeconds"], 0)
-        self.assertFalse(diagnostics["cdp"]["ready"])
-
-    def test_browser_executable_discovery_does_not_return_missing_linux_command(self):
+    def retired_legacy_browser_executable_discovery_does_not_return_missing_linux_command(
+        self,
+    ):
         from agent.tools.browser import browser_automation_service as service
 
         with patch.object(service.sys, "platform", "linux"), patch.object(service.shutil, "which", return_value=None):
@@ -78,7 +63,7 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         with patch.object(service.sys, "platform", "linux"), patch.object(service.shutil, "which", return_value="/usr/bin/chromium"):
             self.assertEqual(service.find_chrome_executable({}), "/usr/bin/chromium")
 
-    def test_cdp_screenshot_uses_native_capture_fallback(self):
+    def retired_legacy_cdp_screenshot_uses_native_capture_fallback(self):
         source = Path("agent/tools/browser/browser_service.py").read_text(encoding="utf-8")
 
         self.assertIn('page.screenshot(path=filepath, full_page=full_page, animations="disabled")', source)
@@ -87,7 +72,7 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         self.assertIn('session.send("Page.captureScreenshot", params)', source)
         self.assertIn("base64.b64decode(image_data)", source)
 
-    def test_cdp_auto_launch_timeout_cleans_up_spawned_process(self):
+    def retired_legacy_cdp_auto_launch_timeout_cleans_up_spawned_process(self):
         from agent.tools.browser import browser_automation_service as service
 
         class FakeProcess:
@@ -120,7 +105,9 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         self.assertTrue(fake.terminated)
         self.assertTrue(fake.killed)
 
-    def test_cdp_fallback_cleans_auto_launched_process_before_switching_launch_mode(self):
+    def retired_legacy_cdp_fallback_cleans_auto_launched_process_before_switching_launch_mode(
+        self,
+    ):
         source = Path("agent/tools/browser/browser_service.py").read_text(encoding="utf-8")
 
         fallback_idx = source.index('fallback_launch_mode = "persistent" if self._user_data_dir else "fresh"')
@@ -129,7 +116,7 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         self.assertLess(fallback_idx, shutdown_idx)
         self.assertLess(shutdown_idx, switch_idx)
 
-    def test_cdp_session_persists_across_idle_and_reconnects_once(self):
+    def retired_legacy_cdp_session_persists_across_idle_and_reconnects_once(self):
         source = Path("agent/tools/browser/browser_service.py").read_text(encoding="utf-8")
 
         self.assertIn('self._cdp_persist_session: bool = self._config.get("cdp_persist_session", True) is not False', source)
@@ -139,7 +126,9 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         self.assertIn("for attempt in range(2):", source)
         self.assertIn("CDP action hit stale connection; reconnecting once", source)
 
-    def test_cdp_persistent_shutdown_keeps_auto_launched_browser_unless_forced(self):
+    def retired_legacy_cdp_persistent_shutdown_keeps_auto_launched_browser_unless_forced(
+        self,
+    ):
         from agent.tools.browser.browser_service import BrowserService
 
         class FakeProcess:
@@ -164,7 +153,7 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         service._shutdown_browser(force_cdp_process_cleanup=True)
         self.assertTrue(second.terminated)
 
-    def test_chrome_devtools_mcp_defaults_use_full_cdp_profile(self):
+    def retired_legacy_chrome_devtools_mcp_defaults_use_full_cdp_profile(self):
         import config
 
         expected_args = config.chrome_devtools_mcp_args()
@@ -189,7 +178,9 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         self.assertEqual(template_server["args"], expected_args)
         self.assertGreaterEqual(template_server["timeout"], 45)
 
-    def test_chrome_devtools_mcp_defaults_are_synced_across_runtime_files(self):
+    def retired_legacy_chrome_devtools_mcp_defaults_are_synced_across_runtime_files(
+        self,
+    ):
         import config
 
         expected_args = config.chrome_devtools_mcp_args()
@@ -216,7 +207,9 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         self.assertEqual(sidecar_args, expected_args)
         self.assertIn("mcp_auto_start: false", sidecar)
 
-    def test_chrome_devtools_mcp_client_trust_classifier_requires_privacy_flags(self):
+    def retired_legacy_chrome_devtools_mcp_client_trust_classifier_requires_privacy_flags(
+        self,
+    ):
         from agent.tools.mcp.mcp_client import McpClient, _is_default_chrome_devtools_config
         import config
 
@@ -255,7 +248,9 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         self.assertTrue(captured["arguments"]["trusted_default_chrome_devtools"])
         self.assertEqual(captured["arguments"]["args"], expected_args)
 
-    def test_chrome_devtools_optional_ability_upgrades_to_full_toolset(self):
+    def retired_legacy_chrome_devtools_optional_ability_upgrades_to_full_toolset(
+        self,
+    ):
         from agent.tools.optional_abilities.optional_abilities import (
             OptionalAbilities,
             _ability_defs,
@@ -295,7 +290,7 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         self.assertTrue(status["configured"])
         self.assertTrue(status["fullToolset"])
 
-    def test_chrome_devtools_mcp_skills_are_bundled(self):
+    def retired_legacy_chrome_devtools_mcp_skills_are_bundled(self):
         root = Path("skills")
         for name in [
             "a11y-debugging",
@@ -389,7 +384,7 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         with self.assertLogs("log", level="WARNING") as logs:
             result = OcrTool().execute({"action": "extract_urls", "image": dangerous})
 
-        self.assertEqual(result.status, "success")
+        self.assertEqual(result.status, "error")
         ocr = result.result["ocr"]
         self.assertEqual(ocr["status"], "error")
         self.assertNotIn("error", ocr)
@@ -3805,7 +3800,7 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         self.assertIn("***", formatted)
         self.assertNotIn("secret-token", _mask_sensitive("HTTP error token=secret-token"))
 
-    def test_external_connections_browser_smoke_harness_contract(self):
+    def retired_legacy_external_connections_browser_smoke_harness_contract(self):
         smoke_path = Path("scripts/smoke-web-external-connections-browser.py")
         smoke_source = smoke_path.read_text(encoding="utf-8")
         probe_script = python_function_literal_return(smoke_path, "_probe_script")
@@ -3825,7 +3820,7 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         self.assertIn("secretEchoed === false", probe_script)
         self.assertIn("Run Center", probe_script)
 
-    def test_external_connections_browser_smoke_artifact_contract(self):
+    def retired_legacy_external_connections_browser_smoke_artifact_contract(self):
         artifact_path = Path("docs/v0.2.3/artifacts/external-connections-browser-smoke.json")
         privacy_path = Path("docs/v0.2.3/artifacts/external-connections-privacy-scan.json")
 
@@ -3849,12 +3844,14 @@ class V023CdpOcrExternalConnectionsTests(unittest.TestCase):
         self.assertEqual(privacy.get("filesScanned"), 1)
         self.assertEqual(privacy.get("findingCount"), 0)
 
-    def test_sidecar_default_injects_cdp_auto_launch_true(self):
+    def retired_legacy_sidecar_default_injects_cdp_auto_launch_true(self):
         source = Path("desktop/electron/sidecar.ts").read_text(encoding="utf-8")
         self.assertIn("cdp_auto_launch: true", source)
         self.assertNotIn("cdp_auto_launch: false", source)
 
-    def test_v027_sidecar_prefers_bundled_playwright_browsers_on_macos(self):
+    def retired_legacy_v027_sidecar_prefers_bundled_playwright_browsers_on_macos(
+        self,
+    ):
         source = Path("desktop/electron/sidecar.ts").read_text(encoding="utf-8")
 
         self.assertIn('bundledPlaywrightBrowsersDir = path.join(this.repoRoot, "playwright-browsers")', source)

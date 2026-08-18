@@ -2,39 +2,24 @@
 Browser service - Playwright wrapper managing browser lifecycle and page operations.
 
 All Playwright calls run on a dedicated background thread so that callers from
-any worker thread can safely use the service.  Non-CDP browsers still use an
-idle timeout to free resources; CDP mode keeps a persistent client by default
-and sends a light keepalive so long browser tasks survive quiet periods.
+any worker thread can safely use the service.  An idle-timeout mechanism
+automatically shuts down the browser (and its thread) after a configurable
+period of inactivity to free resources.
 """
-
-from __future__ import annotations
 
 import os
 import sys
+import json
 import uuid
 import queue
-import json
-import base64
-import subprocess
 import threading
-import time
-import urllib.error
-import urllib.request
 from typing import Optional, Dict, Any, List, Callable
 
 from common.log import logger
 from common.utils import expand_path, is_cloud_deployment
-from agent.tools.browser.browser_automation_service import (
-    cdp_is_reachable,
-    cdp_version_url,
-    ensure_cdp_browser,
-    find_chrome_executable,
-)
 
 
 _DEFAULT_USER_DATA_DIR = "~/.cow/browser_profile"
-_DEFAULT_CDP_USER_DATA_DIR = "~/.cow/chrome_cdp_profile"
-_DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
 
 try:
     from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page, Playwright
@@ -231,6 +216,14 @@ _SNAPSHOT_JS = """
     str(list(_INTERACTIVE_TAGS)),
 )
 
+# Returning the snapshot as ONE JSON string instead of a nested object is a big
+# win in the frozen desktop build: Playwright serializes a nested return value
+# node-by-node over many driver<->python protocol round trips, and each round
+# trip carries fixed overhead that is dramatically amplified in the frozen
+# bundle (a ~300-node tree can take 20s+). JSON.stringify in-page collapses it
+# to a single string transfer; Python then json.loads it. Behaviour identical.
+_SNAPSHOT_JS_STR = "() => JSON.stringify((%s)())" % _SNAPSHOT_JS.strip()
+
 
 _BROWSER_DEAD_HINTS = (
     "has been closed",
@@ -245,21 +238,6 @@ def _is_browser_dead_error(err: Exception) -> bool:
     """Return True if *err* indicates the browser / page died out from under us."""
     msg = str(err).lower()
     return any(h in msg for h in _BROWSER_DEAD_HINTS)
-
-
-def _is_browser_dead_result(value: Any) -> bool:
-    """Return True when an action returned a structured stale-browser error."""
-    if isinstance(value, dict):
-        candidates = [
-            value.get("error"),
-            value.get("message"),
-            value.get("error_message"),
-            value.get("details"),
-        ]
-        return any(any(h in str(item).lower() for h in _BROWSER_DEAD_HINTS) for item in candidates if item)
-    if isinstance(value, str) and ("error" in value.lower() or "failed" in value.lower()):
-        return any(h in value.lower() for h in _BROWSER_DEAD_HINTS)
-    return False
 
 
 def _should_use_headless() -> bool:
@@ -328,9 +306,8 @@ class BrowserService:
 
     All Playwright operations are dispatched to a single long-lived thread via
     a task queue.  Callers from *any* worker thread can use the public API
-    safely.  Non-CDP browsers shut down after ``idle_timeout`` seconds of
-    inactivity (default 300 = 5 min). CDP sessions stay alive by default and
-    reconnect once if the DevTools socket is closed while idle.
+    safely.  An idle timer automatically shuts the browser down after
+    ``idle_timeout`` seconds of inactivity (default 300 = 5 min).
     """
 
     _IDLE_TIMEOUT_DEFAULT = 300  # seconds
@@ -352,32 +329,30 @@ class BrowserService:
         self._browser = None
         self._context = None
         self._page = None
+        self._chrome_launcher = None
 
         # Launch mode: one of "fresh" | "persistent" | "cdp".
         # - cdp: connect to an externally launched Chrome via CDP endpoint.
         # - persistent: launch with launch_persistent_context using a user_data_dir
         #   so cookies / login state survive across runs (default).
         # - fresh: classic launch + new_context, clean state every run.
+        #
+        # Within persistent/fresh, the actual Chromium binary is resolved by
+        # browser_env.resolve_engine(): a system Chrome/Edge (channel-based, zero
+        # download) is preferred, falling back to Playwright's own downloaded
+        # Chromium. `self._channel` is the Playwright channel ("chrome"/"msedge")
+        # when driving a system browser, else None (bundled Chromium).
         cdp_endpoint = self._config.get("cdp_endpoint") or ""
         persistent_flag = self._config.get("persistent", True)
         user_data_dir_cfg = self._config.get("user_data_dir")
         if user_data_dir_cfg is None:
             user_data_dir_cfg = _DEFAULT_USER_DATA_DIR
 
+        self._channel: Optional[str] = None
         self._cdp_endpoint: str = cdp_endpoint.strip() if isinstance(cdp_endpoint, str) else ""
-        self._cdp_fallback: bool = self._config.get("cdp_fallback", True) is not False
-        self._cdp_auto_launch: bool = self._config.get("cdp_auto_launch", True) is True
-        self._cdp_persist_session: bool = self._config.get("cdp_persist_session", True) is not False
-        keepalive_cfg = self._config.get("cdp_keepalive_interval")
-        self._cdp_keepalive_interval: float = float(keepalive_cfg) if keepalive_cfg is not None else 60.0
-        if self._cdp_keepalive_interval < 0:
-            self._cdp_keepalive_interval = 0.0
-        self._last_cdp_keepalive = 0.0
-        self._cdp_user_data_dir: str = expand_path(str(self._config.get("cdp_user_data_dir") or _DEFAULT_CDP_USER_DATA_DIR))
-        self._cdp_process: Optional[subprocess.Popen] = None
         if self._cdp_endpoint:
             self._launch_mode = "cdp"
-            self._user_data_dir = expand_path(str(user_data_dir_cfg)) if user_data_dir_cfg else ""
+            self._user_data_dir: str = ""
         elif persistent_flag and user_data_dir_cfg:
             self._launch_mode = "persistent"
             self._user_data_dir = expand_path(str(user_data_dir_cfg))
@@ -385,12 +360,31 @@ class BrowserService:
             self._launch_mode = "fresh"
             self._user_data_dir = ""
 
+        # Resolve which browser engine to drive (system Chrome vs downloaded
+        # Chromium). Deferred detection failures are surfaced at launch time.
+        #
+        if self._launch_mode != "cdp":
+            try:
+                from agent.tools.browser.browser_env import resolve_engine
+                engine = resolve_engine(self._config)
+                if engine["mode"] == "system-chrome":
+                    self._channel = engine["channel"]
+                    logger.info(f"[Browser] Engine resolved: {engine['reason']}")
+                elif engine["mode"] == "playwright-chromium":
+                    logger.info(f"[Browser] Engine resolved: {engine['reason']}")
+                    if (
+                        os.environ.get("EMATE_PACKAGED_RUNTIME") == "1"
+                        and "headless" not in self._config
+                    ):
+                        self._headless = True
+                else:
+                    logger.info(f"[Browser] No ready engine yet: {engine['reason']}")
+            except Exception as e:
+                logger.debug(f"[Browser] Engine resolution skipped: {e}")
+
         # Idle auto-release
         idle_cfg = self._config.get("idle_timeout")
-        if idle_cfg is None and self._launch_mode == "cdp" and self._cdp_persist_session:
-            self._idle_timeout = 0.0
-        else:
-            self._idle_timeout = float(idle_cfg) if idle_cfg is not None else self._IDLE_TIMEOUT_DEFAULT
+        self._idle_timeout: float = float(idle_cfg) if idle_cfg is not None else self._IDLE_TIMEOUT_DEFAULT
         self._idle_timer: Optional[threading.Timer] = None
 
         # Set when the browser / page is detected to have died externally
@@ -411,10 +405,6 @@ class BrowserService:
             old = self._thread
             if old and old.is_alive():
                 old.join(timeout=5)
-                if old.is_alive():
-                    raise RuntimeError(
-                        "Browser worker is still shutting down after a cancelled or timed-out operation."
-                    )
             # Fresh queue to avoid stale sentinels from a previous close()
             self._task_queue = queue.Queue()
             self._alive = True
@@ -441,7 +431,6 @@ class BrowserService:
             try:
                 task = self._task_queue.get(timeout=1.0)
             except queue.Empty:
-                self._maybe_cdp_keepalive()
                 continue
             if task is None:
                 break
@@ -478,13 +467,30 @@ class BrowserService:
 
     def _launch_browser(self):
         """Launch / connect Chromium on the background thread."""
-        if not _HAS_PLAYWRIGHT:
-            raise RuntimeError("Playwright Python package is not installed; install browser-automation capability first")
+        # Point Playwright at our pinned download dir before any launch so a
+        # bundled-Chromium fallback finds the browser downloaded to ~/.cow.
+        try:
+            from agent.tools.browser.browser_env import apply_browsers_path_env
+            apply_browsers_path_env()
+        except Exception as e:
+            logger.debug(f"[Browser] apply_browsers_path_env skipped: {e}")
+
         if self._headless is None:
             headless_cfg = self._config.get("headless")
             self._headless = headless_cfg if headless_cfg is not None else _should_use_headless()
 
-        launch_args = ["--disable-dev-shm-usage"]
+        launch_args = [
+            "--disable-dev-shm-usage",
+            # Trim first-launch overhead: skip the first-run wizard, the default
+            # browser prompt, and Chrome's background/component network chatter.
+            # These have no effect on page interaction but noticeably speed up
+            # cold starts and each navigation.
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-background-networking",
+            "--disable-component-update",
+            "--disable-features=Translate,OptimizationHints",
+        ]
         if self._headless:
             launch_args.append("--no-sandbox")
 
@@ -518,20 +524,7 @@ class BrowserService:
         self._playwright = sync_playwright().start()
 
         if self._launch_mode == "cdp":
-            try:
-                self._connect_cdp(viewport)
-            except Exception as e:
-                if not self._cdp_fallback:
-                    raise
-                logger.warning(f"[Browser] CDP unavailable ({e}); falling back to Playwright persistent browser")
-                fallback_launch_mode = "persistent" if self._user_data_dir else "fresh"
-                self._shutdown_browser(force_cdp_process_cleanup=True)
-                self._launch_mode = fallback_launch_mode
-                self._playwright = sync_playwright().start()
-                if self._launch_mode == "persistent":
-                    self._launch_persistent(launch_args, viewport, user_agent)
-                else:
-                    self._launch_fresh(launch_args, viewport, user_agent)
+            self._connect_cdp(viewport)
         elif self._launch_mode == "persistent":
             self._launch_persistent(launch_args, viewport, user_agent)
         else:
@@ -540,12 +533,20 @@ class BrowserService:
         logger.info("[Browser] Browser ready")
 
     def _launch_fresh(self, launch_args: List[str], viewport: Dict[str, int], user_agent: str):
-        """Classic launch: brand new Chromium with an empty context."""
-        logger.info(f"[Browser] Launching Chromium (fresh, headless={self._headless})")
-        self._browser = self._playwright.chromium.launch(
-            headless=self._headless,
-            args=launch_args,
-        )
+        """Classic launch: brand new Chromium with an empty context.
+
+        When `self._channel` is set (e.g. "chrome"/"msedge"), Playwright drives
+        the user's installed system browser instead of its own Chromium.
+        """
+        engine_label = f"system:{self._channel}" if self._channel else "chromium"
+        logger.info(f"[Browser] Launching {engine_label} (fresh, headless={self._headless})")
+        launch_kwargs: Dict[str, Any] = {
+            "headless": self._headless,
+            "args": launch_args,
+        }
+        if self._channel:
+            launch_kwargs["channel"] = self._channel
+        self._browser = self._playwright.chromium.launch(**launch_kwargs)
         self._context = self._browser.new_context(
             viewport=viewport,
             user_agent=user_agent,
@@ -556,18 +557,25 @@ class BrowserService:
     def _launch_persistent(self, launch_args: List[str], viewport: Dict[str, int], user_agent: str):
         """Launch Chromium with a persistent user_data_dir so login state survives."""
         os.makedirs(self._user_data_dir, exist_ok=True)
+        engine_label = f"system:{self._channel}" if self._channel else "chromium"
         logger.info(
-            f"[Browser] Launching Chromium (persistent, headless={self._headless}, "
+            f"[Browser] Launching {engine_label} (persistent, headless={self._headless}, "
             f"profile={self._user_data_dir})"
         )
+        persistent_kwargs: Dict[str, Any] = {
+            "user_data_dir": self._user_data_dir,
+            "headless": self._headless,
+            "args": launch_args,
+            "viewport": viewport,
+            "user_agent": user_agent,
+        }
+        # When driving a system browser, let it use its real UA instead of the
+        # spoofed Chromium one (avoids UA/engine mismatch on real Chrome/Edge).
+        if self._channel:
+            persistent_kwargs["channel"] = self._channel
+            persistent_kwargs.pop("user_agent", None)
         try:
-            self._context = self._playwright.chromium.launch_persistent_context(
-                user_data_dir=self._user_data_dir,
-                headless=self._headless,
-                args=launch_args,
-                viewport=viewport,
-                user_agent=user_agent,
-            )
+            self._context = self._playwright.chromium.launch_persistent_context(**persistent_kwargs)
         except Exception as e:
             # Profile is locked when another Chromium instance already holds it.
             msg = str(e).lower()
@@ -585,29 +593,54 @@ class BrowserService:
         self._page = pages[0] if pages else self._context.new_page()
         self._wire_close_listeners()
 
-    def _cdp_version_url(self, endpoint: str) -> str:
-        return cdp_version_url(endpoint)
+    def _launch_system_cdp(self, launch_args: List[str], viewport: Dict[str, int]):
+        """Spawn the user's system Chrome/Edge with a debugging port, attach via CDP.
 
-    def _cdp_is_reachable(self, endpoint: str) -> bool:
-        return cdp_is_reachable(endpoint)
+        This is the default for system browsers. Unlike launch(channel=...), it
+        does not "take over" the browser app, so it avoids the macOS Automation
+        prompt / long stall. Login state persists in the isolated user_data_dir.
+        """
+        from agent.tools.browser.chrome_launcher import ChromeLauncher
 
-    def _find_chrome_executable(self) -> str:
-        return find_chrome_executable(self._config)
+        os.makedirs(self._user_data_dir, exist_ok=True)
+        logger.info(
+            f"[Browser] Launching system:{self._channel} via spawn+CDP "
+            f"(headless={self._headless}, profile={self._user_data_dir})"
+        )
+        self._chrome_launcher = ChromeLauncher(
+            executable=self._system_exe,
+            user_data_dir=self._user_data_dir,
+            extra_args=launch_args,
+            headless=self._headless,
+        )
+        endpoint = self._chrome_launcher.launch()
 
-    def _ensure_cdp_browser(self, endpoint: str) -> None:
-        if self._cdp_is_reachable(endpoint) or not self._cdp_auto_launch:
-            return
-        logger.info(f"[Browser] Auto-launching Chrome/Edge for CDP at {endpoint}")
-        process = ensure_cdp_browser(self._config, endpoint)
-        if process is not None:
-            self._cdp_process = process
+        try:
+            self._browser = self._playwright.chromium.connect_over_cdp(endpoint)
+        except Exception as e:
+            if not self._chrome_launcher.adopted:
+                raise
+            # We reused a browser from an earlier session and it turned out not
+            # to be attachable. Retrying would adopt it again, so replace it.
+            logger.warning(f"[Browser] cannot attach to the reused Chrome: {e}")
+            endpoint = self._chrome_launcher.relaunch_fresh()
+            self._browser = self._playwright.chromium.connect_over_cdp(endpoint)
+        # The spawned Chrome opens its own default context (backed by
+        # user_data_dir); reuse it so cookies / logins persist.
+        contexts = self._browser.contexts
+        self._context = contexts[0] if contexts else self._browser.new_context(viewport=viewport)
+        pages = self._context.pages
+        self._page = pages[0] if pages else self._context.new_page()
+        try:
+            self._page.set_viewport_size(viewport)
+        except Exception:
+            pass
+        self._wire_close_listeners()
 
     def _connect_cdp(self, viewport: Dict[str, int]):
         """Attach to an existing Chrome started with --remote-debugging-port."""
         endpoint = self._cdp_endpoint
-        self._default_viewport = dict(viewport or {})
         logger.info(f"[Browser] Connecting to existing Chrome via CDP: {endpoint}")
-        self._ensure_cdp_browser(endpoint)
         try:
             self._browser = self._playwright.chromium.connect_over_cdp(endpoint)
         except Exception as e:
@@ -631,46 +664,6 @@ class BrowserService:
         self._page = pages[0] if pages else self._context.new_page()
         self._wire_close_listeners()
 
-    def _ensure_live_cdp_page(self) -> None:
-        if self._launch_mode != "cdp":
-            return
-        if not self._browser or not self._cdp_is_reachable(self._cdp_endpoint):
-            self._needs_restart = True
-            raise RuntimeError("Chrome CDP session is not reachable; reconnect required")
-        contexts = self._browser.contexts
-        if contexts:
-            self._context = contexts[0]
-        elif self._default_viewport:
-            self._context = self._browser.new_context(viewport=self._default_viewport)
-        else:
-            self._context = self._browser.new_context()
-        pages = self._context.pages
-        page = self._page
-        if page not in pages:
-            page = pages[0] if pages else self._context.new_page()
-        self._page = page
-        self._wire_close_listeners()
-
-    def _maybe_cdp_keepalive(self) -> None:
-        if (
-            self._launch_mode != "cdp"
-            or not self._cdp_persist_session
-            or self._cdp_keepalive_interval <= 0
-            or self._needs_restart
-        ):
-            return
-        now = time.time()
-        if now - self._last_cdp_keepalive < self._cdp_keepalive_interval:
-            return
-        self._last_cdp_keepalive = now
-        try:
-            self._ensure_live_cdp_page()
-            if self._page:
-                self._page.evaluate("() => document.readyState")
-        except Exception as e:
-            self._needs_restart = True
-            logger.info(f"[Browser] CDP keepalive failed; will reconnect on next request: {e}")
-
     def _wire_close_listeners(self):
         """Mark needs_restart whenever the browser / context / page dies externally."""
         def _on_dead(_obj=None):
@@ -686,7 +679,7 @@ class BrowserService:
         except Exception as e:
             logger.debug(f"[Browser] Failed to wire close listeners: {e}")
 
-    def _shutdown_browser(self, *, force_cdp_process_cleanup: bool = False):
+    def _shutdown_browser(self):
         """Shut down Playwright resources on the background thread.
 
         Mode-specific behavior:
@@ -698,30 +691,13 @@ class BrowserService:
         self._cancel_idle_timer()
 
         if self._launch_mode == "cdp":
-            # For CDP, browser.close() only detaches the Playwright client;
-            # the user's Chrome process and its tabs stay alive.
+            # For external CDP, browser.close() only detaches the Playwright
+            # client; the user's Chrome process and its tabs stay alive.
             try:
                 if self._browser:
                     self._browser.close()
             except Exception as e:
                 logger.debug(f"[Browser] cdp disconnect error: {e}")
-            if self._cdp_process and (force_cdp_process_cleanup or not self._cdp_persist_session):
-                try:
-                    self._cdp_process.terminate()
-                    try:
-                        self._cdp_process.wait(timeout=5)
-                    except Exception:
-                        try:
-                            self._cdp_process.kill()
-                            self._cdp_process.wait(timeout=2)
-                        except Exception as kill_error:
-                            logger.debug(f"[Browser] cdp auto-launched Chrome kill error: {kill_error}")
-                except Exception as e:
-                    logger.debug(f"[Browser] cdp auto-launched Chrome terminate error: {e}")
-                self._cdp_process = None
-            elif self._cdp_process:
-                logger.debug("[Browser] leaving persistent auto-launched CDP browser running")
-                self._cdp_process = None
         else:
             for obj, label in [
                 (self._context, "context"),
@@ -744,52 +720,33 @@ class BrowserService:
         self._playwright = None
         logger.info("[Browser] Browser closed")
 
-    def _submit(self, fn: Callable, *args, cancel_event=None, **kwargs):
+    def _submit(self, fn: Callable, *args, **kwargs):
         """Submit *fn* to the background thread and block until it completes."""
-        for attempt in range(2):
-            # If the browser died externally (e.g. user closed the window), tear
-            # down the stale thread first so _start_thread() will relaunch fresh.
-            if self._needs_restart:
-                logger.info("[Browser] Restarting after detecting closed browser")
-                self.close()
-                self._needs_restart = False
+        # If the browser died externally (e.g. user closed the window), tear
+        # down the stale thread first so _start_thread() will relaunch fresh.
+        if self._needs_restart:
+            logger.info("[Browser] Restarting after detecting closed browser")
+            self.close()
+            self._needs_restart = False
 
-            self._start_thread()
+        self._start_thread()
 
-            if not self._alive:
-                raise RuntimeError("Browser is not available")
+        if not self._alive:
+            raise RuntimeError("Browser is not available")
 
-            self._reset_idle_timer()
+        self._reset_idle_timer()
 
-            result_slot: Dict[str, Any] = {"event": threading.Event()}
-            self._task_queue.put((fn, args, kwargs, result_slot))
+        result_slot: Dict[str, Any] = {"event": threading.Event()}
+        self._task_queue.put((fn, args, kwargs, result_slot))
 
-            # Timeout prevents permanent hang if the background thread crashes
-            deadline = time.time() + 120
-            active_cancel_event = cancel_event if cancel_event is not None else getattr(self, "cancel_event", None)
-            while not result_slot["event"].wait(timeout=0.25):
-                if active_cancel_event is not None and getattr(active_cancel_event, "is_set", lambda: False)():
-                    result_slot["error"] = RuntimeError("Browser operation cancelled by user")
-                    result_slot["event"].set()
-                    self._request_thread_stop(join_timeout=1)
-                    raise result_slot["error"]
-                if time.time() >= deadline:
-                    self._request_thread_stop(join_timeout=1)
-                    raise TimeoutError("Browser operation timed out (120s)")
+        # Timeout prevents permanent hang if the background thread crashes
+        completed = result_slot["event"].wait(timeout=120)
+        if not completed:
+            raise TimeoutError("Browser operation timed out (120s)")
 
-            if "error" not in result_slot:
-                value = result_slot.get("value")
-                if self._launch_mode == "cdp" and attempt == 0 and _is_browser_dead_result(value):
-                    self._needs_restart = True
-                    logger.info(f"[Browser] CDP action returned stale connection; reconnecting once: {value}")
-                    continue
-                return value
-            error = result_slot["error"]
-            if self._launch_mode == "cdp" and attempt == 0 and _is_browser_dead_error(error):
-                self._needs_restart = True
-                logger.info(f"[Browser] CDP action hit stale connection; reconnecting once: {error}")
-                continue
-            raise error
+        if "error" in result_slot:
+            raise result_slot["error"]
+        return result_slot.get("value")
 
     # ------------------------------------------------------------------
     # Idle auto-release
@@ -817,34 +774,27 @@ class BrowserService:
 
     def close(self):
         """Shut down browser and background thread (safe from any thread)."""
-        self._request_thread_stop(join_timeout=10, clear_restart=True)
-
-    def _request_thread_stop(self, join_timeout: int = 2, clear_restart: bool = False):
         self._cancel_idle_timer()
         with self._lock:
+            if not self._alive:
+                self._needs_restart = False
+                return
             self._alive = False
-            self._needs_restart = not clear_restart
             t = self._thread
-            q = self._task_queue
-        if q is not None:
-            try:
-                q.put(None)
-            except Exception:
-                pass
+        if self._task_queue is not None:
+            self._task_queue.put(None)
         if t is not None and t.is_alive():
-            t.join(timeout=join_timeout)
+            t.join(timeout=10)
         with self._lock:
-            if t is None or not t.is_alive():
-                self._thread = None
-                if clear_restart:
-                    self._needs_restart = False
+            self._thread = None
+            self._needs_restart = False
 
     # ------------------------------------------------------------------
     # Actions  (each method is dispatched to the background thread)
     # ------------------------------------------------------------------
 
-    def navigate(self, url: str, timeout: int = 30000, cancel_event=None) -> Dict[str, Any]:
-        return self._submit(self._do_navigate, url, timeout, cancel_event=cancel_event)
+    def navigate(self, url: str, timeout: int = 30000) -> Dict[str, Any]:
+        return self._submit(self._do_navigate, url, timeout)
 
     def _do_navigate(self, url: str, timeout: int) -> Dict[str, Any]:
         page = self._page
@@ -854,11 +804,15 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Navigation failed: {e}"}
 
+        # SPAs keep long-lived connections (websockets, polling, analytics) and
+        # rarely reach true "networkidle", so waiting the full timeout is wasted
+        # time. domcontentloaded already gives a usable DOM; give the page a
+        # short grace period for initial render/XHR, then proceed.
         try:
-            page.wait_for_load_state("networkidle", timeout=8000)
+            page.wait_for_load_state("networkidle", timeout=1500)
         except Exception:
             pass
-        page.wait_for_timeout(500)
+        page.wait_for_timeout(300)
 
         try:
             title = page.title()
@@ -871,13 +825,17 @@ class BrowserService:
 
         return {"url": current_url, "title": title, "status": status}
 
-    def snapshot(self, selector: Optional[str] = None, cancel_event=None) -> str:
-        return self._submit(self._do_snapshot, selector, cancel_event=cancel_event)
+    def snapshot(self, selector: Optional[str] = None) -> str:
+        return self._submit(self._do_snapshot, selector)
 
     def _do_snapshot(self, selector: Optional[str] = None) -> str:
         page = self._page
         try:
-            result = page.evaluate(_SNAPSHOT_JS)
+            # Return a single JSON string (not a nested object) to avoid
+            # Playwright's per-node serialization round trips, which are slow
+            # in the frozen build. See _SNAPSHOT_JS_STR.
+            raw = page.evaluate(_SNAPSHOT_JS_STR)
+            result = json.loads(raw) if isinstance(raw, str) else raw
         except Exception as e:
             return f"[Snapshot error: {e}]"
 
@@ -903,53 +861,21 @@ class BrowserService:
 
         return f"{header}\n{body}"
 
-    def screenshot(self, full_page: bool = False, cwd: str = "", cancel_event=None) -> str:
-        return self._submit(self._do_screenshot, full_page, cwd, cancel_event=cancel_event)
+    def screenshot(self, full_page: bool = False, cwd: str = "") -> str:
+        return self._submit(self._do_screenshot, full_page, cwd)
 
     def _do_screenshot(self, full_page: bool = False, cwd: str = "") -> str:
         page = self._page
         save_dir = self._get_screenshot_dir(cwd)
         filename = f"screenshot_{uuid.uuid4().hex[:8]}.png"
         filepath = os.path.join(save_dir, filename)
-        try:
-            page.screenshot(path=filepath, full_page=full_page, animations="disabled")
-        except Exception as exc:
-            if self._launch_mode != "cdp":
-                raise
-            logger.warning(f"[Browser] Playwright screenshot failed in CDP mode, falling back to native CDP capture: {exc}")
-            self._capture_screenshot_via_cdp(page, filepath, full_page=full_page)
+        page.screenshot(path=filepath, full_page=full_page)
         logger.info(f"[Browser] Screenshot saved: {filepath}")
         return filepath
 
-    def _capture_screenshot_via_cdp(self, page: Page, filepath: str, *, full_page: bool = False) -> None:
-        session = page.context.new_cdp_session(page)
-        try:
-            params: Dict[str, Any] = {
-                "format": "png",
-                "fromSurface": True,
-                "captureBeyondViewport": bool(full_page),
-            }
-            if full_page:
-                metrics = session.send("Page.getLayoutMetrics")
-                content = metrics.get("contentSize") or {}
-                width = max(1, int(float(content.get("width") or 1)))
-                height = max(1, int(float(content.get("height") or 1)))
-                params["clip"] = {"x": 0, "y": 0, "width": width, "height": height, "scale": 1}
-            payload = session.send("Page.captureScreenshot", params)
-            image_data = payload.get("data")
-            if not image_data:
-                raise RuntimeError("CDP Page.captureScreenshot returned no image data")
-            with open(filepath, "wb") as handle:
-                handle.write(base64.b64decode(image_data))
-        finally:
-            try:
-                session.detach()
-            except Exception:
-                pass
-
     def click(self, ref: Optional[int] = None, selector: Optional[str] = None,
-              timeout: int = 5000, cancel_event=None) -> Dict[str, Any]:
-        return self._submit(self._do_click, ref, selector, timeout, cancel_event=cancel_event)
+              timeout: int = 5000) -> Dict[str, Any]:
+        return self._submit(self._do_click, ref, selector, timeout)
 
     def _do_click(self, ref, selector, timeout) -> Dict[str, Any]:
         page = self._page
@@ -976,8 +902,8 @@ class BrowserService:
             return {"error": f"Click failed: {e}"}
 
     def fill(self, text: str, ref: Optional[int] = None,
-             selector: Optional[str] = None, timeout: int = 5000, cancel_event=None) -> Dict[str, Any]:
-        return self._submit(self._do_fill, text, ref, selector, timeout, cancel_event=cancel_event)
+             selector: Optional[str] = None, timeout: int = 5000) -> Dict[str, Any]:
+        return self._submit(self._do_fill, text, ref, selector, timeout)
 
     def _do_fill(self, text, ref, selector, timeout) -> Dict[str, Any]:
         page = self._page
@@ -1005,8 +931,8 @@ class BrowserService:
             return {"error": f"Fill failed: {e}"}
 
     def select(self, value: str, ref: Optional[int] = None,
-               selector: Optional[str] = None, timeout: int = 5000, cancel_event=None) -> Dict[str, Any]:
-        return self._submit(self._do_select, value, ref, selector, timeout, cancel_event=cancel_event)
+               selector: Optional[str] = None, timeout: int = 5000) -> Dict[str, Any]:
+        return self._submit(self._do_select, value, ref, selector, timeout)
 
     def _do_select(self, value, ref, selector, timeout) -> Dict[str, Any]:
         page = self._page
@@ -1031,8 +957,8 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Select failed: {e}"}
 
-    def scroll(self, direction: str = "down", amount: int = 500, cancel_event=None) -> Dict[str, Any]:
-        return self._submit(self._do_scroll, direction, amount, cancel_event=cancel_event)
+    def scroll(self, direction: str = "down", amount: int = 500) -> Dict[str, Any]:
+        return self._submit(self._do_scroll, direction, amount)
 
     def _do_scroll(self, direction, amount) -> Dict[str, Any]:
         page = self._page
@@ -1059,8 +985,8 @@ class BrowserService:
             return {"error": f"Scroll failed: {e}"}
 
     def wait(self, selector: Optional[str] = None, timeout: int = 5000,
-             state: str = "visible", cancel_event=None) -> Dict[str, Any]:
-        return self._submit(self._do_wait, selector, timeout, state, cancel_event=cancel_event)
+             state: str = "visible") -> Dict[str, Any]:
+        return self._submit(self._do_wait, selector, timeout, state)
 
     def _do_wait(self, selector, timeout, state) -> Dict[str, Any]:
         page = self._page
@@ -1074,8 +1000,8 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Wait failed: {e}"}
 
-    def go_back(self, cancel_event=None) -> Dict[str, Any]:
-        return self._submit(self._do_go_back, cancel_event=cancel_event)
+    def go_back(self) -> Dict[str, Any]:
+        return self._submit(self._do_go_back)
 
     def _do_go_back(self) -> Dict[str, Any]:
         page = self._page
@@ -1093,8 +1019,8 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Go back failed: {e}"}
 
-    def go_forward(self, cancel_event=None) -> Dict[str, Any]:
-        return self._submit(self._do_go_forward, cancel_event=cancel_event)
+    def go_forward(self) -> Dict[str, Any]:
+        return self._submit(self._do_go_forward)
 
     def _do_go_forward(self) -> Dict[str, Any]:
         page = self._page
@@ -1112,8 +1038,8 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Go forward failed: {e}"}
 
-    def get_text(self, selector: str, cancel_event=None) -> Dict[str, Any]:
-        return self._submit(self._do_get_text, selector, cancel_event=cancel_event)
+    def get_text(self, selector: str) -> Dict[str, Any]:
+        return self._submit(self._do_get_text, selector)
 
     def _do_get_text(self, selector) -> Dict[str, Any]:
         page = self._page
@@ -1123,8 +1049,8 @@ class BrowserService:
         except Exception as e:
             return {"error": f"Get text failed: {e}"}
 
-    def evaluate(self, script: str, cancel_event=None) -> Dict[str, Any]:
-        return self._submit(self._do_evaluate, script, cancel_event=cancel_event)
+    def evaluate(self, script: str) -> Dict[str, Any]:
+        return self._submit(self._do_evaluate, script)
 
     def _do_evaluate(self, script) -> Dict[str, Any]:
         page = self._page
@@ -1132,6 +1058,9 @@ class BrowserService:
             result = page.evaluate(script)
             return {"result": result}
         except Exception as e:
+            # page.evaluate takes an expression, so a script written as a
+            # function body fails on its top-level return. Wrapping it is what
+            # the caller would do on the next turn anyway.
             if "Illegal return statement" in str(e):
                 try:
                     return {"result": page.evaluate("(() => {\n%s\n})()" % script)}
@@ -1139,8 +1068,8 @@ class BrowserService:
                     e = retry_error
             return {"error": f"Evaluate failed: {e}"}
 
-    def press(self, key: str, cancel_event=None) -> Dict[str, Any]:
-        return self._submit(self._do_press, key, cancel_event=cancel_event)
+    def press(self, key: str) -> Dict[str, Any]:
+        return self._submit(self._do_press, key)
 
     def _do_press(self, key) -> Dict[str, Any]:
         page = self._page

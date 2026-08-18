@@ -5,7 +5,12 @@ v1.0 云端运行时只能在 Linux aarch64 + Python 3.11.9 上构建。构建�
 构建阶段：
 
 ```bash
+cd /srv/build/EcoreX
 /opt/ecorex/platform/python-3.11.9/bin/python3.11 \
+  -m venv /var/lib/ecorex/build/v1.0.2/builder-venv-locked
+/var/lib/ecorex/build/v1.0.2/builder-venv-locked/bin/python3.11 \
+  scripts/install-v1-python-profile.py --profile cloud
+/var/lib/ecorex/build/v1.0.2/builder-venv-locked/bin/python3.11 \
   scripts/build-v1-linux-cloud-artifact.py build \
   --source-root /srv/build/EcoreX \
   --artifact-root /var/lib/ecorex/build/v1.0.2/artifact \
@@ -35,7 +40,7 @@ python scripts/sign-v1-cloud-manifest-dpapi.py `
 只将 `cloud-manifest-signature-response.json` 返回 Linux。Linux 在 attach 前重新扫描全部字节和 POSIX mode，用发布公钥 keyring 验证 Ed25519 签名，最后才将 manifest/signature 写入制品：
 
 ```bash
-/opt/ecorex/platform/python-3.11.9/bin/python3.11 \
+/var/lib/ecorex/build/v1.0.2/builder-venv-locked/bin/python3.11 \
   scripts/build-v1-linux-cloud-artifact.py attach \
   --artifact-root /var/lib/ecorex/build/v1.0.2/artifact \
   --handoff-root /var/lib/ecorex/build/v1.0.2/signing-handoff \

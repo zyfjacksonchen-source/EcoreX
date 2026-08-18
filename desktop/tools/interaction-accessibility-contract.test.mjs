@@ -131,3 +131,16 @@ test("the composer follows CowAgent active-turn send, stop, and steer semantics"
   assert.doesNotMatch(composer, /dispositionLabel|setDisposition|ex-disposition/u);
   assert.doesNotMatch(composer, /"queue"|"replace"/u);
 });
+
+test("the composer grows with its text and scrolls only after the height cap", () => {
+  const textarea = features.match(/(?:^|\n)\.ex-composer textarea\s*\{([^}]*)\}/u)?.[1] ?? "";
+  assert.match(textarea, /field-sizing:\s*content/u);
+  assert.match(textarea, /min-height:\s*44px/u);
+  assert.match(textarea, /max-height:\s*220px/u);
+  assert.match(textarea, /overflow-y:\s*auto/u);
+  assert.match(textarea, /resize:\s*none/u);
+  assert.match(composer, /value=\{draft\}/u);
+  assert.match(composer, /rows=\{1\}/u);
+  assert.match(composer, /if \(sent\) \{[\s\S]*?onDraftChange\(""\);/u);
+  assert.match(composer, /event\.key === "Enter" && !event\.shiftKey && !event\.nativeEvent\.isComposing/u);
+});

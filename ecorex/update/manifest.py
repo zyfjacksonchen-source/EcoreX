@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 MANIFEST_SCHEMA_VERSION = 1
 MAX_MANIFEST_BYTES = 1024 * 1024
-MAX_CORE_ARTIFACT_BYTES = 150 * 1024 * 1024
+MAX_CORE_ARTIFACT_BYTES = 256 * 1024 * 1024
 MAX_CAPABILITY_PACK_ARTIFACT_BYTES = 500 * 1024 * 1024
 # Transport/storage code uses the largest admissible artifact as its absolute
 # allocation ceiling. ReleaseArtifact applies the narrower identity-specific

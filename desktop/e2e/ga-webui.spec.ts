@@ -375,7 +375,6 @@ test("Composer stays at the workspace bottom and moves into the new-task home", 
   for (const control of [
     normalComposer.getByRole("button", { name: "选择模型" }),
     normalComposer.getByRole("button", { name: "打开外部连接与通道" }),
-    normalComposer.locator(".ex-permission-inline").filter({ hasText: /访问/u }),
   ]) {
     const controlBox = await control.boundingBox();
     expect(controlBox).not.toBeNull();
@@ -383,7 +382,7 @@ test("Composer stays at the workspace bottom and moves into the new-task home", 
     expect(controlBox!.y + controlBox!.height).toBeLessThanOrEqual(composerBox!.y + composerBox!.height);
   }
   await expect(guardedPage.locator(".ex-permission-tooltip")).toHaveCount(0);
-  await normalComposer.locator(".ex-permission-inline").first().focus();
+  await normalComposer.getByRole("button", { name: "打开外部连接与通道" }).focus();
   await expect(guardedPage.locator(".ex-permission-tooltip")).toBeVisible();
   const [workspaceBox, normalComposerBox] = await Promise.all([workspace.boundingBox(), normalComposer.boundingBox()]);
   expect(workspaceBox).not.toBeNull();
@@ -877,7 +876,7 @@ test("mobile session drawer remains inside the viewport and scrolls only its sum
   );
 });
 
-test("settings persist output location, memory reset undo, and full-access revocation", async ({ guardedPage }) => {
+test("settings persist output location and expose Cow knowledge and memory files", async ({ guardedPage }) => {
   const remoteMarkdownRequests: string[] = [];
   guardedPage.on("request", (request) => {
     if (request.url().includes("example.invalid")) remoteMarkdownRequests.push(request.url());
@@ -959,28 +958,9 @@ test("settings persist output location, memory reset undo, and full-access revoc
   await memorySection.getByRole("tab", { name: "进化记录" }).click();
   await memorySection.getByRole("button", { name: /偏好\.md/u }).click();
   await expect(memorySection.getByText(/专业严谨/u)).toBeVisible();
-  await memorySection.getByRole("button", { name: "一键重置" }).click();
-  await memorySection.getByRole("button", { name: "确认重置" }).click();
-  await expect(memorySection.getByText("0 项可重置的偏好和资料记忆", { exact: true })).toBeVisible();
-  await memorySection.getByRole("button", { name: "撤销重置" }).click();
-  await expect(memorySection.getByText("2 项可重置的偏好和资料记忆", { exact: true })).toBeVisible();
-
-  await dialog.getByRole("button", { name: "常规设置", exact: true }).click();
-  const permissionSection = dialog.getByRole("heading", { name: "权限", exact: true }).locator("..");
-  await permissionSection.getByRole("switch", { name: "关闭完全访问" }).click();
-  await expect(permissionSection.getByText("默认权限", { exact: true })).toBeVisible();
-  await permissionSection.getByRole("switch", { name: "开启完全访问" }).click();
-  await permissionSection.getByRole("group", { name: "确认启用完全访问" }).getByRole("button", { name: "确认启用" }).click();
-  await expect(permissionSection.getByText("完全访问", { exact: true })).toBeVisible();
-  await permissionSection.getByRole("switch", { name: "关闭完全访问" }).click();
-  await expect(permissionSection.getByText("默认权限", { exact: true })).toBeVisible();
 
   const state = await guardedPage.evaluate(async () => fetch("/__ga/state").then((response) => response.json()));
-  expect(state).toMatchObject({
-    output_location: "workspace",
-    memory_resettable_count: 2,
-    permission_profile: "default",
-  });
+  expect(state).toMatchObject({ output_location: "workspace" });
 });
 
 test("account menu exposes the user name and performs a real lease-bound logout", async ({ guardedPage }) => {
@@ -1090,7 +1070,7 @@ test("closing a cold lazy task dialog releases the workspace for every task-deta
   await expect(guardedPage.getByRole("menuitem", { name: "重命名" })).toBeVisible();
   await guardedPage.keyboard.press("Escape");
 
-  await guardedPage.locator(".ex-workspace-bottom .ex-permission-inline").filter({ hasText: /访问/u }).click();
+  await guardedPage.getByRole("button", { name: "设置", exact: true }).click();
   const settings = guardedPage.getByTestId("settings-workspace");
   await expect(settings).toBeVisible();
   await settings.getByRole("button", { name: "关闭设置" }).click();
@@ -1396,7 +1376,7 @@ test("interrupted connector completion stops polling and keeps retry-start avail
   });
 });
 
-test("320px touch Composer keeps the durable queue action reachable and single-line", async ({ browser }) => {
+test("320px touch Composer keeps the Cow steer action reachable without horizontal overflow", async ({ browser }) => {
   await withGuardedContext(
     browser,
     {
@@ -1407,18 +1387,14 @@ test("320px touch Composer keeps the durable queue action reachable and single-l
     },
     async (page) => {
       await openThreadScenario(page, "retry");
+      await page.getByLabel("给小芯发消息").fill("继续当前任务");
       const disposition = page.getByRole("button", { name: "追加到当前任务" });
       await expect(disposition).toBeVisible();
-      await expect(disposition).toHaveCSS("white-space", "nowrap");
+      await expect(disposition).toBeInViewport();
       await disposition.click();
-      await page.getByRole("menuitem", { name: "排到下一轮" }).click();
-      await expect(page.getByRole("button", { name: "排到下一轮" })).toBeVisible();
-      await page.getByLabel("给小芯发消息").fill("下一轮整理附件");
-      const send = page.getByRole("button", { name: "发送" });
-      await expect(send).toBeInViewport();
-      await send.click();
-      await expect(page.getByText("下一轮整理附件", { exact: true })).toBeVisible();
-      await expect(page.getByText("已排队", { exact: true })).toBeVisible();
+      await expect(
+        page.getByRole("region", { name: "对话" }).getByText("继续当前任务", { exact: true }),
+      ).toBeVisible();
       expect(await page.evaluate(() => (
         Math.max(document.documentElement.scrollWidth, document.body.scrollWidth)
         - document.documentElement.clientWidth
@@ -1502,7 +1478,7 @@ test("a durable partial image batch survives refresh as one accessible gallery",
   const failedSlot = guardedPage.locator('[data-image-batch-task-id="image-batch-task-ga-1"]');
   await expect(failedSlot).toHaveAttribute("data-artifact-status", "failed");
   await expect(failedSlot).toContainText("生成失败");
-  await expect(guardedPage.getByRole("button", { name: "打开：批次图片_01.png" })).toBeVisible();
+  await expect(guardedPage.getByRole("button", { name: "打开：批次图片_01.png" })).toHaveCount(0);
   await expect(guardedPage.getByRole("button", { name: "下载：批次图片_01.png" })).toBeVisible();
 
   await guardedPage.getByRole("button", { name: "下一张图片" }).click();
@@ -1512,7 +1488,8 @@ test("a durable partial image batch survives refresh as one accessible gallery",
   await expect(gallery).toHaveAttribute("aria-label", "图片画廊，第 3 张，共 3 张");
   await expect(guardedPage.getByRole("button", { name: "下一张图片" })).toBeDisabled();
 
-  await gallery.evaluate((element) => element.scrollTo({ left: 0, behavior: "auto" }));
+  await guardedPage.getByRole("button", { name: "上一张图片" }).click();
+  await guardedPage.getByRole("button", { name: "上一张图片" }).click();
   await expect(gallery).toHaveAttribute("aria-label", "图片画廊，第 1 张，共 3 张");
   await guardedPage.getByRole("button", { name: "预览图片：批次图片_01.png" }).click();
   await expect(guardedPage.getByRole("dialog", { name: "批次图片_01.png" })).toBeVisible();

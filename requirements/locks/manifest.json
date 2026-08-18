@@ -31,16 +31,16 @@
     },
     {
       "input": "platform-stage.in",
-      "input_sha256": "c8879b3cda087cde176487162d9f9911eac7048f0cd738d3fa3a462b124cc110",
+      "input_sha256": "ac6f5d3b9ba3617fdbf2e2f28aeb7fdd5838ff9bc23a06f0efe2772b811202be",
       "lock": "platform-stage.lock",
       "lock_sha256": "a27d49763e28ef566d4e800e20ba90557eedfd52c83fac6aae93778a3e87ac37",
       "profile": "platform-stage"
     },
     {
       "input": "runtime.in",
-      "input_sha256": "ef1da1308d5fed57ab3b81c089751acece00efde14b1109b20697d689341c533",
+      "input_sha256": "e877871898b2b5ac147110bffd54988a10fbc47d4d6bf9d23e0a6ff6f35ac8ad",
       "lock": "runtime.lock",
-      "lock_sha256": "f43c98a6285af02e75df0840400b706839e188a0332866f0bd9475b6348455c0",
+      "lock_sha256": "5bed484ef6b3d535837650283635ad50da059d88d324a74edc8401a34b78856b",
       "profile": "runtime"
     }
   ],

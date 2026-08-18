@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import tempfile
+import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Mapping, Optional
 
 from agent.tools.base_tool import BaseTool, ToolResult
 from common.office_pdf_runtime import (
@@ -29,6 +32,31 @@ from common.utils import expand_path
 from config import conf
 
 
+_PACK_SERVICE: Any = None
+_PACK_SERVICE_LOCK = threading.RLock()
+
+
+def bind_office_pack_service(service: Any) -> None:
+    """Bind the verified Office Pack used by the public Cow tools."""
+
+    if service is not None and not all(
+        callable(getattr(service, name, None))
+        for name in ("probe", "create", "edit", "read")
+    ):
+        raise ValueError("Office Pack service contract is incomplete")
+    global _PACK_SERVICE
+    with _PACK_SERVICE_LOCK:
+        _PACK_SERVICE = service
+
+
+def _office_pack_service() -> Any:
+    with _PACK_SERVICE_LOCK:
+        service = _PACK_SERVICE
+    if service is None:
+        raise OfficePdfRuntimeError("verified Office Pack service is unavailable")
+    return service
+
+
 _COMMON_PARAMS: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -37,6 +65,8 @@ _COMMON_PARAMS: dict[str, Any] = {
             "enum": [
                 "probe",
                 "status",
+                "create",
+                "edit",
                 "inspect",
                 "analyze",
                 "render_preview",
@@ -52,7 +82,30 @@ _COMMON_PARAMS: dict[str, Any] = {
         },
         "path": {
             "type": "string",
-            "description": "Local Office/PDF artifact path.",
+            "description": "Output path for create, or source path for edit/inspect/render.",
+        },
+        "output_path": {
+            "type": "string",
+            "description": "Optional edit destination. Defaults to a new -edited file.",
+        },
+        "title": {
+            "type": "string",
+            "description": "Document, workbook, deck, or PDF title for create/edit.",
+        },
+        "sections": {
+            "type": "array",
+            "items": {"type": "object"},
+            "description": "Complete structured sections for DOCX/PDF create or replacement edit.",
+        },
+        "slides": {
+            "type": "array",
+            "items": {"type": "object"},
+            "description": "Complete title/bullet slides for PPTX create or replacement edit.",
+        },
+        "sheets": {
+            "type": "array",
+            "items": {"type": "object"},
+            "description": "Complete named sheets and rows for XLSX create or replacement edit.",
         },
         "reference_path": {
             "type": "string",
@@ -152,8 +205,12 @@ class _OfficeArtifactTool(BaseTool):
         try:
             if action == "probe":
                 return ToolResult.success(self._probe())
+            if action == "create":
+                return ToolResult.success(self._create_or_edit(args, edit=False))
+            if action == "edit":
+                return ToolResult.success(self._create_or_edit(args, edit=True))
             if action == "inspect":
-                return ToolResult.success(inspect_office_pdf_artifact(self._source_path(args), kind=self.artifact_kind))
+                return ToolResult.success(self._inspect(self._source_path(args)))
             if action == "analyze":
                 return ToolResult.success(self._analyze(self._source_path(args)))
             if action == "render_preview":
@@ -167,6 +224,8 @@ class _OfficeArtifactTool(BaseTool):
                 "action": action,
                 "allowedActions": [
                     "probe",
+                    "create",
+                    "edit",
                     "inspect",
                     "analyze",
                     "render_preview",
@@ -185,6 +244,21 @@ class _OfficeArtifactTool(BaseTool):
             return ToolResult.fail(_redacted_error("Office/PDF artifact action failed.", exc))
 
     def _probe(self) -> dict[str, Any]:
+        try:
+            pack = _office_pack_service().probe(timeout_seconds=30.0)
+        except OfficePdfRuntimeError:
+            pack = None
+        if isinstance(pack, Mapping):
+            return {
+                "schemaVersion": 1,
+                "packId": "office",
+                "status": "ready",
+                "artifactKind": self.artifact_kind,
+                "compatibilityId": self.compatibility_id,
+                "officialSkill": self.official_skill,
+                "runtime": dict(pack),
+                "redacted": True,
+            }
         payload = probe_office_pdf_runtime()
         kinds = payload.get("artifactKinds") if isinstance(payload.get("artifactKinds"), dict) else {}
         return {
@@ -197,6 +271,97 @@ class _OfficeArtifactTool(BaseTool):
             "runtime": kinds.get(self.artifact_kind, {}),
             "redacted": True,
         }
+
+    def _create_or_edit(self, args: Dict[str, Any], *, edit: bool) -> dict[str, Any]:
+        source = self._source_path(args) if edit else None
+        raw_target = str(args.get("output_path") or args.get("path") or "").strip()
+        if not raw_target:
+            raise FileNotFoundError("path is required")
+        extension = {
+            "document": ".docx",
+            "spreadsheet": ".xlsx",
+            "presentation": ".pptx",
+            "pdf": ".pdf",
+        }[self.artifact_kind]
+        if source is not None and not str(args.get("output_path") or "").strip():
+            target = source.with_name(f"{source.stem}-edited{extension}")
+        else:
+            target = self._resolve_path(raw_target)
+        self._authorize_file_access("write", target)
+        from common.office_authoring_contract import (
+            validated_authoring_request,
+            validated_authoring_result,
+        )
+
+        structured = {
+            "operation": "create",
+            "file_name": target.name,
+            "title": args.get("title") or target.stem,
+        }
+        field = {
+            "document": "sections",
+            "pdf": "sections",
+            "presentation": "slides",
+            "spreadsheet": "sheets",
+        }[self.artifact_kind]
+        structured[field] = args.get(field)
+        family = self.artifact_kind
+        payload, _ = validated_authoring_request(family, extension, structured)
+        service = _office_pack_service()
+        result = (
+            service.edit(
+                family,
+                source.read_bytes(),
+                payload,
+                timeout_seconds=30.0,
+            )
+            if source is not None
+            else service.create(family, payload, timeout_seconds=30.0)
+        )
+        content, mime_type, validation = validated_authoring_result(
+            family, extension, result
+        )
+        self._write_atomic(target, content)
+        return {
+            "status": "completed",
+            "operation": "edit" if edit else "create",
+            "path": str(target),
+            "source_path": str(source) if source is not None else None,
+            "replacement_mode": (
+                "atomic-in-place"
+                if source is not None and source == target
+                else "new-file"
+            ),
+            "file_name": target.name,
+            "mime_type": mime_type,
+            "size_bytes": len(content),
+            "validation": dict(validation),
+            "redacted": True,
+        }
+
+    def _inspect(self, source: Path) -> dict[str, Any]:
+        result = _office_pack_service().read(
+            self.artifact_kind,
+            source.read_bytes(),
+            timeout_seconds=30.0,
+        )
+        if not isinstance(result, Mapping) or result.get("family") != self.artifact_kind:
+            raise OfficePdfRuntimeError("Office Pack inspection result is invalid")
+        return {**dict(result), "path": str(source), "redacted": True}
+
+    @staticmethod
+    def _write_atomic(target: Path, content: bytes) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, raw = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+        temporary = Path(raw)
+        try:
+            with os.fdopen(descriptor, "wb") as output:
+                output.write(content)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _source_path(self, args: Dict[str, Any]) -> Path:
         raw = str(args.get("path") or "").strip()
@@ -368,8 +533,8 @@ class OfficeDocumentsTool(_OfficeArtifactTool):
     compatibility_id = "office-documents"
     official_skill = "documents"
     description = (
-        "Callable EcoreX-native facade for the documents skill. Use to probe, inspect, "
-        "render, and quality-check Word/DOCX artifacts without exposing document text."
+        "Create, replacement-edit, inspect, render, and quality-check Word/DOCX files "
+        "through the verified Office Pack. Create/edit return a workspace file path."
     )
 
 
@@ -379,8 +544,8 @@ class OfficePdfTool(_OfficeArtifactTool):
     compatibility_id = "office-pdf"
     official_skill = "pdf"
     description = (
-        "Callable EcoreX-native facade for the pdf skill. Use to probe, inspect, render, "
-        "quality-check, and compare PDF page layout evidence."
+        "Create, replacement-edit, inspect, render, quality-check, and compare PDF files "
+        "through the verified Office Pack. Create/edit return a workspace file path."
     )
 
 
@@ -390,8 +555,8 @@ class OfficePresentationsTool(_OfficeArtifactTool):
     compatibility_id = "office-presentations"
     official_skill = "Presentations"
     description = (
-        "Callable EcoreX-native facade for the Presentations skill. Use to probe, inspect, "
-        "render, and quality-check PPT/PPTX decks for story flow, bounds, fonts, charts, and overlap."
+        "Create, replacement-edit, inspect, render, and quality-check PPTX decks through "
+        "the verified Office Pack. Create/edit return a workspace file path."
     )
 
 
@@ -401,6 +566,6 @@ class OfficeSpreadsheetsTool(_OfficeArtifactTool):
     compatibility_id = "office-spreadsheets"
     official_skill = "Spreadsheets"
     description = (
-        "Callable EcoreX-native facade for the Spreadsheets skill. Use to probe, inspect, "
-        "render, and quality-check Excel/CSV artifacts for typed values, formulas, charts, and exports."
+        "Create, replacement-edit, inspect, render, and quality-check XLSX workbooks through "
+        "the verified Office Pack. Create/edit return a workspace file path."
     )

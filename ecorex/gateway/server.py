@@ -48,6 +48,7 @@ _MAX_EVENT_BYTES = 1024 * 1024
 _MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 _MAX_EVENTS = 10_000
 _MAX_ACTIVE_CHAT_HANDOFFS_PER_ACCOUNT = 256
+_STREAM_KEEPALIVE_SECONDS = 15.0
 _ZERO_DIGEST = "0" * 64
 
 
@@ -2013,6 +2014,32 @@ async def _closing_provider_stream(events: AsyncIterator[GatewayEvent]):
                 await close()
 
 
+async def _provider_events_with_keepalive(
+    events: AsyncIterator[GatewayEvent],
+) -> AsyncIterator[GatewayEvent | None]:
+    """Keep the NDJSON transport alive without inventing durable events."""
+
+    while True:
+        pending = asyncio.create_task(anext(events))
+        try:
+            while True:
+                done, _ = await asyncio.wait(
+                    {pending}, timeout=_STREAM_KEEPALIVE_SECONDS
+                )
+                if done:
+                    break
+                yield None
+            try:
+                yield pending.result()
+            except StopAsyncIteration:
+                return
+        finally:
+            if not pending.done():
+                pending.cancel()
+                with suppress(Exception, asyncio.CancelledError):
+                    await pending
+
+
 def create_managed_gateway_app(
     store: SQLiteGatewayStore,
     *,
@@ -2588,7 +2615,13 @@ def create_managed_gateway_app(
             try:
                 provider_events = provider.stream(body, current)
                 async with _closing_provider_stream(provider_events):
-                    async for event in provider_events:
+                    async for event in _provider_events_with_keepalive(provider_events):
+                        if event is None:
+                            # Blank NDJSON lines are already ignored by the
+                            # Runtime client and keep idle proxies from
+                            # truncating a valid slow provider round.
+                            yield b"\n"
+                            continue
                         event = GatewayEvent.model_validate(event)
                         if event.seq != expected_seq or terminal:
                             raise GatewayStoreError(

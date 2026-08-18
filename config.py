@@ -327,15 +327,7 @@ available_setting = {
     "mcp_auto_start": False,                # start configured MCP servers at runtime boot/agent creation
     "skill": {},  # Per-skill runtime config; nested keys flatten to SKILL_<NAME>_<KEY> env vars at startup
     "tools": {
-        "browser": {
-            "cdp_endpoint": DEFAULT_CDP_ENDPOINT,
-            "cdp_auto_launch": True,
-            "cdp_fallback": True,
-            "persistent": True,
-            "cdp_persist_session": True,
-            "cdp_keepalive_interval": 60,
-            "idle_timeout": 0
-        },
+        "browser": {},
         "feishu_cli": {
             "package": "@larksuite/cli@1.0.56",
             "auto_install": False,
@@ -352,15 +344,7 @@ available_setting = {
             "bootstrap_dir": ""
         }
     },
-    "mcp_servers": [
-        {
-            "name": "chrome-devtools",
-            "type": "stdio",
-            "command": "npx",
-            "args": chrome_devtools_mcp_args(DEFAULT_CDP_ENDPOINT),
-            "timeout": 45
-        }
-    ],  # MCP server list; each entry supports type "stdio" (local process) or "sse" (remote URL); loaded only when mcp_auto_start or optional_abilities enables it
+    "mcp_servers": [],  # MCP server list; each entry supports type "stdio" (local process) or "sse" (remote URL)
 }
 
 
@@ -665,11 +649,6 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
         tools = {}
         cfg["tools"] = tools
 
-    browser = tools.get("browser")
-    if not isinstance(browser, dict):
-        browser = {}
-        tools["browser"] = browser
-
     cfg.setdefault("scheduler_enabled", False)
     cfg.setdefault("mcp_auto_start", False)
     if cfg.get("text_to_image") in (None, ""):
@@ -677,40 +656,7 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
     if cfg.get("self_evolution_enabled") in (None, ""):
         cfg["self_evolution_enabled"] = True
 
-    browser_defaults = {
-        "cdp_endpoint": DEFAULT_CDP_ENDPOINT,
-        "cdp_auto_launch": True,
-        "cdp_fallback": True,
-        "persistent": True,
-        "cdp_persist_session": True,
-        "cdp_keepalive_interval": 60,
-        "idle_timeout": 0,
-    }
-    for key, value in browser_defaults.items():
-        if browser.get(key) in (None, ""):
-            browser[key] = value
-
     channel_type = str(cfg.get("channel_type") or os.environ.get("CHANNEL_TYPE") or "").lower()
-    if "web" in channel_type:
-        def _web_bool_env(name: str, default: bool = True) -> bool:
-            value = os.environ.get(name)
-            if value in (None, ""):
-                return default
-            try:
-                return bool(_parse_bool_env_value(value))
-            except ValueError:
-                logger.warning("[INIT] invalid %s value; using %s", name, default)
-                return default
-
-        browser["cdp_auto_launch"] = _web_bool_env("ECOREX_BROWSER_CDP_AUTO_LAUNCH")
-        browser["cdp_fallback"] = _web_bool_env("ECOREX_BROWSER_CDP_FALLBACK")
-        browser["persistent"] = _web_bool_env("ECOREX_BROWSER_PERSISTENT")
-        browser["cdp_persist_session"] = _web_bool_env("ECOREX_BROWSER_CDP_PERSIST_SESSION")
-        try:
-            browser["idle_timeout"] = int(os.environ.get("ECOREX_BROWSER_IDLE_TIMEOUT", "0") or "0")
-        except ValueError:
-            logger.warning("[INIT] invalid ECOREX_BROWSER_IDLE_TIMEOUT value; using 0")
-            browser["idle_timeout"] = 0
 
     feishu_cli = tools.get("feishu_cli")
     if not isinstance(feishu_cli, dict):
@@ -737,55 +683,6 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
     tongxin_cli.setdefault("bootstrap_sha256", "")
     tongxin_cli.setdefault("bootstrap_dir", "")
     tongxin_cli["read_only"] = True
-
-    mcp_servers = cfg.get("mcp_servers")
-    if not isinstance(mcp_servers, list):
-        mcp_servers = []
-        cfg["mcp_servers"] = mcp_servers
-    has_chrome_devtools = any(
-        isinstance(server, dict)
-        and (
-            server.get("name") == "chrome-devtools"
-            or "chrome-devtools-mcp" in str(server.get("command") or "")
-        )
-        for server in mcp_servers
-    )
-    if not has_chrome_devtools:
-        command = "npx.cmd" if os.name == "nt" else "npx"
-        mcp_servers.append({
-            "name": "chrome-devtools",
-            "type": "stdio",
-            "command": command,
-            "args": chrome_devtools_mcp_args(str(browser.get("cdp_endpoint") or DEFAULT_CDP_ENDPOINT)),
-            "timeout": 45,
-        })
-    else:
-        for server in mcp_servers:
-            if not isinstance(server, dict):
-                continue
-            is_chrome_devtools = (
-                server.get("name") == "chrome-devtools"
-                or "chrome-devtools-mcp" in " ".join(str(item) for item in server.get("args", []) if item)
-                or "chrome-devtools-mcp" in str(server.get("command") or "")
-            )
-            if not is_chrome_devtools:
-                continue
-            if os.name == "nt" and str(server.get("command") or "").strip().lower() == "npx":
-                server["command"] = "npx.cmd"
-            args = server.get("args")
-            args_text = " ".join(str(item) for item in args) if isinstance(args, list) else ""
-            if _chrome_devtools_mcp_args_need_upgrade(
-                args,
-                str(browser.get("cdp_endpoint") or DEFAULT_CDP_ENDPOINT),
-            ):
-                server["args"] = chrome_devtools_mcp_args(str(browser.get("cdp_endpoint") or DEFAULT_CDP_ENDPOINT))
-            try:
-                timeout = int(server.get("timeout") or 0)
-            except (TypeError, ValueError):
-                timeout = 0
-            if timeout < 45:
-                server["timeout"] = 45
-
 
 def _prepend_to_path(path: str):
     if not path or not os.path.isdir(path):

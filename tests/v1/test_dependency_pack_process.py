@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 from io import BytesIO
 import json
@@ -230,6 +231,62 @@ def test_ocr_executes_only_from_verified_installed_pack_snapshot(
         process.close()
 
 
+def test_public_cow_ocr_uses_the_verified_pack_and_keeps_pack_errors_failed(
+    tmp_path: Path,
+) -> None:
+    from agent.tools.ocr.ocr import OcrTool, bind_ocr_pack_service
+    from ecorex.runtime import RuntimeSettings, create_app
+
+    class Service:
+        service_id = "ocr.extract"
+
+        def __init__(self) -> None:
+            self.error = False
+
+        def extract(self, content: bytes, *, timeout_seconds: float):
+            assert content == b"public-cow-image"
+            assert timeout_seconds == 8
+            if self.error:
+                raise RuntimeError("pack internal error")
+            return {
+                "status": "success",
+                "provider": "rapidocr_onnxruntime",
+                "text": "TEST1\nTEST2",
+                "latencyMs": 1,
+                "cacheHit": False,
+            }
+
+    service = Service()
+    create_app(
+        settings=RuntimeSettings(
+            database_path=tmp_path / "runtime.db",
+            artifact_root=tmp_path / "artifacts",
+            capability_pack_services={"ocr.extract": service},
+            close_capability_pack_services_on_shutdown=False,
+        )
+    )
+    image = "data:image/png;base64," + base64.b64encode(
+        b"public-cow-image"
+    ).decode("ascii")
+    try:
+        result = OcrTool().execute(
+            {"action": "extract_text", "image": image, "timeout": 8}
+        )
+        assert result.status == "success"
+        assert result.result["text"] == "TEST1\nTEST2"
+        assert result.result["ocr"]["provider"] == "rapidocr_onnxruntime"
+
+        service.error = True
+        failed = OcrTool().execute(
+            {"action": "extract_text", "image": image, "timeout": 8}
+        )
+        assert failed.status == "error"
+        assert failed.result["ocr"]["status"] == "error"
+        assert "pack internal error" not in str(failed.result)
+    finally:
+        bind_ocr_pack_service(None)
+
+
 def test_office_native_dependency_service_is_executable_without_sys_path_pollution(
     tmp_path: Path,
 ) -> None:
@@ -301,7 +358,13 @@ def test_office_service_adapter_uses_the_existing_verified_process_contract() ->
             return {"provider": "office"}
 
     process = Process()
-    result = PackOfficeServiceAdapter(process).create(
+    adapter = PackOfficeServiceAdapter(process)
+
+    result = adapter.probe(timeout_seconds=9.0)
+    assert result == {"provider": "office"}
+    assert process.call == ("probe", {}, 9.0)
+
+    result = adapter.create(
         "document",
         {"title": "Release notes", "sections": []},
         timeout_seconds=12.0,
@@ -314,7 +377,7 @@ def test_office_service_adapter_uses_the_existing_verified_process_contract() ->
         12.0,
     )
 
-    result = PackOfficeServiceAdapter(process).read(
+    result = adapter.read(
         "document",
         b"bounded-docx",
         timeout_seconds=10.0,
@@ -328,6 +391,25 @@ def test_office_service_adapter_uses_the_existing_verified_process_contract() ->
             "content_base64": "Ym91bmRlZC1kb2N4",
         },
         10.0,
+    )
+
+    result = adapter.edit(
+        "document",
+        b"bounded-docx",
+        {"title": "Revised", "sections": []},
+        timeout_seconds=11.0,
+    )
+
+    assert result == {"provider": "office"}
+    assert process.call == (
+        "edit",
+        {
+            "family": "document",
+            "content_base64": "Ym91bmRlZC1kb2N4",
+            "title": "Revised",
+            "sections": [],
+        },
+        11.0,
     )
 
 

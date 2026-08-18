@@ -494,6 +494,21 @@ def _office_create(payload: Mapping[str, Any], runtime: Path) -> Mapping[str, An
     }
 
 
+def _office_edit(payload: Mapping[str, Any], runtime: Path) -> Mapping[str, Any]:
+    """Replace one validated Office artifact with complete structured content."""
+
+    family, _content = _office_content(payload)
+    # Opening the source before replacement proves this is an edit of the
+    # supplied artifact, not a create call mislabeled by the transport.
+    _office_read(payload, runtime)
+    result = dict(_office_create(payload, runtime))
+    result["validation"] = {
+        **dict(result["validation"]),
+        "source_opened": True,
+    }
+    return result
+
+
 def main() -> int:
     if len(sys.argv) not in {2, 4}:
         return 2
@@ -529,6 +544,11 @@ def main() -> int:
                 return 4
             _apply_office_read_memory_limit(memory_limit)
             result = _office_read(payload, runtime)
+        elif pack_id == "office" and operation == "edit":
+            if memory_limit is None:
+                return 4
+            _apply_office_read_memory_limit(memory_limit)
+            result = _office_edit(payload, runtime)
         else:
             return 4
         sys.stdout.write(

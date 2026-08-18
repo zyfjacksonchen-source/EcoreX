@@ -563,7 +563,7 @@ def create_product_app(settings: ProductServerSettings) -> FastAPI:
     scheduler_tool = SchedulerTool()
     scheduler_tool.task_store = TaskStore(
         str(
-            Path(settings.database_path).expanduser().resolve().parent
+            Path(settings.workspace_roots[0]).expanduser().resolve()
             / "scheduler"
             / "tasks.json"
         )

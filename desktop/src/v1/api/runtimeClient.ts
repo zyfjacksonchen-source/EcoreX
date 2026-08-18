@@ -1355,6 +1355,15 @@ export class RuntimeClient {
     );
   }
 
+  generateThreadTitle(threadId: string): Promise<ThreadProjection> {
+    return this.json(
+      `/api/v1/threads/${encodeURIComponent(threadId)}/generate_title`,
+      { method: "POST" },
+      true,
+      validateThreadProjectionBoundary,
+    );
+  }
+
   setThreadArchived(
     threadId: string,
     archived: boolean,

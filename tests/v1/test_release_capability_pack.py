@@ -183,7 +183,7 @@ def test_release_builder_emits_verifiable_service_only_pack_without_fake_tool(
 
 
 def test_cow_release_catalog_builds_without_a_sandbox_tool_pack(tmp_path: Path) -> None:
-    expected = ("browser", "channels", "image", "ocr", "office")
+    expected = ("channels", "image", "ocr", "office")
     assert REQUIRED_CAPABILITY_PACK_IDS == expected
     assert tuple(CAPABILITY_PACK_TOOL_IDS) == expected
     assert tuple(CAPABILITY_PACK_SERVICE_IDS) == expected

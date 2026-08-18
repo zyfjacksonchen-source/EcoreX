@@ -2206,6 +2206,44 @@ test("thread catalog mutations preserve backend order and authenticated idempote
   }
 });
 
+test("automatic thread title uses the Cow generate_title route", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Request[] = [];
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    return Response.json({
+      thread_id: "thr / one",
+      status: "active",
+      title: "客户访谈摘要",
+      pinned: false,
+      active_turn_status: null,
+      last_turn_status: "completed",
+      metadata: {},
+      forked_from_thread_id: null,
+      forked_from_turn_id: null,
+      forked_from_seq: null,
+      created_at: bootstrap.server_time,
+      updated_at: bootstrap.server_time,
+    });
+  };
+  try {
+    const client = new RuntimeClient({
+      apiBase: "http://127.0.0.1:8765",
+      bearerToken: "b".repeat(43),
+    });
+    client.acceptBootstrap(bootstrap);
+    const generated = await client.generateThreadTitle("thr / one");
+
+    assert.equal(generated.title, "客户访谈摘要");
+    assert.match(requests[0]!.url, /threads\/thr%20%2F%20one\/generate_title$/);
+    assert.equal(requests[0]!.method, "POST");
+    assert.equal(requests[0]!.headers.get("x-ecorex-csrf"), bootstrap.csrf_token);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("ShareSnapshot lifecycle never reuses a thread route as a public identity", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Request[] = [];

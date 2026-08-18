@@ -37,8 +37,8 @@ const (
 	maxMetadataBytes     = 16 * 1024 * 1024
 	maxSBOMBytes         = 64 * 1024 * 1024
 	maxBootstrapBytes    = 10 * 1024 * 1024
-	maxCoreArchiveBytes  = 150 * 1024 * 1024
-	maxCoreExpandedBytes = 256 * 1024 * 1024
+	maxCoreArchiveBytes  = 256 * 1024 * 1024
+	maxCoreExpandedBytes = 640 * 1024 * 1024
 	maxPackBytes         = 500 * 1024 * 1024
 	maxFiles             = 50_000
 	artifactChunkBytes   = 8 * 1024 * 1024
@@ -2308,7 +2308,7 @@ func verifySignature(payload []byte, value signature, keys map[string]ed25519.Pu
 func requiredArtifacts(value *manifest, platform, architecture string) ([]artifact, error) {
 	target := platform + "-" + architecture
 	ids := []string{"core-" + target}
-	for _, packID := range []string{"browser", "channels", "image", "ocr", "office"} {
+	for _, packID := range []string{"channels", "image", "ocr", "office"} {
 		base := "capability-pack-" + packID + "-" + target
 		ids = append(ids, base, base+"-manifest")
 	}

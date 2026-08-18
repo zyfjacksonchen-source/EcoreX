@@ -127,65 +127,94 @@ def generate_session_title(
     conversation_messages: Optional[List[dict]] = None,
     session_summary: str = "",
 ) -> str:
-    """
-    Generate a short session title by calling the current bot's reply_text.
-    Prefer a whole-session summary/context over one latest message. Falls back
-    to a deterministic summary-context title if the LLM call fails.
-    """
+    """Return the deterministic title fallback without selecting a provider."""
     conversation_context = _format_messages_for_title(conversation_messages or [])
-    fallback = _fallback_title_from_session_context(
+    return _fallback_title_from_session_context(
         user_message,
         assistant_reply,
         session_summary=session_summary,
         conversation_context=conversation_context,
     )
+
+
+async def generate_managed_session_title(
+    user_message: str,
+    assistant_reply: str,
+    *,
+    gateway: Any,
+    thread_id: str,
+    turn_id: str,
+    model_id: str,
+    model_policy: Any,
+    identity_instruction: str,
+    config_snapshot_id: str = "title_config_v1",
+    capability_snapshot_id: str = "title_capabilities_v1",
+    permission_snapshot_id: str = "title_permissions_v1",
+    model_catalog_snapshot_id: str | None = None,
+) -> str:
+    """Generate one no-tool title through the Runtime's authenticated Gateway."""
+    fallback = generate_session_title(user_message, assistant_reply)
+    prompt = (
+        "Generate a very short title (max 15 characters for Chinese, max 6 words for English) "
+        "from the overall completed exchange, not from only one message. "
+        "Return ONLY the title text, nothing else.\n\n"
+        f"User: {user_message[:1200]}\nAssistant: {assistant_reply[:1200]}"
+    )
     try:
-        from bridge.bridge import Bridge
-        from models.session_manager import Session
-        bot = Bridge().get_bot("chat")
+        from ecorex.gateway import (
+            GatewayEventType,
+            GatewayUserMessageInput,
+            ModelGatewayRequest,
+        )
 
-        prompt_parts: List[str] = []
-        if session_summary:
-            prompt_parts.append(f"Session summary:\n{session_summary[:1200]}")
-        if conversation_context:
-            prompt_parts.append(f"Recent conversation:\n{conversation_context}")
-        if not prompt_parts:
-            if user_message:
-                prompt_parts.append(f"User: {user_message[:500]}")
-            if assistant_reply:
-                prompt_parts.append(f"Assistant: {assistant_reply[:500]}")
-        if not prompt_parts:
+        scope = hashlib.sha256(f"{thread_id}\0{turn_id}".encode()).hexdigest()[:24]
+        request = ModelGatewayRequest(
+            request_id=f"title_{scope}",
+            thread_id=thread_id,
+            turn_id=turn_id,
+            trace_id=f"title_trace_{scope}",
+            model_id=model_id,
+            model_policy=model_policy,
+            instructions=identity_instruction,
+            model_catalog_snapshot_id=model_catalog_snapshot_id,
+            input_items=[
+                GatewayUserMessageInput(
+                    message_id=f"title_message_{scope}",
+                    content=prompt,
+                )
+            ],
+            config_snapshot_id=config_snapshot_id,
+            capability_snapshot_id=capability_snapshot_id,
+            permission_snapshot_id=permission_snapshot_id,
+            direct_tools=[],
+            deferred_tool_ids=[],
+            disclosed_tool_ids=[],
+            suppressed_tool_ids=[],
+        )
+        parts: List[str] = []
+        completed = False
+        async for event in gateway.stream(request):
+            if event.event_type is GatewayEventType.OUTPUT_TEXT_DELTA:
+                parts.append(event.delta or "")
+            elif event.event_type is GatewayEventType.RESPONSE_COMPLETED:
+                completed = True
+            elif event.event_type in {
+                GatewayEventType.TOOL_CALL_REQUESTED,
+                GatewayEventType.RESPONSE_FAILED,
+            }:
+                logger.warning("[SessionService] Managed title request did not complete as text")
+                return fallback
+        if not completed:
             return fallback
-
-        session = Session("__title_gen__", system_prompt="")
-        session.messages = [
-            {"role": "user", "content": (
-                "Generate a very short title (max 15 characters for Chinese, max 6 words for English) "
-                "from the overall session summary/topic, not from only the latest message. "
-                "Return ONLY the title text, nothing else.\n\n"
-                + "\n".join(prompt_parts)
-            )}
-        ]
-
-        result = bot.reply_text(session) or {}
-        # When bots fail (network error, auth error, rate limit, etc.) they
-        # typically return completion_tokens=0 with a sentinel content like
-        # "请再问我一次吧" / "我现在有点累了". Treat that as failure.
-        completion_tokens = result.get("completion_tokens", 0) or 0
-        raw = (result.get("content") or "").strip()
-        if completion_tokens <= 0:
-            logger.warning(
-                f"[SessionService] Title generation got empty completion "
-                f"(completion_tokens={completion_tokens}, content_summary={_title_log_summary(raw)}), "
-                f"using fallback")
-            return fallback
-
-        title = _clean_title_candidate(re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL))
+        raw = "".join(parts).strip()
+        title = _clean_title_candidate(
+            re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+        )
         logger.info(f"[SessionService] Title generation result: {_title_log_summary(title)}")
         if title and len(title) <= 50:
             return title
     except Exception as e:
-        logger.warning(f"[SessionService] Title generation failed: {e}")
+        logger.warning(f"[SessionService] Managed title generation failed: {e}")
     return fallback
 
 

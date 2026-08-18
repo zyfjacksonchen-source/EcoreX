@@ -9,7 +9,14 @@ import pytest
 
 from ecorex.gateway import GatewayAccountUsageProjection, GatewayTokenUsageWindow
 from ecorex.capabilities import ManagedModelCatalog, builtin_model_catalog
-from ecorex.protocol import CreateThreadRequest, CreateTurnRequest, TurnStatus
+from ecorex.protocol import (
+    CreateThreadRequest,
+    CreateTurnRequest,
+    ItemKind,
+    ItemStatus,
+    PublicToolActivity,
+    TurnStatus,
+)
 from ecorex.runtime import RuntimeSettings, create_app
 from ecorex.runtime.usage import UsageProjectionService
 
@@ -149,7 +156,7 @@ def test_usage_projection_uses_provider_facts_for_calendar_and_context(
     }
     assert projection.context.model_id == "ecorex-chat"
     assert projection.context.used_tokens == 20
-    assert projection.context.window_tokens == 272_000
+    assert projection.context.window_tokens == 400_000
 
 
 def test_usage_projection_derives_home_activity_from_turn_states_in_shanghai(
@@ -203,6 +210,56 @@ def test_usage_projection_derives_home_activity_from_turn_states_in_shanghai(
     assert projection.task_activity.days[-3].terminal == 1
 
 
+def test_completed_turn_with_failed_tool_is_partial_activity_after_restart(
+    tmp_path,
+) -> None:
+    database = tmp_path / "runtime-tool-failure-activity.db"
+    app = create_app(
+        settings=RuntimeSettings(
+            database_path=database,
+            runtime_bearer_token=TOKEN,
+            csrf_token=CSRF,
+            webui_origins=(ORIGIN,),
+        )
+    )
+    plain = _turn(app, title="普通回复", message_id="task-plain")[1].turn
+    recovered = _turn(app, title="工具失败后兜底", message_id="task-tool-failed")[1].turn
+    app.state.runtime.create_item(
+        turn_id=recovered.turn_id,
+        kind=ItemKind.TOOL_CALL,
+        status=ItemStatus.FAILED,
+        content=PublicToolActivity(
+            tool_call_id="call-browser-failed",
+            tool_id="browser",
+            tool_name="browser",
+            display_label="browser",
+            phase="failed",
+            status="failed",
+            risk="high",
+            argument_summary="正在执行 browser",
+            result_summary="此步骤未完成",
+            argument_sha256="0" * 64,
+        ).model_dump(mode="json"),
+    )
+    with app.state.runtime.database.transaction() as connection:
+        for turn in (plain, recovered):
+            connection.execute(
+                "UPDATE turns SET status='completed', updated_at=? WHERE turn_id=?",
+                ("2026-08-12T06:50:00.000000+00:00", turn.turn_id),
+            )
+
+    restarted = UsageProjectionService(
+        str(database),
+        model_catalog=app.state.runtime_composition.model_catalog,
+        timezone_name="Asia/Shanghai",
+        clock=lambda: datetime(2026, 8, 12, 7, 0, tzinfo=UTC),
+    ).project("account")
+
+    assert restarted.task_activity.completed_today == 1
+    assert restarted.task_activity.partial_today == 1
+    assert restarted.task_activity.terminal_today == 2
+
+
 def test_usage_endpoint_returns_a_strict_read_only_projection(tmp_path) -> None:
     app = create_app(
         settings=RuntimeSettings(
@@ -233,7 +290,7 @@ def test_usage_endpoint_returns_a_strict_read_only_projection(tmp_path) -> None:
         "total_tokens": 5,
     }
     assert response.json()["context"]["used_tokens"] == 2
-    assert response.json()["context"]["window_tokens"] == 272_000
+    assert response.json()["context"]["window_tokens"] == 400_000
     account = client.get("/api/v1/usage", headers=_headers())
     assert account.status_code == 200
     assert account.json()["today"] == response.json()["today"]
@@ -318,7 +375,7 @@ def test_usage_context_keeps_the_completed_turns_frozen_catalog_revision(
 
     assert projection.context.model_id == "ecorex-chat"
     assert projection.context.model_display_name == original.display_name
-    assert projection.context.window_tokens == 272_000
+    assert projection.context.window_tokens == 400_000
     assert projection.context.model_catalog_snapshot_id == old_catalog.snapshot_id
     assert projection.context.model_catalog_snapshot_id != new_catalog.snapshot_id
 

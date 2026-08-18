@@ -753,6 +753,14 @@ export function useRuntimeSession(providedClient?: RuntimeClient) {
         void refreshConversationUsage(threadId);
         void refreshAccountUsage();
       }
+      if (events.some((event) => (
+        event.event_type === "turn.status_changed"
+        && ["completed", "partial"].includes(String(event.payload.to))
+      ))) {
+        void client.generateThreadTitle(threadId)
+          .then(() => refreshThreads())
+          .catch(() => undefined);
+      }
       if (events.some((event) => event.event_type.startsWith("artifact."))) {
         void refreshArtifacts(threadId).catch((error) => {
           setTransportError(errorMessage(error));

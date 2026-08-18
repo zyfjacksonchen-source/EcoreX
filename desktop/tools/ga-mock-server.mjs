@@ -2587,6 +2587,13 @@ async function handleApi(holder, req, res, url) {
     state.seq = 0;
     return json(res, 201, created);
   }
+  const generateTitleMatch = path.match(/^\/api\/v1\/threads\/([^/]+)\/generate_title$/u);
+  if (generateTitleMatch && req.method === "POST") {
+    const projection = projectionResponse(state, decodeURIComponent(generateTitleMatch[1]));
+    return projection
+      ? json(res, 200, projection)
+      : apiError(res, 404, "thread_not_found", "Thread not found");
+  }
 
   if (path === "/api/v1/usage" && req.method === "GET") {
     const threadId = state.projection?.thread.thread_id ?? state.threads[0]?.thread_id;

@@ -401,6 +401,9 @@ def _load_base(
         f"capability-pack-{pack_id}-{platform}-{architecture}"
         for platform, architecture in TARGETS
         for pack_id in PACK_TOOLS
+    } | {
+        f"capability-pack-browser-{platform}-{architecture}"
+        for platform, architecture in TARGETS
     }
     for artifact_id in required:
         try:
@@ -472,7 +475,7 @@ def _install_locked_runtime_overlay(
 ) -> None:
     target_platform = {
         ("macos", "arm64"): "macosx_11_0_arm64",
-        ("macos", "x64"): "macosx_10_13_x86_64",
+        ("macos", "x64"): "macosx_11_0_x86_64",
         ("windows", "x64"): "win_amd64",
     }.get((platform, architecture))
     if target_platform is None:
@@ -514,7 +517,7 @@ def _install_locked_runtime_overlay(
                 str(runtime_lock),
             ),
             cwd=source,
-            timeout=300,
+            timeout=900,
             code="manual_webui_runtime_overlay_install_failed",
         )
         destination = _runtime_site_packages(core, platform)
@@ -653,50 +656,38 @@ def _replace_builtin_skills(core: Path, source: Path) -> None:
         shutil.copy2(path, target)
 
 
-def _replace_browser_pack_source(pack: Path, source: Path) -> None:
-    runtime_members = {"browser-runtime.json", "browser-runtime.zip"}
-    if any(not (pack / name).is_file() for name in runtime_members):
-        _fail("manual_webui_browser_pack_invalid")
-    for path in pack.iterdir():
-        if path.name in runtime_members:
-            continue
-        if path.is_dir():
-            shutil.rmtree(path)
-        else:
-            path.unlink()
-    browser_source = source / "release" / "capability-packs" / "browser"
-    for path in _tracked_source_files(source, "release/capability-packs/browser"):
-        target = pack / path.relative_to(browser_source)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, target)
-    protocol = _tracked_source_files(
-        source,
-        "release/capability-packs/common/ecorex_pack_protocol.py",
-    )
-    if len(protocol) != 1:
-        _fail("manual_webui_browser_pack_invalid")
-    shutil.copy2(protocol[0], pack / protocol[0].name)
-    expected = {
-        "schema_version": 1,
-        "protocol": "ecorex-stdio-tool-v1",
-        "pack_id": "browser",
-        "runtime_api_version": "1.0.0",
-        "tools": list(PACK_TOOLS["browser"]),
-    }
-    descriptor = pack / "ecorex-pack.json"
+def _install_bundled_browser_runtime(
+    core: Path,
+    predecessor_pack: Path,
+    root: Path,
+    *,
+    platform: str,
+) -> None:
+    """Move the verified Cow Browser payload into the single Core Runtime."""
+    pack = root / "browser-pack"
+    runtime = root / "browser-runtime"
+    _extract_archive(predecessor_pack, pack)
     try:
-        if json.loads(descriptor.read_text(encoding="utf-8")) != expected:
-            _fail("manual_webui_browser_pack_invalid")
-        descriptor.write_bytes(
-            json.dumps(
-                expected,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        )
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        _fail("manual_webui_browser_pack_invalid")
+        descriptor = json.loads((pack / "browser-runtime.json").read_text(encoding="utf-8"))
+        archive = pack / "browser-runtime.zip"
+        if descriptor["archive_sha256"] != _sha256(archive):
+            _fail("manual_webui_browser_runtime_invalid")
+        _extract_archive(archive, runtime)
+        browser_roots = tuple((runtime / "browser").glob("chromium_headless_shell-*"))
+        if len(browser_roots) != 1 or not browser_roots[0].is_dir():
+            _fail("manual_webui_browser_runtime_invalid")
+        executable = {
+            "windows": browser_roots[0] / "chrome-win" / "headless_shell.exe",
+            "macos": browser_roots[0] / "chrome-mac" / "headless_shell",
+        }[platform]
+        if not executable.is_file():
+            _fail("manual_webui_browser_runtime_invalid")
+        destination = core / "ms-playwright"
+        if destination.exists():
+            _fail("manual_webui_browser_runtime_invalid")
+        shutil.copytree(runtime / "browser", destination)
+    except (KeyError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        _fail("manual_webui_browser_runtime_invalid")
 
 
 def _runtime_config(
@@ -789,6 +780,12 @@ def _prepare_stages(
             target_root,
             platform=platform,
         )
+        _install_bundled_browser_runtime(
+            core,
+            base_artifacts[f"capability-pack-browser-{platform}-{architecture}"],
+            target_root,
+            platform=platform,
+        )
         _replace_product_imports(imports[0], source)
         _replace_builtin_skills(core, source)
         _runtime_config(
@@ -849,8 +846,6 @@ def _prepare_stages(
                 ],
                 pack,
             )
-            if pack_id == "browser":
-                _replace_browser_pack_source(pack, source)
             packs[pack_id] = pack
         targets[(platform, architecture)] = {"core": core, **packs}
     return targets
@@ -1029,10 +1024,24 @@ def _sources() -> tuple[ReleaseSource, ...]:
     )
 
 
-def _core_executable_paths(platform: str) -> tuple[str, ...]:
+def _core_executable_paths(platform: str, core: Path | None = None) -> tuple[str, ...]:
     if platform == "windows":
-        return ("bin/ecorex.exe",)
-    return ("bin/ecorex", "bin/pack-python/bin/python3")
+        paths = ["bin/ecorex.exe"]
+    else:
+        paths = [
+        "bin/ecorex",
+        "bin/pack-python/bin/python3",
+        "bin/pack-python/lib/python3.11/site-packages/playwright/driver/node",
+        ]
+    if core is not None:
+        browser = core / "ms-playwright"
+        for path in sorted(browser.rglob("*")):
+            if path.is_file() and (
+                platform == "windows" and path.suffix.casefold() == ".exe"
+                or platform != "windows" and path.stat().st_mode & stat.S_IXUSR
+            ):
+                paths.append(path.relative_to(core).as_posix())
+    return tuple(paths)
 
 
 def _build_release(
@@ -1054,7 +1063,7 @@ def _build_release(
                     ArtifactKind.CORE,
                     platform,
                     architecture,
-                    executable_paths=_core_executable_paths(platform),
+                    executable_paths=_core_executable_paths(platform, target["core"]),
                     product_runtime=True,
                 ),
                 ArtifactBuildInput(
@@ -1077,9 +1086,7 @@ def _build_release(
                     ArtifactKind.CAPABILITY_PACK,
                     platform,
                     architecture,
-                    executable_paths=("__main__.py",)
-                    if pack_id == "browser"
-                    else (),
+                    executable_paths=(),
                     pack_id=pack_id,
                     pack_tool_ids=tuple(PACK_TOOLS[pack_id]),
                     pack_service_ids=tuple(PACK_SERVICES[pack_id]),

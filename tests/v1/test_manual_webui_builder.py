@@ -4,9 +4,11 @@ import base64
 import hashlib
 from importlib import metadata
 import json
+import os
 from pathlib import Path
 import runpy
 import shutil
+import stat
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -15,6 +17,8 @@ import zipfile
 import pytest
 
 from ecorex import __version__
+from ecorex.release.builder import _build_deterministic_zip
+from ecorex.update.storage import _extract_zip_safely
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "build-v1-manual-webui.py"
@@ -87,6 +91,57 @@ def test_manual_webui_builder_preserves_predecessor_release_trust(
         match="manual_webui_predecessor_trust_invalid",
     ):
         builder["_load_predecessor_trust"](trust)
+
+
+@pytest.mark.parametrize(
+    ("platform", "executable"),
+    (
+        ("macos", "chrome-mac/headless_shell"),
+        ("windows", "chrome-win/headless_shell.exe"),
+    ),
+)
+def test_manual_webui_moves_verified_browser_runtime_into_core(
+    tmp_path: Path,
+    platform: str,
+    executable: str,
+) -> None:
+    builder = _builder()
+    browser_runtime = tmp_path / "browser-runtime.zip"
+    member = f"browser/chromium_headless_shell-1169/{executable}"
+    with zipfile.ZipFile(browser_runtime, "w") as archive:
+        info = zipfile.ZipInfo(member)
+        info.create_system = 3
+        info.external_attr = (stat.S_IFREG | 0o755) << 16
+        archive.writestr(info, b"browser")
+    predecessor_pack = tmp_path / "browser-pack.zip"
+    descriptor = json.dumps(
+        {"archive_sha256": hashlib.sha256(browser_runtime.read_bytes()).hexdigest()}
+    )
+    with zipfile.ZipFile(predecessor_pack, "w") as archive:
+        for name, payload in (
+            ("browser-runtime.json", descriptor.encode()),
+            ("browser-runtime.zip", browser_runtime.read_bytes()),
+        ):
+            info = zipfile.ZipInfo(name)
+            info.create_system = 3
+            info.external_attr = (stat.S_IFREG | 0o644) << 16
+            archive.writestr(info, payload)
+    core = tmp_path / "core"
+    core.mkdir()
+
+    builder["_install_bundled_browser_runtime"](
+        core,
+        predecessor_pack,
+        tmp_path / "stage",
+        platform=platform,
+    )
+
+    bundled = core / "ms-playwright" / "chromium_headless_shell-1169" / executable
+    assert bundled.read_bytes() == b"browser"
+    assert bundled.relative_to(core).as_posix() in builder["_core_executable_paths"](
+        platform,
+        core,
+    )
 
 
 def test_checked_in_predecessor_trust_covers_supported_v2_release_identities() -> None:
@@ -195,7 +250,7 @@ def test_manual_webui_runtime_config_rebuilds_exact_cow_pack_projection(
                 f"macos-arm64-{__version__}.json"
             ),
         }
-        for pack_id in ("browser", "channels", "image", "ocr", "office")
+        for pack_id in ("channels", "image", "ocr", "office")
     ]
 
 
@@ -240,12 +295,13 @@ def test_manual_webui_release_sources_are_one_ordered_set() -> None:
     assert sources[2].base_url == "https://mvdcm.ecoremedia.net/e-mate/update"
 
 
-def test_manual_webui_macos_core_keeps_both_runtime_entries_executable() -> None:
+def test_manual_webui_macos_core_keeps_runtime_entries_executable() -> None:
     builder = _builder()
 
     assert builder["_core_executable_paths"]("macos") == (
         "bin/ecorex",
         "bin/pack-python/bin/python3",
+        "bin/pack-python/lib/python3.11/site-packages/playwright/driver/node",
     )
     assert builder["_core_executable_paths"]("windows") == ("bin/ecorex.exe",)
 
@@ -295,10 +351,11 @@ def test_manual_webui_core_package_shape_matches_bootstrap_bounds(
 
     builder["_verify_release_core_bounds"](built)
     assert 62_034_702 <= builder["MAX_CORE_ARCHIVE_BYTES"]
-    assert 166_490_214 <= builder["MAX_CORE_EXPANDED_BYTES"]
+    # Cow desktop ships Playwright's SDK/driver in Core, not a Browser Pack.
+    assert 300 * 1024 * 1024 <= builder["MAX_CORE_EXPANDED_BYTES"]
     go_source = (ROOT / "platform-staging/bootstrap/main.go").read_text()
-    assert "maxCoreArchiveBytes  = 150 * 1024 * 1024" in go_source
-    assert "maxCoreExpandedBytes = 256 * 1024 * 1024" in go_source
+    assert "maxCoreArchiveBytes  = 256 * 1024 * 1024" in go_source
+    assert "maxCoreExpandedBytes = 640 * 1024 * 1024" in go_source
 
     function_globals = builder["_verify_release_core_bounds"].__globals__
     archive_limit = function_globals["MAX_CORE_ARCHIVE_BYTES"]
@@ -326,6 +383,70 @@ def test_manual_webui_runtime_overlay_tracks_the_complete_active_lock() -> None:
     assert "regex" in versions
     assert "python-multipart" in versions
     assert len(versions) >= 55
+
+
+def test_manual_webui_runtime_overlay_targets_supported_intel_macos(
+    tmp_path: Path,
+) -> None:
+    builder = _builder()
+    commands: list[tuple[str, ...]] = []
+
+    def stop_after_command(command, **_kwargs):  # noqa: ANN001
+        commands.append(tuple(command))
+        raise RuntimeError("captured")
+
+    builder["_install_locked_runtime_overlay"].__globals__["_run"] = stop_after_command
+    with pytest.raises(RuntimeError, match="captured"):
+        builder["_install_locked_runtime_overlay"](
+            ROOT,
+            tmp_path / "core",
+            tmp_path,
+            platform="macos",
+            architecture="x64",
+        )
+
+    command = commands[0]
+    assert command[command.index("--platform") + 1] == "macosx_11_0_x86_64"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits are a macOS runtime contract")
+def test_manual_webui_core_stages_executable_playwright_driver_on_macos(
+    tmp_path: Path,
+) -> None:
+    builder = _builder()
+    driver_paths = {
+        "macos": "bin/pack-python/lib/python3.11/site-packages/playwright/driver/node",
+        "windows": "bin/pack-python/Lib/site-packages/playwright/driver/node.exe",
+    }
+    expected_modes = {"macos": 0o755, "windows": 0o644}
+
+    for platform, driver_path in driver_paths.items():
+        core = tmp_path / platform / "core"
+        driver = core / driver_path
+        driver.parent.mkdir(parents=True)
+        driver.write_bytes(b"driver")
+        for executable_path in builder["_core_executable_paths"](platform):
+            executable = core / executable_path
+            executable.parent.mkdir(parents=True, exist_ok=True)
+            executable.write_bytes(b"executable")
+        package = tmp_path / f"core-{platform}.zip"
+        _build_deterministic_zip(
+            source=core,
+            destination=package,
+            executable_paths=builder["_core_executable_paths"](platform),
+            size_limit=1024 * 1024,
+            expanded_limit=1024 * 1024,
+        )
+        staged = tmp_path / platform / "staged"
+        staged.mkdir()
+        _extract_zip_safely(
+            package,
+            staged,
+            max_members=100,
+            max_unpacked_bytes=1024 * 1024,
+        )
+
+        assert stat.S_IMODE((staged / driver_path).stat().st_mode) == expected_modes[platform]
 
 
 def test_manual_webui_product_overlay_contains_the_cow_runtime_spine(
@@ -400,6 +521,7 @@ def test_manual_webui_product_probe_isolated_from_signed_core(
     for name in (
         "_install_locked_runtime_overlay",
         "_install_cow_runtime_overlay",
+        "_install_bundled_browser_runtime",
         "_replace_product_imports",
         "_replace_builtin_skills",
         "_runtime_config",
@@ -437,7 +559,10 @@ def test_manual_webui_product_probe_isolated_from_signed_core(
     stage_root = tmp_path / "stages"
     builder["_prepare_stages"](
         ROOT,
-        {"core-macos-arm64": core_archive},
+        {
+            "core-macos-arm64": core_archive,
+            "capability-pack-browser-macos-arm64": core_archive,
+        },
         stage_root,
         {},
     )
@@ -473,7 +598,7 @@ def test_manual_webui_core_contains_exact_tracked_builtin_skills(tmp_path: Path)
     assert (core / "skills" / "office-presentations" / "SKILL.md").is_file()
 
 
-def test_manual_webui_rebuilds_browser_pack_from_current_cow_source(
+def retired_legacy_manual_webui_rebuilds_browser_pack_from_current_cow_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

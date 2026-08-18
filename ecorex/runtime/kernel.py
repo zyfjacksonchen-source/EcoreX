@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -67,10 +68,30 @@ def _store_time(value: datetime) -> str:
 
 
 def _default_thread_title(value: str) -> str:
-    normalized = " ".join(value.split()).strip()
+    return _safe_generated_thread_title(value) or "新任务"
+
+
+def _safe_generated_thread_title(value: str, max_length: int = 30) -> str:
+    """Keep automatic titles short and free of prompt-only sensitive details."""
+
+    text = str(value or "")
+    text = re.sub(r"```.*?```|`[^`]*`", " ", text, flags=re.DOTALL)
+    text = re.sub(r"https?://\S+", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b[A-Za-z]:[\\/][^\s]+", " ", text)
+    text = re.sub(r"(?:^|\s)/(?:[^\s/]+/)+[^\s]*", " ", text)
+    text = re.sub(r"\{[^{}]*\}|\[[^\[\]]*\]", " ", text)
+    text = re.sub(
+        r"(?i)(?:password|passwd|token|api[_ -]?key|secret|authorization|密码|密钥|令牌)"
+        r"\s*[:=：]\s*[^\s,;，；]+",
+        " ",
+        text,
+    )
+    text = re.sub(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b[A-Za-z0-9_-]{24,}\b", " ", text)
+    normalized = " ".join(text.split()).strip(" -–—:：,，;；。.!！?？\"'")
     if not normalized:
-        return "新任务"
-    return normalized if len(normalized) <= 60 else normalized[:59].rstrip() + "…"
+        return ""
+    return normalized if len(normalized) <= max_length else normalized[: max_length - 1].rstrip() + "…"
 
 
 def _read_time(value: str) -> datetime:
@@ -419,6 +440,115 @@ class RuntimeKernel:
             parameters.append(limit + 1)
             rows = connection.execute(query, parameters).fetchall()
         return [self._thread_from_row(row) for row in rows[:limit]], len(rows) > limit
+
+    def _automatic_title_turn(
+        self,
+        connection: sqlite3.Connection,
+        thread_id: str,
+    ) -> sqlite3.Row | None:
+        self._require_thread(connection, thread_id)
+        return connection.execute(
+            """
+            SELECT turns.* FROM turns
+            WHERE turns.thread_id = ?
+              AND turns.status IN (?, ?)
+              AND turns.turn_id = (
+                SELECT turn_id FROM turns WHERE thread_id = ?
+                ORDER BY created_at, turn_id LIMIT 1
+              )
+              AND EXISTS (
+                SELECT 1 FROM events WHERE thread_id = ?
+                AND idempotency_key = 'thread:title-generated'
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM events WHERE thread_id = ?
+                AND (
+                  event_type = 'thread.renamed'
+                  OR idempotency_key = 'thread:title-summary'
+                )
+              )
+            """,
+            (
+                thread_id,
+                TurnStatus.COMPLETED.value,
+                TurnStatus.PARTIAL.value,
+                thread_id,
+                thread_id,
+                thread_id,
+            ),
+        ).fetchone()
+
+    def automatic_title_context(self, thread_id: str) -> dict[str, str] | None:
+        """Return Cow-style title input and its frozen Turn authority."""
+
+        with self.database.reader() as connection:
+            turn = self._automatic_title_turn(connection, thread_id)
+            if turn is None:
+                return None
+            assistant_parts: list[str] = []
+            for row in connection.execute(
+                "SELECT content_json FROM items WHERE turn_id = ? AND kind = ? "
+                "ORDER BY created_at, item_id",
+                (turn["turn_id"], ItemKind.MESSAGE.value),
+            ).fetchall():
+                content = json_loads(row["content_json"], {})
+                if content.get("role") != "assistant":
+                    continue
+                text = str(content.get("text") or "").strip()
+                if text:
+                    assistant_parts.append(text)
+            if not assistant_parts:
+                return None
+            context = {
+                "user_message": str(turn["input_text"] or ""),
+                "assistant_reply": "\n".join(assistant_parts),
+                "turn_id": str(turn["turn_id"]),
+                "agent_model_id": str(turn["agent_model_id"]),
+            }
+            batch = connection.execute(
+                "SELECT config_snapshot_id, capability_snapshot_id, "
+                "permission_snapshot_id, model_catalog_snapshot_id "
+                "FROM turn_execution_batches WHERE turn_id = ? "
+                "ORDER BY first_revision_ordinal DESC LIMIT 1",
+                (turn["turn_id"],),
+            ).fetchone()
+            if batch is not None:
+                context.update({key: str(batch[key]) for key in batch.keys()})
+            return context
+
+    def apply_generated_thread_title(
+        self,
+        thread_id: str,
+        generated_title: str,
+    ) -> ThreadProjection:
+        """Persist one automatic summary without overriding a manual title."""
+
+        now = _utc_now()
+        with self.jobs.control_transaction(
+            scope="thread_auto_title",
+            subject=thread_id,
+        ) as connection:
+            thread = self._require_thread(connection, thread_id)
+            turn = self._automatic_title_turn(connection, thread_id)
+            if turn is None:
+                return self._thread_from_row(thread)
+            title = _safe_generated_thread_title(generated_title)
+            if not title:
+                title = _default_thread_title(str(turn["input_text"] or ""))
+            event = self.events.append_in_transaction(
+                connection,
+                thread_id=thread_id,
+                turn_id=turn["turn_id"],
+                event_type="thread.title_generated",
+                payload={"title": title, "source": "first_exchange_summary"},
+                idempotency_key="thread:title-summary",
+                created_at=now,
+            )
+            connection.execute(
+                "UPDATE threads SET title = ?, updated_at = ? WHERE thread_id = ?",
+                (title, _store_time(event.created_at), thread_id),
+            )
+            return self._thread_from_row(self._require_thread(connection, thread_id))
 
     def rename_thread(
         self,
