@@ -715,6 +715,7 @@ def create_control_plane_app(
     release_replica_service: CDNReleaseReplicaService | None = None,
     skill_hub_registry: SkillHubRegistry | None = None,
     skill_hub_bundle_store: LocalSkillBundleStore | None = None,
+    skill_hub_authenticator: ControlPlaneAuthenticator | None = None,
     feishu_connector_gateway: FeishuConnectorGateway | None = None,
     wechat_callback_gateway: WechatCallbackGateway | None = None,
 ) -> FastAPI:
@@ -822,6 +823,21 @@ def create_control_plane_app(
                 status_code=401, detail="Control Plane authentication failed"
             ) from error
 
+    def skill_hub_principal(request: Request) -> ControlPrincipal:
+        try:
+            return principal(request)
+        except HTTPException as legacy_error:
+            if skill_hub_authenticator is None or legacy_error.status_code != 401:
+                raise
+        try:
+            return _authenticate_control_principal(
+                skill_hub_authenticator, request.scope.get("headers", [])
+            )
+        except PermissionError as error:
+            raise HTTPException(
+                status_code=401, detail="Control Plane authentication failed"
+            ) from error
+
     def admin(current: ControlPrincipal = Depends(principal)) -> ControlPrincipal:
         if "release_admin" not in current.roles:
             raise HTTPException(
@@ -921,7 +937,7 @@ def create_control_plane_app(
             create_skill_hub_router(
                 skill_hub_registry,
                 skill_hub_bundle_store,
-                principal_dependency=principal,
+                principal_dependency=skill_hub_principal,
                 nickname_resolver=skill_hub_nickname,
             )
         )

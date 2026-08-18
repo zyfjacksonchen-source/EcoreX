@@ -78,6 +78,7 @@ from .audit_schema import (
 from .direct_admission_schema import CURRENT_DIRECT_ADMISSION_SCHEMA_VERSION
 from .production_auth import (
     Ed25519JWTAuthenticator,
+    EMateSessionJWTAuthenticator,
     parse_ed25519_public_keyring,
 )
 from .production_storage import (
@@ -420,6 +421,9 @@ class ControlPlaneProductionConfig:
     direct_release_instruction_sha256: str | None = field(default=None, repr=False)
     feishu_connector_enabled: bool = False
     wechat_callback_enabled: bool = False
+    skill_hub_auth_issuer: str | None = None
+    skill_hub_auth_audience: str | None = None
+    skill_hub_auth_public_keys_json: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         try:
@@ -530,6 +534,19 @@ class ControlPlaneProductionConfig:
             raise ProductionConfigurationError(
                 "Control Plane production configuration is invalid"
             )
+        skill_hub_auth = (
+            self.skill_hub_auth_issuer,
+            self.skill_hub_auth_audience,
+            self.skill_hub_auth_public_keys_json,
+        )
+        if any(value is not None for value in skill_hub_auth) and not all(
+            isinstance(value, str) and bool(value) for value in skill_hub_auth
+        ):
+            raise ProductionConfigurationError(
+                "Skill Hub authentication configuration is incomplete"
+            )
+        if self.skill_hub_auth_public_keys_json is not None:
+            parse_ed25519_public_keyring(self.skill_hub_auth_public_keys_json)
         auth_keys = parse_ed25519_public_keyring(self.auth_public_keys_json)
         release_keys = parse_ed25519_public_keyring(self.release_public_keys_json)
         publication_keys = parse_ed25519_public_keyring(
@@ -1364,6 +1381,15 @@ class ControlPlaneProductionConfig:
                 "ECOREX_CP_WECHAT_CALLBACK_ENABLED",
                 default=False,
             ),
+            skill_hub_auth_issuer=(
+                values.get("ECOREX_CP_SKILL_HUB_AUTH_ISSUER") or None
+            ),
+            skill_hub_auth_audience=(
+                values.get("ECOREX_CP_SKILL_HUB_AUTH_AUDIENCE") or None
+            ),
+            skill_hub_auth_public_keys_json=(
+                values.get("ECOREX_CP_SKILL_HUB_AUTH_PUBLIC_KEYS_JSON") or None
+            ),
         )
 
 
@@ -1519,6 +1545,7 @@ class ControlPlaneProductionBundle:
     release_replica_service: CDNReleaseReplicaService | None
     skill_hub_registry: SkillHubRegistry
     skill_hub_bundle_store: LocalSkillBundleStore
+    skill_hub_authenticator: EMateSessionJWTAuthenticator | None
     feishu_connector_gateway: FeishuConnectorGateway | None
     wechat_callback_gateway: WechatCallbackGateway | None
     lifecycle: "SingleNodeControlPlaneLifecycle"
@@ -1544,6 +1571,7 @@ class ControlPlaneProductionBundle:
             release_replica_service=self.release_replica_service,
             skill_hub_registry=self.skill_hub_registry,
             skill_hub_bundle_store=self.skill_hub_bundle_store,
+            skill_hub_authenticator=self.skill_hub_authenticator,
             feishu_connector_gateway=self.feishu_connector_gateway,
             wechat_callback_gateway=self.wechat_callback_gateway,
         )
@@ -2180,6 +2208,19 @@ class SingleNodeSQLiteS3Provider:
                 max_token_lifetime_seconds=config.auth_max_token_lifetime_seconds,
                 clock_skew_seconds=config.auth_clock_skew_seconds,
             )
+            skill_hub_authenticator = (
+                EMateSessionJWTAuthenticator(
+                    parse_ed25519_public_keyring(
+                        config.skill_hub_auth_public_keys_json
+                    ),
+                    issuer=config.skill_hub_auth_issuer,
+                    audience=config.skill_hub_auth_audience,
+                )
+                if config.skill_hub_auth_public_keys_json is not None
+                and config.skill_hub_auth_issuer is not None
+                and config.skill_hub_auth_audience is not None
+                else None
+            )
             publication_verifier = Ed25519SignatureVerifier(publication_keys)
             online_authorization_signer = _configured_publication_signer(
                 config, release_keys, publication_keys
@@ -2319,6 +2360,7 @@ class SingleNodeSQLiteS3Provider:
                 release_replica_service=release_replica_service,
                 skill_hub_registry=skill_hub_registry,
                 skill_hub_bundle_store=skill_hub_bundle_store,
+                skill_hub_authenticator=skill_hub_authenticator,
                 feishu_connector_gateway=feishu_connector_gateway,
                 wechat_callback_gateway=wechat_callback_gateway,
                 lifecycle=lifecycle,
