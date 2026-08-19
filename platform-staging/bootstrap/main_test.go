@@ -405,7 +405,7 @@ func writeSignedLocalRelease(t *testing.T, sbomBytes []byte) (string, map[string
 		},
 	}
 	artifactIDs := []string{"core-" + platform + "-" + architecture}
-	for _, packID := range []string{"browser", "channels", "image", "ocr", "office"} {
+	for _, packID := range []string{"channels", "image", "ocr", "office"} {
 		base := "capability-pack-" + packID + "-" + platform + "-" + architecture
 		artifactIDs = append(artifactIDs, base, base+"-manifest")
 	}
@@ -1272,7 +1272,7 @@ func TestRequiredArtifactsIncludesEveryProductCapabilityPack(t *testing.T) {
 	value := &manifest{Artifacts: []artifact{{
 		ArtifactID: "core-" + target, Platform: "windows", Architecture: "x64",
 	}}}
-	packIDs := []string{"browser", "channels", "image", "ocr", "office"}
+	packIDs := []string{"channels", "image", "ocr", "office"}
 	for _, packID := range packIDs {
 		base := "capability-pack-" + packID + "-" + target
 		value.Artifacts = append(value.Artifacts,

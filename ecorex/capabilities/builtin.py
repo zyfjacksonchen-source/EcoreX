@@ -1377,7 +1377,6 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
                 "Relax optional filters before switching to another read-only web tool.",
             ),
             cache_ttl_seconds=300,
-            required_packs=frozenset({"browser"}),
             default_exposure=Exposure.DIRECT,
         ),
         ToolSpec(
@@ -1393,7 +1392,6 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             default_exposure=Exposure.DIRECT,
             intent_tags=frozenset({"web", "search", "research", "联网", "搜索"}),
             cache_ttl_seconds=300,
-            required_packs=frozenset({"browser"}),
         ),
         ToolSpec(
             tool_id="vision",
@@ -1445,7 +1443,6 @@ def builtin_tool_specs() -> tuple[ToolSpec, ...]:
             ),
             idempotency=IdempotencyClass.NON_IDEMPOTENT,
             intent_tags=frozenset({"browser", "web", "cdp", "浏览器", "网页搜索"}),
-            required_packs=frozenset({"browser"}),
             default_exposure=Exposure.DIRECT,
         ),
         ToolSpec(

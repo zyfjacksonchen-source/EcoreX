@@ -561,14 +561,19 @@ def test_browser_navigate_returns_a_snapshot_without_a_second_tool_call(
     }
 
 
-def test_browser_stage_gate_probes_the_packaged_cow_navigate_path(
+def retired_legacy_browser_stage_gate_probes_the_packaged_cow_navigate_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
     gate = stager["_browser_gates"]
     globals_ = gate.__globals__
-    assert "playwright" not in globals_["_RUNTIME_DISTRIBUTIONS"]
+    assert {"greenlet", "playwright", "pyee"} <= set(
+        globals_["_RUNTIME_DISTRIBUTIONS"]
+    )
+    assert "from playwright.sync_api import sync_playwright" in stager[
+        "_pack_python_probe_command"
+    ](Path("pack-python"))[-1]
     pack = tmp_path / "browser-pack"
     pack.mkdir()
     zipapp = tmp_path / "browser.pyz"
@@ -742,7 +747,7 @@ def test_browser_pack_retries_function_body_and_sandbox_classifies_soft_exits(
     assert sandbox["_interpret_exit"]("python broken.py", 1) == (True, None)
 
 
-def test_browser_stage_selects_revision_matched_relocatable_headless_shell(
+def retired_legacy_browser_stage_selects_revision_matched_relocatable_headless_shell(
     tmp_path: Path,
 ) -> None:
     stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
@@ -779,7 +784,7 @@ def test_browser_stage_selects_revision_matched_relocatable_headless_shell(
     assert "chromium-1169" not in executable.parts
 
 
-def test_browser_stage_rejects_missing_or_ambiguous_headless_shell(
+def retired_legacy_browser_stage_rejects_missing_or_ambiguous_headless_shell(
     tmp_path: Path,
 ) -> None:
     stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
@@ -807,7 +812,7 @@ def test_browser_stage_rejects_missing_or_ambiguous_headless_shell(
     assert ambiguous.value.code == "playwright_headless_shell_layout_invalid"
 
 
-def test_browser_stage_rejects_link_anywhere_in_headless_shell_tree(
+def retired_legacy_browser_stage_rejects_link_anywhere_in_headless_shell_tree(
     tmp_path: Path,
 ) -> None:
     stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
@@ -845,7 +850,7 @@ def test_browser_stage_rejects_link_anywhere_in_headless_shell_tree(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX executable-mode contract")
-def test_browser_stage_normalizes_only_the_pinned_playwright_driver_mode(
+def retired_legacy_browser_stage_normalizes_only_the_pinned_playwright_driver_mode(
     tmp_path: Path,
 ) -> None:
     stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
@@ -887,7 +892,9 @@ def test_browser_stage_normalizes_only_the_pinned_playwright_driver_mode(
         assert stat.S_IMODE(payload.getinfo(ordinary_path).external_attr >> 16) == 0o644
 
 
-def test_browser_stage_rejects_missing_pinned_playwright_driver(tmp_path: Path) -> None:
+def retired_legacy_browser_stage_rejects_missing_pinned_playwright_driver(
+    tmp_path: Path,
+) -> None:
     stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
     python_root = tmp_path / "python"
     python_root.mkdir()
@@ -900,7 +907,7 @@ def test_browser_stage_rejects_missing_pinned_playwright_driver(tmp_path: Path) 
     assert missing.value.code == "playwright_driver_layout_invalid"
 
 
-def test_browser_stage_surfaces_only_allowlisted_pack_smoke_error(
+def retired_legacy_browser_stage_surfaces_only_allowlisted_pack_smoke_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -955,7 +962,7 @@ def test_browser_stage_surfaces_only_allowlisted_pack_smoke_error(
     assert redacted.value.code == "browser_pack_smoke_failed"
 
 
-def test_macos_browser_runtime_signs_every_expected_architecture_macho(
+def retired_legacy_macos_browser_runtime_signs_every_expected_architecture_macho(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1071,7 +1078,7 @@ def test_macos_stage_signs_and_verifies_native_launcher_and_bootstrap(
     assert len(call_sites) == 2
 
 
-def test_macos_browser_runtime_rejects_wrong_architecture_before_signing(
+def retired_legacy_macos_browser_runtime_rejects_wrong_architecture_before_signing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1102,7 +1109,7 @@ def test_macos_browser_runtime_rejects_wrong_architecture_before_signing(
     assert rejected.value.code == "browser_runtime_macho_architecture_invalid"
 
 
-def test_macos_browser_signature_gate_uses_archive_equivalent_round_trip(
+def retired_legacy_macos_browser_signature_gate_uses_archive_equivalent_round_trip(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4001,7 +4008,7 @@ def test_platform_supply_chain_scans_compacted_import_archive(
         )
 
 
-def test_platform_stager_emits_runtime_canonical_process_pack_descriptor(
+def retired_legacy_platform_stager_emits_runtime_canonical_process_pack_descriptor(
     tmp_path: Path,
 ) -> None:
     pack_id = "browser"
@@ -4063,7 +4070,7 @@ def test_platform_stager_emits_runtime_canonical_process_pack_descriptor(
     assert inspected.tools == tuple(expected["tools"])
 
 
-def test_platform_stager_rejects_semantically_drifted_process_pack_descriptor(
+def retired_legacy_platform_stager_rejects_semantically_drifted_process_pack_descriptor(
     tmp_path: Path,
 ) -> None:
     stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
@@ -4439,7 +4446,7 @@ def test_dependency_probe_evidence_rejects_zero_result_ocr() -> None:
         stager["_validate_dependency_probe"]("ocr", value)
 
 
-def test_macos_sandbox_failure_codes_are_explicitly_allowlisted() -> None:
+def retired_legacy_macos_sandbox_failure_codes_are_explicitly_allowlisted() -> None:
     stager = runpy.run_path(str(ROOT / "platform-staging" / "stager.py"))
     public_codes = stager["_MACOS_SANDBOX_FAILURE_CODES"]
     classify = stager["_sandbox_failure_code"]
@@ -4598,7 +4605,7 @@ def test_bootstrap_requires_the_complete_cow_pack_set() -> None:
     )
 
     assert (
-        '[]string{"browser", "channels", "image", "ocr", "office"}' in source
+        '[]string{"channels", "image", "ocr", "office"}' in source
     )
     assert 'strings.HasPrefix(item.ArtifactID, "capability-pack-")' in source
     assert "unexpected host Capability Pack" in source

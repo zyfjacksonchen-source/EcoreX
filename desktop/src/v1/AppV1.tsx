@@ -140,6 +140,8 @@ declare global {
       downloadDesktopUpdate?: () => Promise<void>;
       installDesktopUpdate?: () => Promise<void>;
       desktopUpdateStatus?: () => Promise<DesktopUpdateStatus | null>;
+      copyMaterializedPath?: (receipt: { locationAlias: "documents" | "downloads" | "workspace"; displayName: string }) => Promise<boolean>;
+      onCopyArtifactPath?: (callback: (target: { artifactId: string; revisionId: string; displayName: string }) => void) => () => void;
       onDesktopUpdateStatus?: (callback: (status: DesktopUpdateStatus) => void) => () => void;
       onOpenThread?: (callback: (threadId: string) => void) => () => void;
     };
@@ -221,6 +223,28 @@ export function AppV1() {
       unsubscribe?.();
     };
   }, []);
+
+  useEffect(() => window.eMateDesktop?.onCopyArtifactPath?.((target) => {
+    const artifact = runtime.artifacts.find((candidate) => (
+      candidate.artifact_id === target.artifactId
+      && candidate.revision_id === target.revisionId
+      && candidate.display_name === target.displayName
+    ));
+    if (!artifact?.actions.includes("download")) {
+      setArtifactNotice("这份产物当前不能复制文件路径。");
+      return;
+    }
+    void runtime.downloadArtifact(artifact).then(async (receipt) => {
+      if (!receipt) return;
+      const copied = await window.eMateDesktop?.copyMaterializedPath?.({
+        locationAlias: receipt.location_alias,
+        displayName: receipt.display_name,
+      }).catch(() => false);
+      setArtifactNotice(copied
+        ? `文件路径已复制：${receipt.display_name}`
+        : `文件已保存，但当前输出位置不支持直接复制路径：${receipt.display_name}`);
+    });
+  }), [runtime.artifacts, runtime.downloadArtifact]);
 
   const updateProfileAvatar = (value: string | null) => {
     setProfileAvatar(value);

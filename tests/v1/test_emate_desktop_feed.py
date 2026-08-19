@@ -617,6 +617,14 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
     assert "name: verify and merge desktop feed" in workflow
     assert "scripts/prepare-emate-desktop-feed.py" in workflow
     assert "--unsigned-manual" in workflow
+    assert "tests/v1/test_runtime_composition.py" not in workflow
+    assert 'const roots = ["electron", "src", "dist", "package.json"]' in (
+        ROOT / "desktop" / "tools" / "check-electron-brand.mjs"
+    ).read_text(encoding="utf-8")
+    assert 'windows / "resources/app.asar"' in workflow
+    assert 'app / "Contents/Resources/app.asar"' in workflow
+    assert "check-emate-brand.py skills ecorex" not in workflow
+    assert "roots.extend(sorted(release.glob" not in workflow
     assert (
         "--nginx-config deploy/e-mate/nginx/update-feed-unsigned-manual.conf"
         in workflow
@@ -638,7 +646,11 @@ def test_workflow_builds_the_branch_and_defers_mac_merge() -> None:
     for required_gate in (
         "tests/v1/test_public_download_site.py",
         "tests/v1/test_emate_feed_deploy.py",
-        "test_product_composes_message_channels_with_the_agent_runtime",
+        "tests/v1/test_cow_public_hotpath_contract.py",
+        "tests/v1/test_memory_storage_shared_db_recovery.py",
+        "tests/v1/test_cow_data_plane_admission.py",
+        "tests/v1/test_cow_spine_takeover_contract.py",
+        "test_product_composes_native_cow_channels_with_the_agent_runtime",
         "npm run typecheck",
         "npm run test:v1",
         "npx playwright install chromium",

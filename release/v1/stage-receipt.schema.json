@@ -42,7 +42,7 @@
     "kind": {"enum": ["core", "bootstrap", "capability-pack"]},
     "platform": {"enum": ["windows", "macos"]},
     "architecture": {"enum": ["x64", "arm64"]},
-    "pack_id": {"type": ["string", "null"], "enum": [null, "browser", "channels", "image", "ocr", "office"]},
+    "pack_id": {"type": ["string", "null"], "enum": [null, "channels", "image", "ocr", "office"]},
     "source_tree_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "source_tree_file_count": {"type": "integer", "minimum": 1, "maximum": 50000},
     "source_tree_size_bytes": {"type": "integer", "minimum": 1, "maximum": 2147483648},
@@ -83,7 +83,7 @@
           "properties": {
             "scope": {"const": "slot-payload"},
             "payload_root": {"const": "."},
-            "required_pack_ids": {"const": ["browser", "channels", "image", "ocr", "office"]}
+            "required_pack_ids": {"const": ["channels", "image", "ocr", "office"]}
           }
         },
         {
@@ -92,14 +92,14 @@
           "required": ["scope", "pack_id", "manifest_relative_path", "artifact_relative_path"],
           "properties": {
             "scope": {"const": "slot-payload"},
-            "pack_id": {"enum": ["browser", "channels", "image", "ocr", "office"]},
+            "pack_id": {"enum": ["channels", "image", "ocr", "office"]},
             "manifest_relative_path": {
               "type": "string",
-              "pattern": "^capability-packs/(browser|channels|image|ocr|office)/ecorex-capability-pack-(browser|channels|image|ocr|office)-(windows-x64|macos-arm64|macos-x64)-1\\.0\\.0\\.json$"
+              "pattern": "^capability-packs/(channels|image|ocr|office)/ecorex-capability-pack-(channels|image|ocr|office)-(windows-x64|macos-arm64|macos-x64)-1\\.0\\.0\\.json$"
             },
             "artifact_relative_path": {
               "type": "string",
-              "pattern": "^capability-packs/(browser|channels|image|ocr|office)/ecorex-capability-pack-(browser|channels|image|ocr|office)-(windows-x64|macos-arm64|macos-x64)-1\\.0\\.0\\.zip$"
+              "pattern": "^capability-packs/(channels|image|ocr|office)/ecorex-capability-pack-(channels|image|ocr|office)-(windows-x64|macos-arm64|macos-x64)-1\\.0\\.0\\.zip$"
             }
           }
         }

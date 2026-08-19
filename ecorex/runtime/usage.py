@@ -17,6 +17,8 @@ import stat
 from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from models.model_capabilities import context_policy_for_model
+
 from ecorex.capabilities import ManagedModelCatalog, UnknownModelError
 from ecorex.protocol import (
     ContextUsageProjection,
@@ -375,14 +377,19 @@ class UsageProjectionService:
                             if isinstance(policy, Mapping)
                             else None
                         )
-                        threshold = (
-                            _nonnegative_int(context.get("compact_threshold_tokens"))
-                            if isinstance(context, Mapping)
+                        display_name = item.get("display_name")
+                        policy_window = None
+                        upstream_model_id = (
+                            policy.get("upstream_model_id")
+                            if isinstance(policy, Mapping)
                             else None
                         )
-                        display_name = item.get("display_name")
+                        if isinstance(upstream_model_id, str) and upstream_model_id:
+                            policy_window = context_policy_for_model(
+                                upstream_model_id
+                            ).context_window_tokens
                         return (
-                            threshold if threshold and threshold >= 1_000 else None,
+                            policy_window,
                             str(display_name)
                             if isinstance(display_name, str)
                             else None,
@@ -396,12 +403,14 @@ class UsageProjectionService:
                 spec = fallback_catalog.get(model_id)
             except UnknownModelError:
                 return None, None, snapshot_id
-            threshold = (
-                spec.model_policy.compact_threshold_tokens
+            window = (
+                context_policy_for_model(
+                    spec.model_policy.upstream_model_id
+                ).context_window_tokens
                 if spec.model_policy is not None
                 else None
             )
-            return threshold, spec.display_name, snapshot_id
+            return window, spec.display_name, snapshot_id
         return None, None, snapshot_id
 
     def project(self, thread_id: str) -> ConversationUsageProjection:
@@ -468,7 +477,10 @@ class UsageProjectionService:
                     str(context_row["job_id"]) if context_row["job_id"] else None
                 )
             terminal_rows = connection.execute(
-                "SELECT status, updated_at FROM turns WHERE updated_at >= ? AND updated_at < ? "
+                "SELECT turns.turn_id, turns.status, turns.updated_at, "
+                "EXISTS(SELECT 1 FROM items WHERE items.turn_id=turns.turn_id "
+                "AND items.kind='tool_call' AND items.status IN ('failed','cancelled')) "
+                "AS has_failed_tool FROM turns WHERE updated_at >= ? AND updated_at < ? "
                 f"AND status IN ({','.join('?' for _ in TERMINAL_TURN_STATUSES)})",
                 (
                     _storage_time(activity_start),
@@ -524,9 +536,11 @@ class UsageProjectionService:
                 continue
             counts[1] += 1
             status = TurnStatus(str(row["status"]))
-            if status is TurnStatus.COMPLETED:
+            if status is TurnStatus.COMPLETED and not bool(row["has_failed_tool"]):
                 counts[0] += 1
-            elif status is TurnStatus.PARTIAL:
+            elif status is TurnStatus.PARTIAL or (
+                status is TurnStatus.COMPLETED and bool(row["has_failed_tool"])
+            ):
                 counts[2] += 1
         today_counts = activity[day_start_local.date()]
 

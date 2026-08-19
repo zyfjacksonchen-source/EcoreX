@@ -23,7 +23,7 @@ def _complete_access_plan():
         availability=RuntimeAvailability(
             platform="macos",
             installed_packs=frozenset(
-                {"browser", "channels", "image", "ocr", "office"}
+                {"channels", "image", "ocr", "office"}
             ),
             online=True,
             selected_model_modalities=frozenset({"chat", "image"}),

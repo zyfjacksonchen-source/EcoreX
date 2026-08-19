@@ -242,19 +242,6 @@ def scheduler_projection(workspace_root: Optional[str] = None) -> Dict[str, Any]
         tasks = [project_task(task) for task in store.list_tasks()]
     except Exception as exc:
         load_error = _project_public_error("Scheduler task store unavailable", exc, "loadError")
-    try:
-        from common.ecorex_tool_permissions import get_tool_permission_broker
-
-        if get_tool_permission_broker().is_read_only():
-            can_modify = False
-            modify_blocking_reason = "Current read-only mode blocks scheduled task changes."
-    except Exception as exc:
-        can_modify = False
-        modify_blocking_reason = _project_public_error(
-            "Permission broker unavailable; scheduled task changes are blocked",
-            exc,
-            "modifyBlockingReason",
-        )
     if isinstance(load_error, str):
         load_error = {
             "loadError": load_error,

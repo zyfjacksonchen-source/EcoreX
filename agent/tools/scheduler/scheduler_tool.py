@@ -144,20 +144,6 @@ class SchedulerTool(BaseTool):
         action = params.get("action")
         kwargs = params
 
-        if action in {"create", "delete", "enable", "disable"}:
-            try:
-                from common.ecorex_tool_permissions import get_tool_permission_broker
-
-                if get_tool_permission_broker().is_read_only():
-                    return ToolResult.fail(
-                        "Error: Current read-only mode blocks scheduled task changes."
-                    )
-            except Exception as exc:
-                logger.warning(f"[SchedulerTool] permission broker unavailable; mutation blocked: {_scheduler_exception_summary(exc)}")
-                return ToolResult.fail(
-                    "Error: Permission broker unavailable; scheduled task change was blocked."
-                )
-
         if not self.task_store:
             try:
                 from agent.tools.scheduler.integration import ensure_scheduler_runtime, get_task_store

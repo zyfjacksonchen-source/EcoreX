@@ -8,10 +8,16 @@ import sqlite3
 import threading
 
 from PIL import Image
+import pytest
 
 from agent.memory.config import MemoryConfig
 from agent.memory.conversation_store import ConversationStore
-from ecorex.gateway import GatewayEvent, GatewayImageInput, GatewayUserMessageInput
+from ecorex.gateway import (
+    GatewayEvent,
+    GatewayFunctionCallOutputInput,
+    GatewayImageInput,
+    GatewayUserMessageInput,
+)
 from ecorex.protocol import CreateThreadRequest, CreateTurnRequest
 from ecorex.runtime import AgentTurnWorker, RuntimeSettings, WorkerOutcome, create_app
 
@@ -150,6 +156,53 @@ def _text_turn(index: int) -> tuple[dict, dict]:
     )
 
 
+def test_failed_followup_preserves_completed_tool_chain_for_cow_history(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from agent.protocol.agent import Agent
+    from agent.protocol.agent_stream import AgentStreamExecutor
+
+    query = "write exactly once"
+    tool_use_id = "tool-once"
+    completed_chain = [
+        {"role": "user", "content": [{"type": "text", "text": query}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": tool_use_id, "name": "write", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": "written"}],
+        },
+    ]
+
+    def fail_after_tool(self, user_message: str) -> str:
+        assert user_message == query
+        self.messages.extend(completed_chain)
+        raise RuntimeError("provider failed after successful tool")
+
+    monkeypatch.setattr(AgentStreamExecutor, "run_stream", fail_after_tool)
+    agent = Agent(system_prompt="test", model=object(), enable_skills=False)
+
+    with pytest.raises(RuntimeError, match="provider failed after successful tool"):
+        agent.run_stream(query)
+
+    assert agent.messages == completed_chain
+    assert agent._last_run_new_messages == completed_chain
+    worker = object.__new__(AgentTurnWorker)
+    worker._turn_image_artifact_history = lambda _turn_id: []
+    store = ConversationStore(tmp_path / "history.db")
+    worker._persist_cow_history(
+        store=store,
+        session_id="failed-tool-session",
+        turn_id="failed-tool-turn",
+        agent=agent,
+        channel_type="web",
+        project_context=None,
+    )
+    assert store.load_messages("failed-tool-session", max_turns=30) == completed_chain
+
+
 def test_public_worker_restores_durable_cow_compaction_state_without_rewriting_history(
     tmp_path: Path, monkeypatch,
 ) -> None:
@@ -253,7 +306,10 @@ def test_parent_completion_waits_for_real_started_subagent(tmp_path: Path) -> No
                     response_id=response_id,
                     delta="child finished",
                 )
-            elif request.previous_response_id is None:
+            elif not any(
+                isinstance(item, GatewayFunctionCallOutputInput)
+                for item in request.ordered_input_items()
+            ):
                 yield GatewayEvent(
                     seq=1,
                     event_type="tool_call.requested",

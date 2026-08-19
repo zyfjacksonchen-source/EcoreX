@@ -68,6 +68,46 @@ textarea {
   background: var(--color-canvas);
 }
 
+:root[data-desktop-platform="darwin"] .ex-sidebar-brand,
+:root[data-desktop-platform="darwin"] .ex-workspace-header,
+:root[data-desktop-platform="win32"] .ex-sidebar-brand,
+:root[data-desktop-platform="win32"] .ex-workspace-header {
+  -webkit-app-region: drag;
+}
+
+:root[data-desktop-platform="darwin"] .ex-sidebar-brand button,
+:root[data-desktop-platform="darwin"] .ex-workspace-header button,
+:root[data-desktop-platform="darwin"] .ex-workspace-header a,
+:root[data-desktop-platform="darwin"] .ex-workspace-header input,
+:root[data-desktop-platform="darwin"] .ex-workspace-header select,
+:root[data-desktop-platform="win32"] .ex-sidebar-brand button,
+:root[data-desktop-platform="win32"] .ex-workspace-header button,
+:root[data-desktop-platform="win32"] .ex-workspace-header a,
+:root[data-desktop-platform="win32"] .ex-workspace-header input,
+:root[data-desktop-platform="win32"] .ex-workspace-header select {
+  -webkit-app-region: no-drag;
+}
+
+:root[data-desktop-platform="darwin"] .ex-sidebar-brand {
+  padding-left: 76px;
+}
+
+:root[data-desktop-platform="darwin"] .ex-sidebar-brand .ex-emate-logo,
+:root[data-desktop-platform="win32"] .ex-sidebar-brand .ex-emate-logo {
+  display: block;
+  width: 112px;
+  height: 26px;
+}
+
+:root[data-desktop-platform="darwin"] .ex-sidebar-brand .ex-emate-mark-image,
+:root[data-desktop-platform="win32"] .ex-sidebar-brand .ex-emate-mark-image {
+  display: none;
+}
+
+:root[data-desktop-platform="win32"] .ex-workspace-header {
+  padding-right: 148px;
+}
+
 .ex-sidebar,
 .ex-workspace {
   height: 100dvh;
